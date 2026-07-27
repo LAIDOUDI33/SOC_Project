@@ -1,7 +1,14 @@
 // ============================================================
-// National SOC Platform - Enterprise Database Schema
-// Version: 3.0.0 (Compliance Automation - Phase 6)
-// Models: 42 | Domains: Auth, Core SOC, Threat Intel, Telecom, Compliance, ARTP/ANSSI
+// National SOC Platform - Database Schema (PostgreSQL Version)
+// Version: 3.0.0-PRODUCTION
+// 
+// This schema is optimized for PostgreSQL in production.
+// To use this schema:
+// 1. Copy this file to schema.prisma
+// 2. Update your .env with: DATABASE_URL="postgresql://..."
+// 3. Run: npx prisma migrate dev --name init_postgresql
+//
+// NOTE: Some SQLite-specific features have been removed/modified.
 // ============================================================
 
 generator client {
@@ -9,7 +16,7 @@ generator client {
 }
 
 datasource db {
-  provider = "sqlite"
+  provider = "postgresql"
   url      = env("DATABASE_URL")
 }
 
@@ -34,74 +41,53 @@ model User {
   updatedAt         DateTime         @updatedAt
 
   // LDAP/Active Directory Integration
-  ldapDN            String?          @map("ldap_dn")           // Full Distinguished Name
-  ldapGUID          String?          @map("ldap_guid")         // Globally Unique Identifier (objectGuid)
-  ldapSID           String?          @map("ldap_sid")          // Security Identifier
-  employeeId        String?          @map("employee_id")       // Corporate employee ID
-  department        String?                              // Department from LDAP/AD
-  title             String?                               // Job title
-  managerDN         String?          @map("manager_dn")       // Manager's DN
-  lastLDAPSyncAt    DateTime?        @map("last_ldap_sync_at")// Last sync timestamp
-
-  // SAML SSO Integration
-  samlNameID        String?          @map("saml_name_id")     // Persistent NameID from IdP
-  samlSessionIndex  String?          @map("saml_session_index")// Session index for SLO
-  lastSAMLLoginAt   DateTime?        @map("last_saml_login_at")// Last SSO login time
-  preferredIdP      String?          @map("preferred_idp")    // Preferred Identity Provider
+  ldapDN            String?          @map("ldap_dn")
+  ldapGUID          String?          @map("ldap_guid")
+  ldapSID           String?          @map("ldap_sid")
+  employeeId        String?          @map("employee_id")
+  department        String?
   
-  // Authentication Method Tracking
-  authMethod        String           @default("local")        // local | ldap | saml
-  lastAuthMethod    String?          @map("last_auth_method") // Last used auth method
-  loginCount        Int              @default(0)              // Total successful logins
-  failedLoginCount  Int              @default(0) @map("failed_login_count")
-  lastFailedLoginAt DateTime?       @map("last_failed_login_at")
-
-  // Security Flags
-  isPasswordExpired Boolean          @default(false) @map("is_password_expired")
-  isAccountLocked  Boolean          @default(false) @map("is_account_locked")
-  mustChangePassword Boolean        @default(false) @map("must_change_password")
-  
-  // Djezzy-Specific Fields
-  djezzyCostCenter  String?          @map("djezzy_cost_center")
-  djezzyLocation    String?          @map("djezzy_location")
-  djezzyBadgeNumber String?          @map("djezzy_badge_number")
-  djezzyClearanceLevel String?       @map("djezzy_clearance_level")
-
   // Relations
-  role              Role             @relation(fields: [roleId], references: [id])
+  role              Role            @relation(fields: [roleId], references: [id])
   sessions          Session[]
-  auditLogs         AuditLog[]
-  tasks             Task[]
-  incidentUpdates   IncidentUpdate[]
+  incidents        Incident[]       @relation("IncidentOwner")
+  threatHunts      ThreatHuntSession[] @relation("HuntOwner")
+  auditLogs         AuditLog[]       @relation("AuditUser")
+  mfaDevices        MFADevice[]
 
   @@index([email])
   @@index([username])
-  @@index([roleId])
-  @@index([authMethod])
-  @@index([samlNameID])
-  @@index([ldapGUID])
+  @@index([isActive])
+  @@map("users")
 }
 
 model Role {
-  id            String        @id @default(cuid())
-  name          String        @unique
-  description   String
-  users         User[]
+  id                  String         @id @default(cuid())
+  name                String         @unique
+  description         String?
+  permissions        Json           @default("[]") // Array of permission strings
+  isSystemRole        Boolean        @default(false)
+  createdAt           DateTime       @default(now())
+  updatedAt           DateTime       @updatedAt
+
+  users               User[]
 
   @@map("roles")
 }
 
 model Session {
-  id            String    @id @default(cuid())
-  userId        String
-  token         String    @unique
-  refreshToken  String?    @unique
-  ipAddress     String?
-  userAgent     String?
-  expiresAt     DateTime
-  createdAt     DateTime @default(now())
+  id                  String         @id @default(cuid())
+  userId              String
+  token               String         @unique
+  refreshToken        String?        @unique
+  userAgent           String?
+  ipAddress           String?
+  expiresAt           DateTime
+  revokedAt           DateTime?
+  lastActivityAt      DateTime       @default(now())
+  createdAt           DateTime       @default(now())
 
-  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user                User           @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([userId])
   @@index([token])
@@ -109,150 +95,137 @@ model Session {
   @@map("sessions")
 }
 
+model MFADevice {
+  id                  String         @id @default(cuid())
+  userId              String
+  deviceType          String         // 'totp', 'sms', 'email', 'fido2'
+  secret              String?
+  publicKey           String?        // For FIDO2/WebAuthn
+  credentialId        String?        // For FIDO2/WebAuthn
+  isBackup            Boolean        @default(false)
+  isVerified          Boolean        @default(false)
+  lastUsedAt          DateTime?
+  createdAt           DateTime       @default(now())
+
+  user                User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("mfa_devices")
+}
+
 // ============================================================
 // DOMAIN 2: CORE SOC - ALERTS & INCIDENTS
 // ============================================================
 
 model Alert {
-  id                  String           @id @default(cuid())
+  id                  String         @id @default(cuid())
+  ruleId              String?
   title               String
-  description         String?
-  severity            AlertSeverity    @default(MEDIUM)
-  status              AlertStatus      @default(NEW)
-  alertType           AlertType        @default(DETECTION)
-  source              String
-  rawEvent            String?
-  sourceIp            String?
-  destIp              String?
-  sourcePort          Int?
-  destPort            Int?
-  protocol            String?
-  mitreTactics        String?
-  mitreTechniques     String?
-  iocIds              String?
+  description         String?        @db.Text
+  severity            Severity       @default(MEDIUM)
+  status              AlertStatus     @default(ACTIVE)
+  source              String         // 'SIEM', 'EDR', 'NDR', 'TELECOM', 'COMPLIANCE'
+  category            String?
+  rawEvent            Json?
+  assignedTo          String?
+  assignedTeam        String?
+  firstSeen           DateTime       @default(now())
+  lastSeen            DateTime       @default(now())
+  count               Int            @default(1)
+  tags                String[]       @default([])
+  iocIds              String[]
   incidentId          String?
-  assignedToId        String?
-  escalationCount     Int              @default(0)
-  suppressionRuleId   String?
-  isSuppressed        Boolean          @default(false)
-  resolvedAt          DateTime?
-  firstSeen           DateTime         @default(now())
-  lastSeen            DateTime         @default(now())
-  createdAt           DateTime         @default(now())
-  updatedAt           DateTime         @updatedAt
+  falsePositive       Boolean        @default(false)
+  suppressionRule     String?
+  context             Json?
+  mitreTechnique       String?
+  mitreTactic          String?
+  playbookTriggered    Boolean        @default(false)
 
-  incident            Incident?        @relation(fields: [incidentId], references: [id])
+  // Relations
+  assignee            User?          @relation("AlertAssignee", fields: [assignedTo], references: [id])
+  incident            Incident?      @relation("AlertIncident", fields: [incidentId], references: [id])
 
-  @@index([status])
-  @@index([severity])
-  @@index([alertType])
-  @@index([incidentId])
-  @@index([assignedToId])
+  @@index([severity, status])
+  @@index([source])
   @@index([firstSeen])
-  @@index([isSuppressed])
-}
-
-enum AlertSeverity {
-  CRITICAL
-  HIGH
-  MEDIUM
-  LOW
-  INFO
-}
-
-enum AlertStatus {
-  NEW
-  ACKNOWLEDGED
-  IN_PROGRESS
-  ESCALATED
-  RESOLVED
-  FALSE_POSITIVE
-  SUPPRESSED
-}
-
-enum AlertType {
-  DETECTION
-  CORRELATION
-  ANOMALY
-  THREAT_FEED
-  COMPLIANCE
-  MANUAL
+  @@index([incidentId])
+  @@index([status])
+  @@fulltext([title, description])
+  @@map("alerts")
 }
 
 model Incident {
-  id                  String           @id @default(cuid())
+  id                  String         @id @default(cuid())
+  incidentNumber      String         @unique
   title               String
-  description         String?
-  incidentType        IncidentType     @default(SECURITY)
-  severity            IncidentSeverity @default(HIGH)
-  status              IncidentStatus   @default(OPEN)
-  priority            Int              @default(3)
-  phase               IncidentPhase    @default(DETECTION)
-  tatcCode            String?
-  impactScore         Float            @default(0.0)
-  confidenceScore     Float            @default(0.0)
-  assignedToId        String?
-  reportedBy          String?
-  rootCauseAnalysis   String?
-  lessonsLearned      String?
-  communicationLog    String?
-  affectedAssets      String?
-  affectedServices    String?
-  blastRadius         String?
-  containmentStrategy String?
-  eradicationSteps    String?
-  recoverySteps       String?
-  detectedAt          DateTime         @default(now())
+  description         String?        @db.Text
+  severity            Severity       @default(HIGH)
+  status              IncidentStatus @default(OPEN)
+  phase               IncidentPhase  @default(DETECTION)
+  type                IncidentType   @default SECURITY
+  priority            Priority       @default(MEDIUM)
+  confidence          Int            @default(50) // 0-100
+  assignedTo          String?
+  commander           String?
+  reporter            String?
+  detectedAt          DateTime       @default(now())
+  acknowledgedAt      DateTime?
   resolvedAt          DateTime?
-  targetResolution    DateTime?
-  slaBreach           Boolean          @default(false)
-  createdAt           DateTime         @default(now())
-  updatedAt           DateTime         @updatedAt
+  closedAt            DateTime?
+  slaDeadline         DateTime?
+  slaBreach           Boolean        @default(false)
+  artpReportable      Boolean        @default(false)
+  artpSubmissionId   String?
+  rootCause           String?        @db.Text
+  impact              String?        @db.Text
+  containmentActions  Json?
+  remediationSteps    Json?
+  lessonsLearned      String?        @db.Text
+  costEstimateDZD      Decimal?       @db.Decimal(15, 2) // Estimated financial impact in DZD
+  affectedAssets       Int            @default(0)
+  affectedSubscribers  Int            @default(0)
+  tags                String[]       @default([])
 
-  alerts              Alert[]
-  updates             IncidentUpdate[]
-  evidence            Evidence[]
+  // Relations
+  owner               User           @relation("IncidentOwner", fields: [reporter], references: [id])
+  assignee            User?          @relation("IncidentAssignee", fields: [assignedTo], references: [id])
+  alerts              Alert[]        @relation("AlertIncident")
   tasks               Task[]
+  evidence            Evidence[]
+  timeline            TimelineEvent[]
 
-  @@index([status])
-  @@index([severity])
-  @@index([incidentType])
-  @@index([assignedToId])
+  @@index([status, severity])
+  @@index([type])
   @@index([detectedAt])
-  @@index([slaBreach])
+  @@index([artpReportable])
+  @@fulltext([title, description])
+  @@map("incidents")
 }
 
-enum IncidentType {
-  SECURITY
-  FRAUD
-  DATA_BREACH
-  DDoS
-  MALWARE
-  PHISHING
-  INSIDER_THREAT
-  THIRD_PARTY
-  TELECOM_FRAUD
-  INTERCEPTION
-  NETWORK_INTRUSION
-  APT
-}
-
-enum IncidentSeverity {
-  CRITICAL
-  HIGH
-  MEDIUM
+enum Severity {
+  INFO
   LOW
+  MEDIUM
+  HIGH
+  CRITICAL
+}
+
+enum AlertStatus {
+  ACTIVE
+  SUPPRESSED
+  ACKNOWLEDGED
+  ESCALATED
+  CLOSED
+  FALSE_POSITIVE
 }
 
 enum IncidentStatus {
   OPEN
   IN_PROGRESS
-  CONTAINED
-  ERADICATED
-  RECOVERING
   RESOLVED
   CLOSED
-  POST_MORTEM
+  ESCALATED
 }
 
 enum IncidentPhase {
@@ -265,218 +238,15 @@ enum IncidentPhase {
   CLOSED
 }
 
-model IncidentUpdate {
-  id          String    @id @default(cuid())
-  incidentId  String
-  authorId    String
-  message     String
-  status      IncidentStatus?
-  phase       IncidentPhase?
-  isInternal  Boolean   @default(false)
-  attachments String?
-  createdAt   DateTime  @default(now())
-
-  incident Incident @relation(fields: [incidentId], references: [id], onDelete: Cascade)
-  author   User    @relation(fields: [authorId], references: [id])
-
-  @@index([incidentId])
-  @@index([authorId])
-  @@map("incident_updates")
+enum IncidentType {
+  SECURITY
+  FRAUD
+  COMPLIANCE
+  OPERATIONAL
+  THIRD_PARTY
 }
 
-model Evidence {
-  id          String        @id @default(cuid())
-  incidentId  String
-  title       String
-  description String?
-  type        EvidenceType  @default(FILE)
-  filePath    String?
-  fileHash    String?
-  fileSize    Int?
-  mimeType    String?
-  collectedBy String?
-  collectedAt DateTime     @default(now())
-  metadata    String?
-  createdAt   DateTime      @default(now())
-
-  incident Incident @relation(fields: [incidentId], references: [id], onDelete: Cascade)
-
-  @@index([incidentId])
-  @@index([type])
-  @@map("evidence")
-}
-
-enum EvidenceType {
-  FILE
-  LOG
-  MEMORY_DUMP
-  NETWORK_CAPTURE
-  SCREENSHOT
-  EMAIL
-  MALWARE_SAMPLE
-  CONFIGURATION
-  OTHER
-}
-
-model Task {
-  id          String     @id @default(cuid())
-  title       String
-  description String?
-  status      TaskStatus @default(PENDING)
-  priority    Int        @default(3)
-  assigneeId  String?
-  incidentId  String?
-  dueDate     DateTime?
-  completedAt DateTime?
-  createdAt   DateTime   @default(now())
-  updatedAt   DateTime   @updatedAt
-
-  assignee  User?     @relation(fields: [assigneeId], references: [id])
-  incident Incident? @relation(fields: [incidentId], references: [id], onDelete: SetNull)
-
-  @@index([status])
-  @@index([assigneeId])
-  @@index([incidentId])
-  @@index([dueDate])
-}
-
-enum TaskStatus {
-  PENDING
-  IN_PROGRESS
-  BLOCKED
-  COMPLETED
-  CANCELLED
-}
-
-// ============================================================
-// DOMAIN 3: THREAT INTELLIGENCE
-// ============================================================
-
-model ThreatIndicator {
-  id                String              @id @default(cuid())
-  type              IndicatorType
-  value             String
-  confidence        Float               @default(50.0)
-  source            String?
-  threatActor       String?
-  malwareFamily     String?
-  campaignId        String?
-  isFirstSeen      Boolean             @default(true)
-  isActive          Boolean             @default(true)
-  ttl               DateTime?
-  lastSeen          DateTime            @default(now())
-  firstSeen         DateTime            @default(now())
-  tags              String?
-  context           String?
-  createdAt         DateTime            @default(now())
-  updatedAt         DateTime            @updatedAt()
-
-  @@unique([type, value])
-  @@index([type])
-  @@index([isActive])
-  @@index([threatActor])
-  @@map("threat_indicators")
-}
-
-enum IndicatorType {
-  IPV4
-  IPV6
-  DOMAIN
-  URL
-  EMAIL
-  FILE_HASH_MD5
-  FILE_HASH_SHA1
-  FILE_HASH_SHA256
-  MUTEX
-  REGISTRY_KEY
-  USER_AGENT
-  SS7_GT
-  SS7_IMSI
-  IMSI
-  IMEI
-  MSISDN
-  PHONE_NUMBER
-}
-
-model IOC {
-  id                String           @id @default(cuid())
-  iocId             String           @unique
-  type              IndicatorType
-  value             String
-  threatLevel       ThreatLevel      @default(MEDIUM)
-  description       String?
-  source            String?
-  sourceUrl         String?
-  confidence        Int              @default(50)
-  createdBy         String?
-  killChainPhases   String?
-  labels            String?
-  isValidated       Boolean          @default(false)
-  falsePositiveRate Float            @default(0.0)
-  lastObserved      DateTime?
-  expiration        DateTime?
-  createdAt         DateTime         @default(now())
-  updatedAt         DateTime         @updatedAt()
-
-  @@index([type])
-  @@index([threatLevel])
-  @@index([isValidated])
-}
-
-enum ThreatLevel {
-  CRITICAL
-  HIGH
-  MEDIUM
-  LOW
-  UNKNOWN
-}
-
-model TIPLv2 {
-  id                  String           @id @default(cuid())
-  tipId               String           @unique
-  title               String
-  type                TIPLv2Type
-  description         String?
-  confidence          Float            @default(50.0)
-  severity            TIPSeverity      @default(MEDIUM)
-  sourceOrg           String?
-  tlp                 TLPMarking       @default(AMBER)
-  iocIds              String?
-  indicatorIds        String?
-  productIds          String?
-  affectedCountries   String?
-  affectedSectors     String?
-  telecomSpecific     String?
-  isActionable        Boolean          @default(false)
-  actionTaken         String?
-  distributionScope   DistributionScope @default(NATIONAL_SOC)
-  publishedAt         DateTime?
-  validFrom           DateTime         @default(now())
-  validUntil         DateTime?
-  createdAt           DateTime         @default(now())
-  updatedAt           DateTime         @updatedAt()
-
-  @@index([type])
-  @@index([severity])
-  @@index([tlp])
-  @@index([isActionable])
-  @@map("tipl_v2")
-}
-
-enum TIPLv2Type {
-  INDICATOR
-  OBSERVABLE
-  CAMPAIGN
-  THREAT_ACTOR
-  MALWARE
-  VULNERABILITY
-  ATTACK_PATTERN
-  COURSE_OF_ACTION
-  INFRASTRUCTURE
-  TELECOM_THREAT
-}
-
-enum TIPSeverity {
+enum Priority {
   CRITICAL
   HIGH
   MEDIUM
@@ -484,264 +254,182 @@ enum TIPSeverity {
   INFO
 }
 
-enum TLPMarking {
-  RED
-  AMBER
-  GREEN
-  WHITE
-  CLEAR
-}
+// ============================================================
+// DOMAIN 3: THREAT INTELLIGENCE
+// ============================================================
 
-enum DistributionScope {
-  NATIONAL_SOC
-  SECTOR_CSIRTs
-  CRITICAL_INFRASTRUCTURE
-  ALL_STAKEHOLDERS
-  INTERNATIONAL_PARTNERS
-  PUBLIC
-}
+model ThreatIntel {
+  id                  String         @id @default(cuid())
+  type                ThreatType
+  value               String         @unique
+  source              String         // 'MISP', 'OpenCTI', 'Internal', 'OSINT'
+  confidence          Int            @default(50) // 0-100
+  severity            ThreatSeverity @default(MEDIUM)
+  tlp                 TLP           @default(WHITE)
+  status              IOCStatus      @default(ACTIVE)
+  firstSeen           DateTime       @default(now())
+  lastSeen            DateTime       @default(now?)
+  expirationDate      DateTime?
+  description         String?        @db.Text
+  tags                String[]       @default([])
+  context             Json?
+  reports             String[]       @default([]) // Related incident IDs
+  enrichmentData      Json?
 
-model Campaign {
-  id                String           @id @default(cuid())
-  name              String           @unique
-  alias             String?
-  description       String?
-  threatActor       String?
-  attributionConfidence Float        @default(0.0)
-  status            CampaignStatus   @default(ACTIVE)
-  startDate         DateTime?
-  endDate           DateTime?
-  targetSector      String?
-  targetRegion      String?
-  objectives        String?
-  techniques        String?
-  milestones        String?
-  financialImpact   Float?
-  isActive          Boolean          @default(true)
-  firstSeen         DateTime         @default(now())
-  lastSeen         DateTime         @default(now())
-  createdAt         DateTime         @default(now())
-  updatedAt         DateTime         @updatedAt()
-
+  @@index([type, value])
+  @@index([source])
   @@index([status])
-  @@index([threatActor])
-  @@index([isActive])
+  @@index([firstSeen])
+  @@map("threat_intel")
 }
 
-enum CampaignStatus {
+enum ThreatType {
+  IP_DOMAIN
+  URL
+  HASH_MD5
+  HASH_SHA1
+ _HASH_SHA256
+  EMAIL
+  IMEI
+  IMSI
+  MSISDN
+  SS7_GT
+  INDICATOR_COMPROMISE
+  MALWARE_SAMPLE
+  VULNERABILITY
+  CUSTOM
+}
+
+enum ThreatSeverity {
+  UNKNOWN
+  LOW
+  MEDIUM
+  HIGH
+  CRITICAL
+}
+
+enum TLP {
+  WHITE
+  GREEN
+  AMBER
+  RED
+}
+
+enum IOCStatus {
   ACTIVE
-  DORMANT
-  CONCLUDED
-  ATTRIBUTED
-  ONGOING
+  EXPIRED
+  RETIATED
+  OBSOLETE
 }
 
 // ============================================================
-// DOMAIN 4: TELECOM-SPECIFIC MODELS (SIMIFIED)
+// DOMAIN 4: TELECOM-SPECIFIC MODELS
 // ============================================================
+
+model NetworkElement {
+  id                  String         @id @default(cuid())
+  name                String
+  elementType         String         // 'SS7_FIREWALL', 'GTP_PROBE', 'HLR', 'MSC', 'SGSN', etc.
+  vendor              String?
+  softwareVersion     String?
+  ipAddress           String?
+  location            String?
+  region              String?
+  status              ElementStatus  @default(OPERATIONAL)
+  lastSeen            DateTime?
+  metadata            Json?
+  createdAt           DateTime       @default(now())
+  updatedAt           DateTime       @updatedAt
+
+  @@index([elementType])
+  @@index([status])
+  @@index([region])
+  @@map("network_elements")
+}
+
+enum ElementStatus {
+  OPERATIONAL
+  DEGRADED
+  MAINTENANCE
+  OFFLINE
+  UNKNOWN
+}
 
 model Subscriber {
-  id                String           @id @default(cuid())
-  imsi              String           @unique
-  msisdn            String           @unique
-  imei              String?
-  imsiType          IMSIType         @default(POSTPAID)
-  subscriberStatus  SubscriberStatus @default(ACTIVE)
-  roamingStatus     RoamingStatus    @default(HOME)
-  homeCountry       String?
-  visitedCountry    String?
-  visitedNetwork    String?
-  profile           String?
-  riskScore         Float            @default(0.0)
-  lastLocationUpdate DateTime?
-  lastActivityAt    DateTime?
-  createdAt         DateTime         @default(now())
-  updatedAt         DateTime         @updatedAt()
+  id                  String         @id @default(cuid())
+  msisdn              String         @unique
+  imsi                String         @unique?
+  riskScore           Int            @default(0) // 0-100
+  subscriberStatus     SubscriberStatus @default(ACTIVE)
+  isRoaming           Boolean        @default(false)
+  roamingCountry      String?
+  homeOperator        String?
+  currentLocation     String?
+  lastSeen            DateTime?
+  firstSeen           DateTime       @default(now())
+  fraudFlags          Json           @default("{}") // { simSwapRisk: true, irsfFlag: false }
+  notes               String?        @db.Text
 
-  @@index([imsi])
   @@index([msisdn])
-  @@index([subscriberStatus])
   @@index([riskScore])
-}
-
-enum IMSIType {
-  PREPAID
-  POSTPAID
-  MVNO
-  ROAMING
-  IoT
-  MACHINE
+  @@index([subscriberStatus])
+  @@map("subscribers")
 }
 
 enum SubscriberStatus {
   ACTIVE
   SUSPENDED
   TERMINATED
-  FRAUD_LOCKED
-  BARRED
-  PENDING_ACTIVATION
-}
-
-enum RoamingStatus {
-  HOME
-  INTERNATIONAL_ROAMING
-  NATIONAL_ROAMING
-  UNKNOWN
-}
-
-model NetworkElement {
-  id                String           @id @default(cuid())
-  elementType       NetworkElementType
-  hostname          String
-  ipAddress         String           @unique
-  vendor            String?
-  softwareVersion   String?
-  status            NEStatus         @default(OPERATIONAL)
-  capacity          Float?
-  location          String?
-  redundancyGroup   String?
-  protocols         String?
-  securityZone      String?
-  configHash        String?
-  metadata          String?
-  lastHeartbeat     DateTime?
-  createdAt         DateTime         @default(now())
-  updatedAt         DateTime         @updatedAt()
-
-  @@index([elementType])
-  @@index([status])
-  @@index([ipAddress])
-  @@map("network_elements")
-}
-
-enum NetworkElementType {
-  HLR_HSS
-  MSC
-  SGSN
-  GGSN_PGW
-  MME
-  SMSC
-  STP
-  SIGTRAN_GATEWAY
-  GTP_PROXY
-  DIAMETER_AGENT
-  SIP_PROXY
-  CSCF_P_CSCF
-  CSCF_I_CSCF
-  CSCF_S_CSCF
-  PCRF_OCS
-  CDR_COLLECTOR
-  PROBE_SENSOR
-  FIREWALL
-  IDS_IPS
-  LOAD_BALANCER
-}
-
-enum NEStatus {
-  OPERATIONAL
-  DEGRADED
-  MAINTENANCE
-  FAILED
-  OFFLINE
-  UNKNOWN
+  ROAMING_ONLY
+  PREPAID
+  POSTPAID
 }
 
 model SS7Message {
-  id                String           @id @default(cuid())
-  messageType       SS7MessageType
-  opc               Int
-  dpc               Int
-  globalTitle       String?
-  imsi              String?
-  msisdn            String?
-  sriResult         String?
-  isRoaming         Boolean          @default(false)
-  isInternational   Boolean          @default(false)
-  anomalyScore      Float            @default(0.0)
-  anomalyReason     String?
-  isBlocked         Boolean          @default(false)
-  rawMessage        String?
-  protocolDetails   String?
-  sourceNeId        String?
-  destNeId          String?
-  timestamp         DateTime         @default(now())
-  processedAt       DateTime?
+  id                  String         @id @default(cuid())
+  messageType         String         // SRI, ISAT, USSD, etc.
+  callingParty        String?
+  calledParty         String?
+  globalTitle         String?
+  sccpCalling        String?
+  sccpCalled         String?
+  imsi                String?
+  msisdn              String?
+  isBlocked           Boolean        @default(false)
+  riskScore           Int            @default(0)
+  timestamp           DateTime       @default(now())
+  rawMessage          Bytes?
+  parsedData          Json?
+  probeId             String?
 
   @@index([messageType])
-  @@index([opc, dpc])
   @@index([timestamp])
-  @@index([anomalyScore])
   @@index([isBlocked])
+  @@index([riskScore])
   @@map("ss7_messages")
 }
 
-enum SS7MessageType {
-  SRI_REQ
-  SRI_RESP
-  ISI_REQ
-  ISI_RESP
-  MAP_INSERT_SUB_DATA
-  MAP_UPDATE_LOCATION
-  MAP_CANCEL_LOCATION
-  MAP_PURGE_MS
-  MAP_NOTIFY_FWD_SHORT_MSG
-  MAP_FWD_SHORT_MSG
-  MAP_DEL_SM_REQ
-  MAP_DEL_SM_RESP
-  MAP_ALERT_SERVICE
-  MAP_PROCESS_SS_REQ
-  MAP_REGISTER_SS
-  MAP_ERASE_SS
-  USSD_REQUEST
-  OTHER
-}
-
 model GTPSession {
-  id                String           @id @default(cuid())
-  sessionType       GTPSessionType
-  imsi              String?
-  msisdn            String?
-  imei              String?
-  sourceIp          String
-  destIp            String
-  sourceTeid        BigInt
-  destTeid          BigInt
-  apn               String?
-  rai               String?
-  cellId            String?
-  lac               Int?
-  mcc               String?
-  mnc               String?
-  qosProfile        String?
-  bytesUp           BigInt           @default(0)
-  bytesDown         BigInt           @default(0)
-  durationSeconds   Int              @default(0)
-  chargingId        String?
-  pdnType           PDNType          @default(IPV4)
-  sessionStatus     SessionStatus    @default(ACTIVE)
-  ratType           RATType?
-  anomalyScore      Float            @default(0.0)
-  startedAt         DateTime         @default(now())
-  lastActivityAt    DateTime         @default(now())
-  terminatedAt      DateTime?
+  id                  String         @id @default(cuid())
+  sessionType         String         // 'GTP-C', 'GTP-U', 'GTPv2'
+  imsi                String?
+  msisdn              String?
+  apn                 String?
+  localTeid           String?
+  remoteTeid          String?
+  sessionStatus       SessionStatus @default(ACTIVE)
+  startedAt           DateTime       @default(now())
+  endedAt             DateTime?
+  dataVolumeUp        BigInt         @default(0)
+  dataVolumeDown      BigInt         @default(0)
+  durationSeconds     Int            @default(0)
+  anomalyScore        Int            @default(0) // 0-100
+  flags               Json?
 
   @@index([imsi])
-  @@index([sessionType])
   @@index([sessionStatus])
-  @@index([startedAt])
+  @@index([anomalyScore])
   @@map("gtp_sessions")
-}
-
-enum GTPSessionType {
-  DATA
-  CONTROL
-  SIGNALING
-}
-
-enum PDNType {
-  IPV4
-  IPV6
-  IPV4V6
 }
 
 enum SessionStatus {
@@ -751,767 +439,84 @@ enum SessionStatus {
   SUSPENDED
 }
 
-enum RATType {
-  GERAN
-  UTRAN
-  EUTRAN
-  NR
-  WLAN
-  UNKNOWN
-}
-
-model DiameterSession {
-  id                String              @id @default(cuid())
-  sessionId         String              @unique
-  commandCode       DiameterCommand
-  originHost        String
-  originRealm       String
-  destinationHost   String?
-  destinationRealm  String?
-  authApplicationId Int?
-  userName          String?
-  imsi              String?
-  resultCode        Int?
-  isError           Boolean             @default(false)
-  errorReason       String?
-  ccRequestType    CCRequestType?
-  ccRequestNumber  Int                 @default(0)
-  serviceInfo       String?
-  subscriptionId    String?
-  ratedUnits        BigInt              @default(0)
-  currencyCode      String?
-  sessionStatus     SessionStatus       @default(ACTIVE)
-  anomalyScore      Float               @default(0.0)
-  startedAt         DateTime            @default(now())
-  lastActivityAt    DateTime            @default(now())
-  terminatedAt      DateTime?
-
-  @@index([sessionId])
-  @@index([commandCode])
-  @@index([userName])
-  @@index([sessionStatus])
-  @@map("diameter_sessions")
-}
-
-enum DiameterCommand {
-  CCR
-  CCA
-  AAR
-  AAA
-  STR
-  STA
-  ASR
-  ASA
-  DER
-  DEA
-  UDR
-  UDA
-  PUR
-  PUA
-  RAR
-  RAA
-  OTHER
-}
-
-enum CCRequestType {
-  INITIAL_REQUEST
-  UPDATE_REQUEST
-  TERMINATION_REQUEST
-  EVENT_REQUEST
-}
-
-model RadiusSession {
-  id                String           @id @default(cuid())
-  sessionId         String           @unique
-  userName          String?
-  nasIpAddress      String
-  nasPort           Int?
-  nasPortType       NASPortType?
-  framedProtocol    FramedProtocol?
-  serviceName       ServiceName?
-  callingStationId  String?
-  calledStationId   String?
-  authProtocol      AuthProtocol?
-  packetType        RadiusPacketType
-  statusCode        Int?
-  errorMessage      String?
-  sessionTimeout    Int?
-  idleTimeout       Int?
-  bytesIn           BigInt           @default(0)
-  bytesOut          BigInt           @default(0)
-  packetsIn         BigInt           @default(0)
-  packetsOut        BigInt           @default(0)
-  imsi              String?
-  apn               String?
-  sessionStatus     SessionStatus    @default(ACTIVE)
-  startedAt         DateTime         @default(now())
-  lastActivityAt    DateTime         @default(now())
-  terminatedAt      DateTime?
-
-  @@index([sessionId])
-  @@index([userName])
-  @@index([nasIpAddress])
-  @@index([sessionStatus])
-  @@map("radius_sessions")
-}
-
-enum NASPortType {
-  WIRELESS_80211
-  ETHERNET
-  ADSL
-  GPRS_UMTS
-  CDMA2000
-  LTE_EUTRAN
-  NR_5G
-  WIMAX
-  XDSL
-  VPN
-  OTHER
-}
-
-enum FramedProtocol {
-  PPP
-  SLIP
-  ARAP
-  GPRS_PPP
-  OTHER
-}
-
-enum ServiceName {
-  FRAMED_USER
-  LOGIN_USER
-  OUTBOUND_USER
-  ADMINISTRATOR
-  NAS_PROMPT
-  AUTHENTICATE_ONLY
-  CALLBACK_LOGIN
-  CALLBACK_FRAMED
-  OTHER
-}
-
-enum AuthProtocol {
-  PAP
-  CHAP
-  MSCHAP
-  MSCHAPV2
-  EAP
-  OTHER
-}
-
-enum RadiusPacketType {
-  ACCESS_REQUEST
-  ACCESS_ACCEPT
-  ACCESS_REJECT
-  ACCESS_CHALLENGE
-  ACCOUNTING_REQUEST
-  ACCOUNTING_RESPONSE
-  SERVER_COA_REQUEST
-  SERVER_COA_ACK
-  SERVER_COA_NAK
-  DISCONNECT_REQUEST
-  DISCONNECT_ACK
-  DISCONNECT_NAK
-}
-
 model SIPSession {
-  id                String           @id @default(cuid())
-  callId            String           @unique
-  fromUri           String
-  toUri             String
-  fromUser          String?
-  toUser            String?
-  fromDomain        String?
-  toDomain         String?
-  callType          SIPCallType      @default(VOICE)
-  callDirection     CallDirection    @default(INCOMING)
-  inviteTimestamp   DateTime?
-  tryTimestamp      DateTime?
-  ringingTimestamp  DateTime?
-  connectTimestamp  DateTime?
-  disconnectTimestamp DateTime?
-  disconnectReason  String?
-  durationSeconds   Int              @default(0)
-  sourceIp          String
-  destIp            String
-  sourcePort        Int?
-  destPort          Int?
-  sipMethod         SIPMethod?
-  responseCode      Int?
-  userAgent         String?
-  isEncrypted       Boolean          @default(false)
-  srtpEnabled       Boolean          @default(false)
-  isIntercepted     Boolean          @default(false)
-  interceptionType  String?
-  fraudIndicators   String?
-  anomalyScore      Float            @default(0.0)
-  sourceNeId        String?
-  destNeId          String?
-  createdAt         DateTime         @default(now())
+  id                  String         @id @default(cuid())
+  callType            String         // 'VOICE', 'VIDEO', 'SMS', 'USSD'
+  callingParty        String?
+  calledParty         String?
+  inviteTimestamp    DateTime?
+  acceptTimestamp    DateTime?
+  byeTimestamp       DateTime?
+  durationSeconds     Int?
+  isFraudSuspected   Boolean        @default(false)
+  fraudType           String?
+  sipStatusCode      Int?
+  reasonPhrase        String?
+  mediaServer        String?
+  trunkGroup         String?
+  roamingOrigin      Boolean        @default(false)
 
-  @@index([callId])
-  @@index([fromUser])
-  @@index([toUser])
   @@index([callType])
-  @@index([connectTimestamp])
+  @@index([inviteTimestamp])
+  @@index([isFraudSuspected])
   @@map("sip_sessions")
 }
 
-enum SIPCallType {
-  VOICE
-  VIDEO
-  SMS_OVER_SIP
-  INSTANT_MESSAGE
-  PRESENCE
-  CONFERENCE
-  OTHER
-}
+model DiameterSession {
+  id                  String         @id @default(cuid())
+  commandCode         Int
+  applicationId       Int
+  originHost          String?
+  originRealm         String?
+  destinationHost     String?
+  destinationRealm    String?
+  sessionId           String?
+  sessionStatus       SessionStatus @default(ACTIVE)
+  startedAt           DateTime       @default(now())
+  endedAt             DateTime?
+  resultCode          Int?
 
-enum CallDirection {
-  INCOMING
-  OUTGOING
-  INTERNAL
-  TRANSIT
-}
-
-enum SIPMethod {
-  INVITE
-  ACK
-  BYE
-  CANCEL
-  OPTIONS
-  REGISTER
-  PRACK
-  SUBSCRIBE
-  NOTIFY
-  PUBLISH
-  INFO
-  REFER
-  MESSAGE
-  UPDATE
+  @@index([commandCode])
+  @@index([applicationId])
+  @@map("diameter_sessions")
 }
 
 // ============================================================
-// DOMAIN 5: COMPLIANCE & AUDIT
+// DOMAIN 5: COMPLIANCE (ARTP/ANSSI)
 // ============================================================
 
-model AuditLog {
-  id            String       @id @default(cuid())
-  userId        String?
-  action        String
-  resource      String
-  resourceId    String?
-  oldValue      String?
-  newValue      String?
-  ipAddress     String?
-  userAgent     String?
-  severity      AuditSeverity @default(INFO)
-  category      AuditCategory @default(GENERAL)
-  outcome       AuditOutcome  @default(SUCCESS)
-  errorMessage  String?
-  metadata      String?
-  createdAt     DateTime     @default(now())
-
-  user User? @relation(fields: [userId], references: [id], onDelete: SetNull)
-
-  @@index([userId])
-  @@index([action])
-  @@index([resource])
-  @@index([createdAt])
-  @@index([category])
-  @@map("audit_logs")
-}
-
-enum AuditSeverity {
-  CRITICAL
-  HIGH
-  MEDIUM
-  LOW
-  INFO
-}
-
-enum AuditCategory {
-  AUTHENTICATION
-  AUTHORIZATION
-  DATA_ACCESS
-  DATA_MODIFICATION
-  SYSTEM_CONFIG
-  INCIDENT_MANAGEMENT
-  THREAT_INTEL
-  COMPLIANCE
-  SECURITY_EVENT
-  GENERAL
-}
-
-enum AuditOutcome {
-  SUCCESS
-  FAILURE
-  DENIED
-  ERROR
-  PARTIAL
-}
-
-model Report {
-  id            String       @id @default(cuid())
-  title         String
-  description   String?
-  reportType    ReportType   @default(INCIDENT_SUMMARY)
-  format        ReportFormat @default(PDF)
-  status        ReportStatus @default(GENERATING)
-  generatedBy   String?
-  parameters    String?
-  filePath      String?
-  fileSize      Int?
-  schedule      ReportSchedule?
-  recipients    String?
-  dateRangeStart DateTime?
-  dateRangeEnd   DateTime?
-  createdAt     DateTime     @default(now())
-  completedAt   DateTime?
-
-  @@index([reportType])
-  @@index([status])
-  @@index([generatedBy])
-  @@index([createdAt])
-}
-
-enum ReportType {
-  INCIDENT_SUMMARY
-  ALERT_TRENDS
-  THREAT_LANDSCAPE
-  KPI_DASHBOARD
-  COMPLIANCE_STATUS
-  SLA_REPORT
-  TEAM_PERFORMANCE
-  THREAT_ACTOR_PROFILE
-  TELECOM_FRAUD
-  ROAMING_ANALYSIS
-  EXECUTIVE_SUMMARY
-  CUSTOM
-}
-
-enum ReportFormat {
-  PDF
-  HTML
-  CSV
-  JSON
-  XLSX
-  DOCX
-}
-
-enum ReportStatus {
-  GENERATING
-  COMPLETED
-  FAILED
-  SCHEDULED
-  EXPIRED
-}
-
-enum ReportSchedule {
-  DAILY
-  WEEKLY
-  MONTHLY
-  QUARTERLY
-  YEARLY
-  ON_DEMAND
-}
-
-model SystemConfig {
-  id            String    @id @default(cuid())
-  key           String    @unique
-  value         String
-  description   String?
-  category      ConfigCategory @default(GENERAL)
-  isSensitive   Boolean   @default(false)
-  validationRule String?
-  lastModifiedBy String?
-  createdAt     DateTime  @default(now())
-  updatedAt     DateTime  @updatedAt
-
-  @@index([category])
-  @@map("system_config")
-}
-
-enum ConfigCategory {
-  GENERAL
-  SECURITY
-  INTEGRATION
-  NOTIFICATION
-  COMPLIANCE
-  PERFORMANCE
-  BACKUP
-  TELECOM
-  THREAT_INTEL
-  UI_SETTINGS
-}
-
-model DataRetentionPolicy {
-  id                  String              @id @default(cuid())
-  entityType          RetentionEntityType
-  retentionPeriodDays Int                 @default(365)
-  actionAfterExpiry   RetentionAction     @default(ARCHIVE)
-  storageTier         StorageTier         @default(HOT)
-  legalHold           Boolean             @default(false)
-  complianceRequirements String?
-  customRules         String?
-  isEnabled           Boolean             @default(true)
-  lastRun             DateTime?
-  nextRun             DateTime?
-  recordsAffected     BigInt              @default(0)
-  createdAt           DateTime            @default(now())
-  updatedAt           DateTime            @updatedAt
-
-  @@index([entityType])
-  @@index([isEnabled])
-  @@map("data_retention_policies")
-}
-
-enum RetentionEntityType {
-  ALERTS
-  INCIDENTS
-  AUDIT_LOGS
-  RAW_LOGS
-  SESSION_DATA
-  PCAP_FILES
-  EVIDENCE
-  THREAT_INTEL
-  METRICS
-  REPORTS
-  TELECOM_SESSIONS
-  SS7_MESSAGES
-  SIP_CDRS
-  ALL
-}
-
-enum RetentionAction {
-  DELETE
-  ARCHIVE
-  ANONYMIZE
-  AGGREGATE
-  MOVE_TO_COLD
-}
-
-enum StorageTier {
-  HOT
-  WARM
-  COLD
-  GLACIER
-}
-
-// ============================================================
-// DOMAIN: FRAUD DETECTION (Telecom Security)
-// ============================================================
-
-model FraudCase {
-  id                String           @id @default(cuid())
-  caseNumber        String           @unique
-  type              String           // SIM_SWAP, IRSF, WANGIRI, PBX_HIJACKING, etc.
-  severity          String           // LOW, MEDIUM, HIGH, CRITICAL
-  status            String           @default("OPEN") // OPEN, INVESTIGATING, ESCALATED, RESOLVED, CLOSED
-  confidence        Int              @default(0) // 0-100
-  description       String?
-  subscriberId      String?
-  
-  // Evidence & Impact
-  evidence          String?                              // JSON array of evidence items
-  estimatedLossDZD  Float?                                 // Estimated financial loss in Dinar
-  
-  // ARTP Compliance
-  artpReportable    Boolean          @default(false)
-  artpDeadline      DateTime?       // Must report within 24h
-  
-  // Assignment & Resolution
-  assignedTo        String?
-  resolvedAt        DateTime?
-  resolutionNotes   String?
-  metadata          String?                               // Additional metadata as JSON
-  
-  createdAt         DateTime         @default(now())
-  updatedAt         DateTime         @updatedAt
-
-  @@index([caseNumber])
-  @@index([type])
-  @@index([severity])
-  @@index([status])
-  @@index([subscriberId])
-  @@index([artpReportable])
-  @@index([createdAt])
-}
-
-model FraudRule {
-  id                String           @id @default(cuid())
-  name              String
-  fraudType         String           // Maps to FraudCase.type
-  enabled           Boolean          @default(true)
-  severity          String           // LOW, MEDIUM, HIGH, CRITICAL
-  conditions        String?                               // JSON array of rule conditions
-  actions           String?                                // JSON array of actions to take
-  artpReportable    Boolean          @default(false)
-  cooldownMinutes   Int              @default(60)
-  hitCount          Int              @default(0)
-  lastHitAt         DateTime?
-  enabledBy         String?
-  createdAt         DateTime         @default(now())
-  updatedAt         DateTime         @updatedAt
-
-  @@index([fraudType])
-  @@index([enabled])
-}
-
-// ============================================================
-// DOMAIN 6: COMPLIANCE AUTOMATION (Phase 6)
-// ARTP Reporting & ANSSI Alignment
-// ============================================================
-
-// Compliance Framework (e.g., ARTP, ANSSI PSSI, ISO 27001)
-model ComplianceFramework {
-  id                  String                   @id @default(cuid())
-  name                String                   @unique
-  displayName         String
-  description         String?
-  version             String                   @default("1.0")
-  frameworkType       FrameworkType            @default(REGULATORY)
-  jurisdiction        String?                  // e.g., "DZ", "EU", "FR"
-  issuingBody         String?                  // e.g., "ARTP", "ANSSI", "ISO"
-  effectiveDate       DateTime?
-  reviewFrequency     ReviewFrequency          @default(ANNUAL)
-  status              FrameworkStatus          @default(ACTIVE)
-  parentFrameworkId   String?
-  
-  // Configuration
-  controlCategories   String?                  // JSON array of categories
-  riskLevels          String?                  // JSON of risk level definitions
-  scoringMethodology  String?                  // Scoring rules as JSON
-  
-  // Metadata
-  documentationUrl    String?
-  contactEmail        String?
-  lastReviewedAt      DateTime?
+model Control {
+  id                  String         @id @default(cuid())
+  frameworkId         String
+  controlId           String         @unique
+  controlName         String
+  category            String
+  description         String?        @db.Text
+  implementationStatus ImplementationStatus @default(NOT_IMPLEMENTED
+  evidenceNotes       String?        @db.Text
+  riskRating          RiskRating     @default(MEDIUM)
+  artpReference       String?        // ARTP control reference
+  anssiMapping        String?        // ANSSI PSSI mapping
+  lastAssessedAt      DateTime?
   nextReviewDate      DateTime?
-  
-  // Relations
-  controls            ComplianceControl[]
-  assessments         ComplianceAssessment[]
-  policies            CompliancePolicy[]
-  metrics             ComplianceMetric[]
-  
-  @@index([frameworkType])
-  @@index([jurisdiction])
-  @@index([status])
-  @@map("compliance_frameworks")
-}
+  owner               String?
+  automatedEvidence   Boolean        @default(false)
+  complianceScore     Int            @default(0) // 0-100
 
-enum FrameworkType {
-  REGULATORY                                  // Government mandated (ARTP)
-  STANDARD                                    // Industry standard (ISO, NIST)
-  FRAMEWORK                                   // Best practice framework (ANSSI)
-  CERTIFICATION                               // Certifiable scheme
-  INTERNAL                                    // Internal policies
-}
+  assessments         Assessment[]
 
-enum ReviewFrequency {
-  QUARTERLY
-  SEMI_ANNUAL
-  ANNUAL
-  BIENNIAL
-  ON_DEMAND
-}
-
-enum FrameworkStatus {
-  DRAFT
-  ACTIVE
-  UNDER_REVIEW
-  DEPRECATED
-  SUPERSEDED
-}
-
-// Individual Control within a Framework
-model ComplianceControl {
-  id                  String                 @id @default(cuid())
-  frameworkId         String
-  controlId           String                 // External ID (e.g., "ARTP-SEC-001")
-  controlRef          String?                // Reference code
-  name                String
-  description         String?
-  category            String?                // e.g., "Access Control", "Encryption"
-  family              String?                // Control family/group
-  
-  // Classification
-  criticality         ControlCriticality     @default(MEDIUM)
-  priority            Int                    @default(3)        // 1=Highest
-  
-  // Requirements
-  requirements         String?                // Detailed requirements text
-  implementationGuidance String?             // How to implement
-  evidenceRequirements   String?              // What evidence is needed
-  testingProcedures      String?              // How to test/verify
-  
-  // Mapping
-  mappedControls      String?                // JSON of mappings to other frameworks
-  threatCoverage      String?                // JSON of threats this covers
-  mitreTechniques     String?                // MITRE ATT&CK technique IDs
-  
-  // Status
-  status              ControlStatus           @default(ACTIVE)
-  isApplicable        Boolean                 @default(true)
-  customizations      String?                 // Local customizations
-  
-  // Relations
-  framework           ComplianceFramework     @relation(fields: [frameworkId], references: [id], onDelete: Cascade)
-  assessments         ControlAssessment[]
-  evidenceItems       ComplianceEvidence[]
-  gapFindings         GapFinding[]
-  
-  @@unique([frameworkId, controlId])
-  @@index([category])
-  @@index([family])
-  @@index([criticality])
-  @@index([status])
-  @@map("compliance_controls")
-}
-
-enum ControlCriticality {
-  CRITICAL
-  HIGH
-  MEDIUM
-  LOW
-}
-
-enum ControlStatus {
-  ACTIVE
-  UNDER_REVIEW
-  DEPRECATED
-  DRAFT
-  NOT_APPLICABLE
-}
-
-// Compliance Assessment Run
-model ComplianceAssessment {
-  id                  String                   @id @default(cuid())
-  frameworkId         String
-  assessmentType      AssessmentType           @default(PERIODIC)
-  status              AssessmentStatus          @default(IN_PROGRESS)
-  
-  // Scope
-  scope               AssessmentScope?         // What's being assessed
-  assessedBy          String?                  // Assessor user ID
-  reviewedBy          String?                  // Reviewer user ID
-  
-  // Scoring
-  overallScore        Float?                   // 0-100 percentage
-  totalControls       Int                      @default(0)
-  compliantCount      Int                      @default(0)
-  partialCount        Int                      @default(0)
-  nonCompliantCount   Int                      @default(0)
-  notApplicableCount  Int                      @default(0)
-  notAssessedCount    Int                      @default(0)
-  
-  // Dates
-  startDate           DateTime                 @default(now())
-  targetEndDate       DateTime?
-  completedAt         DateTime?
-  
-  // Results & Actions
-  executiveSummary    String?
-  findings            String?                  // JSON array of findings
-  recommendations     String?                  // JSON array of recommendations
-  remediationPlan     String?                  // JSON of remediation tasks
-  riskAcceptances     String?                  // JSON of accepted risks
-  
-  // Reports
-  reportFilePath      String?
-  artpSubmissionId    String?                  // Link to ARTP submission
-  
-  // Relations
-  framework           ComplianceFramework      @relation(fields: [frameworkId], references: [id])
-  controlAssessments  ControlAssessment[]
-  gapFindings         GapFinding[]
-  
   @@index([frameworkId])
-  @@index([status])
-  @@index([assessmentType])
-  @@index([startDate])
-  @@map("compliance_assessments")
+  @@index([category])
+  @@index([implementationStatus])
+  @@map("controls")
 }
 
-enum AssessmentType {
-  PERIODIC                                     // Regular scheduled assessment
-  TRIGGERED                                    // Event-triggered (incident, breach)
-  INITIAL                                      // First-time baseline
-  FOLLOW_UP                                    // Follow-up on previous gaps
-  PRE_AUDIT                                    // Pre-certification audit
-  POST_INCIDENT                                // Post-incident review
-  ARTP_MANDATORY                               // ARTP-required assessment
-}
-
-enum AssessmentStatus {
-  PLANNING
-  IN_PROGRESS
-  DATA_COLLECTION
-  ANALYSIS
-  REVIEW
-  COMPLETED
-  APPROVED
-  REJECTED
-  ARCHIVED
-}
-
-enum AssessmentScope {
-  FULL                                         // All controls
-  SAMPLE                                       // Statistical sample
-  RISK_BASED                                   // High-risk controls only
-  DOMAIN_SPECIFIC                              // Specific domain/category
-  CONTROL_POINT                                // Specific control(s)
-}
-
-// Per-Control Assessment Result
-model ControlAssessment {
-  id                  String                   @id @default(cuid())
-  assessmentId        String
-  controlId           String
-  
-  // Results
-  result              AssessmentResult         @default(NOT_ASSESSED)
-  score               Float?                   // 0-100 for partial compliance
-  confidenceLevel     Float?                   @default(100.0)     // Confidence in assessment
-  
-  // Evidence
-  evidenceCollected   Boolean                  @default(false)
-  evidenceIds         String?                  // Array of evidence IDs
-  testResults         String?                  // Test results as JSON
-  
-  // Findings
-  findings            String?                  // Detailed findings
-  gapsIdentified      String?                  // JSON array of gaps
-  riskRating          RiskRating?              // Risk if non-compliant
-  
-  // Remediation
-  remediationRequired Boolean                  @default(false)
-  remediationPlan     String?                  // Planned actions
-  targetDate          DateTime?
-  owner               String?                  // Responsible person
-  comments            String?                  // Assessor comments
-  
-  // Timestamps
-  assessedAt          DateTime                 @default(now())
-  reassessmentDue     DateTime?
-  
-  // Relations
-  assessment          ComplianceAssessment     @relation(fields: [assessmentId], references: [id], onDelete: Cascade)
-  control             ComplianceControl        @relation(fields: [controlId], references: [id], onDelete: Cascade)
-  
-  @@unique([assessmentId, controlId])
-  @@index([result])
-  @@index([riskRating])
-  @@map("control_assessments")
-}
-
-enum AssessmentResult {
-  COMPLIANT
-  PARTIALLY_COMPLIANT
-  NON_COMPLIANT
-  NOT_ASSESSED
-  NOT_APPLICABLE
-  OBSERVATION
+enum ImplementationStatus {
+  NOT_IMPLEMENTED
+  PARTIALLY_IMPLEMENTED
+  IMPLEMENTED
+  TESTED
+  VERIFIED
 }
 
 enum RiskRating {
@@ -1519,482 +524,713 @@ enum RiskRating {
   HIGH
   MEDIUM
   LOW
-  ACCEPTABLE
-}
-
-// Compliance Evidence
-model ComplianceEvidence {
-  id                  String                   @id @default(cuid())
-  controlId           String
-  assessmentId        String?
-  
-  // Evidence Details
-  title               String
-  description         String?
-  type                EvidenceSourceType       @default(DOCUMENT)
-  classification      EvidenceClassification  @default(INTERNAL)
-  
-  // File/Content
-  filePath            String?
-  fileName            String?
-  fileHash            String?
-  fileSize            Int?
-  mimeType            String?
-  contentUrl          String?                  // URL for external evidence
-  
-  // Metadata
-  collectedBy         String?                  // User who collected
-  collectedAt         DateTime                 @default(now())
-  validFrom           DateTime?
-  validUntil          DateTime?
-  reviewStatus        EvidenceReviewStatus     @default(PENDING)
-  reviewedBy          String?
-  reviewedAt          DateTime?
-  reviewComments      String?
-  
-  // Provenance
-  sourceSystem        String?                  // Where evidence came from
-  automatedCollection Boolean                  @default(false)
-  collectionMethod    String?                  // How it was collected
-  
-  // Relations
-  control             ComplianceControl        @relation(fields: [controlId], references: [id], onDelete: Cascade)
-  
-  @@index([controlId])
-  @@index([type])
-  @@index([reviewStatus])
-  @@map("compliance_evidence")
-}
-
-enum EvidenceSourceType {
-  DOCUMENT
-  SCREENSHOT
-  LOG_EXTRACT
-  CONFIGURATION_EXPORT
-  POLICY_DOCUMENT
-  PROCEDURE
-  TRAINING_RECORD
-  ACCESS_LOG
-  AUDIT_REPORT
-  SCAN_RESULT
-  CERTIFICATE
-  INTERVIEW_NOTES
-  TEST_OUTPUT
-  AUTOMATED_TOOL_OUTPUT
-  EXTERNAL_AUDIT
-}
-
-enum EvidenceClassification {
-  PUBLIC
-  INTERNAL
-  CONFIDENTIAL
-  RESTRICTED
-  TOP_SECRET
-}
-
-enum EvidenceReviewStatus {
-  PENDING
-  VALIDATED
-  INVALIDATED
-  EXPIRED
-  SUPPLEMENTARY_NEEDED
-}
-
-// ARTP Regulatory Submission
-model ArtpSubmission {
-  id                  String                   @id @default(cuid())
-  submissionNumber    String                   @unique
-  submissionType      ArtpSubmissionType       @default(INCIDENT_REPORT)
-  status              ArtpSubmissionStatus      @default(DRAFT)
-  
-  // Content
-  title               String
-  summary             String?
-  detailedReport      String?                  // Full report content (JSON/HTML)
-  attachments         String?                  // JSON of attachment references
-  
-  // Reference Data
-  incidentId          String?                  // Related SOC incident
-  fraudCaseId         String?                  // Related fraud case
-  assessmentId        String?                  // Related compliance assessment
-  
-  // Timeline
-  deadline            DateTime?                // ARTP deadline (usually 24h/72h)
-  submittedAt         DateTime?
-  acknowledgedAt      DateTime?
-  responseReceivedAt  DateTime?
-  followUpRequired    Boolean                  @default(false)
-  followUpDeadline    DateTime?
-  
-  // ARTP Response
-  referenceNumber     String?                  // ARTP reference number
-  responseStatus      String?                  // ARTP's response status
-  responseComments    String?                  // Feedback from ARTP
-  requiredActions     String?                  // Actions requested by ARTP
-  
-  // Internal Tracking
-  preparedBy          String?
-  reviewedBy          String?
-  approvedBy          String?
-  priority            ArtpPriority             @default(STANDARD)
-  confidentiality     ArtpConfidentiality      @default(OFFICIAL)
-  
-  // Metadata
-  metadata            String?                  // Additional metadata
-  createdAt           DateTime                 @default(now())
-  updatedAt           DateTime                 @updatedAt()
-  
-  @@index([submissionType])
-  @@index([status])
-  @@index([deadline])
-  @@index([incidentId])
-  @@map("artp_submissions")
-}
-
-enum ArtpSubmissionType {
-  INCIDENT_REPORT                             // Security incident notification
-  FRAUD_REPORT                                 // Fraud case report
-  BREACH_NOTIFICATION                          // Data breach notification
-  QUARTERLY_REPORT                             // Quarterly security report
-  ANNUAL_CERTIFICATION                         // Annual certification
-  AD_HOC_REQUEST                               // Response to ARTP inquiry
-  SELF_ASSESSMENT                              // Self-assessment submission
-  EXCEPTION_REQUEST                            // Exception/com waiver request
-  CORRECTIVE_ACTION_PLAN                       // CAP submission
-}
-
-enum ArtpSubmissionStatus {
-  DRAFT
-  IN_REVIEW
-  PENDING_APPROVAL
-  SUBMITTED
-  ACKNOWLEDGED
-  UNDER_REVIEW_BY_ARTP
-  ADDITIONAL_INFO_REQUIRED
-  ACCEPTED
-  REJECTED
-  CLOSED
-  OVERDUE
-}
-
-enum ArtpPriority {
-  URGENT                                       // < 24 hours
-  HIGH                                         // < 72 hours
-  STANDARD                                     // Normal processing
-  LOW                                          // Informational
-}
-
-enum ArtpConfidentiality {
-  PUBLIC
-  OFFICIAL
-  CONFIDENTIAL
-  SECRET
-  TOP_SECRET
-}
-
-// Compliance Policy Document
-model CompliancePolicy {
-  id                  String                   @id @default(cuid())
-  frameworkId         String?
-  
-  // Policy Details
-  policyNumber        String                   @unique
-  title               String
-  version             String                   @default("1.0")
-  policyType          PolicyType               @default(SECURITY)
-  
-  // Content
-  summary             String?
-  content             String?                  // Full policy text or path
-  scope               String?                  // Applicability scope
-  owner               String?                  // Policy owner
-  steward             String?                  // Day-to-day steward
-  
-  // Lifecycle
-  status              PolicyStatus             @default(DRAFT)
-  effectiveDate       DateTime?
-  reviewDate          DateTime?
-  nextReviewDate      DateTime?
-  supersededBy        String?                  // Newer version
-  
-  // Approval
-  authorId            String?
-  reviewerId          String?
-  approverId          String?
-  approvedAt          DateTime?
-  
-  // Controls Mapping
-  mappedControls      String?                  // JSON of related control IDs
-  riskAreas           String?                  // JSON of covered risk areas
-  
-  // Metadata
-  classification      PolicyClassification     @default(INTERNAL)
-  lastPublishedAt     DateTime?
-  metadata            String?
-  createdAt           DateTime                 @default(now())
-  updatedAt           DateTime                 @updatedAt()
-  
-  // Relations
-  framework           ComplianceFramework?     @relation(fields: [frameworkId], references: [id])
-  
-  @@index([policyType])
-  @@index([status])
-  @@index([effectiveDate])
-  @@map("compliance_policies")
-}
-
-enum PolicyType {
-  SECURITY
-  PRIVACY
-  ACCEPTABLE_USE
-  ACCESS_CONTROL
-  DATA_CLASSIFICATION
-  INCIDENT_RESPONSE
-  BUSINESS_CONTINUITY
-  RISK_MANAGEMENT
-  THIRD_PARTY
-  PHYSICAL_SECURITY
-  NETWORK_SECURITY
-  APPLICATION_SECURITY
-  CRYPTOGRAPHY
-  PERSONNEL_SECURITY
-  COMPLIANCE
-  OPERATIONAL
-}
-
-enum PolicyStatus {
-  DRAFT
-  IN_REVIEW
-  APPROVED
-  EFFECTIVE
-  UNDER_REVISION
-  SUPERSEDED
-  RETIRED
-}
-
-enum PolicyClassification {
-  PUBLIC
-  INTERNAL
-  CONFIDENTIAL
-  RESTRICTED
-}
-
-// Compliance Dashboard Metrics (Pre-calculated)
-model ComplianceMetric {
-  id                  String                   @id @default(cuid())
-  metricName          String                   @unique
-  metricCategory      MetricCategory
-  frameworkId         String?
-  
-  // Values
-  currentValue        Float
-  previousValue       Float?
-  targetValue         Float?
-  unit                String?                  // "%", "count", "days"
-  
-  // Trend
-  trend               MetricTrend              @default(STABLE)
-  trendPeriod         String?                  // "7d", "30d", "90d"
-  
-  // Calculation
-  calculationMethod   String?                  // How calculated
-  lastCalculatedAt    DateTime                 @default(now())
-  dataSource          String?                  // Where data comes from
-  
-  // Breakdown
-  breakdown           String?                  // JSON of detailed breakdown
-  thresholds          String?                  // JSON of alert thresholds
-  
-  // Relations
-  framework           ComplianceFramework?     @relation(fields: [frameworkId], references: [id])
-  
-  @@index([metricCategory])
-  @@index([lastCalculatedAt])
-  @@map("compliance_metrics")
-}
-
-enum MetricCategory {
-  OVERALL_COMPLIANCE
-  FRAMEWORK_COVERAGE
-  ASSESSMENT_STATUS
-  EVIDENCE_COVERAGE
-  REMEDIATION_PROGRESS
-  ARTP_SUBMISSIONS
-  POLICY_COVERAGE
-  RISK_POSTURE
-  TRAINING_STATUS
-  AUDIT_READINESS
-}
-
-enum MetricTrend {
-  IMPROVING
-  STABLE
-  DECLINING
-  UNKNOWN
-}
-
-// Gap Analysis Findings
-model GapFinding {
-  id                  String                   @id @default(cuid())
-  assessmentId        String?
-  controlId           String?
-  
-  // Finding Details
-  title               String
-  description         String
-  gapType             GapType                  @default(CONTROL_GAP)
-  severity            GapSeverity              @default(MEDIUM)
-  
-  // Impact Analysis
-  impactDescription   String?
-  likelihood          RiskLikelihood?          @default(POSSIBLE)
-  businessImpact      BusinessImpact?          @default(MODERATE)
-  
-  // Root Cause
-  rootCause           String?
-  contributingFactors String?                  // JSON array
-  
-  // Remediation
-  remediationStatus   RemediationStatus        @default(OPEN)
-  remediationPlan     String?
-  estimatedEffort     String?                  // e.g., "40 hours", "$10k"
-  dueDate             DateTime?
-  resolvedAt          DateTime?
-  
-  // Assignment
-  ownerId             String?                  // Responsible party
-  reviewerId          String?
-  
-  // Validation
-  validationMethod    String?
-  validationEvidence  String?
-  
-  // Relations
-  assessment          ComplianceAssessment?    @relation(fields: [assessmentId], references: [id])
-  control             ComplianceControl?      @relation(fields: [controlId], references: [id])
-  
-  @@index([assessmentId])
-  @@index([severity])
-  @@index([remediationStatus])
-  @@map("gap_findings")
-}
-
-enum GapType {
-  CONTROL_GAP                                 // Control not implemented
-  DOCUMENTATION_GAP                           // Missing documentation
-  PROCEDURAL_GAP                              // Procedure not followed
-  TECHNICAL_GAP                               // Technical deficiency
-  TRAINING_GAP                                // Training needed
-  RESOURCE_GAP                                // Insufficient resources
-  COVERAGE_GAP                                // Incomplete coverage
-  TESTING_GAP                                 // Not tested/validated
-}
-
-enum GapSeverity {
-  CRITICAL
-  HIGH
-  MEDIUM
-  LOW
-  INFORMATIONAL
-}
-
-enum RiskLikelihood {
-  ALMOST_CERTAIN
-  LIKELY
-  POSSIBLE
-  UNLIKELY
-  RARE
-}
-
-enum BusinessImpact {
-  CATASTROPHIC
-  MAJOR
-  MODERATE
-  MINOR
   NEGLIGIBLE
 }
 
-enum RemediationStatus {
-  OPEN
+model Framework {
+  id                  String         @id @default(cuid())
+  name                String         @unique
+  version             String
+  type                FrameworkType
+  description         String?        @db.Text
+  issuer              String         // 'ARTP', 'ANSSI', 'ISO', 'NIST'
+  totalControls       Int            @default(0)
+  implementedControls Int            @default(0)
+  complianceScore    Float          @default(0.0) // 0-100
+  lastAssessmentDate DateTime?
+  nextReviewDate      DateTime?
+  isActive            Boolean        @default(true)
+
+  controls            Control[]
+  assessments         Assessment[]
+
+  @@map("frameworks")
+}
+
+enum FrameworkType {
+  ARTP_TELECOM
+  ANSSI_PSSI
+  ISO_27001
+  NIST_CSF
+  GDPR
+  SOC2
+  CUSTOM
+}
+
+model Assessment {
+  id                  String         @id @default(cuid())
+  frameworkId         String
+  framework           Framework      @relation(fields: [frameworkId], references: [id])
+  assessorId          String?
+  assessmentType      AssessmentType @default(REGULAR)
+  status              AssessmentStatus @default(IN_PROGRESS)
+  score               Int            @default(0) // 0-100
+  findingsCount       Int            @default(0)
+  gapsIdentified      Int            @default(0)
+  startedAt           DateTime       @default(now())
+  completedAt         DateTime?
+  reportUrl           String?
+  submittedToArtp     Boolean        @default(false)
+  submissionRef       String?
+  notes               String?        @db.Text
+
+  assessor            User?          @relation("Assessor", fields: [assessorId], references: [id])
+  controlAssessments ControlAssessment[]
+
+  @@index([frameworkId])
+  @@index([status])
+  @@index([submittedToArtp])
+  @@map("assessments")
+}
+
+enum AssessmentType {
+  INITIAL
+  REGULAR
+  FOLLOW_UP
+  SPECIAL
+  POST_INCIDENT
+}
+
+enum AssessmentStatus {
+  PLANNING
   IN_PROGRESS
-  PENDING_VALIDATION
-  VALIDATED
-  DEFERRED
-  ACCEPTED_RISK
+  REVIEW
+  COMPLETED
+  APPROVED
+  REJECTED
+  ARCHIVED
+}
+
+model ControlAssessment {
+  id                  String         @id @default(cuid())
+  assessmentId        String
+  controlId           String
+  control             Control        @relation(fields: [controlId], references: [id])
+  assessment          Assessment      @relation(fields: [assessmentId], references: [id], onDelete: Cascade)
+  status              ControlStatus @default(NOT_ASSESSED
+  evidence            String?        @db.Text
+  gapDescription      String?        @db.Text
+  remediationPlan     String?        @db.Text
+  testerNotes         String?        @db.Text
+  testedAt            DateTime?
+
+  @@index([assessmentId])
+  @@index([controlId])
+  @@map("control_assessments")
+}
+
+enum ControlStatus {
+  NOT_ASSESSED
+  PASS
+  FAIL
+  PARTIAL_PASS
+  NOT_APPLICABLE
+  NOT_TESTED
+}
+
+model Evidence {
+  id                  String         @id @default(cuid())
+  controlId           String
+  assessmentId        String?
+  type                EvidenceType
+  title               String
+  description         String?        @db.Text
+  filePath            String?
+  fileHash            String?
+  collectedAt         DateTime       @default(now())
+  collectedBy         String?
+  isValidated         Boolean        @default(false)
+  validatedBy         String?
+  validatedAt         DateTime?
+  artpAccepted        Boolean        @default(false)
+
+  @@index([controlId])
+  @@index([assessmentId])
+  @@index([type])
+  @@map("evidence")
+}
+
+enum EvidenceType {
+  SCREENSHOT
+  LOG_FILE
+  CONFIGURATION
+  POLICY_DOCUMENT
+  INTERVIEW_NOTES
+  SCAN_REPORT
+  MANUAL_CHECKLIST
+  OTHER
+}
+
+// ============================================================
+// DOMAIN 6: SOAR / AUTOMATION
+// ============================================================
+
+model Playbook {
+  id                  String         @id @default(cuid())
+  name                String
+  description         String?        @db.Text
+  version             String         @default("1.0")
+  category            PlaybookCategory
+  severity            Severity       @default(HIGH)
+  status              PlaybookStatus @default(DRAFT)
+  triggers            Json           @default("[]") // Array of trigger conditions
+  steps               PlaybookStep[]  @relation(sort: [{ order: 'asc' }])
+  approvalRequired   Boolean        @default(false)
+  estimatedRuntime    Int            @default(300) // seconds
+  successRate         Float          @default(0.0) // percentage
+  totalRuns           Int            @default(0)
+  timeSaved          String         @default("0h") // estimated time saved
+  createdBy           String
+  createdAt           DateTime       @default(now())
+  updatedAt           DateTime       @updatedAt
+
+  executions          PlaybookExecution[]
+
+  @@index([category])
+  @@index([status])
+  @@index([severity])
+  @@map("playbooks")
+}
+
+enum PlaybookCategory {
+  CONTAINMENT
+  REMEDIATION
+  DETECTION
+  ENRICHMENT
+  NOTIFICATION
+  REPORTING
+  INVESTIGATION
+  CUSTOM
+}
+
+enum PlaybookStatus {
+  DRAFT
+  TESTING
+  ACTIVE
+  DEPRECATED
+  ARCHIVED
+}
+
+model PlaybookStep {
+  id                  String         @id @default(cuid())
+  playbookId          String
+  order               Int
+  name                String
+  actionType          ActionType
+  config              Json?
+  timeout             Int            @default(60) // seconds
+  status              StepStatus     @default(PENDING)
+  condition           String?        // Condition to execute this step
+  onFailure           StepOnFailure   @default(SKIP)
+  approvalRequired    Boolean        @default(false)
+  playbook            Playbook       @relation(fields: [playbookId], references: [id], onDelete: Cascade)
+
+  @@index([playbookId])
+  @@index([order])
+  @@map("playbook_steps")
+}
+
+enum ActionType {
+  BLOCK_IP
+  ISOLATE_ENDPOINT
+  DISABLE_ACCOUNT
+  SEND_NOTIFICATION
+  CREATE_CASE
+  COLLECT_EVIDENCE
+  ENRICH_INDICATOR
+  API_CALL
+  RUN_QUERY
+  EXECUTE_SCRIPT
+  UPDATE_TICKET
+  QUARANTINE_FILE
+  RESET_PASSWORD
+  CUSTOM
+}
+
+enum StepStatus {
+  PENDING
+  RUNNING
+  COMPLETED
+  FAILED
+  SKIPPED
+  APPROVAL_PENDING
+}
+
+enum StepOnFailure {
+  SKIP
+  RETRY
+  ABORT
+  PAUSE
+}
+
+model PlaybookExecution {
+  id                  String         @id @default(cuid())
+  playbookId          String
+  playbook            Playbook       @relation(fields: [playbookId], references: [id])
+  triggeredBy          String         // Alert ID or User ID
+  triggeredByType      ExecutionTrigger
+  status              ExecutionStatus @default(RUNNING)
+  progress            Int            @default(0) // percentage
+  currentStep         Int            @default(1)
+  startedAt           DateTime       @default(now())
+  completedAt         DateTime?
+  durationSeconds     Int?
+  result              ExecutionResult?
+  error               String?        @db.Text
+  executionLog        Json           @default("[]")
+  approvedBy          String?
+  approvedAt          DateTime?
+
+  stepExecutions      StepExecution[]
+
+  @@index([playbookId])
+  @@index([status])
+  @@index([startedAt])
+  @@map("playbook_executions")
+}
+
+enum ExecutionTrigger {
+  ALERT
+  MANUAL
+  SCHEDULED
+  WEBHOOK
+  API
+}
+
+enum ExecutionStatus {
+  PENDING
+  RUNNING
+  COMPLETED
+  FAILED
+  CANCELLED
+  TIMEOUT
+  WAITING_APPROVAL
+}
+
+enum ExecutionResult {
+  SUCCESS
+  PARTIAL
+  FAILURE
+  TIMEOUT
+  CANCELLED
+}
+
+model StepExecution {
+  id                  String         @id @default(cuid())
+  executionId         String
+  execution           PlaybookExecution @relation(fields: [executionId], references: [id], onDelete: Cascade)
+  stepId              String
+  step                PlaybookStep?
+  status              StepStatus     @default(PENDING)
+  startedAt           DateTime?
+  completedAt         DateTime?
+  result              Json?
+  error               String?
+  output              Json?          // Data produced by this step
+  durationMs          Int?
+
+  @@index([executionId])
+  @@index([status])
+  @@map("step_executions")
+}
+
+// ============================================================
+// DOMAIN 7: THREAT HUNTING
+// ============================================================
+
+model ThreatHuntSession {
+  id                  String         @id @default(cuid())
+  name                String
+  description         String?        @db.Text
+  hypothesis          String?        @db.Text
+  status              HuntStatus     @default(ACTIVE)
+  hunterId            String
+  hunterName          String
+  findingsCount       Int            @default(0)
+  iocsExtracted       Int            @default(0)
+  queries             Json           @default("[]") // Array of queries executed
+  filters             Json           @default("{}")
+  createdAt           DateTime       @default(now())
+  updatedAt           DateTime       @default(now())
+  lastActivityAt      DateTime?
+  completedAt         DateTime?
+
+  hunter              User           @relation("HuntOwner", fields: [hunterId], references: [id])
+  findings            HuntingFinding[]
+
+  @@index([hunterId])
+  @@index([status])
+  @@index([createdAt])
+  @@map("threat_hunt_sessions")
+}
+
+enum HuntStatus {
+  ACTIVE
+  PAUSED
+  COMPLETED
+  CANCELLED
+  EXPIRED
+}
+
+model HuntingFinding {
+  id                  String         @id @default(cuid())
+  sessionId           String
+  session             ThreatHuntSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  title               String
+  description         String?        @db.Text
+  severity            Severity       @default(MEDIUM)
+  confidence          Int            @default(50) // 0-100
+  type                FindingType
+  status              FindingStatus @default(NEW)
+  iocs                Json           @default("[]") // IOCs extracted from this finding
+  relatedAlerts        String[]       @default([]) // Alert IDs
+  assignedTo          String?
+  investigationStatus InvestigationStatus @default(OPEN)
+  createdAt           DateTime       @default(now())
+
+  @@index([sessionId])
+  @@index([severity])
+  @@index([type])
+  @@map("hunting_findings")
+}
+
+enum FindingType {
+  ANOMALY_PATTERN
+  COMPROMISED_INDICATOR
+  LATERAL_MOVEMENT
+  DATA_EXFILTRATION
+  POLICY_VIOLATION
+  UNKNOWN_THREAT
+  CUSTOM
+}
+
+enum FindingStatus {
+  NEW
+  INVESTIGATING
+  CONFIRMED
+  FALSE_POSITIVE
+  BENIGN
+  ESCALATED
   CLOSED
 }
 
-// ANSSI-Specific Alignments
-model AnssiAlignment {
-  id                  String                   @id @default(cuid())
-  localControlId      String                   // Our control ID
-  anssiReference      String                   // ANSSI reference (e.g., "EBIOS-RISK-001")
-  anssiDomain         AnssiDomain
-  anssiCategory       String?
-  
-  // Mapping Quality
-  mappingStrength     MappingStrength          @default(PARTIAL)
-  coveragePercent     Float?                   // 0-100 how well we cover
-  gaps                String?                  // Description of gaps
-  
-  // Implementation Status
-  implementationStatus AnssiImplementationStatus @default(NOT_IMPLEMENTED)
-  implementationNotes String?
-  evidenceAvailable   Boolean                  @default(false)
-  
-  // Certification Relevance
-  certRelevant        Boolean                  @default(false)
-  certLevel           AnssiCertLevel?          // What certification level this supports
-  
-  // Metadata
-  lastReviewedAt      DateTime?
-  nextReviewDate      DateTime?
-  reviewerId          String?
-  comments            String?
-  createdAt           DateTime                 @default(now())
-  updatedAt           DateTime                 @updatedAt()
-  
-  @@index([anssiDomain])
-  @@index([mappingStrength])
-  @@index([implementationStatus])
-  @@map("anssi_alignments")
+enum InvestigationStatus {
+  OPEN
+  IN_PROGRESS
+  ESCALATED
+  RESOLVED
+  CLOSED
+  DISMISSED
 }
 
-enum AnssiDomain {
-  PSSI                                         // Politique de Sécurité des Systèmes d'Information
-  EBIOS                                        // Méthode de gestion des risques
-  RGS                                          // Référentiel Général de Sécurité
-  SEC_NUM_CLOUD                                // Sécurité des Clouds
-  PASSI                                        // Prestataires d'Audit de Sécurité des SI
-  ESS                                          // Experts de Sécurité des Systèmes d'Information
-  PEST                                         // Prestataires d'Évaluation de Sécurité
-  AC                                           // Autorités de Certification
-  CNS                                          // Centres de Notification SSI
-  HATS                                         // Homologation Administrateur des Systèmes d'Information
-  OPS                                          // Opérateurs d'Importance Vitale
-  DETECTION                                    // Détection des incidents
-  RESPONSE                                    // Réponse aux incidents
+// ============================================================
+// DOMAIN 8: CASE MANAGEMENT
+// ============================================================
+
+model Case {
+  id                  String         @id @default(cuid())
+  caseNumber          String         @unique
+  title               String
+  description         String?        @db.Text
+  caseType            CaseType
+  priority            Priority       @default(MEDIUM)
+  severity            Severity       @default(HIGH)
+  status              CaseStatus     @default(OPEN)
+  phase               CasePhase       @default(TRIAGE
+  assignedTo          String?
+  assignedTeam        String?
+  reporter            String?
+  detectedAt          DateTime       @default(now())
+  resolvedAt          DateTime?
+  slaDeadline         DateTime?
+  slaBreach           Boolean        @default(false)
+  artpReportable      Boolean        @default(false)
+  relatedIncidentId   String?
+  relatedThreats      String[]       @default([])
+  evidenceIds         String[]       @default([])
+  tasks               Task[]
+  timeline            TimelineEvent[]
+  notes               CaseNote[]
+
+  assignee            User?          @relation("CaseAssignee", fields: [assignedTo], references: [id])
+
+  @@index([caseType])
+  @@index([status])
+  @@index([priority])
+  @@index([detectedAt])
+  @@map("cases")
 }
 
-enum MappingStrength {
-  FULL                                         // Complete alignment
-  SUBSTANTIAL                                  // Major overlap
-  PARTIAL                                      // Some alignment
-  MINIMAL                                      // Limited alignment
-  NONE                                         // No alignment
+enum CaseType {
+  SECURITY_INCIDENT
+  FRAUD_INVESTIGATION
+  COMPLIANCE_VIOLATION
+  VULNERABILITY_ASSESSMENT
+  THREAT_HUNT_RESULT
+  PENETRATION_TEST
+  AUDIT_FINDING
+  THIRD_PARTY
+  CUSTOM
 }
 
-enum AnssiImplementationStatus {
-  IMPLEMENTED
-  PARTIALLY_IMPLEMENTED
-  PLANNED
-  NOT_IMPLEMENTED
-  NOT_APPLICABLE
+enum CaseStatus {
+  OPEN
+  IN_PROGRESS
+  UNDER_REVIEW
+  RESOLVED
+  CLOSED
+  ESCALATED
+  ARCHIVED
 }
 
-enum AnssiCertLevel {
-  BASIC
-  STANDARD
-  ADVANCED
-  EXPERT
+enum CasePhase {
+  TRIAGE
+  INVESTIGATION
+  ANALYSIS
+  CONTAINMENT
+  ERADICATION
+  RECOVERY
+  REPORTING
+  CLOSED
+}
+
+model Task {
+  id                  String         @id @default(cuid())
+  caseId              String
+  incidentId          String?
+  title               String
+  description         String?        @db.Text
+  assigneeId          String?
+  status              TaskStatus     @default(TODO)
+  priority            Priority       @default(MEDIUM)
+  dueDate             DateTime?
+  completedAt         DateTime?
+  createdAt           DateTime       @default(now())
+  updatedAt           DateTime       @updatedAt
+
+  case_               Case?          @relation(fields: [caseId], references: [id], onDelete: Cascade)
+  incident            Incident?      @relation(fields: [incidentId], references: [id], onDelete: Cascade)
+  assignee            User?          @relation("TaskAssignee", fields: [assigneeId], references: [id])
+
+  @@index([caseId])
+  @@index([incidentId])
+  @@index([status])
+  @@index([dueDate])
+  @@map("tasks")
+}
+
+enum TaskStatus {
+  TODO
+  IN_PROGRESS
+  BLOCKED
+  IN_REVIEW
+  DONE
+  CANCELLED
+}
+
+model TimelineEvent {
+  id                  String         @id @default(cuid())
+  caseId              String?
+  incidentId          String?
+  eventType           TimelineEventType
+  title               String
+  description         String?        @db.Text
+  timestamp           DateTime       @default(now())
+  createdBy           String
+  metadata            Json?
+
+  case_               Case?          @relation(fields: [caseId], references: [id], onDelete: Cascade)
+  incident            Incident?      @relation(fields: [incidentId], references: [id], onDelete: Cascade)
+
+  @@index([caseId])
+  @@index([incidentId])
+  @@index([eventType])
+  @@index([timestamp])
+  @@map("timeline_events")
+}
+
+enum TimelineEventType {
+  DETECTION
+  ACKNOWLEDGMENT
+  ASSIGNMENT
+  STATUS_CHANGE
+  EVIDENCE_COLLECTED
+  TASK_COMPLETED
+  NOTE_ADDED
+  PHASE_CHANGE
+  ESCALATION
+  RESOLUTION
+  closure
+}
+
+model CaseNote {
+  id                  String         @id @default(cuid())
+  caseId              String
+  authorId            String
+  content             String         @db.Text
+  isInternal          Boolean        @default(false)
+  createdAt           DateTime       @default(now())
+
+  case_               Case           @relation(fields: [caseId], references: [id], onDelete: Cascade)
+
+  @@index([caseId])
+  @@index([createdAt])
+  @@map("case_notes")
+}
+
+model Evidence {
+  id                  String         @id @default(cuid())
+  caseId              String?
+  incidentId          String?
+  type                EvidenceType
+  title               String
+  description         String?        @db.Text
+  filePath            String?
+  fileHash            String?
+  fileSize            BigInt?
+  mimeType            String?
+  collectedAt         DateTime       @default(now())
+  collectedBy         String?
+  chainOfCustody      Json?
+  isValidated         Boolean        @default(false)
+  artpAccepted        Boolean        @default(false)
+
+  @@index([caseId])
+  @@index([incidentId])
+  @@index([type])
+  @@map("evidence_items")
+}
+
+// ============================================================
+// DOMAIN 9: SYSTEM & MONITORING
+// ============================================================
+
+model AuditLog {
+  id                  String         @id @default(cuid())
+  userId              String
+  action              AuditAction
+  resourceType        ResourceType
+  resourceId          String
+  details             Json?
+  ipAddress           String?
+  userAgent           String?
+  timestamp           DateTime       @default(now())
+  severity            AuditSeverity @default(INFO)
+
+  user                User           @relation("AuditUser", fields: [userId], references: [id])
+
+  @@index([userId])
+  @@index([action])
+  @@index([resourceType])
+  @@index([timestamp])
+  @@index([ipAddress])
+  @@map("audit_logs")
+}
+
+enum AuditAction {
+  LOGIN
+  LOGOUT
+  CREATE
+  READ
+  UPDATE
+  DELETE
+  EXPORT
+  IMPORT
+  CONFIG_CHANGE
+  ROLE_CHANGE
+  PERMISSION_CHANGE
+  ALERT_ACKNOWLEDGE
+  INCIDENT_CREATE
+  INCIDENT_UPDATE
+  INCIDENT_RESOLVE
+  PLAYBOOK_EXECUTE
+  PLAYBOOK_APPROVE
+  CASE_CREATE
+  CASE_UPDATE
+  EVIDENCE_ADD
+  COMPLIANCE_SUBMIT
+  ADMIN_ACTION
+  CUSTOM
+}
+
+enum ResourceType {
+  USER
+  ROLE
+  ALERT
+  INCIDENT
+  THREAT_INTEL
+  PLAYBOOK
+  CASE
+  EVIDENCE
+  CONTROL
+  ASSESSMENT
+  FRAMEWORK
+  SYSTEM_CONFIG
+  NETWORK_ELEMENT
+  SUBSCRIBER
+  SESSION
+  API_KEY
+  WEBHOOK
+  REPORT
+  DASHBOARD
+  CUSTOM
+}
+
+enum AuditSeverity {
+  DEBUG
+  INFO
+  WARNING
+  ERROR
+  CRITICAL
+}
+
+model SystemHealth {
+  id                  String         @id @default(cuid())
+  overall             HealthStatus   @default(HEALTHY)
+  database            HealthCheck
+  redis               HealthCheck
+  memory              SystemMetrics
+  cpu                 SystemMetrics
+  disk                DiskMetrics
+  apiLatency          Json           @default("{}")
+  activeConnections   Int            @default(0)
+  alertsLastHour       Int            @default(0)
+  incidentsActive     Int            @default(0)
+  uptimeSeconds       BigInt         @default(0)
+  version             String         @default("1.0.0")
+  environment         String         @default("unknown")
+  timestamp           DateTime       @default(now())
+
+  @@index([overall])
+  @@index([timestamp])
+  @@map("system_health")
+}
+
+interface HealthCheck {
+  status: HealthStatus
+  latency?: number
+  message?: string
+  details?: Record<string, unknown>
+}
+
+enum HealthStatus {
+  HEALTHY
+  DEGRADED
+  UNHEALTHY
+  UNKNOWN
+}
+
+interface SystemMetrics {
+  used: number
+  total: number
+  percentage: number
+  unit: string
+}
+
+interface DiskMetrics {
+  used: number
+  total: number
+  percentage: number
+  unit: string
+  path: string
 }
