@@ -14,8 +14,8 @@
 import { NextRequest, NextResponse } from 'next/server';
 
 // ============================================================
-# Metrics Collection
-# ============================================================
+// Metrics Collection
+// ============================================================
 
 interface Metric {
   name: string;
@@ -143,7 +143,7 @@ class MetricsRegistry {
       
       // Sum and count
       output += `${baseName}_sum${labels ? `{${labels}}` : ''} ${hist.sum}\n`;
-      output += `${baseName}_count${labels ? `{${labels}}` : ''} ${hist.count}\n';
+      output += `${baseName}_count${labels ? `{${labels}}` : ''} ${hist.count}\n`;
     }
     
     return output;
@@ -166,8 +166,8 @@ export const metrics = new MetricsRegistry();
 const startTime = Date.now();
 
 // ============================================================
-# Middleware to collect metrics
-# ============================================================
+// Middleware to collect metrics
+// ============================================================
 
 export function recordRequestMetrics(
   method: string,
@@ -207,8 +207,8 @@ function sanitizePath(path: string): string {
 }
 
 // ============================================================
-# API Endpoint Handler
-# ============================================================
+// API Endpoint Handler
+// ============================================================
 
 export async function GET(request: NextRequest) {
   try {
@@ -244,8 +244,8 @@ export async function GET(request: NextRequest) {
 }
 
 // ============================================================
-# System Metrics Collection
-# ============================================================
+// System Metrics Collection
+// ============================================================
 
 async function updateSystemMetrics() {
   try {
@@ -312,8 +312,8 @@ function buildAppInfoMetrics(): string {
 }
 
 // ============================================================
-# Custom Metrics Helpers (for use in other files)
-# ============================================================
+// Custom Metrics Helpers (for use in other files)
+// ============================================================
 
 export class SOCCounter {
   constructor(private name: string, private help: string) {}

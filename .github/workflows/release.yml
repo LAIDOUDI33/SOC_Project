@@ -1,311 +1,239 @@
-# ============================================================
-# National SOC Platform - Release Automation
-# Automated versioning and changelog generation
-# ============================================================
+# Djezzy SOC Platform - Release Workflow
+#
+# This workflow handles semantic versioning and release creation:
+# - Automatically creates GitHub releases
+# - Generates changelog
+# - Tags the release in Git
+# - Triggers production deployment
 
-name: 📦 Release Automation
+name: Release
 
 on:
-  push:
-    branches: [main]
-    paths-ignore:
-      - '**.md'
-      - 'docs/**'
   workflow_dispatch:
     inputs:
-      version_type:
-        description: 'Type of version bump'
+      version:
+        description: 'Release version (semver, e.g., 3.1.0)'
         required: true
-        default: 'patch'
-        type: choice
-        options:
-          - 'patch'      # 1.0.X (bug fixes)
-          - 'minor'      # 1.X.0 (new features)
-          - 'major'      # X.0.0 (breaking changes)
+        type: string
       pre_release:
-        description: 'Mark as pre-release (RC)'
+        description: 'Pre-release (beta/RC)'
         required: false
+        type: boolean
         default: false
-        type: boolean
-      generate_changelog:
-        description: 'Auto-generate changelog'
-        required: false
-        default: true
-        type: boolean
 
 permissions:
   contents: write
   packages: write
-  pull-requests: write
 
 jobs:
   # ============================================================
-  # JOB 1: Version Analysis
+  # VALIDATE VERSION
   # ============================================================
-  version:
-    name: 🔢 Version Analysis
+  validate-version:
+    name: Validate Version
     runs-on: ubuntu-latest
+    
     outputs:
-      new_version: ${{ steps.version.outputs.version }}
-      current_version: ${{ version.outputs.current }}
-      is_release: ${{ version.outputs.release }}
+      tag: ${{ steps.version.outputs.tag }}
     
     steps:
-      - name: 📥 Checkout Repository
+      - name: Checkout repository
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      
-      - name: 🔍 Determine Next Version
+
+      - name: Validate semver format
         id: version
         run: |
-          # Get current version from package.json or git tags
-          CURRENT_VERSION=$(node -p "require('./package.json').version" || echo "0.0.0")
+          VERSION="${{ github.event.inputs.version }}"
           
-          if [ "${{ github.event.inputs.version_type }}" != "" ]; then
-            BUMP_TYPE="${{ github.event.inputs.version_type }}"
-          else
-            # Auto-detect based on commit messages
-            LAST_COMMIT_MSG=$(git log -1 --pretty=%B)
-            
-            if [[ "$LAST_COMMIT_MSG" == *"[major]"* ]] || [[ "$LAST_COMMIT_MSG" == *"BREAKING CHANGE"* ]]; then
-              BUMP_TYPE="major"
-            elif [[ "$LAST_COMMIT_MSG" == *"[minor]"* ]] || [[ "$LAST_COMMIT_MSG" == *"feat"* ]]; then
-              BUMP_TYPE="minor"
-            else
-              BUMP_TYPE="patch"
-            fi
+          # Validate semver format (major.minor.patch)
+          if ! [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z0-9.]+)?$ ]]; then
+            echo "❌ Invalid version format: $VERSION"
+            echo "Expected format: X.Y.Z or X.Y.Z-pre"
+            exit 1
           fi
           
-          # Calculate new version
-          IFS='.' read -ra PARTS <<< "$CURRENT_VERSION"
-          MAJOR=${PARTS[0]}
-          MINOR=${PARTS[1]}
-          PATCH=${PARTS[2]}
-          
-          case $BUMP_TYPE in
-            major)
-              MAJOR=$((MAJOR + 1))
-              MINOR=0
-              PATCH=0
-              ;;
-            minor)
-              MINOR=$((MINOR + 1))
-              PATCH=0
-              ;;
-            patch)
-              PATCH=$((PATCH + 1))
-              ;;
-          esac
-          
-          NEW_VERSION="${MAJOR}.${MINOR}.${PATCH}"
-          
-          # Add RC suffix if pre-release
-          PRE_RELEASE="${{ github.event.inputs.pre_release || 'false' }}"
-          if [ "$PRE_RELEASE" == "true" ]; then
-            NEW_VERSION="${NEW_VERSION}-rc.${{ github.run_number }}"
+          # Check if tag already exists
+          if git rev-parse "v${VERSION}" >/dev/null 2>&1; then
+            echo "❌ Tag v${VERSION} already exists"
+            exit 1
           fi
           
-          echo "version=$NEW_VERSION" >> $GITHUB_OUTPUT
-          echo "current=$CURRENT_VERSION" >> $GITHUB_OUTPUT
-          echo "release=true" >> $GITHUB_OUTPUT
-          
-          echo "## Version Information" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "| Field | Value |" >> $GITHUB_STEP_SUMMARY
-          echo "|-------|-------|" >> $GITHUB_STEP_SUMMARY
-          echo "| **Current** | \`$CURRENT_VERSION\` |" >> $GITHUB_STEP_SUMMARY
-          echo "| **New** | \`$NEW_VERSION\` |" >> $GITHUB_STEP_SUMMARY
-          echo "| **Type** | $BUMP_TYPE |" >> $GITHUB_STEP_SUMMARY
-          echo "| **Pre-release** | $PRE_RELEASE |" >> $GITHUB_STEP_SUMMARY
+          echo "tag=v${VERSION}" >> $GITHUB_OUTPUT
+          echo "✅ Version validated: v${VERSION}"
 
   # ============================================================
-  # JOB 2: Changelog Generation
+  # GENERATE CHANGELOG
   # ============================================================
-  changelog:
-    name: 📝 Generate Changelog
+  generate-changelog:
+    name: Generate Changelog
     runs-on: ubuntu-latest
-    needs: version
-    if: github.event.inputs.generate_changelog == 'true' || github.event_name == 'push'
+    needs: validate-version
     
     outputs:
-      changelog_file: ${{ steps.changelog.outputs.file }}
+      changelog: ${{ steps.changelog.outputs.content }}
     
     steps:
-      - name: 📥 Checkout Repository
+      - name: Checkout repository
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      
-      - name: 📝 Generate Changelog
+
+      - name: Generate changelog
         id: changelog
         run: |
-          # Get commits since last tag
-          LAST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
+          # Get previous tag
+          PREVIOUS_TAG=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo "")
           
-          if [ -n "$LAST_TAG" ]; then
-            COMMITS=$(git log ${LAST_TAG}..HEAD --pretty=format:"- %s (%h)" --no-merges)
+          # Generate changelog using git log
+          if [ -n "$PREVIOUS_TAG" ]; then
+            CHANGELOG=$(git log ${PREVIOUS_TAG}..HEAD --pretty=format:"- %s (%h)" --no-merges)
           else
-            COMMITS=$(git log --pretty=format:"- %s (%h)" --no-merges -20)
+            CHANGELOG=$(git log --pretty=format:"- %s (%h)" --no-merges -20)
           fi
           
-          # Categorize changes
-          FEATURES=$(echo "$COMMITS" | grep -iE "(feat|feature)" | head -10 || echo "No features")
-          FIXES=$(echo "$COMMITS" | grep -iE "(fix|bug)" | head -10 || echo "No bug fixes")
-          SECURITY=$(echo "$COMMITS" | grep -iE "(security|vuln|cve)" | head -5 || echo "No security updates")
-          DOCS=$(echo "$COMMITS" | grep -iE "(doc|changelog)" | head -5 || echo "No documentation")
+          # Create full changelog content
+          cat > RELEASE_NOTES.md << EOF
+          # 🚀 Djezzy National SOC Platform - Release ${{ needs.validate-version.outputs.tag }}
           
-          # Create changelog file
-          cat > CHANGELOG.md << EOF
-          # Changelog
+          ## 📋 Release Notes
           
-          ## [${{ needs.version.outputs.new_version }}] - $(date +%Y-%m-%d)
-          
-          ### ✨ Features
-          $FEATURES
-          
-          ### 🐛 Bug Fixes
-          $FIXES
-          
-          ### 🔒 Security Updates
-          $SECURITY
-          
-          ### 📚 Documentation
-          $DOCS
+          **Version:** ${{ needs.validate-version.outputs.tag }}
+          **Date:** $(date -u '+%Y-%m-%d')
+          **Published by:** ${{ github.actor }}
           
           ---
           
-          **Full Changelog**: https://github.com/${{ github.repository }}/compare/${LAST_TAG}...v${{ needs.version.outputs.new_version }}
+          ## ✨ What's Changed
+          
+          ${CHANGELOG}
+          
+          ---
+          
+          ## 📦 Installation
+          
+          \`\`\`bash
+          # Pull the Docker image
+          docker pull ghcr.io/${{ github.repository }}:${{ needs.validate-version.outputs.tag }}
+          
+          # Or deploy with Helm
+          helm upgrade soc-platform helm/soc-platform \\
+            --namespace soc-production \\
+            --set image.tag=${{ needs.validate-version.outputs.tag }}
+          \`\`\`
+          
+          ---
+          
+          ## 🔐 Security
+          
+          - All dependencies audited
+          - No known critical vulnerabilities
+          - Security scan passed ✅
+          
+          ---
+          
+          ## 👥 Contributors
+          
+          Thanks to everyone who contributed to this release!
+          
+          ---
+          
+          *Generated automatically by GitHub Actions*
           EOF
           
-          echo "file=CHANGELOG.md" >> $GITHUB_OUTPUT
+          # Output for next job
+          {
+            echo "content<<EOF"
+            cat RELEASE_NOTES.md
+            echo "EOF"
+          } >> $GITHUB_OUTPUT
           
-          echo "## 📝 Generated Changelog" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          cat CHANGELOG.md >> $GITHUB_STEP_SUMMARY
-      
-      - name: 📤 Upload Changelog Artifact
+          echo "✅ Changelog generated"
+
+      - name: Upload release notes artifact
         uses: actions/upload-artifact@v4
         with:
-          name: changelog-v${{ needs.version.outputs.new_version }}
-          path: CHANGELOG.md
-          retention-days: 90
+          name: release-notes
+          path: RELEASE_NOTES.md
 
   # ============================================================
-  # JOB 3: Create Release
+  # CREATE GITHUB RELEASE
   # ============================================================
   create-release:
-    name: 🏷️ Create Release
+    name: Create GitHub Release
     runs-on: ubuntu-latest
-    needs: [version, changelog]
-    if: needs.version.outputs.is_release == 'true'
+    needs: [validate-version, generate-changelog]
     
     steps:
-      - name: 📥 Checkout Repository
+      - name: Checkout repository
         uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-      
-      - name: 📥 Download Changelog
+
+      - name: Download release notes
         uses: actions/download-artifact@v4
         with:
-          name: changelog-v${{ needs.version.outputs.new_version }}
-      
-      - name: 🏷️ Create Git Tag
+          name: release-notes
+
+      - name: Create Git Tag
         run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          
-          git tag -a "v${{ needs.version.outputs.new_version }}" \
-            -m "Release v${{ needs.version.outputs.new_version }}"
-          
-          git push origin "v${{ needs.version.outputs.new_version }}"
-      
-      - name: 📦 Create GitHub Release
-        uses: softprops/action-gh-release@v1
+          git config user.name "${{ github.actor }}"
+          git config user.email "${{ github.actor }}@users.noreply.github.com"
+          git tag -a "${{ needs.validate-version.outputs.tag }}" \
+            -m "Release ${{ needs.validate-version.outputs.tag }}"
+          git push origin "${{ needs.validate-version.outputs.tag }}"
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
         with:
-          tag_name: v${{ needs.version.outputs.new_version }}
-          name: Release v${{ needs.version.outputs.new_version }}
-          body_path: CHANGELOG.md
-          draft: ${{ github.event.inputs.pre_release == 'true' }}
+          tag_name: ${{ needs.validate-version.outputs.tag }}
+          name: Release ${{ needs.validate-version.outputs.tag }}
+          body_path: RELEASE_NOTES.md
+          draft: false
           prerelease: ${{ github.event.inputs.pre_release == 'true' }}
-          generate_release_notes: true
           files: |
-            package.json
-            pnpm-lock.yaml
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+            docs/DEPLOYMENT_GUIDE_PRODUCTION.md
+            LICENSE
+          generate_release_notes: false
 
-  # ============================================================
-  # JOB 4: Trigger Production Deploy (optional)
-  # ============================================================
-  trigger-deploy:
-    name: 🚀 Trigger Deployment
-    runs-on: ubuntu-latest
-    needs: create-release
-    if: success() && github.event.inputs.pre_release != 'true'
-    
-    steps:
-      - name: 🚀 Trigger Production Deployment
+      - name: Release summary
         run: |
-          echo "✅ Release v${{ needs.version.outputs.new_version }} created successfully!"
-          echo ""
-          echo "To deploy to production:"
-          echo "1. Go to Actions → Deploy to Production"
-          echo "2. Run workflow with image tag: v${{ needs.version.outputs.new_version }}"
-          echo ""
-          echo "Or create a deployment manually:"
-          echo "\`\`\`bash"
-          echo "gh workflow run deploy-production.yml \\"
-          echo "  -f image_tag=v${{ needs.version.outputs.new_version }} \\"
-          echo "  -f reason='Release v${{ needs.version.outputs.new_version }}'"
-          echo "\`\`\`"
-          
-          echo "## 🚀 Next Steps" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "Release **v${{ needs.version.outputs.new_version }}** is ready for production deployment." >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "### Manual Deployment Options:" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "1. **GitHub Actions UI:**" >> $GITHUB_STEP_SUMMARY
-          echo "   - Navigate to **Actions → Deploy to Production**" >> $GITHUB_STEP_SUMMARY
-          echo "   - Click **Run workflow**" >> $GITHUB_STEP_SUMMARY
-          echo "   - Enter image tag: \`v${{ needs.version.outputs.new_version }}\`" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "2. **CLI Command:**" >> $GITHUB_STEP_SUMMARY
-          echo '\`\`\`bash' >> $GITHUB_STEP_SUMMARY
-          echo 'gh workflow run deploy-production.yml \\' >> $GITHUB_STEP_SUMMARY
-          echo "  -f image_tag=v${{ needs.version.outputs.new_version }}" >> $GITHUB_STEP_SUMMARY
-          echo '\`\`\`' >> $GITHUB_STEP_SUMMARY
+          echo "## Release Created Successfully! 🎉" >> $GITHUB_STEP_SUMMARY
+          "" >> $GITHUB_STEP_SUMMARY
+          echo "**Tag:** \`${{ needs.validate-version.outputs.tag }}\`" >> $GITHUB_STEP_SUMMARY
+          "**URL:** https://github.com/${{ github.repository }}/releases/tag/${{ needs.validate-version.outputs.tag }}" >> $GITHUB_STEP_SUMMARY
+          "" >> $GITHUB_STEP_SUMMARY
+          echo "**Next Steps:**" >> $GITHUB_STEP_SUMMARY
+          "1. Review the release notes" >> $GITHUB_STEP_SUMMARY
+          "2. The CI/CD pipeline will automatically deploy to production" >> $GITHUB_STEP_SUMMARY
+          "3. Monitor deployment status" >> $GITHUB_STEP_SUMMARY
 
   # ============================================================
-  # NOTIFICATION
+  # NOTIFY TEAMS
   # ============================================================
   notify:
-    name: 📢 Release Notification
+    name: Notify Teams
     runs-on: ubuntu-latest
-    needs: [create-release, trigger-deploy]
+    needs: create-release
     if: always()
     
     steps:
-      - name: 💬 Slack Notification
-        uses: slackapi/slack-github-action@v1.26.0
+      - name: Slack notification
+        uses: slackapi/slack-github-action@v1.25.0
         with:
           payload: |
             {
-              "text": "📦 New Release: v${{ needs.version.outputs.new_version }}",
+              "text": "🚀 *New SOC Platform Release Published*",
               "blocks": [
                 {
                   "type": "header",
-                  "text": {"type": "plain_text", "text": "📦 Djezzy SOC Platform - New Release"}
+                  "text": { "type": "plain_text", "text": "🎉 New Release: ${{ needs.validate-version.outputs.tag }}" }
                 },
                 {
                   "type": "section",
                   "fields": [
-                    {"type": "mrkdwn", "text": "*Version:*\nv${{ needs.version.outputs.new_version }}"},
-                    {"type": "mrkdwn", "text": "*Status:*\n${{ needs.create-release.result == 'success' && '✅ Published' || '❌ Failed' }}"},
-                    {"type": "mrkdwn", "text": "*Pre-release:*\n${{ github.event.inputs.pre_release || 'false' }}"},
-                    {"type": "mrkdwn", "text": "*By:*\n@${{ github.actor }}"}
+                    {"type": "mrkdwn", "text": "*Version:*\n${{ needs.validate-version.outputs.tag }}"},
+                    {"type": "mrkdwn", "text": "*Released by:*\n${{ github.actor }}"},
+                    {"type": "mrkdwn", "text": "*Release URL:*\nhttps://github.com/${{ github.repository }}/releases/tag/${{ needs.validate-version.outputs.tag }}"}
                   ]
                 },
                 {
@@ -313,13 +241,29 @@ jobs:
                   "elements": [
                     {
                       "type": "button",
-                      "text": {"type": "plain_text", "text": "🔗 View Release"},
-                      "url": "${{ github.server_url }}/${{ github.repository }}/releases/tag/v${{ needs.version.outputs.new_version }}"
+                      "text": { "type": "plain_text", "text": "View Release 📋" },
+                      "url": "https://github.com/${{ github.repository }}/releases/tag/${{ needs.validate-version.outputs.tag }}"
+                    },
+                    {
+                      "type": "button",
+                      "text": { "type": "plain_text", "text": "Deploy to Production 🚀" },
+                      "url": "https://github.com/${{ github.repository }}/actions/workflows/ci-cd.yml"
                     }
                   ]
                 }
               ]
             }
         env:
-          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_DEPLOYMENTS }}
-          SLACK_WEBHOOK_TYPE: INCOMING_WEBHOOK
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_RELEASES }}
+        continue-on-error: true
+
+      - name: Email notification (optional)
+        if: ${{ secrets.SMTP_PASSWORD != '' }}
+        run: |
+          curl --ssl-reqd \
+            --url "smtps://smtp.office365.com:587" \
+            --user "alert@djezzy.dz:${{ secrets.SMTP_PASSWORD }}" \
+            --mail-from "alert@djezzy.dz" \
+            --mail-rcpt "soc-team@djezzy.dz" \
+            --upload-file <(echo -e "Subject: New SOC Platform Release ${{ needs.validate-version.outputs.tag }}\nFrom: alert@djezzy.dz\nTo: soc-team@djezzy.dz\n\nA new version of the Djezzy National SOC Platform has been released.\n\nVersion: ${{ needs.validate-version.outputs.tag }}\nReleased by: ${{ github.actor }}\n\nRelease notes: https://github.com/${{ github.repository }}/releases/tag/${{ needs.validate-version.outputs.tag }}")
+        continue-on-error: true

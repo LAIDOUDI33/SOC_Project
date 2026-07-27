@@ -13,8 +13,8 @@
 import { db } from '@/lib/db';
 
 // ============================================================
-# Types & Interfaces
-# ============================================================
+// Types & Interfaces
+// ============================================================
 
 export interface ProbeConfig {
   id: string;
@@ -92,8 +92,8 @@ export interface TelecomMetrics {
 }
 
 // ============================================================
-# Probe Connection Manager
-# ============================================================
+// Probe Connection Manager
+// ============================================================
 
 class ProbeConnectionManager {
   private connections: Map<string, ProbeConnection> = new Map();
@@ -931,8 +931,8 @@ class ProbeConnectionManager {
 }
 
 // ============================================================
-# Base Probe Connection Class
-# ============================================================
+// Base Probe Connection Class
+// ============================================================
 
 abstract class ProbeConnection {
   config: ProbeConfig;
@@ -958,8 +958,8 @@ abstract class ProbeConnection {
 }
 
 // ============================================================
-# SS7 Probe Connection Implementation
-# ============================================================
+// SS7 Probe Connection Implementation
+// ============================================================
 
 class SS7ProbeConnection extends ProbeConnection {
   private socket?: any;
@@ -982,7 +982,7 @@ class SS7ProbeConnection extends ProbeConnection {
     }
   }
 
-  private startListening(): void() {
+  private startListening(): void {
     // Simulate receiving SS7 messages
     // In production, this would parse ASN.1 encoded MTP3/SCCP/TCAP/MAP messages
     
@@ -1020,8 +1020,8 @@ class SS7ProbeConnection extends ProbeConnection {
 }
 
 // ============================================================
-# GTP Probe Connection Implementation
-# ============================================================
+// GTP Probe Connection Implementation
+// ============================================================
 
 class GTPProbeConnection extends ProbeConnection {
   private socket?: any;
@@ -1036,7 +1036,7 @@ class GTPProbeConnection extends ProbeConnection {
     this.isConnected = false;
   }
 
-  private startListening(): void() {
+  private startListening(): void {
     setInterval(async () => {
       if (!this.isConnected) return;
 
@@ -1077,8 +1077,8 @@ class GTPProbeConnection extends ProbeConnection {
 }
 
 // ============================================================
-# SIP Probe Connection Implementation
-# ============================================================
+// SIP Probe Connection Implementation
+// ============================================================
 
 class SIPProbeConnection extends ProbeConnection {
   private socket?: any;
@@ -1093,7 +1093,7 @@ class SIPProbeConnection extends ProbeConnection {
     this.isConnected = false;
   }
 
-  private startListening(): void() {
+  private startListening(): void {
     setInterval(async () => {
       if (!this.isConnected) return;
 
@@ -1132,8 +1132,8 @@ class SIPProbeConnection extends ProbeConnection {
 }
 
 // ============================================================
-# Diameter Probe Connection Implementation
-# ============================================================
+// Diameter Probe Connection Implementation
+// ============================================================
 
 class DiameterProbeConnection extends ProbeConnection {
   private socket?: any;
@@ -1148,7 +1148,7 @@ class DiameterProbeConnection extends ProbeConnection {
     this.isConnected = false;
   }
 
-  private startListening(): void() {
+  private startListening(): void {
     setInterval(async () => {
       if (!this.isConnected) return;
 
