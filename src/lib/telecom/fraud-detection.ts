@@ -17,8 +17,8 @@
 import { db } from '@/lib/db';
 
 // ============================================================
-# Types & Interfaces
-# ============================================================
+// Types & Interfaces
+// ============================================================
 
 export interface FraudCase {
   id: string;
@@ -102,8 +102,8 @@ export interface RuleAction {
 }
 
 // ============================================================
-# Predefined Fraud Rules (Djezzy-specific)
-# ============================================================
+// Predefined Fraud Rules (Djezzy-specific)
+// ============================================================
 
 const DEFAULT_FRAUD_RULES: FraudRule[] = [
   {
@@ -244,8 +244,8 @@ const DEFAULT_FRAUD_RULES: FraudRule[] = [
 ];
 
 // ============================================================
-# Fraud Detection Engine Class
-# ============================================================
+// Fraud Detection Engine Class
+// ============================================================
 
 class FraudDetectionEngine {
   private rules: Map<string, FraudRule> = new Map();
@@ -813,7 +813,7 @@ class FraudDetectionEngine {
       db.fraudCase.groupBy({ by: ['type'], _count: { id: true }, where: { createdAt: { gte: since } } }),
       db.fraudCase.groupBy({ by: ['status'], _count: { id: true }, where: { createdAt: { gte: since } } }),
       db.fraudCase.aggregate({ _sum: { estimatedLossDZD: true }, where: { createdAt: { gte: since } } }),
-      db.fraudCase.count({ where: { artpReportable: true, status: { notIn: ['RESOLVED', 'CLOSED'] }, createdAt: { gte: since } }),
+      db.fraudCase.count({ where: { artpReportable: true, status: { notIn: ['RESOLVED', 'CLOSED'] }, createdAt: { gte: since } } }),
       db.fraudCase.count({ where: { status: 'RESOLVED', resolvedAt: { gte: since } } })
     ]);
 

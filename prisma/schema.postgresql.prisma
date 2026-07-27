@@ -1,0 +1,1236 @@
+// ============================================================
+// National SOC Platform - Database Schema (PostgreSQL Version)
+// Version: 3.0.0-PRODUCTION
+// 
+// This schema is optimized for PostgreSQL in production.
+// To use this schema:
+// 1. Copy this file to schema.prisma
+// 2. Update your .env with: DATABASE_URL="postgresql://..."
+// 3. Run: npx prisma migrate dev --name init_postgresql
+//
+// NOTE: Some SQLite-specific features have been removed/modified.
+// ============================================================
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ============================================================
+// DOMAIN 1: AUTHENTICATION & AUTHORIZATION
+// ============================================================
+
+model User {
+  id                String           @id @default(cuid())
+  email             String           @unique
+  username          String           @unique
+  passwordHash      String
+  name              String
+  avatarUrl         String?
+  isActive          Boolean          @default(true)
+  isMfaEnabled      Boolean          @default(false)
+  mfaSecret         String?
+  lastLoginAt       DateTime?
+  passwordChangedAt DateTime         @default(now())
+  roleId            String
+  createdAt         DateTime         @default(now())
+  updatedAt         DateTime         @updatedAt
+
+  // LDAP/Active Directory Integration
+  ldapDN            String?          @map("ldap_dn")
+  ldapGUID          String?          @map("ldap_guid")
+  ldapSID           String?          @map("ldap_sid")
+  employeeId        String?          @map("employee_id")
+  department        String?
+  
+  // Relations
+  role              Role            @relation(fields: [roleId], references: [id])
+  sessions          Session[]
+  incidents        Incident[]       @relation("IncidentOwner")
+  threatHunts      ThreatHuntSession[] @relation("HuntOwner")
+  auditLogs         AuditLog[]       @relation("AuditUser")
+  mfaDevices        MFADevice[]
+
+  @@index([email])
+  @@index([username])
+  @@index([isActive])
+  @@map("users")
+}
+
+model Role {
+  id                  String         @id @default(cuid())
+  name                String         @unique
+  description         String?
+  permissions        Json           @default("[]") // Array of permission strings
+  isSystemRole        Boolean        @default(false)
+  createdAt           DateTime       @default(now())
+  updatedAt           DateTime       @updatedAt
+
+  users               User[]
+
+  @@map("roles")
+}
+
+model Session {
+  id                  String         @id @default(cuid())
+  userId              String
+  token               String         @unique
+  refreshToken        String?        @unique
+  userAgent           String?
+  ipAddress           String?
+  expiresAt           DateTime
+  revokedAt           DateTime?
+  lastActivityAt      DateTime       @default(now())
+  createdAt           DateTime       @default(now())
+
+  user                User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([token])
+  @@index([expiresAt])
+  @@map("sessions")
+}
+
+model MFADevice {
+  id                  String         @id @default(cuid())
+  userId              String
+  deviceType          String         // 'totp', 'sms', 'email', 'fido2'
+  secret              String?
+  publicKey           String?        // For FIDO2/WebAuthn
+  credentialId        String?        // For FIDO2/WebAuthn
+  isBackup            Boolean        @default(false)
+  isVerified          Boolean        @default(false)
+  lastUsedAt          DateTime?
+  createdAt           DateTime       @default(now())
+
+  user                User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("mfa_devices")
+}
+
+// ============================================================
+// DOMAIN 2: CORE SOC - ALERTS & INCIDENTS
+// ============================================================
+
+model Alert {
+  id                  String         @id @default(cuid())
+  ruleId              String?
+  title               String
+  description         String?        @db.Text
+  severity            Severity       @default(MEDIUM)
+  status              AlertStatus     @default(ACTIVE)
+  source              String         // 'SIEM', 'EDR', 'NDR', 'TELECOM', 'COMPLIANCE'
+  category            String?
+  rawEvent            Json?
+  assignedTo          String?
+  assignedTeam        String?
+  firstSeen           DateTime       @default(now())
+  lastSeen            DateTime       @default(now())
+  count               Int            @default(1)
+  tags                String[]       @default([])
+  iocIds              String[]
+  incidentId          String?
+  falsePositive       Boolean        @default(false)
+  suppressionRule     String?
+  context             Json?
+  mitreTechnique       String?
+  mitreTactic          String?
+  playbookTriggered    Boolean        @default(false)
+
+  // Relations
+  assignee            User?          @relation("AlertAssignee", fields: [assignedTo], references: [id])
+  incident            Incident?      @relation("AlertIncident", fields: [incidentId], references: [id])
+
+  @@index([severity, status])
+  @@index([source])
+  @@index([firstSeen])
+  @@index([incidentId])
+  @@index([status])
+  @@fulltext([title, description])
+  @@map("alerts")
+}
+
+model Incident {
+  id                  String         @id @default(cuid())
+  incidentNumber      String         @unique
+  title               String
+  description         String?        @db.Text
+  severity            Severity       @default(HIGH)
+  status              IncidentStatus @default(OPEN)
+  phase               IncidentPhase  @default(DETECTION)
+  type                IncidentType   @default SECURITY
+  priority            Priority       @default(MEDIUM)
+  confidence          Int            @default(50) // 0-100
+  assignedTo          String?
+  commander           String?
+  reporter            String?
+  detectedAt          DateTime       @default(now())
+  acknowledgedAt      DateTime?
+  resolvedAt          DateTime?
+  closedAt            DateTime?
+  slaDeadline         DateTime?
+  slaBreach           Boolean        @default(false)
+  artpReportable      Boolean        @default(false)
+  artpSubmissionId   String?
+  rootCause           String?        @db.Text
+  impact              String?        @db.Text
+  containmentActions  Json?
+  remediationSteps    Json?
+  lessonsLearned      String?        @db.Text
+  costEstimateDZD      Decimal?       @db.Decimal(15, 2) // Estimated financial impact in DZD
+  affectedAssets       Int            @default(0)
+  affectedSubscribers  Int            @default(0)
+  tags                String[]       @default([])
+
+  // Relations
+  owner               User           @relation("IncidentOwner", fields: [reporter], references: [id])
+  assignee            User?          @relation("IncidentAssignee", fields: [assignedTo], references: [id])
+  alerts              Alert[]        @relation("AlertIncident")
+  tasks               Task[]
+  evidence            Evidence[]
+  timeline            TimelineEvent[]
+
+  @@index([status, severity])
+  @@index([type])
+  @@index([detectedAt])
+  @@index([artpReportable])
+  @@fulltext([title, description])
+  @@map("incidents")
+}
+
+enum Severity {
+  INFO
+  LOW
+  MEDIUM
+  HIGH
+  CRITICAL
+}
+
+enum AlertStatus {
+  ACTIVE
+  SUPPRESSED
+  ACKNOWLEDGED
+  ESCALATED
+  CLOSED
+  FALSE_POSITIVE
+}
+
+enum IncidentStatus {
+  OPEN
+  IN_PROGRESS
+  RESOLVED
+  CLOSED
+  ESCALATED
+}
+
+enum IncidentPhase {
+  DETECTION
+  ANALYSIS
+  CONTAINMENT
+  ERADICATION
+  RECOVERY
+  LESSONS_LEARNED
+  CLOSED
+}
+
+enum IncidentType {
+  SECURITY
+  FRAUD
+  COMPLIANCE
+  OPERATIONAL
+  THIRD_PARTY
+}
+
+enum Priority {
+  CRITICAL
+  HIGH
+  MEDIUM
+  LOW
+  INFO
+}
+
+// ============================================================
+// DOMAIN 3: THREAT INTELLIGENCE
+// ============================================================
+
+model ThreatIntel {
+  id                  String         @id @default(cuid())
+  type                ThreatType
+  value               String         @unique
+  source              String         // 'MISP', 'OpenCTI', 'Internal', 'OSINT'
+  confidence          Int            @default(50) // 0-100
+  severity            ThreatSeverity @default(MEDIUM)
+  tlp                 TLP           @default(WHITE)
+  status              IOCStatus      @default(ACTIVE)
+  firstSeen           DateTime       @default(now())
+  lastSeen            DateTime       @default(now?)
+  expirationDate      DateTime?
+  description         String?        @db.Text
+  tags                String[]       @default([])
+  context             Json?
+  reports             String[]       @default([]) // Related incident IDs
+  enrichmentData      Json?
+
+  @@index([type, value])
+  @@index([source])
+  @@index([status])
+  @@index([firstSeen])
+  @@map("threat_intel")
+}
+
+enum ThreatType {
+  IP_DOMAIN
+  URL
+  HASH_MD5
+  HASH_SHA1
+ _HASH_SHA256
+  EMAIL
+  IMEI
+  IMSI
+  MSISDN
+  SS7_GT
+  INDICATOR_COMPROMISE
+  MALWARE_SAMPLE
+  VULNERABILITY
+  CUSTOM
+}
+
+enum ThreatSeverity {
+  UNKNOWN
+  LOW
+  MEDIUM
+  HIGH
+  CRITICAL
+}
+
+enum TLP {
+  WHITE
+  GREEN
+  AMBER
+  RED
+}
+
+enum IOCStatus {
+  ACTIVE
+  EXPIRED
+  RETIATED
+  OBSOLETE
+}
+
+// ============================================================
+// DOMAIN 4: TELECOM-SPECIFIC MODELS
+// ============================================================
+
+model NetworkElement {
+  id                  String         @id @default(cuid())
+  name                String
+  elementType         String         // 'SS7_FIREWALL', 'GTP_PROBE', 'HLR', 'MSC', 'SGSN', etc.
+  vendor              String?
+  softwareVersion     String?
+  ipAddress           String?
+  location            String?
+  region              String?
+  status              ElementStatus  @default(OPERATIONAL)
+  lastSeen            DateTime?
+  metadata            Json?
+  createdAt           DateTime       @default(now())
+  updatedAt           DateTime       @updatedAt
+
+  @@index([elementType])
+  @@index([status])
+  @@index([region])
+  @@map("network_elements")
+}
+
+enum ElementStatus {
+  OPERATIONAL
+  DEGRADED
+  MAINTENANCE
+  OFFLINE
+  UNKNOWN
+}
+
+model Subscriber {
+  id                  String         @id @default(cuid())
+  msisdn              String         @unique
+  imsi                String         @unique?
+  riskScore           Int            @default(0) // 0-100
+  subscriberStatus     SubscriberStatus @default(ACTIVE)
+  isRoaming           Boolean        @default(false)
+  roamingCountry      String?
+  homeOperator        String?
+  currentLocation     String?
+  lastSeen            DateTime?
+  firstSeen           DateTime       @default(now())
+  fraudFlags          Json           @default("{}") // { simSwapRisk: true, irsfFlag: false }
+  notes               String?        @db.Text
+
+  @@index([msisdn])
+  @@index([riskScore])
+  @@index([subscriberStatus])
+  @@map("subscribers")
+}
+
+enum SubscriberStatus {
+  ACTIVE
+  SUSPENDED
+  TERMINATED
+  ROAMING_ONLY
+  PREPAID
+  POSTPAID
+}
+
+model SS7Message {
+  id                  String         @id @default(cuid())
+  messageType         String         // SRI, ISAT, USSD, etc.
+  callingParty        String?
+  calledParty         String?
+  globalTitle         String?
+  sccpCalling        String?
+  sccpCalled         String?
+  imsi                String?
+  msisdn              String?
+  isBlocked           Boolean        @default(false)
+  riskScore           Int            @default(0)
+  timestamp           DateTime       @default(now())
+  rawMessage          Bytes?
+  parsedData          Json?
+  probeId             String?
+
+  @@index([messageType])
+  @@index([timestamp])
+  @@index([isBlocked])
+  @@index([riskScore])
+  @@map("ss7_messages")
+}
+
+model GTPSession {
+  id                  String         @id @default(cuid())
+  sessionType         String         // 'GTP-C', 'GTP-U', 'GTPv2'
+  imsi                String?
+  msisdn              String?
+  apn                 String?
+  localTeid           String?
+  remoteTeid          String?
+  sessionStatus       SessionStatus @default(ACTIVE)
+  startedAt           DateTime       @default(now())
+  endedAt             DateTime?
+  dataVolumeUp        BigInt         @default(0)
+  dataVolumeDown      BigInt         @default(0)
+  durationSeconds     Int            @default(0)
+  anomalyScore        Int            @default(0) // 0-100
+  flags               Json?
+
+  @@index([imsi])
+  @@index([sessionStatus])
+  @@index([anomalyScore])
+  @@map("gtp_sessions")
+}
+
+enum SessionStatus {
+  ACTIVE
+  IDLE
+  TERMINATED
+  SUSPENDED
+}
+
+model SIPSession {
+  id                  String         @id @default(cuid())
+  callType            String         // 'VOICE', 'VIDEO', 'SMS', 'USSD'
+  callingParty        String?
+  calledParty         String?
+  inviteTimestamp    DateTime?
+  acceptTimestamp    DateTime?
+  byeTimestamp       DateTime?
+  durationSeconds     Int?
+  isFraudSuspected   Boolean        @default(false)
+  fraudType           String?
+  sipStatusCode      Int?
+  reasonPhrase        String?
+  mediaServer        String?
+  trunkGroup         String?
+  roamingOrigin      Boolean        @default(false)
+
+  @@index([callType])
+  @@index([inviteTimestamp])
+  @@index([isFraudSuspected])
+  @@map("sip_sessions")
+}
+
+model DiameterSession {
+  id                  String         @id @default(cuid())
+  commandCode         Int
+  applicationId       Int
+  originHost          String?
+  originRealm         String?
+  destinationHost     String?
+  destinationRealm    String?
+  sessionId           String?
+  sessionStatus       SessionStatus @default(ACTIVE)
+  startedAt           DateTime       @default(now())
+  endedAt             DateTime?
+  resultCode          Int?
+
+  @@index([commandCode])
+  @@index([applicationId])
+  @@map("diameter_sessions")
+}
+
+// ============================================================
+// DOMAIN 5: COMPLIANCE (ARTP/ANSSI)
+// ============================================================
+
+model Control {
+  id                  String         @id @default(cuid())
+  frameworkId         String
+  controlId           String         @unique
+  controlName         String
+  category            String
+  description         String?        @db.Text
+  implementationStatus ImplementationStatus @default(NOT_IMPLEMENTED
+  evidenceNotes       String?        @db.Text
+  riskRating          RiskRating     @default(MEDIUM)
+  artpReference       String?        // ARTP control reference
+  anssiMapping        String?        // ANSSI PSSI mapping
+  lastAssessedAt      DateTime?
+  nextReviewDate      DateTime?
+  owner               String?
+  automatedEvidence   Boolean        @default(false)
+  complianceScore     Int            @default(0) // 0-100
+
+  assessments         Assessment[]
+
+  @@index([frameworkId])
+  @@index([category])
+  @@index([implementationStatus])
+  @@map("controls")
+}
+
+enum ImplementationStatus {
+  NOT_IMPLEMENTED
+  PARTIALLY_IMPLEMENTED
+  IMPLEMENTED
+  TESTED
+  VERIFIED
+}
+
+enum RiskRating {
+  CRITICAL
+  HIGH
+  MEDIUM
+  LOW
+  NEGLIGIBLE
+}
+
+model Framework {
+  id                  String         @id @default(cuid())
+  name                String         @unique
+  version             String
+  type                FrameworkType
+  description         String?        @db.Text
+  issuer              String         // 'ARTP', 'ANSSI', 'ISO', 'NIST'
+  totalControls       Int            @default(0)
+  implementedControls Int            @default(0)
+  complianceScore    Float          @default(0.0) // 0-100
+  lastAssessmentDate DateTime?
+  nextReviewDate      DateTime?
+  isActive            Boolean        @default(true)
+
+  controls            Control[]
+  assessments         Assessment[]
+
+  @@map("frameworks")
+}
+
+enum FrameworkType {
+  ARTP_TELECOM
+  ANSSI_PSSI
+  ISO_27001
+  NIST_CSF
+  GDPR
+  SOC2
+  CUSTOM
+}
+
+model Assessment {
+  id                  String         @id @default(cuid())
+  frameworkId         String
+  framework           Framework      @relation(fields: [frameworkId], references: [id])
+  assessorId          String?
+  assessmentType      AssessmentType @default(REGULAR)
+  status              AssessmentStatus @default(IN_PROGRESS)
+  score               Int            @default(0) // 0-100
+  findingsCount       Int            @default(0)
+  gapsIdentified      Int            @default(0)
+  startedAt           DateTime       @default(now())
+  completedAt         DateTime?
+  reportUrl           String?
+  submittedToArtp     Boolean        @default(false)
+  submissionRef       String?
+  notes               String?        @db.Text
+
+  assessor            User?          @relation("Assessor", fields: [assessorId], references: [id])
+  controlAssessments ControlAssessment[]
+
+  @@index([frameworkId])
+  @@index([status])
+  @@index([submittedToArtp])
+  @@map("assessments")
+}
+
+enum AssessmentType {
+  INITIAL
+  REGULAR
+  FOLLOW_UP
+  SPECIAL
+  POST_INCIDENT
+}
+
+enum AssessmentStatus {
+  PLANNING
+  IN_PROGRESS
+  REVIEW
+  COMPLETED
+  APPROVED
+  REJECTED
+  ARCHIVED
+}
+
+model ControlAssessment {
+  id                  String         @id @default(cuid())
+  assessmentId        String
+  controlId           String
+  control             Control        @relation(fields: [controlId], references: [id])
+  assessment          Assessment      @relation(fields: [assessmentId], references: [id], onDelete: Cascade)
+  status              ControlStatus @default(NOT_ASSESSED
+  evidence            String?        @db.Text
+  gapDescription      String?        @db.Text
+  remediationPlan     String?        @db.Text
+  testerNotes         String?        @db.Text
+  testedAt            DateTime?
+
+  @@index([assessmentId])
+  @@index([controlId])
+  @@map("control_assessments")
+}
+
+enum ControlStatus {
+  NOT_ASSESSED
+  PASS
+  FAIL
+  PARTIAL_PASS
+  NOT_APPLICABLE
+  NOT_TESTED
+}
+
+model Evidence {
+  id                  String         @id @default(cuid())
+  controlId           String
+  assessmentId        String?
+  type                EvidenceType
+  title               String
+  description         String?        @db.Text
+  filePath            String?
+  fileHash            String?
+  collectedAt         DateTime       @default(now())
+  collectedBy         String?
+  isValidated         Boolean        @default(false)
+  validatedBy         String?
+  validatedAt         DateTime?
+  artpAccepted        Boolean        @default(false)
+
+  @@index([controlId])
+  @@index([assessmentId])
+  @@index([type])
+  @@map("evidence")
+}
+
+enum EvidenceType {
+  SCREENSHOT
+  LOG_FILE
+  CONFIGURATION
+  POLICY_DOCUMENT
+  INTERVIEW_NOTES
+  SCAN_REPORT
+  MANUAL_CHECKLIST
+  OTHER
+}
+
+// ============================================================
+// DOMAIN 6: SOAR / AUTOMATION
+// ============================================================
+
+model Playbook {
+  id                  String         @id @default(cuid())
+  name                String
+  description         String?        @db.Text
+  version             String         @default("1.0")
+  category            PlaybookCategory
+  severity            Severity       @default(HIGH)
+  status              PlaybookStatus @default(DRAFT)
+  triggers            Json           @default("[]") // Array of trigger conditions
+  steps               PlaybookStep[]  @relation(sort: [{ order: 'asc' }])
+  approvalRequired   Boolean        @default(false)
+  estimatedRuntime    Int            @default(300) // seconds
+  successRate         Float          @default(0.0) // percentage
+  totalRuns           Int            @default(0)
+  timeSaved          String         @default("0h") // estimated time saved
+  createdBy           String
+  createdAt           DateTime       @default(now())
+  updatedAt           DateTime       @updatedAt
+
+  executions          PlaybookExecution[]
+
+  @@index([category])
+  @@index([status])
+  @@index([severity])
+  @@map("playbooks")
+}
+
+enum PlaybookCategory {
+  CONTAINMENT
+  REMEDIATION
+  DETECTION
+  ENRICHMENT
+  NOTIFICATION
+  REPORTING
+  INVESTIGATION
+  CUSTOM
+}
+
+enum PlaybookStatus {
+  DRAFT
+  TESTING
+  ACTIVE
+  DEPRECATED
+  ARCHIVED
+}
+
+model PlaybookStep {
+  id                  String         @id @default(cuid())
+  playbookId          String
+  order               Int
+  name                String
+  actionType          ActionType
+  config              Json?
+  timeout             Int            @default(60) // seconds
+  status              StepStatus     @default(PENDING)
+  condition           String?        // Condition to execute this step
+  onFailure           StepOnFailure   @default(SKIP)
+  approvalRequired    Boolean        @default(false)
+  playbook            Playbook       @relation(fields: [playbookId], references: [id], onDelete: Cascade)
+
+  @@index([playbookId])
+  @@index([order])
+  @@map("playbook_steps")
+}
+
+enum ActionType {
+  BLOCK_IP
+  ISOLATE_ENDPOINT
+  DISABLE_ACCOUNT
+  SEND_NOTIFICATION
+  CREATE_CASE
+  COLLECT_EVIDENCE
+  ENRICH_INDICATOR
+  API_CALL
+  RUN_QUERY
+  EXECUTE_SCRIPT
+  UPDATE_TICKET
+  QUARANTINE_FILE
+  RESET_PASSWORD
+  CUSTOM
+}
+
+enum StepStatus {
+  PENDING
+  RUNNING
+  COMPLETED
+  FAILED
+  SKIPPED
+  APPROVAL_PENDING
+}
+
+enum StepOnFailure {
+  SKIP
+  RETRY
+  ABORT
+  PAUSE
+}
+
+model PlaybookExecution {
+  id                  String         @id @default(cuid())
+  playbookId          String
+  playbook            Playbook       @relation(fields: [playbookId], references: [id])
+  triggeredBy          String         // Alert ID or User ID
+  triggeredByType      ExecutionTrigger
+  status              ExecutionStatus @default(RUNNING)
+  progress            Int            @default(0) // percentage
+  currentStep         Int            @default(1)
+  startedAt           DateTime       @default(now())
+  completedAt         DateTime?
+  durationSeconds     Int?
+  result              ExecutionResult?
+  error               String?        @db.Text
+  executionLog        Json           @default("[]")
+  approvedBy          String?
+  approvedAt          DateTime?
+
+  stepExecutions      StepExecution[]
+
+  @@index([playbookId])
+  @@index([status])
+  @@index([startedAt])
+  @@map("playbook_executions")
+}
+
+enum ExecutionTrigger {
+  ALERT
+  MANUAL
+  SCHEDULED
+  WEBHOOK
+  API
+}
+
+enum ExecutionStatus {
+  PENDING
+  RUNNING
+  COMPLETED
+  FAILED
+  CANCELLED
+  TIMEOUT
+  WAITING_APPROVAL
+}
+
+enum ExecutionResult {
+  SUCCESS
+  PARTIAL
+  FAILURE
+  TIMEOUT
+  CANCELLED
+}
+
+model StepExecution {
+  id                  String         @id @default(cuid())
+  executionId         String
+  execution           PlaybookExecution @relation(fields: [executionId], references: [id], onDelete: Cascade)
+  stepId              String
+  step                PlaybookStep?
+  status              StepStatus     @default(PENDING)
+  startedAt           DateTime?
+  completedAt         DateTime?
+  result              Json?
+  error               String?
+  output              Json?          // Data produced by this step
+  durationMs          Int?
+
+  @@index([executionId])
+  @@index([status])
+  @@map("step_executions")
+}
+
+// ============================================================
+// DOMAIN 7: THREAT HUNTING
+// ============================================================
+
+model ThreatHuntSession {
+  id                  String         @id @default(cuid())
+  name                String
+  description         String?        @db.Text
+  hypothesis          String?        @db.Text
+  status              HuntStatus     @default(ACTIVE)
+  hunterId            String
+  hunterName          String
+  findingsCount       Int            @default(0)
+  iocsExtracted       Int            @default(0)
+  queries             Json           @default("[]") // Array of queries executed
+  filters             Json           @default("{}")
+  createdAt           DateTime       @default(now())
+  updatedAt           DateTime       @default(now())
+  lastActivityAt      DateTime?
+  completedAt         DateTime?
+
+  hunter              User           @relation("HuntOwner", fields: [hunterId], references: [id])
+  findings            HuntingFinding[]
+
+  @@index([hunterId])
+  @@index([status])
+  @@index([createdAt])
+  @@map("threat_hunt_sessions")
+}
+
+enum HuntStatus {
+  ACTIVE
+  PAUSED
+  COMPLETED
+  CANCELLED
+  EXPIRED
+}
+
+model HuntingFinding {
+  id                  String         @id @default(cuid())
+  sessionId           String
+  session             ThreatHuntSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  title               String
+  description         String?        @db.Text
+  severity            Severity       @default(MEDIUM)
+  confidence          Int            @default(50) // 0-100
+  type                FindingType
+  status              FindingStatus @default(NEW)
+  iocs                Json           @default("[]") // IOCs extracted from this finding
+  relatedAlerts        String[]       @default([]) // Alert IDs
+  assignedTo          String?
+  investigationStatus InvestigationStatus @default(OPEN)
+  createdAt           DateTime       @default(now())
+
+  @@index([sessionId])
+  @@index([severity])
+  @@index([type])
+  @@map("hunting_findings")
+}
+
+enum FindingType {
+  ANOMALY_PATTERN
+  COMPROMISED_INDICATOR
+  LATERAL_MOVEMENT
+  DATA_EXFILTRATION
+  POLICY_VIOLATION
+  UNKNOWN_THREAT
+  CUSTOM
+}
+
+enum FindingStatus {
+  NEW
+  INVESTIGATING
+  CONFIRMED
+  FALSE_POSITIVE
+  BENIGN
+  ESCALATED
+  CLOSED
+}
+
+enum InvestigationStatus {
+  OPEN
+  IN_PROGRESS
+  ESCALATED
+  RESOLVED
+  CLOSED
+  DISMISSED
+}
+
+// ============================================================
+// DOMAIN 8: CASE MANAGEMENT
+// ============================================================
+
+model Case {
+  id                  String         @id @default(cuid())
+  caseNumber          String         @unique
+  title               String
+  description         String?        @db.Text
+  caseType            CaseType
+  priority            Priority       @default(MEDIUM)
+  severity            Severity       @default(HIGH)
+  status              CaseStatus     @default(OPEN)
+  phase               CasePhase       @default(TRIAGE
+  assignedTo          String?
+  assignedTeam        String?
+  reporter            String?
+  detectedAt          DateTime       @default(now())
+  resolvedAt          DateTime?
+  slaDeadline         DateTime?
+  slaBreach           Boolean        @default(false)
+  artpReportable      Boolean        @default(false)
+  relatedIncidentId   String?
+  relatedThreats      String[]       @default([])
+  evidenceIds         String[]       @default([])
+  tasks               Task[]
+  timeline            TimelineEvent[]
+  notes               CaseNote[]
+
+  assignee            User?          @relation("CaseAssignee", fields: [assignedTo], references: [id])
+
+  @@index([caseType])
+  @@index([status])
+  @@index([priority])
+  @@index([detectedAt])
+  @@map("cases")
+}
+
+enum CaseType {
+  SECURITY_INCIDENT
+  FRAUD_INVESTIGATION
+  COMPLIANCE_VIOLATION
+  VULNERABILITY_ASSESSMENT
+  THREAT_HUNT_RESULT
+  PENETRATION_TEST
+  AUDIT_FINDING
+  THIRD_PARTY
+  CUSTOM
+}
+
+enum CaseStatus {
+  OPEN
+  IN_PROGRESS
+  UNDER_REVIEW
+  RESOLVED
+  CLOSED
+  ESCALATED
+  ARCHIVED
+}
+
+enum CasePhase {
+  TRIAGE
+  INVESTIGATION
+  ANALYSIS
+  CONTAINMENT
+  ERADICATION
+  RECOVERY
+  REPORTING
+  CLOSED
+}
+
+model Task {
+  id                  String         @id @default(cuid())
+  caseId              String
+  incidentId          String?
+  title               String
+  description         String?        @db.Text
+  assigneeId          String?
+  status              TaskStatus     @default(TODO)
+  priority            Priority       @default(MEDIUM)
+  dueDate             DateTime?
+  completedAt         DateTime?
+  createdAt           DateTime       @default(now())
+  updatedAt           DateTime       @updatedAt
+
+  case_               Case?          @relation(fields: [caseId], references: [id], onDelete: Cascade)
+  incident            Incident?      @relation(fields: [incidentId], references: [id], onDelete: Cascade)
+  assignee            User?          @relation("TaskAssignee", fields: [assigneeId], references: [id])
+
+  @@index([caseId])
+  @@index([incidentId])
+  @@index([status])
+  @@index([dueDate])
+  @@map("tasks")
+}
+
+enum TaskStatus {
+  TODO
+  IN_PROGRESS
+  BLOCKED
+  IN_REVIEW
+  DONE
+  CANCELLED
+}
+
+model TimelineEvent {
+  id                  String         @id @default(cuid())
+  caseId              String?
+  incidentId          String?
+  eventType           TimelineEventType
+  title               String
+  description         String?        @db.Text
+  timestamp           DateTime       @default(now())
+  createdBy           String
+  metadata            Json?
+
+  case_               Case?          @relation(fields: [caseId], references: [id], onDelete: Cascade)
+  incident            Incident?      @relation(fields: [incidentId], references: [id], onDelete: Cascade)
+
+  @@index([caseId])
+  @@index([incidentId])
+  @@index([eventType])
+  @@index([timestamp])
+  @@map("timeline_events")
+}
+
+enum TimelineEventType {
+  DETECTION
+  ACKNOWLEDGMENT
+  ASSIGNMENT
+  STATUS_CHANGE
+  EVIDENCE_COLLECTED
+  TASK_COMPLETED
+  NOTE_ADDED
+  PHASE_CHANGE
+  ESCALATION
+  RESOLUTION
+  closure
+}
+
+model CaseNote {
+  id                  String         @id @default(cuid())
+  caseId              String
+  authorId            String
+  content             String         @db.Text
+  isInternal          Boolean        @default(false)
+  createdAt           DateTime       @default(now())
+
+  case_               Case           @relation(fields: [caseId], references: [id], onDelete: Cascade)
+
+  @@index([caseId])
+  @@index([createdAt])
+  @@map("case_notes")
+}
+
+model Evidence {
+  id                  String         @id @default(cuid())
+  caseId              String?
+  incidentId          String?
+  type                EvidenceType
+  title               String
+  description         String?        @db.Text
+  filePath            String?
+  fileHash            String?
+  fileSize            BigInt?
+  mimeType            String?
+  collectedAt         DateTime       @default(now())
+  collectedBy         String?
+  chainOfCustody      Json?
+  isValidated         Boolean        @default(false)
+  artpAccepted        Boolean        @default(false)
+
+  @@index([caseId])
+  @@index([incidentId])
+  @@index([type])
+  @@map("evidence_items")
+}
+
+// ============================================================
+// DOMAIN 9: SYSTEM & MONITORING
+// ============================================================
+
+model AuditLog {
+  id                  String         @id @default(cuid())
+  userId              String
+  action              AuditAction
+  resourceType        ResourceType
+  resourceId          String
+  details             Json?
+  ipAddress           String?
+  userAgent           String?
+  timestamp           DateTime       @default(now())
+  severity            AuditSeverity @default(INFO)
+
+  user                User           @relation("AuditUser", fields: [userId], references: [id])
+
+  @@index([userId])
+  @@index([action])
+  @@index([resourceType])
+  @@index([timestamp])
+  @@index([ipAddress])
+  @@map("audit_logs")
+}
+
+enum AuditAction {
+  LOGIN
+  LOGOUT
+  CREATE
+  READ
+  UPDATE
+  DELETE
+  EXPORT
+  IMPORT
+  CONFIG_CHANGE
+  ROLE_CHANGE
+  PERMISSION_CHANGE
+  ALERT_ACKNOWLEDGE
+  INCIDENT_CREATE
+  INCIDENT_UPDATE
+  INCIDENT_RESOLVE
+  PLAYBOOK_EXECUTE
+  PLAYBOOK_APPROVE
+  CASE_CREATE
+  CASE_UPDATE
+  EVIDENCE_ADD
+  COMPLIANCE_SUBMIT
+  ADMIN_ACTION
+  CUSTOM
+}
+
+enum ResourceType {
+  USER
+  ROLE
+  ALERT
+  INCIDENT
+  THREAT_INTEL
+  PLAYBOOK
+  CASE
+  EVIDENCE
+  CONTROL
+  ASSESSMENT
+  FRAMEWORK
+  SYSTEM_CONFIG
+  NETWORK_ELEMENT
+  SUBSCRIBER
+  SESSION
+  API_KEY
+  WEBHOOK
+  REPORT
+  DASHBOARD
+  CUSTOM
+}
+
+enum AuditSeverity {
+  DEBUG
+  INFO
+  WARNING
+  ERROR
+  CRITICAL
+}
+
+model SystemHealth {
+  id                  String         @id @default(cuid())
+  overall             HealthStatus   @default(HEALTHY)
+  database            HealthCheck
+  redis               HealthCheck
+  memory              SystemMetrics
+  cpu                 SystemMetrics
+  disk                DiskMetrics
+  apiLatency          Json           @default("{}")
+  activeConnections   Int            @default(0)
+  alertsLastHour       Int            @default(0)
+  incidentsActive     Int            @default(0)
+  uptimeSeconds       BigInt         @default(0)
+  version             String         @default("1.0.0")
+  environment         String         @default("unknown")
+  timestamp           DateTime       @default(now())
+
+  @@index([overall])
+  @@index([timestamp])
+  @@map("system_health")
+}
+
+interface HealthCheck {
+  status: HealthStatus
+  latency?: number
+  message?: string
+  details?: Record<string, unknown>
+}
+
+enum HealthStatus {
+  HEALTHY
+  DEGRADED
+  UNHEALTHY
+  UNKNOWN
+}
+
+interface SystemMetrics {
+  used: number
+  total: number
+  percentage: number
+  unit: string
+}
+
+interface DiskMetrics {
+  used: number
+  total: number
+  percentage: number
+  unit: string
+  path: string
+}

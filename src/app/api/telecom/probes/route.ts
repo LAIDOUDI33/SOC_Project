@@ -13,8 +13,8 @@ import { probeManager, type ProbeConfig, type TelecomMetrics } from '@/lib/telec
 import { db } from '@/lib/db';
 
 // ============================================================
-# GET /api/telecom/probes - List all probes and their status
-# ============================================================
+// GET /api/telecom/probes - List all probes and their status
+// ============================================================
 
 export async function GET(request: NextRequest) {
   try {
@@ -51,8 +51,8 @@ export async function GET(request: NextRequest) {
 }
 
 // ============================================================
-# POST /api/telecom/probes - Manage probe connections
-# ============================================================
+// POST /api/telecom/probes - Manage probe connections
+// ============================================================
 
 export async function POST(request: NextRequest) {
   try {
@@ -89,8 +89,8 @@ export async function POST(request: NextRequest) {
 }
 
 // ============================================================
-# Handler Functions
-# ============================================================
+// Handler Functions
+// ============================================================
 
 async function getProbeStatus(): Promise<NextResponse> {
   const connections = probeManager.getConnectionStatus();
