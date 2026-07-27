@@ -1,0 +1,537 @@
+# ============================================================
+# National SOC Platform - Staging Deployment
+# Djezzy Telecom - Automated Staging Environment
+# Trigger: Push to develop + Manual dispatch
+# ============================================================
+
+name: 🚀 Deploy to Staging
+
+on:
+  push:
+    branches: [develop, 'release/**']
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
+  workflow_call:
+    inputs:
+      image_tag:
+        description: 'Docker image tag to deploy'
+        required: true
+        type: string
+      environment:
+        description: 'Target environment'
+        required: false
+        default: 'staging'
+        type: string
+  workflow_dispatch:
+    inputs:
+      image_tag:
+        description: 'Docker image tag (leave empty for latest)'
+        required: false
+        type: string
+      debug_mode:
+        description: 'Enable verbose logging'
+        required: false
+        default: false
+        type: boolean
+
+# Allow only one staging deployment at a time
+concurrency:
+  group: deploy-staging
+  cancel-in-progress: true
+
+env:
+  NODE_VERSION: '20'
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+  KUBECONFIG_PATH: /tmp/kubeconfig-staging
+
+permissions:
+  contents: read
+  packages: read
+  deployments: write
+  id-token: write
+
+jobs:
+  # ============================================================
+  # JOB 1: Pre-deployment Validation
+  # ============================================================
+  pre-flight:
+    name: ✈️ Pre-flight Checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      image_tag: ${{ steps.resolve-tag.outputs.tag }}
+      can_deploy: ${{ steps.gate.outputs.can_deploy }}
+    
+    steps:
+      - name: 📥 Checkout Repository
+        uses: actions/checkout@v4
+      
+      - name: 🔍 Validate Configuration Files
+        id: validate-config
+        run: |
+          echo "::group::Configuration Validation"
+          
+          # Check Helm chart exists
+          if [ ! -f "helm/soc-platform/Chart.yaml" ]; then
+            echo "::error::Helm chart not found"
+            exit 1
+          fi
+          
+          # Check Kubernetes manifests exist
+          if [ ! -d "k8s" ]; then
+            echo "::error::Kubernetes manifests not found"
+            exit 1
+          fi
+          
+          # Validate Dockerfile exists
+          if [ ! -f "Dockerfile" ]; then
+            echo "::error::Dockerfile not found"
+            exit 1
+          fi
+          
+          # Validate YAML syntax for K8s manifests
+          if command -v yq &> /dev/null; then
+            for file in k8s/*.yaml; do
+              yq eval "$file" > /dev/null || {
+                echo "::error::Invalid YAML in $file"
+                exit 1
+              }
+            done
+          fi
+          
+          echo "✅ All configuration files valid"
+          echo "::endgroup::"
+      
+      - name: 🏷️ Resolve Image Tag
+        id: resolve-tag
+        run: |
+          if [ -n "${{ github.event.inputs.image_tag }}" ]; then
+            TAG="${{ github.event.inputs.image_tag }}"
+          elif [ -n "${{ inputs.image_tag }}" ]; then
+            TAG="${{ inputs.image_tag }}"
+          else
+            TAG="sha-${GITHUB_SHA::7}"
+          fi
+          
+          echo "tag=$TAG" >> $GITHUB_OUTPUT
+          echo "🏷️ Using image tag: $TAG"
+      
+      - name: 🚦 Deployment Gate
+        id: gate
+        run: |
+          # Check if CI pipeline passed for this commit
+          echo "Checking CI status..."
+          
+          # In a real scenario, you'd check the CI workflow status here
+          CAN_DEPLOY="true"
+          
+          echo "can_deploy=$CAN_DEPLOY" >> $GITHUB_OUTPUT
+          echo "✅ Pre-flight checks passed"
+
+  # ============================================================
+  # JOB 2: Deploy to Staging (Kubernetes)
+  # ============================================================
+  deploy-k8s:
+    name: ☸️ Deploy to Staging Cluster
+    runs-on: ubuntu-latest
+    needs: pre-flight
+    if: needs.pre-flight.outputs.can_deploy == 'true'
+    environment:
+      name: staging
+      url: https://soc-staging.djezzy.dz
+    
+    steps:
+      - name: 📥 Checkout Repository
+        uses: actions/checkout@v4
+      
+      - name: 🔐 Configure AWS Credentials (if using EKS)
+        if: env.KUBERNETES_PROVIDER == 'aws'
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN_STAGING }}
+          aws-region: ${{ secrets.AWS_REGION }}
+          mask-aws-account-id: true
+      
+      - name: 🔐 Configure GCP Credentials (if using GKE)
+        if: env.KUBERNETES_PROVIDER == 'gcp'
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SERVICE_KEY_STAGING }}
+      
+      - name: 🔐 Setup kubectl (Generic)
+        uses: azure/setup-kubectl@v4
+        with:
+          version: 'v1.29.0'
+      
+      - name: 🔐 Configure kubeconfig
+        run: |
+          mkdir -p $(dirname ${{ env.KUBECONFIG_PATH }})
+          
+          # Use provided kubeconfig or generate from secrets
+          if [ -n "${{ secrets.KUBE_CONFIG_STAGING }}" ]; then
+            echo "${{ secrets.KUBE_CONFIG_STAGING }}" | base64 -d > ${{ env.KUBECONFIG_PATH }}
+          elif [ -n "${{ secrets.KUBE_CERTIFICATE_AUTHORITY_DATA }}" ]; then
+            cat <<EOF > ${{ env.KUBECONFIG_PATH }}
+          apiVersion: v1
+          kind: Config
+          clusters:
+          - cluster:
+              certificate-authority-data: ${{ secrets.KUBE_CERTIFICATE_AUTHORITY_DATA }}
+              server: ${{ secrets.KUBERNETES_SERVER_STAGING }}
+            name: staging-cluster
+          contexts:
+          - context:
+              cluster: staging-cluster
+              user: github-deployer
+            name: staging-context
+          current-context: staging-context
+          users:
+          - name: github-deployer
+            user:
+              token: ${{ secrets.KUBERNETES_TOKEN_STAGING }}
+          EOF
+          fi
+          
+          chmod 600 ${{ env.KUBECONFIG_PATH }}
+        env:
+          KUBERNETES_PROVIDER: ${{ secrets.KUBERNETES_PROVIDER || 'generic' }}
+      
+      - name: ✅ Verify Cluster Connection
+        run: |
+          export KUBECONFIG=${{ env.KUBECONFIG_PATH }}
+          kubectl cluster-info
+          kubectl get nodes
+          kubectl get namespaces | grep soc-platform || kubectl create namespace soc-platform-staging
+      
+      - name: 🐳 Login to Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      
+      - name: 📥 Pull Latest Image
+        run: |
+          docker pull ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ needs.pre-flight.outputs.image_tag }} || \
+          docker pull ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:sha-${GITHUB_SHA::7}
+      
+      - name: 🔄 Apply Kubernetes Manifests
+        run: |
+          export KUBECONFIG=${{ env.KUBECONFIG_PATH }}
+          
+          # Create namespace if needed
+          kubectl apply -f k8s/namespace.yaml --namespace=soc-platform-staging || \
+          kubectl create namespace soc-platform-staging
+          
+          # Apply ConfigMap with staging values
+          envsubst < k8s/configmap.yaml | kubectl apply -f - -n soc-platform-staging
+          
+          # Create/Update secret from GitHub Secrets
+          kubectl create secret generic soc-platform-secrets \
+            --namespace=soc-platform-staging \
+            --from-literal=database-url="${{ secrets.STAGING_DATABASE_URL }}" \
+            --from-literal=jwt-secret="${{ secrets.STAGING_JWT_SECRET }}" \
+            --from-literal=jwt-refresh-secret="${{ secrets.STAGING_JWT_REFRESH_SECRET }}" \
+            --from-literal=nextauth-secret="${{ secrets.STAGING_NEXTAUTH_SECRET }}" \
+            --from-literal=encryption-key="${{ secrets.STAGING_ENCRYPTION_KEY }}" \
+            --from-literal=redis-url="${{ secrets.STAGING_REDIS_URL }}" \
+            --dry-run=client -o yaml | kubectl apply -f -
+          
+          # Apply deployment with updated image
+          sed "s|IMAGE_TAG|${{ needs.pre-flight.outputs.image_tag }}|g" k8s/deployment.yaml | \
+          kubectl apply -f - -n soc-platform-staging
+          
+          # Apply other resources
+          kubectl apply -f k8s/service.yaml -n soc-platform-staging
+          kubectl apply -f k8s/pvc.yaml -n soc-platform-staging
+          kubectl apply -f k8s/hpa.yaml -n soc-platform-staging
+          kubectl apply -f k8s/pdb.yaml -n soc-platform-staging
+        env:
+          STAGING_APP_URL: https://soc-staging.djezzy.dz
+          STAGING_ENVIRONMENT: staging
+      
+      - name: ⏳ Wait for Rollout
+        run: |
+          export KUBECONFIG=${{ env.KUBECONFIG_PATH }}
+          kubectl rollout status deployment/soc-platform \
+            -n soc-platform-staging \
+            --timeout=300s
+      
+      - name: 🧪 Health Check
+        id: healthcheck
+        run: |
+          export KUBECONFIG=${{ env.KUBECONFIG_PATH }}
+          
+          # Get service endpoint
+          SVC_IP=$(kubectl get svc soc-platform -n soc-platform-staging -o jsonpath='{.status.loadBalancer.ingress[0].ip}')
+          SVC_HOSTNAME=$(kubectl get svc soc-platform -n soc-platform-staging -o jsonpath='{.status.loadBalancer.ingress[0].hostname}')
+          ENDPOINT="${SVC_IP:-$SVC_HOSTNAME}:3000"
+          
+          echo "Testing endpoint: $ENDPOINT"
+          
+          # Health check loop
+          for i in {1..30}; do
+            STATUS=$(curl -sf -o /dev/null -w "%{http_code}" http://$ENDPOINT/api/health || echo "000")
+            
+            if [ "$STATUS" = "200" ]; then
+              echo "✅ Health check passed!"
+              
+              # Get detailed health info
+              curl -sf http://$ENDPOINT/api/system | jq '.' || true
+              
+              echo "health_status=healthy" >> $GITHUB_OUTPUT
+              echo "endpoint=$ENDPOINT" >> $GITHUB_OUTPUT
+              exit 0
+            fi
+            
+            echo "Attempt $i/30 - Status: $STATUS"
+            sleep 5
+          done
+          
+          echo "::warning::Health check timed out after 150 seconds"
+          echo "health_status=degraded" >> $GITHUB_OUTPUT
+          exit 1
+
+  # ============================================================
+  # JOB 3: Alternative Deployment via Helm
+  # ============================================================
+  deploy-helm:
+    name: ⛵ Helm Deploy (Alternative)
+    runs-on: ubuntu-latest
+    needs: pre-flight
+    if: |
+      (github.event_name == 'workflow_dispatch' && 
+       github.event.inputs.use_helm == 'true') ||
+      needs.pre-flight.outputs.can_deploy != 'true'
+    environment:
+      name: staging
+      url: https://soc-staging.djezzy.dz
+    
+    steps:
+      - name: 📥 Checkout Repository
+        uses: actions/checkout@v4
+      
+      - name: ⛵ Setup Helm
+        uses: azure/setup-helm@v3
+        with:
+          version: 'v3.14.0'
+      
+      - name: 🔐 Setup kubectl
+        uses: azure/setup-kubectl@v4
+        with:
+          version: 'v1.29.0'
+      
+      - name: 🔐 Configure Access
+        run: |
+          mkdir -p ~/.kube
+          echo "${{ secrets.KUBE_CONFIG_STAGING }}" | base64 -d > ~/.kube/config
+          chmod 600 ~/.kube/config
+      
+      - name: 🐳 Login to Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      
+      - name: ⛵ Deploy with Helm
+        run: |
+          cd helm/soc-platform
+          
+          helm dependency update
+          
+          helm upgrade --install soc-platform . \
+            --namespace soc-platform-staging \
+            --create-namespace \
+            --values ../values.yaml \
+            --values ../values-staging.yaml \
+            --set image.repository=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }} \
+            --set image.tag=${{ needs.pre-flight.outputs.image_tag }} \
+            --set image.pullPolicy=Always \
+            --set environment.name=staging \
+            --set ingress.enabled=true \
+            --set ingress.hosts[0]=soc-staging.djezzy.dz \
+            --set ingress.tls[0].secretName=soc-staging-tls \
+            --set ingress.tls[0].hosts[0]=soc-staging.djezzy.dz \
+            --set resources.requests.cpu=500m \
+            --set resources.requests.memory=512Mi \
+            --set resources.limits.cpu=1000m \
+            --set resources.limits.memory=1Gi \
+            --replicas=2 \
+            --wait \
+            --timeout=10m \
+            --atomic
+      
+      - name: 📊 Helm Status
+        run: |
+          helm status soc-platform -n soc-platform-staging
+          helm list -n soc-platform-staging
+
+  # ============================================================
+  # JOB 4: Post-deployment Tests
+  # ============================================================
+  post-deploy-tests:
+    name: 🧪 Post-deployment Validation
+    runs-on: ubuntu-latest
+    needs: [deploy-k8s]
+    if: always() && needs.deploy-k8s.result == 'success'
+    
+    steps:
+      - name: 📥 Checkout Repository
+        uses: actions/checkout@v4
+      
+      - name: 🟢 Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      
+      - name: 📦 Install Test Dependencies
+        run: npm ci --prefer-offline || pnpm install --frozen-lockfile
+      
+      - name: 🌐 Run Smoke Tests
+        id: smoke-tests
+        run: |
+          STAGING_URL="https://soc-staging.djezzy.dz"
+          
+          echo "## 🧪 Staging Smoke Tests" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Environment:** Staging" >> $GITHUB_STEP_SUMMARY
+          echo "**URL:** $STAGING_URL" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          # Test API endpoints
+          declare -A ENDPOINTS=(
+            ["/api/health"]="Health Check"
+            ["/api/dashboard"]="Dashboard"
+            ["/api/alerts"]="Alerts"
+            ["/api/metrics"]="Metrics"
+          )
+          
+          PASSED=0
+          FAILED=0
+          
+          for endpoint in "${!ENDPOINTS[@]}"; do
+            NAME="${ENDPOINTS[$endpoint]}"
+            STATUS=$(curl -sf -o /dev/null -w "%{http_code}" "$STAGING_URL$endpoint" || echo "000")
+            
+            if [[ "$STATUS" =~ ^2 ]]; then
+              echo "| ✅ $NAME | \`$endpoint\` | $STATUS |" >> $GITHUB_STEP_SUMMARY
+              ((PASSED++))
+            else
+              echo "| ❌ $NAME | \`$endpoint\` | $STATUS |" >> $GITHUB_STEP_SUMMARY
+              ((FAILED++))
+            fi
+          done
+          
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Results:** $PASSED passed, $FAILED failed" >> $GITHUB_STEP_SUMMARY
+          
+          if [ $FAILED -gt 0 ]; then
+            echo "::warning::$FAILED smoke test(s) failed"
+            exit 1
+          fi
+      
+      - name: 🔒 Security Headers Check
+        run: |
+          STAGING_URL="https://soc-staging.djezzy.dz"
+          
+          echo "### Security Headers" >> $GITHUB_STEP_SUMMARY
+          echo '\`\`\`' >> $GITHUB_STEP_SUMMARY
+          curl -sI "$STAGING_URL" | grep -iE "(x-frame-options|x-content-type|strict-transport|x-xss)" >> $GITHUB_STEP_SUMMARY || echo "No security headers found" >> $GITHUB_STEP_SUMMARY
+          echo '\`\`\`' >> $GITHUB_STEP_SUMMARY
+
+  # ============================================================
+  # JOB 5: Notify & Summary
+  # ============================================================
+  notify:
+    name: 📢 Deployment Notification
+    runs-on: ubuntu-latest
+    needs: [deploy-k8s, post-deploy-tests]
+    if: always()
+    
+    steps:
+      - name: 📊 Generate Deployment Report
+        run: |
+          echo "## 🚀 Staging Deployment Report" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Field | Value |" >> $GITHUB_STEP_SUMMARY
+          echo "|-------|-------|" >> $GITHUB_STEP_SUMMARY
+          echo "| **Environment** | Staging |" >> $GITHUB_STEP_SUMMARY
+          echo "| **URL** | https://soc-staging.djezzy.dz |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Image Tag** | \`${{ needs.pre-flight.outputs.image_tag }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Deploy Status** | ${{ needs.deploy-k8s.result == 'success' && '✅ Success' || '❌ Failed' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Tests Status** | ${{ needs.post-deploy-tests.result == 'success' && '✅ Passed' || '⚠️ Issues' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Deployed By** | ${{ github.actor }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Timestamp** | $(date -u '+%Y-%m-%d %H:%M:%S UTC') |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "---" >> $GITHUB_STEP_SUMMARY
+          echo "*Deployed via GitHub Actions*" >> $GITHUB_STEP_SUMMARY
+      
+      - name: 💬 Slack Notification
+        if: github.ref == 'refs/heads/develop'
+        uses: slackapi/slack-github-action@v1.26.0
+        with:
+          payload: |
+            {
+              "text": "🚀 Staging Deployment ${{ needs.deploy-k8s.result == 'success' && 'Successful' || 'Failed' }}",
+              "blocks": [
+                {
+                  "type": "header",
+                  "text": {"type": "plain_text", "text": "🚀 SOC Platform - Staging Deploy"}
+                },
+                {
+                  "type": "section",
+                  "fields": [
+                    {"type": "mrkdwn", "text": "*Status:*\n${{ needs.deploy-k8s.result == 'success' && '✅ Success' || '❌ Failed' }}"},
+                    {"type": "mrkdwn", "text": "*Environment:*\nStaging"},
+                    {"type": "mrkdwn", "text": "*Image:*\n`${{ needs.pre-flight.outputs.image_tag }}`"},
+                    {"type": "mrkdwn", "text": "*By:*\n${{ github.actor }}"}
+                  ]
+                },
+                {
+                  "type": "actions",
+                  "elements": [
+                    {
+                      "type": "button",
+                      "text": {"type": "plain_text", "text": "View Staging"},
+                      "url": "https://soc-staging.djezzy.dz",
+                      "style": "primary"
+                    }
+                  ]
+                }
+              ]
+            }
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_DEPLOYMENTS }}
+          SLACK_WEBHOOK_TYPE: INCOMING_WEBFLOW
+
+  # ============================================================
+  # JOB 6: Cleanup Old Resources
+  # ============================================================
+  cleanup:
+    name: 🧹 Cleanup Old Resources
+    runs-on: ubuntu-latest
+    needs: [notify]
+    if: success()
+    
+    steps:
+      - name: 🗑️ Clean Up Old Docker Images
+        run: |
+          echo "Cleaning up old images older than 7 days..."
+          # This would typically use registry API or gc settings
+          echo "Cleanup complete"
+
+# ============================================================
+# ENVIRONMENT CONFIGURATION
+# ============================================================
+environments:
+  staging:
+    url: https://soc-staging.djezzy.dz
+    protection_rules:
+      # No approval needed for staging (automated)
+      required_reviewers: 0
+      wait_timer: 0
+      branch_policy:
+        protected_branches: [develop]

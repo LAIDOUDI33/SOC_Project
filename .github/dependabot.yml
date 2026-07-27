@@ -1,0 +1,98 @@
+# ============================================================
+# National SOC Platform - Dependabot Configuration
+# Automated dependency updates for security & stability
+# ============================================================
+
+version: 2
+updates:
+
+  # ============================================================
+  # Package Manager: npm/pnpm (Node.js)
+  # ============================================================
+  - package-ecosystem: "npm"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "06:00"
+      timezone: "Africa/Algiers"
+    open-pull-requests-limit: 10
+    commit-message:
+      prefix: "deps"
+      include: "scope"
+    labels:
+      - "dependencies"
+      - "npm"
+    reviewers:
+      - "laidoudi33"
+    assignees:
+      - "laidoudi33"
+    groups:
+      # Group all patch updates together
+      minor-patch:
+        patterns:
+          - "*"
+        update-types:
+          - "minor"
+          - "patch"
+      # Security updates get their own PRs
+      security:
+        patterns:
+          - "*"
+        update-types:
+          - "security"
+    
+    # Ignore specific versions that cause issues
+    ignore:
+      # Next.js major version (manual upgrade)
+      - dependency-name: "next"
+        update-types: ["version-update:major"]
+      # React major version (manual upgrade)
+      - dependency-name: "react"
+        update-types: ["version-update:major"]
+      - dependency-name: "react-dom"
+        update-types: ["version-update:major"]
+      
+  # ============================================================
+  # Package Manager: Docker
+  # ============================================================
+  - package-ecosystem: "docker"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "tuesday"
+      time: "02:00"
+      timezone: "Africa/Algiers"
+    commit-message:
+      prefix: "docker"
+      include: "scope"
+    labels:
+      - "dependencies"
+      - "docker"
+      - "security"
+    reviewers:
+      - "laidoudi33"
+
+  # ============================================================
+  # Package Manager: GitHub Actions
+  # ============================================================
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "monthly"
+      day: "monday"
+      time: "04:00"
+      timezone: "Africa/Algiers"
+    commit-message:
+      prefix: "ci"
+      include: "scope"
+    labels:
+      - "dependencies"
+      - "ci/cd"
+      - "github-actions"
+    reviewers:
+      - "laidoudi33"
+    groups:
+      actions:
+        patterns:
+          - "*"

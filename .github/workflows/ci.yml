@@ -1,0 +1,559 @@
+# ============================================================
+# National SOC Platform - CI Pipeline
+# Djezzy Telecom Security Operations Center
+# Trigger: Every push/PR to main/develop branches
+# ============================================================
+
+name: 🧪 CI Pipeline
+
+on:
+  push:
+    branches: [main, develop, 'release/**']
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
+      - '.gitignore'
+  pull_request:
+    branches: [main, develop]
+    types: [opened, synchronize, reopened, ready_for_review]
+  workflow_dispatch:
+    inputs:
+      debug_enabled:
+        description: 'Enable debug logging'
+        required: false
+        default: 'false'
+        type: boolean
+
+# Cancel in-progress runs for the same branch
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  NODE_VERSION: '20'
+  PNPM_VERSION: '9'
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+  # Cache configuration
+  CACHE_VERSION: v1
+
+jobs:
+  # ============================================================
+  # JOB 1: Code Quality & Linting
+  # ============================================================
+  lint:
+    name: 🔍 Code Quality
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    
+    steps:
+      - name: 📥 Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      
+      - name: 🟢 Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
+      
+      - name: 🟢 Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'pnpm'
+          cache-dependency-path: pnpm-lock.yaml
+      
+      - name: 📦 Install Dependencies
+        run: pnpm install --frozen-lockfile
+      
+      - name: 🔎 ESLint Check
+        id: eslint
+        run: |
+          echo "::group::ESLint Analysis"
+          pnpm lint --max-warnings=0 || {
+            echo "::warning::ESLint found issues. Please fix before merging."
+            exit 1
+          }
+          echo "::endgroup::"
+      
+      - name: 📊 TypeScript Type Check
+        id: typecheck
+        run: |
+          echo "::group::TypeScript Compilation"
+          pnpm tsc --noEmit --pretty 2>&1 | tee ts-output.log
+          if [ ${PIPESTATUS[0]} -ne 0 ]; then
+            echo "::error::TypeScript compilation failed"
+            exit 1
+          fi
+          echo "::endgroup::"
+      
+      - name: 🎨 Prettier Format Check
+        run: |
+          echo "::group::Prettier Validation"
+          pnpm format:check || {
+            echo "::warning::Code formatting issues found. Run 'pnpm format' to fix."
+            exit 1
+          }
+          echo "::endgroup::"
+      
+      - name: 📏 Complex Analysis (Optional)
+        if: github.event_name == 'pull_request'
+        continue-on-error: true
+        run: |
+          echo "## Code Complexity Report" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          find src -name "*.ts" -o -name "*.tsx" | xargs wc -l | tail -1 >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+
+  # ============================================================
+  # JOB 2: Unit Tests (Jest)
+  # ============================================================
+  unit-tests:
+    name: 🧪 Unit Tests
+    runs-on: ubuntu-latest
+    needs: lint
+    timeout-minutes: 20
+    
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: soc_test
+          POSTGRES_PASSWORD: soc_test_password
+          POSTGRES_DB: soc_platform_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd="pg_isready -U soc_test -d soc_platform_test"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=5
+    
+    env:
+      DATABASE_URL: postgresql://soc_test:soc_test_password@localhost:5432/soc_platform_test
+      NODE_ENV: test
+      JWT_SECRET: test-secret-for-ci-pipeline-256bits-safe
+      JWT_REFRESH_SECRET: test-refresh-secret-256bits-safe
+      NEXTAUTH_SECRET: nextauth-test-secret-32-chars!!
+      ENCRYPTION_KEY: 0123456789abcdef0123456789abcdef
+      REDIS_URL: redis://localhost:6379
+    
+    steps:
+      - name: 📥 Checkout Repository
+        uses: actions/checkout@v4
+      
+      - name: 🟢 Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
+      
+      - name: 🟢 Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'pnpm'
+          cache-dependency-path: pnpm-lock.yaml
+      
+      - name: 📦 Install Dependencies
+        run: pnpm install --frozen-lockfile
+      
+      - name: 🔄 Generate Prisma Client
+        run: |
+          npx prisma generate
+          npx prisma db push --accept-data-loss
+      
+      - name: 🗄️ Seed Test Database
+        run: |
+          npx prisma db seed || echo "Seed script not configured, using empty DB"
+        env:
+          DATABASE_URL: ${{ env.DATABASE_URL }}
+      
+      - name: 🧪 Run Jest Unit Tests
+        id: jest
+        run: |
+          echo "::group::Jest Test Execution"
+          pnpm test:ci -- --coverage --reporters=default --reporters=jest-junit --verbose 2>&1 | tee test-results.txt
+          EXIT_CODE=${PIPESTATUS[0]}
+          echo "::endgroup::"
+          exit $EXIT_CODE
+        env:
+          JEST_JUNIT_OUTPUT_DIR: ./reports/junit
+          JEST_JUNIT_OUTPUT_NAME: results.xml
+      
+      - name: 📊 Upload Test Results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: unit-test-results
+          path: |
+            ./coverage/
+            ./reports/
+            ./test-results.txt
+          retention-days: 14
+      
+      - name: 📈 Coverage Summary
+        if: always()
+        run: |
+          echo "## 🧪 Unit Test Coverage" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          if [ -f coverage/coverage-summary.json ]; then
+            cat coverage/coverage-summary.json >> $GITHUB_STEP_SUMMARY
+          elif [ -f coverage/lcov.info ]; then
+            echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+            npx coverage-summary < coverage/lcov.info >> $GITHUB_STEP_SUMMARY 2>/dev/null || echo "Coverage data available in artifact" >> $GITHUB_STEP_SUMMARY
+            echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "Coverage report generated in artifacts" >> $GITHUB_STEP_SUMMARY
+          fi
+      
+      - name: ✅ PR Comment with Results
+        if: github.event_name == 'pull_request' && always()
+        uses: marocchino/sticky-pull-request-comment@v2
+        with:
+          header: ci-test-results
+          message: |
+            ## 🧪 CI Test Results
+            
+            **Commit:** `${{ github.sha }}`
+            
+            **Status:** ${{ steps.jest.outcome == 'success' && '✅ Passed' || '❌ Failed' }}
+            
+            **Test Artifacts:** Available in [Unit Test Results](../actions/runs/${{ github.run_id }})
+            
+            ---
+            *Generated by SOC Platform CI Pipeline*
+
+  # ============================================================
+  # JOB 3: Integration Tests (API)
+  # ============================================================
+  integration-tests:
+    name: 🔗 Integration Tests
+    runs-on: ubuntu-latest
+    needs: unit-tests
+    timeout-minutes: 25
+    
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: soc_integration
+          POSTGRES_PASSWORD: soc_integration_password
+          POSTGRES_DB: soc_platform_integration
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd="pg_isready -U soc_integration -d soc_platform_integration"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=5
+      
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd="redis-cli ping"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=5
+    
+    env:
+      DATABASE_URL: postgresql://soc_integration:soc_integration_password@localhost:5432/soc_platform_integration
+      NODE_ENV: test
+      PORT: 3000
+      HOSTNAME: localhost
+      JWT_SECRET: integration-test-secret-256bit-key!!
+      JWT_REFRESH_SECRET: integration-refresh-secret-256b
+      NEXTAUTH_SECRET: integration-nextauth-secret-32chars!
+      ENCRYPTION_KEY: fedcba9876543210fedcba9876543210
+      REDIS_URL: redis://localhost:6379
+      NEXTAUTH_URL: http://localhost:3000
+    
+    steps:
+      - name: 📥 Checkout Repository
+        uses: actions/checkout@v4
+      
+      - name: 🟢 Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
+      
+      - name: 🟢 Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'pnpm'
+          cache-dependency-path: pnpm-lock.yaml
+      
+      - name: 📦 Install Dependencies
+        run: pnpm install --frozen-lockfile
+      
+      - name: 🔄 Setup Prisma & Database
+        run: |
+          npx prisma generate
+          npx prisma db push --accept-data-loss
+          npx prisma db seed || true
+      
+      - name: 🚀 Start Application Server
+        run: |
+          pnpm dev &
+          sleep 10
+          # Wait for server to be ready
+          for i in {1..30}; do
+            if curl -sf http://localhost:3000/api/health > /dev/null; then
+              echo "Server is ready!"
+              break
+            fi
+            echo "Waiting for server... ($i/30)"
+            sleep 2
+          done
+      
+      - name: 🔗 Run Integration Tests
+        id: integration
+        run: |
+          echo "::group::Integration Test Execution"
+          pnpm test:integration -- --verbose --forceExit --detectOpenHandles 2>&1 | tee integration-results.txt
+          EXIT_CODE=${PIPESTATUS[0]}
+          echo "::endgroup::"
+          exit $EXIT_CODE
+      
+      - name: 📊 Upload Integration Results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: integration-test-results
+          path: |
+            ./integration-results.txt
+            ./reports/integration/
+          retention-days: 14
+      
+      - name: 📈 API Performance Metrics
+        if: always()
+        run: |
+          echo "## 🔗 Integration Test Results" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Server Response Times** (sample):" >> $GITHUB_STEP_SUMMARY
+          echo '\`\`\`' >> $GITHUB_STEP_SUMMARY
+          curl -sf -w "\nTime Total: %{time_total}s\nTime Connect: %{time_connect}s\n" \
+            -o /dev/null http://localhost:3000/api/health >> $GITHUB_STEP_SUMMARY 2>/dev/null || echo "Metrics captured in logs" >> $GITHUB_STEP_SUMMARY
+          echo '\`\`\`' >> $GITHUB_STEP_SUMMARY
+
+  # ============================================================
+  # JOB 4: Build Docker Image
+  # ============================================================
+  build:
+    name: 🐳 Build Docker Image
+    runs-on: ubuntu-latest
+    needs: [lint, unit-tests]
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      image-tag: ${{ steps.meta.outputs.tags }}
+      image-digest: ${{ steps.build.outputs.digest }}
+    
+    steps:
+      - name: 📥 Checkout Repository
+        uses: actions/checkout@v4
+      
+      - name: 🐳 Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+      
+      - name: 🔐 Login to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      
+      - name: 🏷️ Extract Docker Metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=sha,prefix=
+            type=ref,event=branch
+            type=semver,pattern={{version}}
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=raw,value={{branch}}-,enable={{is_default_branch}},prefix=ci-
+      
+      - name: 🐳 Build and Push Docker Image
+        id: build
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./Dockerfile
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          platforms: linux/amd64,linux/arm64
+          build-args: |
+            BUILDKIT_INLINE_CACHE=1
+            NEXT_TELEMETRY_DISABLED=1
+            NODE_ENV=production
+      
+      - name: 🔍 Trivy Vulnerability Scanner
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
+          format: 'table'
+          exit-code: '0'
+          ignore-unfixed: true
+          severity: 'CRITICAL,HIGH'
+          output: 'trivy-results.txt'
+      
+      - name: 📊 Upload Trivy Scan Results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: trivy-scan-results
+          path: trivy-results.txt
+          retention-days: 7
+      
+      - name: 📋 Trivy Summary
+        if: always()
+        run: |
+          echo "## 🔍 Container Security Scan" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo '\`\`\`' >> $GITHUB_STEP_SUMMARY
+          cat trivy-results.txt 2>/dev/null | head -50 >> $GITHUB_STEP_SUMMARY || echo "Scan completed - see artifacts" >> $GITHUB_STEP_SUMMARY
+          echo '\`\`\`' >> $GITHUB_STEP_SUMMARY
+
+  # ============================================================
+  # JOB 5: E2E Tests (Playwright) - Only on main/PRs
+  # ============================================================
+  e2e-tests:
+    name: 🌐 E2E Browser Tests
+    runs-on: ubuntu-latest
+    needs: build
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' || 
+        github.event_name == 'pull_request'
+    timeout-minutes: 35
+    
+    strategy:
+      fail-fast: false
+      matrix:
+        project: [chromium, firefox]
+    
+    steps:
+      - name: 📥 Checkout Repository
+        uses: actions/checkout@v4
+      
+      - name: 🟢 Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'pnpm'
+          cache-dependency-path: pnpm-lock.yaml
+      
+      - name: 🟢 Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
+      
+      - name: 📦 Install Dependencies
+        run: pnpm install --frozen-lockfile
+      
+      - name: 🌐 Install Playwright Browsers
+        run: npx playwright install --with-deps ${{ matrix.project }}
+      
+      - name: 🔄 Run Playwright Tests
+        id: playwright
+        uses: nick-fields/retry@v3
+        with:
+          timeout_minutes: 30
+          max_attempts: 2
+          retry_wait_seconds: 10
+          command: |
+            npx playwright test --project=${{ matrix.project }} --reporter=list 2>&1 | tee playwright-results.txt
+      
+      - name: 📊 Upload Playwright Results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-results-${{ matrix.project }}
+          path: |
+            ./playwright-report/
+            ./test-results/
+            ./playwright-results.txt
+          retention-days: 14
+      
+      - name: 📈 E2E Summary
+        if: always()
+        run: |
+          echo "## 🌐 E2E Test Results (${{ matrix.project }})" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Status:** ${{ steps.playwright.outcome }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Browser:** ${{ matrix.project }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Full report available in artifacts." >> $GITHUB_STEP_SUMMARY
+
+  # ============================================================
+  # JOB 6: CI Gate - Final Status
+  # ============================================================
+  ci-gate:
+    name: ✅ CI Gate
+    runs-on: ubuntu-latest
+    needs: [lint, unit-tests, integration-tests, build]
+    if: always()
+    
+    steps:
+      - name: 📊 Check All Jobs Status
+        run: |
+          echo "## ✅ CI Pipeline Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Job | Status |" >> $GITHUB_STEP_SUMMARY
+          echo "|-----|--------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Lint | ${{ needs.lint.result == 'success' && '✅ Passed' || '❌ Failed' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Unit Tests | ${{ needs.unit-tests.result == 'success' && '✅ Passed' || '❌ Failed' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Integration Tests | ${{ needs.integration-tests.result == 'success' && '✅ Passed' || '❌ Failed' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Docker Build | ${{ needs.build.result == 'success' && '✅ Passed' || '❌ Failed' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          # Fail if any required job failed
+          if [[ "${{ needs.lint.result }}" == "failure" ]] || \
+             [[ "${{ needs.unit-tests.result }}" == "failure" ]] || \
+             [[ "${{ needs.build.result }}" == "failure" ]]; then
+            echo "::error::CI Pipeline Failed - One or more jobs did not pass"
+            exit 1
+          fi
+          
+          echo "🎉 **CI Pipeline Passed Successfully!**" >> $GITHUB_STEP_SUMMARY
+      
+      - name: 🏷️ Create Git Tag (Main only)
+        if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+        run: |
+          TAG="v$(date +'%Y.%m.%d')-${{ github.run_number }}"
+          git tag $TAG
+          git push origin $TAG
+          echo "Created tag: $TAG"
+
+# ============================================================
+# NOTIFICATIONS
+# ============================================================
+notifications:
+  slack:
+    if: failure() && github.ref == 'refs/heads/main'
+    uses: slackapi/slack-github-action@v1.26.0
+    with:
+      payload: |
+        {
+          "text": "❌ CI Pipeline Failed",
+          "blocks": [
+            {
+              "type": "section",
+              "text": {
+                "type": "mrkdwn",
+                "text": "*CI Pipeline Failed*\nRepository: ${{ github.repository }}\nBranch: ${{ github.ref_name }}\nCommit: ${{ github.sha }}\nActor: ${{ actor }}"
+              }
+            }
+          ]
+        }
+    env:
+      SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_CI }}
+      SLACK_WEBHOOK_TYPE: INCOMING_WEBHOOK

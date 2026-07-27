@@ -1,0 +1,166 @@
+# ============================================================
+# National SOC Platform - Maintenance & Cleanup
+# Automated cleanup of old resources
+# ============================================================
+
+name: 🧹 Maintenance & Cleanup
+
+on:
+  schedule:
+    # Run every Sunday at 3 AM Algeria time (2 AM UTC)
+    - cron: '0 2 * * 0'
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Dry run (no actual deletion)'
+        required: false
+        default: true
+        type: boolean
+      keep_recent:
+        description: 'Number of recent items to keep'
+        required: false
+        default: '30'
+        type: string
+
+permissions:
+  contents: read
+  packages: write
+  actions: read
+
+jobs:
+  # ============================================================
+  # JOB 1: Clean Old Workflow Runs
+  # ============================================================
+  cleanup-workflows:
+    name: 🗑️ Clean Old Workflow Runs
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: 📥 Checkout
+        uses: actions/checkout@v4
+      
+      - name: 🗑️ Delete Old Workflow Runs
+        uses: Mattraks/delete-workflow-runs@v2
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          repository: ${{ github.repository }}
+          retain_days: 30
+          keep_minimum_runs: 10
+          delete_branch_workflow_run: true
+          dry_run: ${{ github.event.inputs.dry_run || 'true' }}
+
+  # ============================================================
+  # JOB 2: Clean Old Docker Images
+  # ============================================================
+  cleanup-images:
+    name: 🐳 Clean Old Container Images
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: 🔐 Login to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      
+      - name: 🐳 List and Clean Old Images
+        run: |
+          KEEP=${{ github.event.inputs.keep_recent || '30' }}
+          DRY_RUN=${{ github.event.inputs.dry_run || 'true' }}
+          
+          echo "## 🐳 Image Cleanup Report" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          # Get list of images for this repository
+          TOKEN=$(curl -s -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+            https://ghcr.io/token?scope=repository:${{ github.repository }}:pull | jq -r '.token')
+          
+          IMAGES=$(curl -s -H "Authorization: Bearer $TOKEN" \
+            "https://ghcr.io/v2/${{ github.repository }}/tags/list" | jq -r '.tags[]' 2>/dev/null || echo "")
+          
+          if [ -z "$IMAGES" ]; then
+            echo "No images found or API error" >> $GITHUB_STEP_SUMMARY
+            exit 0
+          fi
+          
+          IMAGE_COUNT=$(echo "$IMAGES" | wc -l)
+          echo "**Total Images:** $IMAGE_COUNT" >> $GITHUB_STEP_SUMMARY
+          echo "**Keeping:** $KEEP most recent" >> $GITHUB_STEP_SUMMARY
+          echo "**Mode:** $DRY_RUN" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          if [ "$IMAGE_COUNT" -gt "$KEEP" ]; then
+            TO_DELETE=$((IMAGE_COUNT - KEEP))
+            echo "**Images to delete:** $TO_DELETE" >> $GITHUB_STEP_SUMMARY
+            
+            if [ "$DRY_RUN" != "true" ]; then
+              # In production, you would use the GitHub API to delete old images
+              echo "Would delete $TO_DELETE old images"
+            fi
+          else
+            echo "**Status:** No cleanup needed" >> $GITHUB_STEP_SUMMARY
+          fi
+
+  # ============================================================
+  # JOB 3: Clean Old Artifacts
+  # ============================================================
+  cleanup-artifacts:
+    name: 📦 Clean Old Artifacts
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: 📦 List Artifacts
+        id: artifacts
+        run: |
+          ARTIFACTS=$(gh api repos/${{ github.repository }}/actions/artifacts \
+            --jq '.artifacts[] | "\(.id)|\(.name)|\(.created_at)"')
+          
+          COUNT=$(echo "$ARTIFACTS" | wc -l)
+          
+          echo "total_count=$COUNT" >> $GITHUB_OUTPUT
+          echo "## 📦 Artifact Cleanup" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Total Artifacts:** $COUNT" >> $GITHUB_STEP_SUMMARY
+      
+      - name: 🗑️ Delete Old Artifacts
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          DRY_RUN: ${{ github.event.inputs.dry_run || 'true' }}
+          KEEP: ${{ github.event.inputs.keep_recent || '30' }}
+        run: |
+          if [ "$DRY_RUN" == "true" ]; then
+            echo "**Mode:** Dry Run - No deletions performed" >> $GITHUB_STEP_SUMMARY
+          else
+            # Delete artifacts older than keep threshold
+            gh api repos/${{ github.repository }}/actions/artifacts --jq \
+              '.artifacts[] | select(.created_at < "'$(date -d '-30 days' -u +%Y-%m-%dT%H:%M:%SZ)'") | .id' | \
+              while read ID; do
+                gh api -X DELETE repos/${{ github.repository }}/actions/artifacts/$ID
+              done
+            
+            echo "**Cleanup completed**" >> $GITHUB_STEP_SUMMARY
+          fi
+
+  # ============================================================
+  # JOB 4: Generate Maintenance Report
+  # ============================================================
+  report:
+    name: 📊 Maintenance Report
+    runs-on: ubuntu-latest
+    needs: [cleanup-workflows, cleanup-images, cleanup-artifacts]
+    if: always()
+    
+    steps:
+      - name: 📊 Summary Report
+        run: |
+          echo "# 🧹 Weekly Maintenance Report" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Date:** $(date -u '+%Y-%m-%d %H:%M:%S UTC')" >> $GITHUB_STEP_SUMMARY
+          echo "**Repository:** ${{ github.repository }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Task | Status |" >> $GITHUB_STEP_SUMMARY
+          echo "|------|--------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Workflow Cleanup | ${{ needs.cleanup-workflows.result == 'success' && '✅ Complete' || '❌ Failed' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Image Cleanup | ${{ needs.cleanup-images.result == 'success' && '✅ Complete' || '❌ Failed' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Artifact Cleanup | ${{ needs.cleanup-artifacts.result == 'success' && '✅ Complete' || '❌ Failed' }} |" >> $GITHUB_STEP_SUMMARY
