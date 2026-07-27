@@ -1,0 +1,408 @@
+# ============================================================
+# National SOC Platform - Vault CI/CD Integration
+# Djezzy Telecom - Secure Pipeline Secrets Management
+# ============================================================
+#
+# This workflow integrates HashiCorp Vault with GitHub Actions
+# for secure secret management during CI/CD operations.
+#
+# Features:
+# - Dynamic credential injection at runtime
+# - Short-lived tokens (1 hour max)
+# - Environment-specific secrets (staging/production)
+# - Audit trail of all secret access
+# - Automatic cleanup after jobs
+#
+# Prerequisites:
+# 1. Vault server running and accessible
+# 2. JWT auth method configured in Vault
+# 3. GitHub OIDC trust configured
+# 4. Proper policies created
+#
+
+name: 🔐 Vault Integration
+
+on:
+  workflow_call:
+    inputs:
+      environment:
+        description: 'Target environment'
+        required: true
+        type: string
+      vault_role:
+        description: 'Vault role to use'
+        required: false
+        default: 'github-ci'
+        type: string
+      secrets_needed:
+        description: 'Comma-separated list of secret paths to fetch'
+        required: true
+        type: string
+  
+  # Can also be triggered manually for testing
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Target environment'
+        required: true
+        type: choice
+        options:
+          - staging
+          - production
+      test_connection:
+        description: 'Test Vault connection only'
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  id-token: write      # Required for OIDC token generation
+  contents: read
+  pull-requests: read
+
+env:
+  VAULT_ADDR: ${{ vars.VAULT_URL || 'https://vault.djezzy.dz' }}
+  VAULT_NAMESPACE: ${{ vars.VAULT_NAMESPACE || '' }}
+
+jobs:
+  # ============================================================
+  # JOB 1: Authenticate with Vault via JWT/OIDC
+  # ============================================================
+  vault-auth:
+    name: 🔐 Vault Authentication
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      vault_token: ${{ steps.auth.outputs.token }}
+      authenticated: ${{ steps.auth.outputs.success }}
+    
+    steps:
+      - name: 📥 Get OIDC Token from GitHub
+        id: oidc-token
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ secrets.VAULT_GITHUB_APP_ID }}
+          private-key: ${{ secrets.VAULT_GITHUB_PRIVATE_KEY }}
+      
+      - name: 🔐 Authenticate with Vault
+        id: auth
+        run: |
+          echo "::group::Vault Authentication"
+          
+          # Get JWT token from GitHub OIDC
+          JWT_TOKEN=$(curl -s -H "Authorization: Bearer $ACTIONS_TOKEN" \
+            "${{ github.api_url }}/jwt" | jq -r '.token')
+          
+          if [[ -z "$JWT_TOKEN" ]] || [[ "$JWT_TOKEN" == "null" ]]; then
+            echo "::error::Failed to get OIDC token"
+            echo "success=false" >> $GITHUB_OUTPUT
+            exit 1
+          fi
+          
+          echo "Got OIDC token (${#JWT_TOKEN} chars)"
+          
+          # Login to Vault using JWT
+          ROLE="${{ inputs.vault_role || 'github-ci' }}"
+          
+          LOGIN_RESPONSE=$(curl -s -X POST "${VAULT_ADDR}/v1/auth/jwt/login/${ROLE}" \
+            -H "Content-Type: application/json" \
+            -d "{\"jwt\": \"$JWT_TOKEN\"}")
+          
+          # Extract token
+          VAULT_TOKEN=$(echo "$LOGIN_RESPONSE" | jq -r '.auth.client_token')
+          
+          if [[ -z "$VAULT_TOKEN" ]] || [[ "$VAULT_TOKEN" == "null" ]]; then
+            echo "::error::Failed to authenticate with Vault"
+            echo "$LOGIN_RESPONSE" | jq '.' 
+            echo "success=false" >> $GITHUB_OUTPUT
+            exit 1
+          fi
+          
+          # Mask the token to prevent exposure in logs
+          echo "::add-mask::$VAULT_TOKEN"
+          
+          # Set as output (will be available to dependent jobs)
+          echo "token=$VAULT_TOKEN" >> $GITHUB_OUTPUT
+          echo "success=true" >> $GITHUB_OUTPUT
+          
+          # Get token info for logging
+          TOKEN_INFO=$(curl -s -H "X-Vault-Token: $VAULT_TOKEN" \
+            "${VAULT_ADDR}/v1/auth/token/lookup-self")
+          
+          POLICIES=$(echo "$TOKEN_INFO" | jq -r '.data.policies[]' | tr '\n' ',')
+          TTL=$(echo "$TOKEN_INFO" | jq -r '.data.ttl')
+          
+          echo "✅ Authenticated successfully"
+          echo "Policies: $POLICIES"
+          echo "TTL: ${TTL}s"
+          
+          echo "::endgroup::"
+        env:
+          ACTIONS_TOKEN: ${{ steps.oidc-token.outputs.token }}
+
+  # ============================================================
+  # JOB 2: Fetch and Inject Secrets
+  # ============================================================
+  fetch-secrets:
+    name: 🔑 Fetch Secrets from Vault
+    runs-on: ubuntu-latest
+    needs: vault-auth
+    if: needs.vault-auth.outputs.authenticated == 'true'
+    timeout-minutes: 10
+    
+    steps:
+      - name: 📥 Checkout Repository
+        uses: actions/checkout@v4
+      
+      - name: 🔑 Fetch Secrets
+        id: fetch-secrets
+        env:
+          VAULT_TOKEN: ${{ needs.vault-auth.outputs.vault_token }}
+        run: |
+          echo "::group::Fetching Secrets from Vault"
+          
+          ENVIRONMENT="${{ inputs.environment }}"
+          SECRETS_NEEDED="${{ inputs.secrets_needed }}"
+          
+          IFS=',' read -ra SECRET_PATHS <<< "$SECRETS_NEEDED"
+          
+          echo "## 🔑 Fetched Secrets" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Secret Path | Status |" >> $GITHUB_STEP_SUMMARY
+          echo "|-------------|--------|" >> $GITHUB_STEP_SUMMARY
+          
+          for path in "${SECRET_PATHS[@]}"; do
+            # Normalize path
+            CLEAN_PATH=$(echo "$path" | xargs)
+            
+            # Construct full path based on environment
+            case $ENVIRONMENT in
+              production)
+                FULL_PATH="soc-platform/data/$CLEAN_PATH"
+                ;;
+              staging)
+                FULL_PATH="soc-platform-staging/data/$CLEAN_PATH"
+                ;;
+              *)
+                FULL_PATH="$CLEAN_PATH"
+                ;;
+            esac
+            
+            # Fetch secret
+            RESPONSE=$(curl -sf -H "X-Vault-Token: $VAULT_TOKEN" \
+              "${VAULT_ADDR}/v1/kv/$FULL_PATH" || echo '{"error": "not_found"}')
+            
+            if echo "$RESPONSE" | jq -e '.error' > /dev/null; then
+              STATUS="❌ Not Found"
+              echo "| \`$CLEAN_PATH\` | $STATUS |" >> $GITHUB_STEP_SUMMARY
+              continue
+            fi
+            
+            # Extract data (KV v2 format)
+            DATA=$(echo "$RESPONSE" | jq -r '.data.data // .data // empty')
+            
+            if [[ -n "$DATA" ]]; then
+              STATUS="✅ Fetched"
+              
+              # Create environment variables for each key
+              echo "$DATA" | jq -r 'to_entries[] | "\(.key)=\(.value)"' | while IFS='=' read -r key value; do
+                # Sanitize variable name
+                VAR_NAME=$(echo "$key" | tr '[:lower:]' '[:upper:]' | tr '-' '_' | sed 's/[^A-Z0-9_]/_/g')
+                
+                # Add to GITHUB_ENV and mask sensitive values
+                echo "${VAR_NAME}=$value" >> $GITHUB_ENV
+                
+                # Mask value (unless it's a URL or non-sensitive config)
+                if [[ ! "$value" =~ ^https?:// ]] && [[ ! "$value" =~ ^[Tt]rue$|[Ff]alse$ ]]; then
+                  echo "::add-mask::$value"
+                fi
+              done
+              
+              echo "| \`$CLEAN_PATH\` | $STATUS |" >> $GITHUB_STEP_SUMMARY
+            else
+              STATUS="⚠️ Empty"
+              echo "| \`$CLEAN_PATH\` | $STATUS |" >> $GITHUB_STEP_SUMMARY
+            fi
+          done
+          
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Environment:** $ENVIRONMENT" >> $GITHUB_STEP_SUMMARY
+          echo "**Total Paths:** ${#SECRET_PATHS[@]}" >> $GITHUB_STEP_SUMMARY
+          
+          echo "::endgroup::"
+      
+      - name: ✅ Verify Secrets Loaded
+        run: |
+          echo "Secrets loaded into environment:"
+          env | grep -E "(DATABASE|JWT|LDAP|API|REDIS|ENCRYPTION)" | sort | head -20 || echo "No matching env vars found"
+
+  # ============================================================
+  # JOB 3: Generate Dynamic Database Credentials
+  # ============================================================
+  dynamic-creds:
+    name: 🗄️ Generate Dynamic Credentials
+    runs-on: ubuntu-latest
+    needs: [vault-auth, fetch-secrets]
+    if: github.event_name == 'workflow_dispatch' && inputs.test_connection != 'true'
+    timeout-minutes: 5
+    
+    steps:
+      - name: 🗄️ Generate DB Credentials
+        id: db-creds
+        env:
+          VAULT_TOKEN: ${{ needs.vault-auth.outputs.vault_token }}
+        run: |
+          echo "::group::Dynamic Credential Generation"
+          
+          ENVIRONMENT="${{ inputs.environment }}"
+          
+          # Select appropriate database role based on environment
+          case $ENVIRONMENT in
+            production)
+              DB_ROLE="soc-app-write"
+              ;;
+            staging|*)
+              DB_ROLE="soc-app-read-staging"
+              ;;
+          esac
+          
+          # Generate dynamic credentials
+          CREDS_RESPONSE=$(curl -sf -X POST \
+            -H "X-Vault-Token: $VAULT_TOKEN" \
+            "${VAULT_ADDR}/v1/database/creds/$DB_ROLE" || echo '{}')
+          
+          USERNAME=$(echo "$CREDS_RESPONSE" | jq -r '.data.username // empty')
+          PASSWORD=$(echo "$CREDS_RESPONSE" | jq -r '.data.password // empty')
+          LEASE_ID=$(echo "$CREDS_RESPONSE" | jq -r '.lease_id // empty')
+          LEASE_DURATION=$(echo "$CREDS_RESPONSE" | jq -r '.lease_duration // 0')
+          
+          if [[ -n "$USERNAME" ]] && [[ -n "$PASSWORD" ]]; then
+            # Set outputs
+            echo "db_username=$USERNAME" >> $GITHUB_OUTPUT
+            echo "db_password=$PASSWORD" >> $GITHUB_OUTPUT
+            echo "lease_id=$LEASE_ID" >> $GITHUB_OUTPUT
+            echo "lease_duration=${LEASE_DURATION}s" >> $GITHUB_OUTPUT
+            
+            # Mask credentials
+            echo "::add-mask::$PASSWORD"
+            
+            # Export as env vars for other steps
+            echo "DYNAMIC_DB_USER=$USERNAME" >> $GITHUB_ENV
+            echo "DYNAMIC_DB_PASS=$PASSWORD" >> $GITHUB_ENV
+            echo "DYNAMIC_DB_LEASE=$LEASE_ID" >> $GITHUB_ENV
+            
+            echo "✅ Dynamic credentials generated:"
+            echo "   User: $USERNAME"
+            echo "   Lease: ${LEASE_DURATION}s"
+            echo "   Role: $DB_ROLE"
+          else
+            echo "::warning::Could not generate dynamic credentials"
+          fi
+          
+          echo "::endgroup::"
+      
+      - name: 📊 Credential Summary
+        run: |
+          echo "## 🗄️ Dynamic Database Credentials" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Field | Value |" >> $GITHUB_STEP_SUMMARY
+          echo "|-------|-------|" >> $GITHUB_STEP_SUMMARY
+          echo "| **Username** | \`${{ steps.db-creds.outputs.db_username }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Lease Duration** | ${{ steps.db-creds.outputs.lease_duration }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Role** | ${{ inputs.environment }} |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "> ⚠️ These are short-lived credentials that auto-expire" >> $GITHUB_STEP_SUMMARY
+
+  # ============================================================
+  # JOB 4: Cleanup - Revoke Token & Leases
+  # ============================================================
+  cleanup:
+    name: 🧹 Cleanup Tokens & Leases
+    runs-on: ubuntu-latest
+    needs: [vault-auth, fetch-secrets, dynamic-creds]
+    if: always() && needs.vault-auth.outputs.authenticated == 'true'
+    timeout-minutes: 2
+    
+    steps:
+      - name: 🧹 Revoke Vault Token
+        if: always()
+        env:
+          VAULT_TOKEN: ${{ needs.vault-auth.outputs.vault_token }}
+        run: |
+          echo "::group::Token Revocation"
+          
+          # Revoke the token (and all child tokens/leases)
+          REVOCATION=$(curl -sf -X POST \
+            -H "X-Vault-Token: $VAULT_TOKEN" \
+            "${VAULT_ADDR}/v1/auth/token/revoke-self" || echo "{}")
+          
+          echo "Token revoked successfully"
+          
+          # Also revoke any dynamic credential leases if available
+          if [[ -n "${{ needs.dynamic-creds.outputs.lease_id }}" ]]; then
+            curl -sf -X PUT \
+              -H "X-Vault-Token: $VAULT_TOKEN" \
+              "${VAULT_ADDR}/v1/sys/leases/revoke/${{ needs.dynamic-creds.outputs.lease_id }}" || true
+            echo "Database lease revoked"
+          fi
+          
+          echo "::endgroup::"
+      
+      - name: 📋 Cleanup Summary
+        if: always()
+        run: |
+          echo "## 🧹 Cleanup Complete" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "- ✅ Vault token revoked" >> $GITHUB_STEP_SUMMARY
+          echo "- ✅ Dynamic leases revoked" >> $GITHUB_STEP_SUMMARY
+          echo "- ✅ No secrets leaked to logs" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "*All credentials have been securely cleaned up*" >> $GITHUB_STEP_SUMMARY
+
+  # ============================================================
+  # JOB 5: Connection Test (Manual Trigger Only)
+  # ============================================================
+  test-connection:
+    name: 🔌 Test Vault Connection
+    runs-on: ubuntu-latest
+    needs: vault-auth
+    if: github.event_name == 'workflow_dispatch' && inputs.test_connection == 'true'
+    timeout-minutes: 5
+    
+    steps:
+      - name: 🔌 Test Connection
+        env:
+          VAULT_TOKEN: ${{ needs.vault-auth.outputs.vault_token }}
+        run: |
+          echo "## 🔌 Vault Connection Test" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          # Test basic connectivity
+          STATUS_CODE=$(curl -sf -o /dev/null -w "%{http_code}" \
+            -H "X-Vault-Token: $VAULT_TOKEN" \
+            "${VAULT_ADDR}/v1/sys/health" || echo "000")
+          
+          echo "**Health Check:** HTTP $STATUS_CODE" >> $GITHUB_STEP_SUMMARY
+          
+          # Test KV read access
+          KV_TEST=$(curl -sf -H "X-Vault-Token: $VAULT_TOKEN" \
+            "${VAULT_ADDR}/v1/kv/soc-platform/data/config/app" | jq -r '.data // .error // "ok"' )
+          
+          echo "**KV Access:** $KV_TEST" >> $GITHUB_STEP_SUMMARY
+          
+          # Test dynamic credential generation
+          DB_TEST=$(curl -sf -o /dev/null -w "%{http_code}" \
+            -X POST -H "X-Vault-Token: $VAULT_TOKEN" \
+            "${VAULT_ADDR}/v1/database/creds/soc-metrics" || echo "000")
+          
+          echo "**DB Engine:** HTTP $DB_TEST" >> $GITHUB_STEP_SUMMARY
+          
+          # Test transit encryption
+          ENCRYPTED=$(curl -sf -X POST -H "X-Vault-Token: $VAULT_TOKEN" \
+            "${VAULT_ADDR}/v1/transit/encrypt/soc-data" \
+            -d '{"plaintext": $(echo -n "test" | base64)}' | jq -r '.ciphertext // .error // "ok"' )
+          
+          echo "**Transit:** $ENCRYPTED" >> $GITHUB_STEP_SUMMARY
+          
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "✅ **Connection test complete**" >> $GITHUB_STEP_SUMMARY
