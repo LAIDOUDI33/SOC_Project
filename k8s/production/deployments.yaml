@@ -1,0 +1,2200 @@
+# =============================================================================
+# Djezzy National SOC Platform - Production Deployments
+# =============================================================================
+# 26+ Containers | NSA K8s Hardening | ANRT Compliant | GitOps Ready
+# =============================================================================
+
+# =============================================================================
+# 1. SOC PLATFORM API (Next.js Application)
+# =============================================================================
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: soc-platform-api
+  namespace: soc-backend
+  labels:
+    app.kubernetes.io/name: djezzy-soc
+    app.kubernetes.io/component: api
+    app.kubernetes.io/part-of: soc-platform
+    app.kubernetes.io/managed-by: argocd
+    anrt.djezzy.soc/compliance: telecom-regulation
+  annotations:
+    argocd.argoproj.io/sync-wave: "2"
+    description: "Main SOC Platform API - Next.js 16"
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: soc-platform-api
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: soc-platform-api
+        app.kubernetes.io/part-of: soc-platform
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "3000"
+        prometheus.io/path: "/api/metrics"
+      annotations:
+        prometheus.io/scrape: "true"
+    spec:
+      serviceAccountName: soc-platform-service-account
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 100
+            podAffinityTerm:
+              labelSelector:
+                matchExpressions:
+                - key: app.kubernetes.io/name
+                  operator: In
+                  values: [soc-platform-api]
+              topologyKey: kubernetes.io/hostname
+        nodeAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 80
+            preference:
+              matchExpressions:
+              - key: node-role/djezzy.soc
+                operator: In
+                values: [backend]
+      containers:
+      - name: soc-platform-api
+        image: registry.djezzy.dz/soc/platform-api:production
+        imagePullPolicy: Always
+        ports:
+        - name: http
+          containerPort: 3000
+          protocol: TCP
+        envFrom:
+        - configMapRef:
+            name: soc-platform-config
+        - secretRef:
+            name: application-secrets
+        resources:
+          requests:
+            cpu: "500m"
+            memory: "512Mi"
+          limits:
+            cpu: "2"
+            memory: "2Gi"
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop:
+            - ALL
+          seccompProfile:
+            type: RuntimeDefault
+        livenessProbe:
+          httpGet:
+            path: /api/health
+            port: http
+          initialDelaySeconds: 30
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 3
+        readinessProbe:
+          httpGet:
+            path: /api/health/readiness
+            port: http
+          initialDelaySeconds: 5
+          periodSeconds: 5
+          timeoutSeconds: 3
+          failureThreshold: 3
+        startupProbe:
+          httpGet:
+            path: /api/health
+            port: http
+          initialDelaySeconds: 10
+          periodSeconds: 5
+          timeoutSeconds: 3
+          failureThreshold: 30
+        volumeMounts:
+        - name: tmp-dir
+          mountPath: /tmp
+        - name: cache-dir
+          mountPath: /app/.next/cache
+      volumes:
+      - name: tmp-dir
+        emptyDir: {}
+      - name: cache-dir
+        emptyDir: {}
+
+---
+# =============================================================================
+# 2. KONG API GATEWAY
+# =============================================================================
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: kong-gateway
+  namespace: soc-backend
+  labels:
+    app.kubernetes.io/name: kong-gateway
+    app.kubernetes.io/component: gateway
+    app.kubernetes.io/part-of: soc-platform
+    app.kubernetes.io/managed-by: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "1"
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: kong-gateway
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: kong-gateway
+        app.kubernetes.io/part-of: soc-platform
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8443"
+        prometheus.io/path: "/metrics"
+      annotations:
+        prometheus.io/scrape: "true"
+    spec:
+      serviceAccountName: kong-service-account
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1001
+        fsGroup: 1001
+      containers:
+      - name: kong-gateway
+        image: kong/kong-gateway:3.6-ubuntu
+        imagePullPolicy: Always
+        ports:
+        - name: proxy
+          containerPort: 8000
+          protocol: TCP
+        - name: proxy-ssl
+          containerPort: 8443
+          protocol: TCP
+        - name: admin
+          containerPort: 8001
+          protocol: TCP
+        envFrom:
+        - configMapRef:
+            name: kong-config
+        - secretRef:
+            name: kong-secrets
+        resources:
+          requests:
+            cpu: "500m"
+            memory: "512Mi"
+          limits:
+            cpu: "2"
+            memory: "2Gi"
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: false  # Kong needs write access for temp files
+          capabilities:
+            drop:
+            - ALL
+            add:
+            - NET_BIND_SERVICE
+        livenessProbe:
+          httpGet:
+            path: /status
+            port: admin
+          initialDelaySeconds: 15
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /status/ready
+            port: admin
+          initialDelaySeconds: 10
+          periodSeconds: 5
+        volumeMounts:
+        - name: kong-tmp
+          mountPath: /tmp
+        - name: kong-prefix
+          mountPath: /var/run/kong
+      volumes:
+      - name: kong-tmp
+        emptyDir: {}
+      - name: kong-prefix
+        emptyDir: {}
+
+---
+# =============================================================================
+# 3. WAZUH SIEM MANAGER
+# =============================================================================
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: wazuh-manager
+  namespace: soc-backend
+  labels:
+    app.kubernetes.io/name: wazuh-manager
+    app.kubernetes.io/component: siem
+    app.kubernetes.io/part-of: soc-platform
+    app.kubernetes.io/managed-by: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "2"
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: wazuh-manager
+  strategy:
+    type: Recreate
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: wazuh-manager
+        app.kubernetes.io/part-of: soc-platform
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "1514"
+        prometheus.io/path: "/metrics"
+    spec:
+      securityContext:
+        runAsNonRoot: false  # Wazuh requires root for some operations
+        runAsUser: 0
+        fsGroup: 0
+      initContainers:
+      - name: check-elasticsearch
+        image: busybox:1.36
+        command: ['sh', '-c', 'until nc -z soc-elasticsearch 9200; do echo waiting for elasticsearch; sleep 2; done']
+      containers:
+      - name: wazuh-manager
+        image: wazuh/wazuh-manager:4.7.0
+        imagePullPolicy: Always
+        ports:
+        - name: events
+          containerPort: 1514
+          protocol: TCP
+        - name: events-udp
+          containerPort: 1514
+          protocol: UDP
+        - name: api
+          containerPort: 55000
+          protocol: TCP
+        envFrom:
+        - configMapRef:
+            name: wazuh-config
+        - secretRef:
+            name: database-credentials
+        resources:
+          requests:
+            cpu: "1"
+            memory: "2Gi"
+          limits:
+            cpu: "4"
+            memory: "8Gi"
+        securityContext:
+          allowPrivilegeEscalation: true  # Required by Wazuh
+          capabilities:
+            add:
+            - SYS_ADMIN
+            - NET_ADMIN
+            drop:
+            - ALL
+        livenessProbe:
+          tcpSocket:
+            port: 1514
+          initialDelaySeconds: 60
+          periodSeconds: 20
+        readinessProbe:
+          exec:
+            command:
+            - /bin/sh
+            - -c
+            - pgrep -f wazuh-manager || exit 1
+          initialDelaySeconds: 30
+          periodSeconds: 10
+        volumeMounts:
+        - name: wazuh-data
+          mountPath: /var/ossec/data
+        - name: wazuh-config-volume
+          mountPath: /var/ossec/etc/ossec.conf
+          subPath: ossec.conf
+      volumes:
+      - name: wazuh-data
+        persistentVolumeClaim:
+          claimName: wazuh-data-pvc
+      - name: wazuh-config-volume
+        configMap:
+          name: wazuh-config
+
+---
+# =============================================================================
+# 4. WAZUH DASHBOARD (Kibana Fork)
+# =============================================================================
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: wazuh-dashboard
+  namespace: soc-backend
+  labels:
+    app.kubernetes.io/name: wazuh-dashboard
+    app.kubernetes.io/component: siem-ui
+    app.kubernetes.io/part-of: soc-platform
+    app.kubernetes.io/managed-by: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "3"
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: wazuh-dashboard
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: wazuh-dashboard
+        app.kubernetes.io/part-of: soc-platform
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        fsGroup: 1000
+      initContainers:
+      - name: check-wazuh
+        image: busybox:1.36
+        command: ['sh', '-c', 'until nc -z wazuh-manager 55000; do echo waiting for wazuh-manager; sleep 2; done']
+      containers:
+      - name: wazuh-dashboard
+        image: wazuh/wazuh-dashboard:4.7.0
+        imagePullPolicy: Always
+        ports:
+        - name: web
+          containerPort: 5601
+          protocol: TCP
+        env:
+        - name: WAZUH_API_URL
+          value: "https://wazuh-manager:55000"
+        - name: WAZUH_DASHBOARD_USERNAME
+          value: "${WAZUH_DASHBOARD_USER}"
+        - name: WAZUH_DASHBOARD_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: application-secrets
+              key: WAZUH_DASHBOARD_PASSWORD
+        resources:
+          requests:
+            cpu: "500m"
+            memory: "1Gi"
+          limits:
+            cpu: "2"
+            memory: "4Gi"
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: false
+        livenessProbe:
+          httpGet:
+            path: /api/status
+            port: web
+          initialDelaySeconds: 60
+          periodSeconds: 20
+        readinessProbe:
+          httpGet:
+            path: /api/status
+            port: web
+          initialDelaySeconds: 45
+          periodSeconds: 10
+
+---
+# =============================================================================
+# 5. THEHIVE SOAR
+# =============================================================================
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: thehive
+  namespace: soc-backend
+  labels:
+    app.kubernetes.io/name: thehive
+    app.kubernetes.io/component: soar
+    app.kubernetes.io/part-of: soc-platform
+    app.kubernetes.io/managed-by: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "2"
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: thehive
+  strategy:
+    type: Recreate
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: thehive
+        app.kubernetes.io/part-of: soc-platform
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "9000"
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        fsGroup: 1000
+      initContainers:
+      - name: check-postgres
+        image: busybox:1.36
+        command: ['sh', '-c', 'until nc -z soc-postgresql 5432; do echo waiting for postgresql; sleep 2; done']
+      - name: check-es
+        image: busybox:1.36
+        command: ['sh', '-c', 'until nc -z soc-elasticsearch 9200; do echo waiting for elasticsearch; sleep 2; done']
+      containers:
+      - name: thehive
+        image: thehiveproject/thehive4:latest
+        imagePullPolicy: Always
+        ports:
+        - name: web
+          containerPort: 9000
+          protocol: TCP
+        envFrom:
+        - configMapRef:
+            name: thehive-config
+        - secretRef:
+            name: database-credentials
+        - secretRef:
+            name: application-secrets
+        resources:
+          requests:
+            cpu: "500m"
+            memory: "1Gi"
+          limits:
+            cpu: "2"
+            memory: "4Gi"
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: false
+        livenessProbe:
+          httpGet:
+            path: /api/health
+            port: web
+          initialDelaySeconds: 120
+          periodSeconds: 30
+        readinessProbe:
+          httpGet:
+            path: /api/health
+            port: web
+          initialDelaySeconds: 90
+          periodSeconds: 15
+        volumeMounts:
+        - name: thehive-data
+          mountPath: /opt/thehive/data
+      volumes:
+      - name: thehive-data
+        persistentVolumeClaim:
+          claimName: thehive-data-pvc
+
+---
+# =============================================================================
+# 6. CORTEX ANALYZERS
+# =============================================================================
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: cortex
+  namespace: soc-backend
+  labels:
+    app.kubernetes.io/name: cortex
+    app.kubernetes.io/component: soar-analyzers
+    app.kubernetes.io/part-of: soc-platform
+    app.kubernetes.io/managed-by: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "2"
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: cortex
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: cortex
+        app.kubernetes.io/part-of: soc-platform
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "9001"
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        fsGroup: 1000
+      initContainers:
+      - name: check-postgres
+        image: busybox:1.36
+        command: ['sh', '-c', 'until nc -z soc-postgresql 5432; do echo waiting for postgresql; sleep 2; done']
+      containers:
+      - name: cortex
+        image: thehiveproject/cortex:latest
+        imagePullPolicy: Always
+        ports:
+        - name: web
+          containerPort: 9001
+          protocol: TCP
+        envFrom:
+        - configMapRef:
+            name: cortex-config
+        - secretRef:
+            name: database-credentials
+        - secretRef:
+            name: threat-intel-keys
+        resources:
+          requests:
+            cpu: "500m"
+            memory: "1Gi"
+          limits:
+            cpu: "4"
+            memory: "8Gi"  # Cortex can be resource-intensive with analyzers
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: false
+        livenessProbe:
+          httpGet:
+            path: /api/health
+            port: web
+          initialDelaySeconds: 60
+          periodSeconds: 20
+        readinessProbe:
+          httpGet:
+            path: /api/health
+            port: web
+          initialDelaySeconds: 40
+          periodSeconds: 10
+
+---
+# =============================================================================
+# 7. MISP THREAT INTELLIGENCE
+# =============================================================================
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: misp
+  namespace: soc-backend
+  labels:
+    app.kubernetes.io/name: misp
+    app.kubernetes.io/component: threat-intel
+    app.kubernetes.io/part-of: soc-platform
+    app.kubernetes.io/managed-by: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "2"
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: misp
+  strategy:
+    type: Recreate
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: misp
+        app.kubernetes.io/part-of: soc-platform
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        fsGroup: 1000
+      initContainers:
+      - name: check-postgres
+        image: busybox:1.36
+        command: ['sh', '-c', 'until nc -z soc-postgresql 5432; do echo waiting for postgresql; sleep 2; done']
+      - name: check-redis
+        image: busybox:1.36
+        command: ['sh', '-c', 'until nc -z soc-redis-master 6379; do echo waiting for redis; sleep 2; done']
+      containers:
+      - name: misp-server
+        image: misp/misp:latest
+        imagePullPolicy: Always
+        ports:
+        - name: web
+          containerPort: 80
+          protocol: TCP
+        - name: zmq
+          containerPort: 50000
+          protocol: TCP
+        envFrom:
+        - configMapRef:
+            name: misp-config
+        - secretRef:
+            name: database-credentials
+        - secretRef:
+            name: application-secrets
+        resources:
+          requests:
+            cpu: "1"
+            memory: "2Gi"
+          limits:
+            cpu: "4"
+            memory: "8Gi"
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: false
+        livenessProbe:
+          httpGet:
+            path: /users/login
+            port: web
+          initialDelaySeconds: 180
+          periodSeconds: 30
+        readinessProbe:
+          httpGet:
+            path: /users/login
+            port: web
+          initialDelaySeconds: 150
+          periodSeconds: 20
+        volumeMounts:
+        - name: misp-data
+          mountPath: /var/www/MISP/app/files
+        - name: misp-config-files
+          mountPath: /var/www/MISP/app/Config
+      volumes:
+      - name: misp-data
+        persistentVolumeClaim:
+          claimName: misp-data-pvc
+      - name: misp-config-files
+        emptyDir: {}
+
+---
+# =============================================================================
+# 8. OPENCTI THREAT INTELLIGENCE PLATFORM
+# =============================================================================
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: opencti
+  namespace: soc-backend
+  labels:
+    app.kubernetes.io/name: opencti
+    app.kubernetes.io/component: threat-intel
+    app.kubernetes.io/part-of: soc-platform
+    app.kubernetes.io/managed-by: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "2"
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: opencti
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: opencti
+        app.kubernetes.io/part-of: soc-platform
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8080"
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        fsGroup: 1000
+      initContainers:
+      - name: check-redis
+        image: busybox:1.36
+        command: ['sh', '-c', 'until nc -z soc-redis-master 6379; do echo waiting for redis; sleep 2; done']
+      - name: check-es
+        image: busybox:1.36
+        command: ['sh', '-c', 'until nc -z soc-elasticsearch 9200; do echo waiting for elasticsearch; sleep 2; done']
+      - name: check-rabbitmq
+        image: busybox:1.36
+        command: ['sh', '-c', 'until nc -z soc-rabbitmq 5672; do echo waiting for rabbitmq; sleep 2; done']
+      containers:
+      - name: opencti
+        image: opencti/opencti:latest
+        imagePullPolicy: Always
+        ports:
+        - name: web
+          containerPort: 8080
+          protocol: TCP
+        envFrom:
+        - configMapRef:
+            name: opencti-config
+        - secretRef:
+            name: application-secrets
+        resources:
+          requests:
+            cpu: "1"
+            memory: "2Gi"
+          limits:
+            cpu: "4"
+            memory: "8Gi"
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: false
+        livenessProbe:
+          httpGet:
+            path: /healthcheck
+            port: web
+          initialDelaySeconds: 120
+          periodSeconds: 30
+        readinessProbe:
+          httpGet:
+            path: /healthcheck
+            port: web
+          initialDelaySeconds: 90
+          periodSeconds: 15
+
+---
+# =============================================================================
+# 9. SURICATA NSM
+# =============================================================================
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: suricata
+  namespace: soc-backend
+  labels:
+    app.kubernetes.io/name: suricata
+    app.kubernetes.io/component: nsm
+    app.kubernetes.io/part-of: soc-platform
+    app.kubernetes.io/managed-by: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "3"
+spec:
+  replicas: 2  # Multiple instances for high availability
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: suricata
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: suricata
+        app.kubernetes.io/part-of: soc-platform
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "9114"
+    spec:
+      hostNetwork: true  # Required for packet capture
+      dnsPolicy: ClusterFirstWithHostNet
+      securityContext:
+        runAsNonRoot: false  # Suricata needs root for network access
+        runAsUser: 0
+      containers:
+      - name: suricata
+        image: jasonish/suricata:latest
+        imagePullPolicy: Always
+        command: ["/usr/bin/suricata", "-c", "/etc/suricata/suricata.yaml", "-i", "eth0"]
+        securityContext:
+          capabilities:
+            add:
+            - NET_ADMIN
+            - NET_RAW
+            - IPC_LOCK
+            - SYS_NICE
+        envFrom:
+        - configMapRef:
+            name: suricata-config
+        resources:
+          requests:
+            cpu: "2"
+            memory: "2Gi"
+          limits:
+            cpu: "4"
+            memory: "8Gi"
+        volumeMounts:
+        - name: suricata-rules
+          mountPath: /etc/suricata/rules
+        - name: suricata-logs
+          mountPath: /var/log/suricata
+        - name: suricata-config-volume
+          mountPath: /etc/suricata/suricata.yaml
+          subPath: suricata.yaml
+      volumes:
+      - name: suricata-rules
+        configMap:
+          name: suricata-config
+      - name: suricata-logs
+        emptyDir: {}
+      - name: suricata-config-volume
+        configMap:
+          name: suricata-config
+
+---
+# =============================================================================
+# 10. ZEEK (BRO) NSM
+# =============================================================================
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: zeek
+  namespace: soc-backend
+  labels:
+    app.kubernetes.io/name: zeek
+    app.kubernetes.io/component: nsm
+    app.kubernetes.io/part-of: soc-platform
+    app.kubernetes.io/managed-by: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "3"
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: zeek
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: zeek
+        app.kubernetes.io/part-of: soc-platform
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "9115"
+    spec:
+      hostNetwork: true
+      dnsPolicy: ClusterFirstWithHostNet
+      securityContext:
+        runAsNonRoot: false
+        runAsUser: 0
+      containers:
+      - name: zeek
+        image: blackzeek/zeek:latest
+        imagePullPolicy: Always
+        command: ["zeekctl", "run"]
+        securityContext:
+          capabilities:
+            add:
+            - NET_ADMIN
+            - NET_RAW
+        envFrom:
+        - configMapRef:
+            name: zeek-config
+        resources:
+          requests:
+            cpu: "2"
+            memory: "4Gi"
+          limits:
+            cpu: "4"
+            memory: "12Gi"  # Zeek is memory intensive
+        volumeMounts:
+        - name: zeek-logs
+          mountPath: /usr/local/zeek/logs
+        - name: zeek-scripts
+          mountPath: /usr/local/zeek/share/zeek/site
+      volumes:
+      - name: zeek-logs
+        persistentVolumeClaim:
+          claimName: zeek-logs-pvc
+      - name: zeek-scripts
+        configMap:
+          name: zeek-config
+
+---
+# =============================================================================
+# 11. ARKIME (Moloch) FULL PACKET CAPTURE
+# =============================================================================
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: arkime
+  namespace: soc-backend
+  labels:
+    app.kubernetes.io/name: arkime
+    app.kubernetes.io/component: nsm-fpc
+    app.kubernetes.io/part-of: soc-platform
+    app.kubernetes.io/managed-by: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "3"
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: arkime
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: arkime
+        app.kubernetes.io/part-of: soc-platform
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8005"
+    spec:
+      hostNetwork: true
+      dnsPolicy: ClusterFirstWithHostNet
+      securityContext:
+        runAsNonRoot: false
+        runAsUser: 0
+      initContainers:
+      - name: check-es
+        image: busybox:1.36
+        command: ['sh', '-c', 'until nc -z soc-elasticsearch 9200; do echo waiting for elasticsearch; sleep 2; done']
+      containers:
+      - name: arkime-capture
+        image: arkime/arkime:latest
+        imagePullPolicy: Always
+        command: ["capture"]
+        securityContext:
+          capabilities:
+            add:
+            - NET_ADMIN
+            - NET_RAW
+            - IPC_LOCK
+        envFrom:
+        - configMapRef:
+            name: arkime-config
+        - secretRef:
+            name: application-secrets
+        resources:
+          requests:
+            cpu: "2"
+            memory: "2Gi"
+          limits:
+            cpu: "4"
+            memory: "8Gi"
+        volumeMounts:
+        - name: arkime-pcaps
+          mountPath: /data/pcap
+        - name: arkime-config-volume
+          mountPath: /opt/arkime/etc/config.ini
+          subPath: config.ini
+      - name: arkime-viewer
+        image: arkime/arkime:latest
+        imagePullPolicy: Always
+        command: ["viewer"]
+        ports:
+        - name: viewer
+          containerPort: 8005
+          protocol: TCP
+        envFrom:
+        - configMapRef:
+            name: arkime-config
+        - secretRef:
+            name: application-secrets
+        resources:
+          requests:
+            cpu: "500m"
+            memory: "512Mi"
+          limits:
+            cpu: "2"
+            memory: "2Gi"
+      volumes:
+      - name: arkime-pcaps
+        persistentVolumeClaim:
+          claimName: arkime-pcaps-pvc
+      - name: arkime-config-volume
+        configMap:
+          name: arkime-config
+
+---
+# =============================================================================
+# 12. OPENVAS VULNERABILITY SCANNER
+# =============================================================================
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: openvas
+  namespace: soc-backend
+  labels:
+    app.kubernetes.io/name: openvas
+    app.kubernetes.io/component: vulnerability-scanner
+    app.kubernetes.io/part-of: soc-platform
+    app.kubernetes.io/managed-by: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "3"
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: openvas
+  strategy:
+    type: Recreate
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: openvas
+        app.kubernetes.io/part-of: soc-platform
+    spec:
+      securityContext:
+        runAsNonRoot: false  # OpenVAS needs root
+        runAsUser: 0
+      initContainers:
+      - name: setup-openvas
+        image: greenbone/openvas-scanner:22.4
+        command: ['/bin/sh', '-c', 'openvas --update-vt-data && openvas -s']
+      containers:
+      - name: ospd-openvas
+        image: greenbone/ospd-openvas:22.4
+        imagePullPolicy: Always
+        ports:
+        - name: scanner
+          containerPort: 12321
+          protocol: TCP
+        envFrom:
+        - configMapRef:
+            name: openvas-config
+        resources:
+          requests:
+            cpu: "2"
+            memory: "4Gi"
+          limits:
+            cpu: "4"
+            memory: "8Gi"
+        securityContext:
+          capabilities:
+            add:
+            - NET_RAW
+            - NET_ADMIN
+        livenessProbe:
+          tcpSocket:
+            port: scanner
+          initialDelaySeconds: 180
+          periodSeconds: 30
+        readinessProbe:
+          tcpSocket:
+            port: scanner
+          initialDelaySeconds: 150
+          periodSeconds: 20
+        volumeMounts:
+        - name: openvas-data
+          mountPath: /var/lib/openvas
+      - name: gvmd
+        image: greenbone/gvmd:22.4
+        imagePullPolicy: Always
+        ports:
+        - name: manager
+          containerPort: 9392
+          protocol: TCP
+        envFrom:
+        - configMapRef:
+            name: openvas-config
+        resources:
+          requests:
+            cpu: "500m"
+            memory: "512Mi"
+          limits:
+            cpu: "2"
+            memory: "2Gi"
+        livenessProbe:
+          tcpSocket:
+            port: manager
+          initialDelaySeconds: 60
+          periodSeconds: 20
+      - name: gsa
+        image: greenbone/gsa:22.4
+        imagePullPolicy: Always
+        ports:
+        - name: web
+          containerPort: 8080
+          protocol: TCP
+        resources:
+          requests:
+            cpu: "200m"
+            memory: "256Mi"
+          limits:
+            cpu: "500m"
+            memory: "512Mi"
+        livenessProbe:
+          httpGet:
+            path: /
+            port: web
+          initialDelaySeconds: 30
+          periodSeconds: 15
+      volumes:
+      - name: openvas-data
+        persistentVolumeClaim:
+          claimName: openvas-data-pvc
+
+---
+# =============================================================================
+# 13. DEFECTDOJO VULNERABILITY MANAGEMENT
+# =============================================================================
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: defectdojo
+  namespace: soc-backend
+  labels:
+    app.kubernetes.io/name: defectdojo
+    app.kubernetes.io/component: vulnerability-management
+    app.kubernetes.io/part-of: soc-platform
+    app.kubernetes.io/managed-by: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "3"
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: defectdojo
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: defectdojo
+        app.kubernetes.io/part-of: soc-platform
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8080"
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        fsGroup: 1000
+      initContainers:
+      - name: migrate-db
+        image: defectdojo/defectdojo-latest:latest
+        command: ["python3", "manage.py", "migrate"]
+        envFrom:
+        - configMapRef:
+            name: defectdojo-config
+        - secretRef:
+            name: database-credentials
+        - secretRef:
+            name: application-secrets
+      containers:
+      - name: defectdojo-uwsgi
+        image: defectdojo/defectdojo-latest:latest
+        imagePullPolicy: Always
+        ports:
+        - name: web
+          containerPort: 8080
+          protocol: TCP
+        envFrom:
+        - configMapRef:
+            name: defectdojo-config
+        - secretRef:
+            name: database-credentials
+        - secretRef:
+            name: application-secrets
+        resources:
+          requests:
+            cpu: "500m"
+            memory: "1Gi"
+          limits:
+            cpu: "2"
+            memory: "4Gi"
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: false
+        livenessProbe:
+          httpGet:
+            path: /
+            port: web
+          initialDelaySeconds: 60
+          periodSeconds: 20
+        readinessProbe:
+          httpGet:
+            path: /
+            port: web
+          initialDelaySeconds: 45
+          periodSeconds: 10
+        volumeMounts:
+        - name: defectdojo-media
+          mountPath: /app/media
+      - name: defectdojo-celery-worker
+        image: defectdojo/defectdojo-latest:latest
+        imagePullPolicy: Always
+        command: ["celery", "-A", "dojo", "worker", "-l", "INFO"]
+        envFrom:
+        - configMapRef:
+            name: defectdojo-config
+        - secretRef:
+            name: database-credentials
+        - secretRef:
+            name: application-secrets
+        resources:
+          requests:
+            cpu: "500m"
+            memory: "1Gi"
+          limits:
+            cpu: "2"
+            memory: "4Gi"
+      volumes:
+      - name: defectdojo-media
+        persistentVolumeClaim:
+          claimName: defectdojo-media-pvc
+
+---
+# =============================================================================
+# 14. GRR EDR (Endpoint Detection & Response)
+# =============================================================================
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: grr
+  namespace: soc-backend
+  labels:
+    app.kubernetes.io/name: grr-edr
+    app.kubernetes.io/component: edr
+    app.kubernetes.io/part-of: soc-platform
+    app.kubernetes.io/managed-by: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "3"
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: grr
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: grr
+        app.kubernetes.io/part-of: soc-platform
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8000"
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        fsGroup: 1000
+      initContainers:
+      - name: check-mysql
+        image: busybox:1.36
+        command: ['sh', '-c', 'until nc -z soc-mysql 3306; do echo waiting for mysql; sleep 2; done']
+      containers:
+      - name: grr-server
+        image: grrdocker/grr:latest
+        imagePullPolicy: Always
+        ports:
+        - name: frontend
+          containerPort: 8000
+          protocol: TCP
+        - name: admin-ui
+          containerPort: 4443
+          protocol: TCP
+        envFrom:
+        - configMapRef:
+            name: grr-config
+        - secretRef:
+            name: database-credentials
+        resources:
+          requests:
+            cpu: "1"
+            memory: "2Gi"
+          limits:
+            cpu: "4"
+            memory: "8Gi"
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: false
+        livenessProbe:
+          httpGet:
+            path: /
+            port: frontend
+          initialDelaySeconds: 120
+          periodSeconds: 30
+        readinessProbe:
+          httpGet:
+            path: /
+            port: frontend
+          initialDelaySeconds: 90
+          periodSeconds: 15
+        volumeMounts:
+        - name: grr-data
+          mountPath: /var/grr-data
+        - name: grr-config-volume
+          mountPath: /etc/grr/server.local.yaml
+          subPath: server.local.yaml
+      volumes:
+      - name: grr-data
+        persistentVolumeClaim:
+          claimName: grr-data-pvc
+      - name: grr-config-volume
+        configMap:
+          name: grr-config
+
+---
+# =============================================================================
+# 15. POSTGRESQL DATABASE
+# =============================================================================
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: postgresql
+  namespace: soc-backend
+  labels:
+    app.kubernetes.io/name: postgresql
+    app.kubernetes.io/component: database
+    app.kubernetes.io/part-of: soc-platform
+    app.kubernetes.io/managed-by: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "0"
+spec:
+  serviceName: soc-postgresql
+  replicas: 1  # Use external HA solution for production
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: postgresql
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: postgresql
+        app.kubernetes.io/part-of: soc-platform
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "9187"
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 999
+        fsGroup: 999
+      containers:
+      - name: postgresql
+        image: postgres:16-alpine
+        imagePullPolicy: Always
+        ports:
+        - name: postgres
+          containerPort: 5432
+          protocol: TCP
+        - name: metrics
+          containerPort: 9187
+          protocol: TCP
+        env:
+        - name: POSTGRES_USER
+          value: "soc_user"
+        - name: POSTGRES_DB
+          value: "soc_platform"
+        - name: PGDATA
+          value: /var/lib/postgresql/data/pgdata
+        - name: POSTGRES_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: database-credentials
+              key: POSTGRES_PASSWORD
+        resources:
+          requests:
+            cpu: "1"
+            memory: "2Gi"
+          limits:
+            cpu: "4"
+            memory: "16Gi"
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: false
+        livenessProbe:
+          exec:
+            command:
+            - pg_isready
+            - -U
+            - soc_user
+          initialDelaySeconds: 30
+          periodSeconds: 10
+        readinessProbe:
+          exec:
+            command:
+            - pg_isready
+            - -U
+            - soc_user
+          initialDelaySeconds: 5
+          periodSeconds: 5
+        volumeMounts:
+        - name: postgresql-data
+          mountPath: /var/lib/postgresql/data
+        - name: postgresql-backup
+          mountPath: /backups
+      volumes:
+      - name: postgresql-data
+        persistentVolumeClaim:
+          claimName: postgresql-data-pvc
+      - name: postgresql-backup
+        persistentVolumeClaim:
+          claimName: postgresql-backup-pvc
+  volumeClaimTemplates:
+  - metadata:
+      name: postgresql-data
+    spec:
+      accessModes: ["ReadWriteOnce"]
+      storageClassName: local-path
+      resources:
+        requests:
+          storage: 500Gi
+
+---
+# =============================================================================
+# 16. ELASTICSEARCH CLUSTER
+# =============================================================================
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: elasticsearch
+  namespace: soc-backend
+  labels:
+    app.kubernetes.io/name: elasticsearch
+    app.kubernetes.io/component: search-engine
+    app.kubernetes.io/part-of: soc-platform
+    app.kubernetes.io/managed-by: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "0"
+spec:
+  serviceName: soc-elasticsearch
+  replicas: 3  # Minimum 3 for production
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: elasticsearch
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: elasticsearch
+        app.kubernetes.io/part-of: soc-platform
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "9114"
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        fsGroup: 1000
+      initContainers:
+      - name: sysctl
+        image: busybox:1.36
+        command: ['sysctl', '-w', 'vm.max_map_count=262144']
+        securityContext:
+          privileged: true
+      containers:
+      - name: elasticsearch
+        image: docker.elastic.co/elasticsearch/elasticsearch:8.11.0
+        imagePullPolicy: Always
+        ports:
+        - name: http
+          containerPort: 9200
+          protocol: TCP
+        - name: transport
+          containerPort: 9300
+          protocol: TCP
+        env:
+        - name: discovery.type
+          value: single-node  # Change to zen for cluster mode
+        - name: ES_JAVA_OPTS
+          value: "-Xms4g -Xmx4g"
+        - name: xpack.security.enabled
+          value: "false"  # Enable in production with proper certs
+        - name: xpack.security.enrollment.enabled
+          value: "false"
+        - name: cluster.name
+          value: "djezzy-soc-cluster"
+        resources:
+          requests:
+            cpu: "2"
+            memory: "4Gi"
+          limits:
+            cpu: "8"
+            memory: "16Gi"
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: false
+        livenessProbe:
+          tcpSocket:
+            port: http
+          initialDelaySeconds: 60
+          periodSeconds: 20
+        readinessProbe:
+          httpGet:
+            path: /_cluster/health?local=true
+            port: http
+          initialDelaySeconds: 30
+          periodSeconds: 10
+        volumeMounts:
+        - name: es-data
+          mountPath: /usr/share/elasticsearch/data
+      volumes:
+      - name: es-data
+        persistentVolumeClaim:
+          claimName: elasticsearch-data-pvc
+
+---
+# =============================================================================
+# 17. REDIS CLUSTER
+# =============================================================================
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: redis-master
+  namespace: soc-backend
+  labels:
+    app.kubernetes.io/name: redis
+    app.kubernetes.io/component: cache
+    app.kubernetes.io/part-of: soc-platform
+    app.kubernetes.io/managed-by: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "1"
+spec:
+  serviceName: soc-redis-master
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: redis
+      app.kubernetes.io/role: master
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: redis
+        app.kubernetes.io/role: master
+        app.kubernetes.io/part-of: soc-platform
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "9121"
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 999
+        fsGroup: 999
+      containers:
+      - name: redis
+        image: redis:7.2-alpine
+        imagePullPolicy: Always
+        ports:
+        - name: redis
+          containerPort: 6379
+          protocol: TCP
+        command:
+        - redis-server
+        - /etc/redis/redis.conf
+        envFrom:
+        - configMapRef:
+            name: redis-config
+        - secretRef:
+            name: redis-credentials
+        resources:
+          requests:
+            cpu: "200m"
+            memory: "256Mi"
+          limits:
+            cpu: "2"
+            memory: "4Gi"
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: false
+        livenessProbe:
+          tcpSocket:
+            port: redis
+          initialDelaySeconds: 15
+          periodSeconds: 10
+        readinessProbe:
+          exec:
+            command:
+            - redis-cli
+            - ping
+          initialDelaySeconds: 5
+          periodSeconds: 5
+        volumeMounts:
+        - name: redis-data
+          mountPath: /data
+        - name: redis-config-volume
+          mountPath: /etc/redis/redis.conf
+          subPath: redis.conf
+      - name: redis-exporter
+        image: oliver006/redis_exporter:v1.55.0
+        ports:
+        - name: metrics
+          containerPort: 9121
+          protocol: TCP
+        env:
+        - name: REDIS_ADDR
+          value: "redis://localhost:6379"
+        - name: REDIS_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: redis-credentials
+              key: REDIS_PASSWORD
+        resources:
+          requests:
+            cpu: "50m"
+            memory: "64Mi"
+          limits:
+            cpu: "200m"
+            memory: "256Mi"
+      volumes:
+      - name: redis-data
+        persistentVolumeClaim:
+          claimName: redis-data-pvc
+      - name: redis-config-volume
+        configMap:
+          name: redis-config
+
+---
+# =============================================================================
+# KAFKA CLUSTER (StatefulSet for 3 brokers)
+# =============================================================================
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: kafka
+  namespace: soc-events
+  labels:
+    app.kubernetes.io/name: kafka
+    app.kubernetes.io/component: messaging
+    app.kubernetes.io/part-of: soc-platform
+    app.kubernetes.io/managed-by: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "1"
+spec:
+  serviceName: soc-kafka
+  replicas: 3
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: kafka
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: kafka
+        app.kubernetes.io/part-of: soc-platform
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "9999"
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        fsGroup: 1000
+      initContainers:
+      - name: check-zookeeper
+        image: busybox:1.36
+        command: ['sh', '-c', 'until nc -z soc-zookeeper-headless 2181; do echo waiting for zookeeper; sleep 2; done']
+      containers:
+      - name: kafka-broker
+        image: bitnami/kafka:3.6
+        imagePullPolicy: Always
+        ports:
+        - name: internal
+          containerPort: 9092
+          protocol: TCP
+        - name: jmx
+          containerPort: 9999
+          protocol: TCP
+        env:
+        - name: KAFKA_BROKER_ID
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        - name: KAFKA_CFG_ZOOKEEPER_CONNECT
+          value: "soc-zookeeper-headless:2181"
+        - name: KAFKA_CFG_LISTENERS
+          value: "PLAINTEXT://:9092"
+        - name: KAFKA_CFG_ADVERTISED_LISTENERS
+          value: "PLAINTEXT://$(KAFKA_POD_FQDN):9092"
+        - name: KAFKA_POD_FQDN
+          valueFrom:
+            fieldRef:
+              fieldPath: status.podIP
+        - name: KAFKA_HEAP_OPTS
+          value: "-Xmx4g -Xms4g"
+        - name: KAFKA_JMX_PORT
+          value: "9999"
+        - name: KAFKA_LOG_DIRS
+          value: "/bitnami/kafka/data"
+        envFrom:
+        - configMapRef:
+            name: kafka-config
+        resources:
+          requests:
+            cpu: "1"
+            memory: "4Gi"
+          limits:
+            cpu: "4"
+            memory: "8Gi"
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: false
+        livenessProbe:
+          exec:
+            command:
+            - bin/kafka-broker-api-versions.sh
+            - --bootstrap-server
+            - localhost:9092
+          initialDelaySeconds: 30
+          periodSeconds: 20
+        readinessProbe:
+          exec:
+            command:
+            - bin/kafka-broker-api-versions.sh
+            - --bootstrap-server
+            - localhost:9092
+          initialDelaySeconds: 20
+          periodSeconds: 10
+        volumeMounts:
+        - name: kafka-data
+          mountPath: /bitnami/kafka/data
+      volumes:
+      - name: kafka-data
+        persistentVolumeClaim:
+          claimName: kafka-data-pvc
+  volumeClaimTemplates:
+  - metadata:
+      name: kafka-data
+    spec:
+      accessModes: ["ReadWriteOnce"]
+      storageClassName: local-path
+      resources:
+        requests:
+          storage: 100Gi
+
+---
+# =============================================================================
+# ZOOKEEPER CLUSTER
+# =============================================================================
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: zookeeper
+  namespace: soc-events
+  labels:
+    app.kubernetes.io/name: zookeeper
+    app.kubernetes.io/component: messaging-coordination
+    app.kubernetes.io/part-of: soc-platform
+    app.kubernetes.io/managed-by: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "0"
+spec:
+  serviceName: soc-zookeeper-headless
+  replicas: 3
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: zookeeper
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: zookeeper
+        app.kubernetes.io/part-of: soc-platform
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        fsGroup: 1000
+      containers:
+      - name: zookeeper
+        image: bitnami/zookeeper:3.8
+        imagePullPolicy: Always
+        ports:
+        - name: client
+          containerPort: 2181
+          protocol: TCP
+        - name: follower
+          containerPort: 2888
+          protocol: TCP
+        - name: leader-election
+          containerPort: 3888
+          protocol: TCP
+        env:
+        - name: ZOO_SERVERS
+          value: "server.1=soc-zookeeper-0.soc-zookeeper-headless:2888:3888,server.2=soc-zookeeper-1.soc-zookeeper-headless:2888:3888,server.3=soc-zookeeper-2.soc-zookeeper-headless:2888:3888"
+        - name: ZOO_MY_ID
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.annotations['statefulset.kubernetes.io/pod-name']
+        envFrom:
+        - configMapRef:
+            name: zookeeper-config
+        resources:
+          requests:
+            cpu: "200m"
+            memory: "512Mi"
+          limits:
+            cpu: "1"
+            memory: "2Gi"
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: false
+        livenessProbe:
+          tcpSocket:
+            port: client
+          initialDelaySeconds: 20
+          periodSeconds: 10
+        readinessProbe:
+          exec:
+            command:
+            - bash
+            - -c
+            - ruok | grep imok
+          initialDelaySeconds: 10
+          periodSeconds: 5
+        volumeMounts:
+        - name: zk-data
+          mountPath: /bitnami/zookeeper/data
+      volumes:
+      - name: zk-data
+        persistentVolumeClaim:
+          claimName: zookeeper-data-pvc
+  volumeClaimTemplates:
+  - metadata:
+      name: zk-data
+    spec:
+      accessModes: ["ReadWriteOnce"]
+      storageClassName: local-path
+      resources:
+        requests:
+          storage: 10Gi
+
+---
+# =============================================================================
+# PROMETHEUS MONITORING
+# =============================================================================
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: prometheus
+  namespace: soc-monitoring
+  labels:
+    app.kubernetes.io/name: prometheus
+    app.kubernetes.io/component: monitoring
+    app.kubernetes.io/part-of: soc-platform
+    app.kubernetes.io/managed-by: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "2"
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: prometheus
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: prometheus
+        app.kubernetes.io/part-of: soc-platform
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        fsGroup: 1000
+      serviceAccountName: prometheus-service-account
+      containers:
+      - name: prometheus
+        image: prom/prometheus:v2.49.0
+        imagePullPolicy: Always
+        args:
+        - "--config.file=/etc/prometheus/prometheus.yml"
+        - "--storage.tsdb.path=/prometheus"
+        - "--storage.tsdb.retention.time=2555h"  # ANRT compliance - 7 years data retention
+        - "--storage.tsdb.retention.size=500GB"
+        - "--web.enable-lifecycle"
+        - "--web.enable-admin-api"
+        ports:
+        - name: web
+          containerPort: 9090
+          protocol: TCP
+        envFrom:
+        - configMapRef:
+            name: prometheus-config
+        resources:
+          requests:
+            cpu: "500m"
+            memory: "1Gi"
+          limits:
+            cpu: "2"
+            memory: "8Gi"
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop:
+            - ALL
+        livenessProbe:
+          httpGet:
+            path: /-/healthy
+            port: web
+          initialDelaySeconds: 30
+          periodSeconds: 15
+        readinessProbe:
+          httpGet:
+            path: /-/ready
+            port: web
+          initialDelaySeconds: 15
+          periodSeconds: 10
+        volumeMounts:
+        - name: prometheus-config-volume
+          mountPath: /etc/prometheus
+        - name: prometheus-data
+          mountPath: /prometheus
+      volumes:
+      - name: prometheus-config-volume
+        configMap:
+          name: prometheus-config
+      - name: prometheus-data
+        persistentVolumeClaim:
+          claimName: prometheus-data-pvc
+
+---
+# =============================================================================
+# GRAFANA MONITORING UI
+# =============================================================================
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: grafana
+  namespace: soc-monitoring
+  labels:
+    app.kubernetes.io/name: grafana
+    app.kubernetes.io/component: monitoring-ui
+    app.kubernetes.io/part-of: soc-platform
+    app.kubernetes.io/managed-by: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "3"
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: grafana
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: grafana
+        app.kubernetes.io/part-of: soc-platform
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 472  # Grafana user ID
+        fsGroup: 472
+      initContainers:
+      - name: provision-dashboards
+        image: busybox:1.36
+        command: ['sh', '-c', 'cp /dashboards/* /grafana-dashboards/']
+        volumeMounts:
+        - name: dashboard-provisioning
+          mountPath: /dashboards
+        - name: grafana-dashboards
+          mountPath: /grafana-dashboards
+      containers:
+      - name: grafana
+        image: grafana/grafana:10.2.0
+        imagePullPolicy: Always
+        ports:
+        - name: web
+          containerPort: 3000
+          protocol: TCP
+        envFrom:
+        - configMapRef:
+            name: grafana-config
+        - secretRef:
+            name: grafana-secrets
+        resources:
+          requests:
+            cpu: "200m"
+            memory: "256Mi"
+          limits:
+            cpu: "1"
+            memory: "2Gi"
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: false
+        livenessProbe:
+          httpGet:
+            path: /api/health
+            port: web
+          initialDelaySeconds: 30
+          periodSeconds: 15
+        readinessProbe:
+          httpGet:
+            path: /api/health
+            port: web
+          initialDelaySeconds: 20
+          periodSeconds: 10
+        volumeMounts:
+        - name: grafana-data
+          mountPath: /var/lib/grafana
+        - name: grafana-dashboards
+          mountPath: /etc/grafana/provisioning/dashboards
+        - name: grafana-datasources
+          mountPath: /etc/grafana/provisioning/datasources
+      volumes:
+      - name: grafana-data
+        persistentVolumeClaim:
+          claimName: grafana-data-pvc
+      - name: grafana-dashboards
+        configMap:
+          name: grafana-dashboards
+      - name: grafana-datasources
+        configMap:
+          name: grafana-datasources
+
+---
+# =============================================================================
+# SS7 MODULE DEPLOYMENTS
+# =============================================================================
+
+# SS7 Collector
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ss7-collector
+  namespace: soc-ss7
+  labels:
+    app.kubernetes.io/name: ss7-collector
+    app.kubernetes.io/component: ss7-signaling
+    app.kubernetes.io/part-of: ss7-module
+    anrt.djezzy.soc/classification: restricted
+    app.kubernetes.io/managed-by: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "2"
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: ss7-collector
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: ss7-collector
+        app.kubernetes.io/part-of: ss7-module
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "9100"
+    spec:
+      hostNetwork: true
+      dnsPolicy: ClusterFirstWithHostNet
+      securityContext:
+        runAsNonRoot: false
+        runAsUser: 0
+      containers:
+      - name: ss7-collector
+        image: registry.djezzy.dz/soc/ss7-collector:production
+        imagePullPolicy: Always
+        securityContext:
+          capabilities:
+            add:
+            - NET_ADMIN
+            - NET_RAW
+        envFrom:
+        - configMapRef:
+            name: ss7-module-config
+        - secretRef:
+            name: ss7-module-secrets
+        resources:
+          requests:
+            cpu: "1"
+            memory: "1Gi"
+          limits:
+            cpu: "4"
+            memory: "4Gi"
+        livenessProbe:
+          tcpSocket:
+            port: 9100
+          initialDelaySeconds: 30
+          periodSeconds: 15
+        volumeMounts:
+        - name: ss7-collector-data
+          mountPath: /data/ss7
+      volumes:
+      - name: ss7-collector-data
+        persistentVolumeClaim:
+          claimName: ss7-collector-data-pvc
+
+---
+
+# SS7 Analyzer
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ss7-analyzer
+  namespace: soc-ss7
+  labels:
+    app.kubernetes.io/name: ss7-analyzer
+    app.kubernetes.io/component: ss7-signaling
+    app.kubernetes.io/part-of: ss7-module
+    anrt.djezzy.soc/classification: restricted
+    app.kubernetes.io/managed-by: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "2"
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: ss7-analyzer
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: ss7-analyzer
+        app.kubernetes.io/part-of: ss7-module
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "9101"
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        fsGroup: 1000
+      containers:
+      - name: ss7-analyzer
+        image: registry.djezzy.dz/soc/ss7-analyzer:production
+        imagePullPolicy: Always
+        ports:
+        - name: metrics
+          containerPort: 9101
+          protocol: TCP
+        envFrom:
+        - configMapRef:
+            name: ss7-module-config
+        - secretRef:
+            name: ss7-module-secrets
+        resources:
+          requests:
+            cpu: "1"
+            memory: "2Gi"
+          limits:
+            cpu: "4"
+            memory: "8Gi"
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: metrics
+          initialDelaySeconds: 30
+          periodSeconds: 15
+        volumeMounts:
+        - name: ss7-rules
+          mountPath: /etc/ss7/rules
+      volumes:
+      - name: ss7-rules
+        configMap:
+          name: ss7-module-config
+
+---
+
+# Diameter Monitor
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: diameter-monitor
+  namespace: soc-ss7
+  labels:
+    app.kubernetes.io/name: diameter-monitor
+    app.kubernetes.io/component: ss7-signaling
+    app.kubernetes.io/part-of: ss7-module
+    anrt.djezzy.soc/classification: restricted
+    app.kubernetes.io/managed-by: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "2"
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: diameter-monitor
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: diameter-monitor
+        app.kubernetes.io/part-of: ss7-module
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "9102"
+    spec:
+      hostNetwork: true
+      dnsPolicy: ClusterFirstWithHostNet
+      securityContext:
+        runAsNonRoot: false
+        runAsUser: 0
+      containers:
+      - name: diameter-monitor
+        image: registry.djezzy.dz/soc/diameter-monitor:production
+        imagePullPolicy: Always
+        ports:
+        - name: metrics
+          containerPort: 9102
+          protocol: TCP
+        - name: diameter
+          containerPort: 3868
+          protocol: TCP
+        envFrom:
+        - configMapRef:
+            name: ss7-module-config
+        - secretRef:
+            name: ss7-module-secrets
+        resources:
+          requests:
+            cpu: "500m"
+            memory: "512Mi"
+          limits:
+            cpu: "2"
+            memory: "2Gi"
+        securityContext:
+          capabilities:
+            add:
+            - NET_ADMIN
+            - NET_RAW
+        livenessProbe:
+          tcpSocket:
+            port: metrics
+          initialDelaySeconds: 30
+          periodSeconds: 15

@@ -1,0 +1,389 @@
+# =============================================================================
+# Djezzy National SOC Platform - Ingress Configuration
+# =============================================================================
+# Kong API Gateway Ingress Rules | TLS Termination | ANRT Compliant
+# =============================================================================
+
+# =============================================================================
+# MAIN INGRESS - Kong Gateway as Entry Point
+# =============================================================================
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: soc-platform-ingress
+  namespace: soc-backend
+  labels:
+    app.kubernetes.io/name: djezzy-soc
+    app.kubernetes.io/component: ingress
+    app.kubernetes.io/part-of: soc-platform
+  annotations:
+    # Use NGINX or Traefik as the ingress controller for external traffic
+    kubernetes.io/ingress.class: nginx
+    # SSL/TLS Configuration
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+    # Rate Limiting
+    nginx.ingress.kubernetes.io/rate-limit: "1000"
+    nginx.ingress.kubernetes.io/rate-limit-window: "1m"
+    # Security Headers
+    nginx.ingress.kubernetes.io/configuration-snippet: |
+      add_header X-Frame-Options "SAMEORIGIN" always;
+      add_header X-Content-Type-Options "nosniff" always;
+      add_header X-XSS-Protection "1; mode=block" always;
+      add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+      add_header Content-Security-Policy "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:;" always;
+      add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
+    # Body Size Limit
+    nginx.ingress.kubernetes.io/proxy-body-size: "50m"
+    # Timeouts
+    nginx.ingress.kubernetes.io/proxy-connect-timeout: "30"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "600"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "600"
+    # ANRT Compliance Annotations
+    anrt.djezzy.soc/tls-version: "1.3"
+    anrt.djezzy.soc/cipher-suite: "ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384"
+spec:
+  ingressClassName: nginx
+  tls:
+  - hosts:
+    - soc.djezzy.dz
+    - api.soc.djezzy.dz
+    - kong-admin.soc.djezzy.dz
+    secretName: soc-platform-tls-cert
+  rules:
+  # Main Platform UI/API
+  - host: soc.djezzy.dz
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: kong-gateway
+            port:
+              number: 8443
+  
+  # Direct API Access
+  - host: api.soc.djezzy.dz
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: kong-gateway
+            port:
+              number: 8443
+  
+  # Kong Admin (Restricted Access)
+  - host: kong-admin.soc.djezzy.dz
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: kong-gateway
+            port:
+              number: 8001
+
+---
+# =============================================================================
+# MONITORING INGRESS
+# =============================================================================
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: monitoring-ingress
+  namespace: soc-monitoring
+  labels:
+    app.kubernetes.io/name: djezzy-soc
+    app.kubernetes.io/component: ingress
+    app.kubernetes.io/part-of: soc-platform
+  annotations:
+    kubernetes.io/ingress.class: nginx
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+    nginx.ingress.kubernetes.io/auth-type: basic
+    nginx.ingress.kubernetes.io-auth-secret: grafana-basic-auth
+    nginx.ingress.kubernetes.io/auth-realm: "Djezzy SOC Monitoring - Authentication Required"
+    # Security Headers
+    nginx.ingress.kubernetes.io/configuration-snippet: |
+      add_header X-Frame-Options "SAMEORIGIN" always;
+      add_header X-Content-Type-Options "nosniff" always;
+spec:
+  ingressClassName: nginx
+  tls:
+  - hosts:
+    - grafana.soc.djezzy.dz
+    - prometheus.soc.djezzy.dz
+    secretName: monitoring-tls-cert
+  rules:
+  # Grafana Dashboard
+  - host: grafana.soc.djezzy.dz
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: grafana
+            port:
+              number: 3000
+  
+  # Prometheus (Internal Only - Should be behind VPN)
+  - host: prometheus.soc.djezzy.dz
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: prometheus
+            port:
+              number: 9090
+
+---
+# =============================================================================
+# SIEM INGRESS (Wazuh Dashboard)
+# =============================================================================
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: siem-ingress
+  namespace: soc-backend
+  labels:
+    app.kubernetes.io/name: djezzy-soc
+    app.kubernetes.io/component: ingress
+    app.kubernetes.io/part-of: soc-platform
+  annotations:
+    kubernetes.io/ingress.class: nginx
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+    nginx.ingress.kubernetes.io/auth-type: basic
+    nginx.ingress.kubernetes.io-auth-secret: wazuh-basic-auth
+spec:
+  ingressClassName: nginx
+  tls:
+  - hosts:
+    - siem.soc.djezzy.dz
+    secretName: siem-tls-cert
+  rules:
+  - host: siem.soc.djezzy.dz
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: wazuh-dashboard
+            port:
+              number: 5601
+
+---
+# =============================================================================
+# SOAR INGRESS (TheHive)
+# =============================================================================
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: soar-ingress
+  namespace: soc-backend
+  labels:
+    app.kubernetes.io/name: djezzy-soc
+    app.kubernetes.io/component: ingress
+    app.kubernetes.io/part-of: soc-platform
+  annotations:
+    kubernetes.io/ingress.class: nginx
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+spec:
+  ingressClassName: nginx
+  tls:
+  - hosts:
+    - soar.soc.djezzy.dz
+    secretName: soar-tls-cert
+  rules:
+  - host: soar.soc.djezzy.dz
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: thehive
+            port:
+              number: 9000
+
+---
+# =============================================================================
+# THREAT INTEL INGRESS (MISP)
+# =============================================================================
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: threat-intel-ingress
+  namespace: soc-backend
+  labels:
+    app.kubernetes.io/name: djezzy-soc
+    app.kubernetes.io/component: ingress
+    app.kubernetes.io/part-of: soc-platform
+  annotations:
+    kubernetes.io/ingress.class: nginx
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+spec:
+  ingressClassName: nginx
+  tls:
+  - hosts:
+    - ti.soc.djezzy.dz
+    secretName: threat-intel-tls-cert
+  rules:
+  - host: ti.soc.djezzy.dz
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: misp
+            port:
+              number: 80
+
+---
+# =============================================================================
+# VULNERABILITY MANAGEMENT INGRESS (DefectDojo/OpenVAS)
+# =============================================================================
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: vulnerability-ingress
+  namespace: soc-backend
+  labels:
+    app.kubernetes.io/name: djezzy-soc
+    app.kubernetes.io/component: ingress
+    app.kubernetes.io/part-of: soc-platform
+  annotations:
+    kubernetes.io/ingress.class: nginx
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+spec:
+  ingressClassName: nginx
+  tls:
+  - hosts:
+    - vuln.soc.djezzy.dz
+    secretName: vulnerability-tls-cert
+  rules:
+  - host: vuln.soc.djezzy.dz
+    http:
+      paths:
+      - path: /defectdojo
+        pathType: Prefix
+        backend:
+          service:
+            name: defectdojo
+            port:
+              number: 8080
+      - path: /openvas
+        pathType: Prefix
+        backend:
+          service:
+            name: openvas
+            port:
+              number: 8080
+
+---
+# =============================================================================
+# EDR INGRESS (GRR)
+# =============================================================================
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: edr-ingress
+  namespace: soc-backend
+  labels:
+    app.kubernetes.io/name: djezzy-soc
+    app.kubernetes.io/component: ingress
+    app.kubernetes.io/part-of: soc-platform
+  annotations:
+    kubernetes.io/ingress.class: nginx
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+spec:
+  ingressClassName: nginx
+  tls:
+  - hosts:
+    - edr.soc.djezzy.dz
+    secretName: edr-tls-cert
+  rules:
+  - host: edr.soc.djezzy.dz
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: grr
+            port:
+              number: 8000
+
+---
+# =============================================================================
+# OPENCTI INGRESS
+# =============================================================================
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: opencti-ingress
+  namespace: soc-backend
+  labels:
+    app.kubernetes.io/name: djezzy-soc
+    app.kubernetes.io/component: ingress
+    app.kubernetes.io/part-of: soc-platform
+  annotations:
+    kubernetes.io/ingress.class: nginx
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+spec:
+  ingressClassName: nginx
+  tls:
+  - hosts:
+    - opencti.soc.djezzy.dz
+    secretName: opencti-tls-cert
+  rules:
+  - host: opencti.soc.djezzy.dz
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: opencti
+            port:
+              number: 8080
+
+---
+# =============================================================================
+# NSM INGRESS (Arkime Viewer)
+# =============================================================================
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: nsm-ingress
+  namespace: soc-backend
+  labels:
+    app.kubernetes.io/name: djezzy-soc
+    app.kubernetes.io/component: ingress
+    app.kubernetes.io/part-of: soc-platform
+  annotations:
+    kubernetes.io/ingress.class: nginx
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+spec:
+  ingressClassName: nginx
+  tls:
+  - hosts:
+    - nsm.soc.djezzy.dz
+    secretName: nsm-tls-cert
+  rules:
+  - host: nsm.soc.djezzy.dz
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: arkime
+            port:
+              number: 8005

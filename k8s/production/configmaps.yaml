@@ -1,0 +1,841 @@
+# =============================================================================
+# Djezzy National SOC Platform - ConfigMaps
+# =============================================================================
+# Production Configuration | ANRT Compliant | GitOps Ready
+# =============================================================================
+
+# =============================================================================
+# SOC Platform API Configuration
+# =============================================================================
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: soc-platform-config
+  namespace: soc-backend
+  labels:
+    app.kubernetes.io/name: djezzy-soc
+    app.kubernetes.io/component: api
+    app.kubernetes.io/part-of: soc-platform
+  annotations:
+    argocd.argoproj.io/sync-wave: "1"
+data:
+  NODE_ENV: "production"
+  NEXT_TELEMETRY_DISABLED: "1"
+  PORT: "3000"
+  HOSTNAME: "0.0.0.0"
+  # Database Configuration
+  DATABASE_URL: "postgresql://soc_user:${DB_PASSWORD}@soc-postgresql.soc-backend:5432/soc_platform?schema=public"
+  # Redis Configuration
+  REDIS_HOST: "soc-redis-master.soc-backend"
+  REDIS_PORT: "6379"
+  # Kafka Configuration
+  KAFKA_BROKERS: "soc-kafka-0.soc-events:9092,soc-kafka-1.soc-events:9092,soc-kafka-2.soc-events:9092"
+  KAFKA_CLIENT_ID: "soc-platform-api"
+  # Security Settings
+  SESSION_SECRET_PLACEHOLDER: "${SESSION_SECRET}"
+  JWT_SECRET_PLACEHOLDER: "${JWT_SECRET}"
+  ENCRYPTION_KEY_PLACEHOLDER: "${ENCRYPTION_KEY}"
+  # ANRT Compliance
+  ANRT_LOG_LEVEL: "audit"
+  ANRT_DATA_RETENTION_DAYS: "2555"  # 7 years per ANRT requirements
+  ANRT_AUDIT_ENABLED: "true"
+  # Rate Limiting
+  RATE_LIMIT_WINDOW_MS: "60000"
+  RATE_LIMIT_MAX_REQUESTS: "1000"
+  # CORS Configuration
+  CORS_ALLOWED_ORIGINS: "https://soc.djezzy.dz,https://api.soc.djezzy.dz"
+  # Feature Flags
+  ENABLE_SS7_MODULE: "true"
+  ENABLE_AI_AUTOMATION: "true"
+  ENABLE_THREAT_HUNTING: "true"
+  ENABLE_GEOMARKETING: "true"
+
+# =============================================================================
+# Wazuh SIEM Configuration
+# =============================================================================
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: wazuh-config
+  namespace: soc-backend
+  labels:
+    app.kubernetes.io/name: wazuh-siem
+    app.kubernetes.io/component: siem
+    app.kubernetes.io/part-of: soc-platform
+  annotations:
+    argocd.argoproj.io/sync-wave: "1"
+data:
+  WAZUH_CLUSTER_NAME: "djezzy-soc-cluster"
+  WAZUH_CLUSTER_NODE_NAME: "node-1"
+  WAZUH_CLUSTER_NODE_TYPE: "master"
+  WAZUH_CLUSTER_KEY: ""
+  # Elasticsearch Connection
+  WAZUH_ELASTICSEARCH_URL: "https://soc-elasticsearch.soc-backend:9200"
+  WAZUH_ELASTICSEARCH_USERNAME: "wazuh"
+  WAZUH_ELASTICSEARCH_INDEX_PREFIX: "wazuh-alerts-*"
+  # File Integrity Monitoring
+  WAZUH_FIM_DIRECTORIES: "/etc,/usr/bin,/usr/sbin,/bin,/sbin,/boot"
+  # Rootkit Detection
+  WAZUH_ROOTKIT_DETECTION: "yes"
+  # Log Collection
+  WAZUH_LOG_LEVEL: "info"
+  WAZUH_LOG_FORMAT: "json"
+  # Active Response
+  WAZUH_ACTIVE_RESPONSE: "disabled"
+  # ANRT Compliance Logging
+  WAZUH_ANRT_AUDIT_LOGGING: "enabled"
+  WAZUH_ANRT_RETENTION: "2555d"
+  # Custom Rules for Algerian Telecom Threats
+  WAZUH_CUSTOM_RULES: |
+    <group name="algerian_telecom,">
+      <rule id="100001" level="10">
+        <if_sid>5501</if_sid>
+        <field name="srcip">\.dz$</field>
+        <description>Algerian IP Address - Suspicious Activity</description>
+      </rule>
+      <rule id="100002" level="12">
+        <if_sid>5503</if_sid>
+        <field name="data.auth.program">ss7|diameter|sigtran</field>
+        <description>SS7/Diameter Authentication Attempt</description>
+      </rule>
+    </group>
+
+# =============================================================================
+# TheHive SOAR Configuration
+# =============================================================================
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: thehive-config
+  namespace: soc-backend
+  labels:
+    app.kubernetes.io/name: thehive-soar
+    app.kubernetes.io/component: soar
+    app.kubernetes.io/part-of: soc-platform
+  annotations:
+    argocd.argoproj.io/sync-wave: "1"
+data:
+  THEHIVE_HTTP_PORT: "9000"
+  THEHIVE_HTTP_ADDRESS: "0.0.0.0"
+  THEHIVE_SECRET_CONFIG: "${THEHIVE_SECRET}"
+  # Database
+  THEHIVE_DB_PROVIDER: "postgresql"
+  THEHIVE_DB_JDBC_URL: "jdbc:postgresql://soc-postgresql.soc-backend:5432/thehive?sslmode=disable"
+  # Elasticsearch
+  THEHIVE_ES_URL: "http://soc-elasticsearch.soc-backend:9200"
+  # Index Configuration
+  THEHIVE_INDEX_CONFIG: |
+    {
+      "index": {
+        "number_of_shards": 3,
+        "number_of_replicas": 1
+      }
+    }
+  # Playbook Directory
+  THEHIVE_PLAYBOOK_DIRECTORY: "/opt/thehive/playbooks"
+  # ANRT Compliance
+  THEHIVE_AUDIT_ENABLED: "true"
+  THEHIVE_CASE_RETENTION_DAYS: "2555"
+
+# =============================================================================
+# Cortex Analyzer Configuration
+# =============================================================================
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: cortex-config
+  namespace: soc-backend
+  labels:
+    app.kubernetes.io/name: cortex-analyzers
+    app.kubernetes.io/component: soar
+    app.kubernetes.io/part-of: soc-platform
+  annotations:
+    argocd.argoproj.io/sync-wave: "1"
+data:
+  CORTEX_HTTP_PORT: "9001"
+  CORTEX_HTTP_ADDRESS: "0.0.0.0"
+  # Database
+  CORTEX_DB_PROVIDER: "postgresql"
+  CORTEX_DB_JDBC_URL: "jdbc:postgresql://soc-postgresql.soc-backend:5432/cortex?sslmode=disable"
+  # Analyzers Configuration
+  CORTEX_ANALYZERS: |
+    analyzers:
+      - name: MISP_1
+        configuration:
+          url: http://soc-misp.soc-backend:80
+          api_key: ${MISP_API_KEY}
+      - name: OpenCTI_1
+        configuration:
+          opencti_url: http://soc-opencti.soc-backend:8080
+          opencti_token: ${OPENCTI_TOKEN}
+      - name: VirusTotal_GetReport_2
+        configuration:
+          vt_apikey: ${VIRUSTOTAL_API_KEY}
+      - name: AbuseIPDB_2_0
+        configuration:
+          abuseipdb_key: ${ABUSEIPDB_API_KEY}
+
+# =============================================================================
+# MISP Threat Intelligence Configuration
+# =============================================================================
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: misp-config
+  namespace: soc-backend
+  labels:
+    app.kubernetes.io/name: misp-threat-intel
+    app.kubernetes.io/component: threat-intel
+    app.kubernetes.io/part-of: soc-platform
+  annotations:
+    argocd.argoproj.io/sync-wave: "1"
+data:
+  MISP_BASEURL: ""
+  MISP_FQDN: "misp.soc.djezzy.dz"
+  MISP_ORG: "Djezzy National SOC"
+  MISP_ORG_ALT: "Djezzy Telecom Algeria"
+  # Database
+  MISP_DATABASE_HOST: "soc-postgresql.soc-backend"
+  MISP_DATABASE_PORT: "5432"
+  MISP_DATABASE_USER: "misp"
+  MISP_DATABASE_NAME: "misp"
+  # Email (for alerts)
+  MISP_EMAIL: "soc@djezzy.dz"
+  MISP_EMAIL_REPLYTO: "no-reply@djezzy.dz"
+  # Plugin Settings
+  MISP_PLUGIN_ENALBED: "true"
+  MISP_ZMQ_ENABLED: "true"
+  MISP_ZMQ_ENDPOINT: "tcp://0.0.0.0:50000"
+  # ANRT Compliance
+  MISP_PROPOSAL_POLICY: "strict"
+  MISP_SYNCHRONIZE: "true"
+  MISP_TAG_RESTRICTION: "anrt-compliant"
+
+# =============================================================================
+# OpenCTI Configuration
+# =============================================================================
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: opencti-config
+  namespace: soc-backend
+  labels:
+    app.kubernetes.io/name: opencti-threat-intel
+    app.kubernetes.io/component: threat-intel
+    app.kubernetes.io/part-of: soc-platform
+  annotations:
+    argocd.argoproj.io/sync-wave: "1"
+data:
+  OPENCTI_PORT: "8080"
+  OPENCTI_ADMIN_EMAIL: "admin@soc.doc.djezzy.dz"
+  OPENCTI_ADMIN_PASSWORD_PLACEHOLDER: "${OPENCTI_ADMIN_PASSWORD}"
+  # Redis
+  OPENCTI_REDIS_HOSTNAME: "soc-redis-master.soc-backend"
+  OPENCTI_REDIS_PORT: "6379"
+  # Elasticsearch
+  OPENCTI_ELASTICSEARCH_URL: "http://soc-elasticsearch.soc-backend:9200"
+  # RabbitMQ/Queue
+  OPENCTI_QUEUE_BROKER_URL: "amqp://guest:guest@soc-rabbitmq.soc-events:5672"
+  # Workers
+  OPENCTI_WORKERS: "4"
+  # ANRT Compliance
+  OPENCTI_AUTO_ENROLL: "false"
+  OPENCTI_DATA_RETENTION: "2555"
+
+# =============================================================================
+# Suricata NSM Configuration
+# =============================================================================
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: suricata-config
+  namespace: soc-backend
+  labels:
+    app.kubernetes.io/name: suricata-nsm
+    app.kubernetes.io/component: nsm
+    afp.kubernetes.io/part-of: soc-platform
+  annotations:
+    argocd.argoproj.io/sync-wave: "1"
+data:
+  SURICATA_INTERFACE: "eth0"
+  SURICATA_AF_PACKET_THREADS: "4"
+  SURICATA_HOME_NET: "[192.168.0.0/16,10.0.0.0/8,172.16.0.0/12]"
+  SURICATA_EXTERNAL_NET: "!$HOME_NET"
+  # Rule Files
+  SURICATA_RULE_FILES: |
+    - suricata.rules
+    - emerging-threats.rules
+    - djezzy-custom.rules
+  # Detection Settings
+  SURICATA_DETECTION_PCRE_MATCH_LIMIT: "3500"
+  SURICATA_STREAM_DEPTH: "0"
+  # Output Configuration
+  SURICATA_OUTPUT_EVELOG_ENABLED: "yes"
+  SURICATA_OUTPUT_EVELOG_FILENAME: "/var/log/suricata/eve.json"
+  SURICATA_OUTPUT_EVELOG_TYPES: |
+    alert:
+      enabled: yes
+      filetype: regular
+    http:
+      enabled: yes
+    dns:
+      enabled: yes
+    tls:
+      enabled: yes
+    files:
+      enabled: yes
+      force-hash: [md5,sha1,sha256]
+  # Performance Tuning
+  SURICATA_MAX_PENDING_PKTS: "1024"
+  SURICATA_RUNMODE: "workers"
+
+# =============================================================================
+# Zeek NSM Configuration
+# =============================================================================
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: zeek-config
+  namespace: soc-backend
+  labels:
+    app.kubernetes.io/name: zeek-nsm
+    app.kubernetes.io/component: nsm
+    app.kubernetes.io/part-of: soc-platform
+  annotations:
+    argocd.argoproj.io/sync-wave: "1"
+data:
+  ZEEK_CLUSTER_ENABLED: "false"
+  ZEEK_CLUSTERNODE: "worker"
+  ZEEK_MANAGERHOSTNAME: "localhost"
+  ZEEK_INTERFACE: "eth0"
+  ZEEK_LB_METHOD: "custom"
+  ZEEK_LB_PROCS: "4"
+  # Scripts
+  ZEEK_LOCAL_SCRIPTS: |
+    @load protocols/ssh/detect-bruteforcing
+    @load protocols/http/detect-SQL-injection
+    @load frameworks/files/hash-all-files
+    @load policy/protocols/conn/known-hosts
+    @load policy/protocols/conn/unknown-ports
+    # Djezzy Custom Scripts
+    @load ./local/djezzy-telecom.zeek
+    @load ./local/ss7-detection.zeek
+  # Log Rotation
+  ZEEK_LOG_ROTATION_INTERVAL: "3600"
+  ZEEK_MAX_LOG_SIZE: "1GB"
+
+# =============================================================================
+# Arkime (formerly Moloch) Configuration
+# =============================================================================
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: arkime-config
+  namespace: soc-backend
+  labels:
+    app.kubernetes.io/name: arkime-nsm
+    app.kubernetes.io/component: nsm
+    app.kubernetes.io/part-of: soc-platform
+  annotations:
+    argocd.argoproj.io/sync-wave: "1"
+data:
+  ARKIME_INTERFACE: "eth0"
+  ARKIME_NODE_NAME: "arkime-node-1"
+  ARKIME_ELASTICSEARCH: "http://soc-elasticsearch.soc-backend:9200"
+  # Capture Settings
+  ARKIME_PACKET_THREADS: "4"
+  ARKIME_MAX_PACKETS_PER_FILE: "2000000"
+  ARKIME_PCAP_DIR: "/data/pcap"
+  ARKIME_PCAP_WRITE_SIZE: "64MB"
+  # Viewer Settings
+  ARKIME_VIEWER_PORT: "8005"
+  ARKIME_PASSWORD_SECRET_PLACEHOLDER: "${ARKIME_SECRET}"
+  # Free Space Management
+  ARKIME_FREE_SPACE_GB: "500"
+  ARKIME_MIN_FREE_SPACE_GB: "100"
+
+# =============================================================================
+# OpenVAS Vulnerability Scanner Configuration
+# =============================================================================
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: openvas-config
+  namespace: soc-backend
+  labels:
+    app.kubernetes.io/name: openvas-scanner
+    app.kubernetes.io/component: vulnerability
+    app.kubernetes.io/part-of: soc-platform
+  annotations:
+    argocd.argoproj.io/sync-wave: "1"
+data:
+  GVMD_LISTEN_ADDR: "0.0.0.0"
+  GVMD_LISTEN_PORT: "9392"
+  GVMD_MANAGERS: "0"
+  GVMD_SCANNER_TYPE: "OSP"
+  GVMD_SCANNER_HOST: "ospd-openvas.soc-backend"
+  GVMD_SCANNER_PORT: "12321"
+  # Scan Settings
+  OPENVAS_SCAN_SPEED: "normal"
+  OPENVAS_MAX_CONCURRENT_SCANS: "10"
+  OPENVAS_MEMORY_LIMIT: "4GB"
+  # Feed Updates
+  OPENVAS_FEED_SYNC_TIME: "02:00"
+  OPENVAS_NVT_CACHE_TTL: "24h"
+
+# =============================================================================
+# DefectDojo Vulnerability Management Configuration
+# =============================================================================
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: defectdojo-config
+  namespace: soc-backend
+  labels:
+    app.kubernetes.io/name: defectdojo-vuln-mgmt
+    app.kubernetes.io/component: vulnerability
+    app.kubernetes.io/part-of: soc-platform
+  annotations:
+    argocd.argoproj.io/sync-wave: "1"
+data:
+  DD_DATABASE_URL: "postgres://defectdojo:${DD_PASSWORD}@soc-postgresql.soc-backend:5432/defectdojo"
+  DD_SECRET_KEY_PLACEHOLDER: "${DD_SECRET_KEY}"
+  DD_CSRF_TRUSTED_ORIGINS: "https://defectdojo.soc.djezzy.dz"
+  DD_ALLOWED_HOSTS: "defectdojo.soc.djezzy.dz,localhost"
+  DD_DJANGO_SETTINGS_MODULE: "defectdojo.settings.production"
+  # Celery Worker
+  DD_CELERY_BROKER_URL: "redis://soc-redis-master.soc-backend:6379/1"
+  DD_CELERY_RESULT_BACKEND: "redis://soc-redis-master.soc-backend:6379/2"
+  # Integration Endpoints
+  DD_CVSS_SCORE_VERSION: "3.1"
+  DD_ENABLE_SECURITY_LOGGING: "true"
+  DD_ANRT_COMPLIANCE_MODE: "true"
+
+# =============================================================================
+# GRR EDR Configuration
+# =============================================================================
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grr-config
+  namespace: soc-backend
+  labels:
+    app.kubernetes.io/name: grr-edr
+    app.kubernetes.io/component: edr
+    app.kubernetes.io/part-of: soc-platform
+  annotations:
+    argocd.argoproj.io/sync-wave: "1"
+data:
+  GRR_SERVER_NAME: "Djezzy SOC EDR"
+  GRR_FRONTEND_HOST: "0.0.0.0"
+  GRR_FRONTEND_PORT: "8000"
+  GRR_ADMIN_UI_HOST: "0.0.0.0"
+  GRR_ADMIN_UI_PORT: "4443"
+  # Database
+  GRR_MYSQL_HOST: "soc-mysql.soc-backend"
+  GRR_MYSQL_PORT: "3306"
+  GRR_MYSQL_DATABASE: "grr"
+  # Logging
+  GRR_LOG_LEVEL: "INFO"
+  GRR_MAX_LOG_FILE_SIZE: "100MB"
+  GRR_MAX_LOG_FILES: "20"
+  # Client Settings
+  GRR_CLIENT_MAX_POST_SIZE: "100000000"
+  GRR_CLIENT_MAX_POLL_TIMEOUT: "300000"
+  GRR_CLIENT_FOREMAN_CHECK_PERIOD: "10"
+
+# =============================================================================
+# Kong API Gateway Configuration
+# =============================================================================
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: kong-config
+  namespace: soc-backend
+  labels:
+    app.kubernetes.io/name: kong-gateway
+    app.kubernetes.io/component: gateway
+    app.kubernetes.io/part-of: soc-platform
+  annotations:
+    argocd.argoproj.io/sync-wave: "1"
+data:
+  KONG_DATABASE: "off"
+  KONG_DECLARATIVE_CONFIG: "/etc/kong/kong.yml"
+  KONG_NGINX_PROXY_REAL_IP_HEADER: "X-Forwarded-For"
+  KONG_NGINX_PROXY_REAL_IP_RECURSIVE: "on"
+  KONG_PROXY_ACCESS_LOG: /dev/stdout
+  KONG_ADMIN_ACCESS_LOG: /dev/stdout
+  KONG_PROXY_ERROR_LOG: /dev/stderr
+  KONG_ADMIN_ERROR_LOG: /dev/stderr
+  KONG_ADMIN_LISTEN: "0.0.0.0:8001"
+  KONG_ADMIN_GUI_URL: "https://kong-admin.soc.djezzy.dz"
+  # Plugins
+  KONG_PLUGINS: "bundled,rate-limiting,key-auth,acl,jwt,oauth2,correlation-id,request-transformer,response-transformer"
+  # SSL/TLS
+  KONG_SSL_CIPHER_SUITE: "ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384"
+  # Performance
+  KONG_WORKER_PROCESS: "auto"
+  KONG_WORKER_CONNECTIONS: "16384"
+  # Declarative Config
+  kong.yml: |
+    _format_version: "3.0"
+    
+    services:
+      - name: soc-platform-api
+        url: http://soc-platform-api.soc-backend:3000
+        routes:
+          - name: api-route
+            paths:
+              - /api
+            strip_path: true
+            methods:
+              - GET
+              - POST
+              - PUT
+              - DELETE
+            plugins:
+              - name: rate-limiting
+                config:
+                  minute: 1000
+                  policy: local
+                  fault_tolerant: true
+              - name: cors
+                config:
+                  origins:
+                    - https://soc.djezzy.dz
+                  methods:
+                    - GET
+                    - POST
+                    - PUT
+                    - DELETE
+                    - OPTIONS
+                  headers:
+                    - Accept
+                    - Authorization
+                    - Content-Type
+                  credentials: true
+                  max_age: 3600
+      
+      - name: thehive-service
+        url: http://soc-thehive.soc-backend:9000
+        routes:
+          - name: thehive-route
+            paths:
+              - /thehive
+            strip_path: true
+            plugins:
+              - name: key-auth
+                config:
+                  hide_credentials: false
+      
+      - name: misp-service
+        url: http://soc-misp.soc-backend:80
+        routes:
+          - name: misp-route
+            paths:
+              - /misp
+            strip_path: true
+      
+      - name: grafana-service
+        url: http://soc-grafana.soc-monitoring:3000
+        routes:
+          - name: grafana-route
+            paths:
+              - /grafana
+            strip_path: true
+            plugins:
+              - name: jwt
+                config:
+                  secret_is_base64: false
+                  claims_to_verify:
+                    - exp
+
+# =============================================================================
+# Prometheus Monitoring Configuration
+# =============================================================================
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: prometheus-config
+  namespace: soc-monitoring
+  labels:
+    app.kubernetes.io/name: prometheus
+    app.kubernetes.io/component: monitoring
+    app.kubernetes.io/part-of: soc-platform
+  annotations:
+    argocd.argoproj.io/sync-wave: "1"
+data:
+  prometheus.yml: |
+    global:
+      scrape_interval: 15s
+      evaluation_interval: 15s
+      external_labels:
+        cluster: 'djezzy-soc'
+        environment: 'production'
+    
+    rule_files:
+      - '/etc/prometheus/alert_rules.yml'
+    
+    scraping_configs:
+      - job_name: 'kubernetes-pods'
+        kubernetes_sd_configs:
+          - role: pod
+        relabel_configs:
+          - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_scrape]
+            action: keep
+            regex: true
+          - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_path]
+            action: replace
+            target_label: __metrics_path__
+            regex: (.+)
+          - source_labels: [__address__, __meta_kubernetes_pod_annotation_prometheus_io_port]
+            action: replace
+            regex: ([^:]+)(?::\d+)?;(\d+)
+            replacement: $1:$2
+            target_label: __address__
+      
+      - job_name: 'kubernetes-services'
+        kubernetes_sd_configs:
+          - role: service
+        relabel_configs:
+          - source_labels: [__meta_kubernetes_service_annotation_prometheus_io_scrape]
+            action: keep
+            regex: true
+      
+      - job_name: 'kubernetes-nodes'
+        kubernetes_sd_configs:
+          - role: node
+        relabel_configs:
+          - source_labels: [__address__]
+            regex: '(.*):10250'
+            target_label: __address__
+            replacement: '${1}:9100'
+      
+      - job_name: 'kubernetes-cadvisor'
+        kubernetes_sd_configs:
+          - role: node
+        scheme: https
+        tls_config:
+          ca_file: /var/run/secrets/kubernetes.io/serviceaccount/ca.crt
+          insecure_skip_verify: true
+        relabel_configs:
+          - action: labelmap
+            regex: __meta_kubernetes_node_label_(.+)
+          - target_label: __address__
+            replacement: kubernetes.default.svc:443
+          - source_labels: [__meta_kubernetes_node_name]
+            target_label: __metrics_path__
+            replacement: /api/v1/nodes/${1}/proxy/metrics/cadvisor
+
+  alert_rules.yml: |
+    groups:
+      - name: soc_platform_alerts
+        rules:
+          - alert: HighErrorRate
+            expr: rate(http_requests_total{status=~"5.."}[5m]) > 0.1
+            for: 5m
+            labels:
+              severity: critical
+            annotations:
+              summary: "High error rate detected"
+              description: "Error rate is {{ $value }} on {{ $labels.instance }}"
+          
+          - alert: HighMemoryUsage
+            expr: container_memory_usage_bytes / container_spec_memory_limit_bytes > 0.85
+            for: 10m
+            labels:
+              severity: warning
+            annotations:
+              summary: "High memory usage"
+              description: "Container {{ $labels.container }} is using {{ $value }}% of memory"
+          
+          - alert: KafkaConsumerLag
+            expr: kafka_consumer_lag > 10000
+            for: 15m
+            labels:
+              severity: warning
+            annotations:
+              summary: "High Kafka consumer lag"
+              description: "Consumer lag is {{ $value }} messages"
+          
+          - alert: PostgreSQLConnectionPoolExhaustion
+            expr: pg_stat_activity_count / pg_settings_max_connections > 0.85
+            for: 5m
+            labels:
+              severity: critical
+            annotations:
+              summary: "PostgreSQL connection pool nearly exhausted"
+          
+          - alert: SIEMAlertBacklog
+            expr: wazuh_alerts_pending > 10000
+            for: 30m
+            labels:
+              severity: warning
+            annotations:
+              summary: "SIEM alert backlog growing"
+              description: "{{ $value }} pending alerts in Wazuh"
+
+# =============================================================================
+# Grafana Dashboard Configuration
+# =============================================================================
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-config
+  namespace: soc-monitoring
+  labels:
+    app.kubernetes.io/name: grafana
+    app.kubernetes.io/component: monitoring
+    app.kubernetes.io/part-of: soc-platform
+  annotations:
+    argocd.argoproj.io/sync-wave: "1"
+data:
+  GF_SECURITY_ADMIN_USER: "admin"
+  GF_USERS_ALLOW_SIGN_UP: "false"
+  GF_AUTH_ANONYMOUS_ENABLED: "false"
+  GF_SERVER_ROOT_URL: "https://grafana.soc.djezzy.dz"
+  GF_SERVER_DOMAIN: "grafana.soc.djezzy.dz"
+  GF_INSTALL_PLUGINS: "grafana-piechart-panel,grafana-worldmap-panel,grafana-clock-panel,natel-discrete-panel"
+  GF_DATAPROXY_TIMEOUT: "180"
+  GF_LOG_MODE: "console"
+  GF_LOG_LEVEL: "info"
+  # ANRT Compliance
+  GF_AUDIT_LOGGING_ENABLED: "true"
+  GF_AUDIT_LOG_ACTIONS: "export,settings,create,delete,modify"
+
+# =============================================================================
+# Kafka Cluster Configuration
+# =============================================================================
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: kafka-config
+  namespace: soc-events
+  labels:
+    app.kubernetes.io/name: kafka-cluster
+    app.kubernetes.io/component: messaging
+    app.kubernetes.io/part-of: soc-platform
+  annotations:
+    argocd.argoproj.io/sync-wave: "1"
+data:
+  KAFKA_BROKER_ID: "1"
+  KAFKA_NUM_PARTITIONS: "12"
+  KAFKA_DEFAULT_REPLICATION_FACTOR: "3"
+  KAFKA_MIN_INSYNC_REPLICAS: "2"
+  KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: "3"
+  KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: "3"
+  KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: "2"
+  KAFKA_LOG_RETENTION_HOURS: "168"  # 7 days
+  KAFKA_LOG_SEGMENT_BYTES: "1073741824"  # 1GB
+  KAFKA_LOG_RETENTION_CHECK_INTERVAL_MS: "300000"
+  KAFKA_ZOOKEEPER_CONNECT: "soc-zookeeper-headless.soc-events:2181"
+  KAFKA_JMX_PORT: "9999"
+  KAFKA_HEAP_OPTS: "-Xmx4g -Xms4g"
+  # Security
+  KAFKA_SSL_ENABLED: "false"  # Enable with certificates in production
+  KAFKA_SASL_MECHANISM: ""
+  # Topics Configuration
+  KAFKA_TOPICS: |
+    security.alerts:12:3
+    security.events:24:3
+    ss7.signaling:6:3
+    telecom.fraud:6:3
+    threat.intelligence:6:3
+    vulnerability.findings:6:3
+    soar.cases:6:3
+    audit.logs:12:3
+
+# =============================================================================
+# Zookeeper Configuration
+# =============================================================================
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: zookeeper-config
+  namespace: soc-events
+  labels:
+    app.kubernetes.io/name: zookeeper
+    app.kubernetes.io/component: messaging
+    app.kubernetes.io/part-of: soc-platform
+  annotations:
+    argocd.argoproj.io/sync-wave: "1"
+data:
+  ZOOKEEPER_CLIENT_PORT: "2181"
+  ZOOKEEPER_TICK_TIME: "2000"
+  ZOOKEEPER_INIT_LIMIT: "10"
+  ZOOKEEPER_SYNC_LIMIT: "5"
+  ZOOKEEPER_MAX_CLIENT_CNXNS: "60"
+  ZOOKEEPER_HEAP_OPTS: "-Xmx1g -Xms1g"
+  ZOOKEEPER_PURGE_INTERVAL: "24"
+
+# =============================================================================
+# SS7 Module Configuration
+# =============================================================================
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: ss7-module-config
+  namespace: soc-ss7
+  labels:
+    app.kubernetes.io/name: ss7-module
+    app.kubernetes.io/component: ss7-signaling
+    app.kubernetes.io/part-of: soc-platform
+  annotations:
+    argocd.argoproj.io/sync-wave: "1"
+data:
+  # SS7 Collector Configuration
+  SS7_COLLECTOR_INTERFACE: "eth0"
+  SS7_COLLECTOR_PCAP_BUFFER_SIZE: "512MB"
+  SS7_COLLECTOR_FILTER: "m3ua or sccp or tcap or map or isup or diameter"
+  
+  # SS7 Analyzer Configuration
+  SS7_ANALYZER_RULES_PATH: "/etc/ss7/rules"
+  SS7_ANALYZER_OUTPUT_FORMAT: "json"
+  SS7_ANALYZER_KAFKA_TOPIC: "ss7.signaling"
+  SS7_ANALYZER_ALERT_THRESHOLD: "high"
+  
+  # Diameter Monitor Configuration
+  DIAMETER_MONITOR_ORIGIN_HOST: "soc.djezzy.dz"
+  DIAMETER_MONITOR_ORIGIN_REALM: "djezzy.dz"
+  DIAMETER_MONITOR_VENDOR_ID: "28608"  # Djezzy vendor ID placeholder
+  DIAMETER_MONITOR_PRODUCT_NAME: "Djezzy-SOC-Diameter-Monitor"
+  
+  # Common Settings
+  SS7_MODULE_LOG_LEVEL: "info"
+  SS7_MODULE_METRICS_PORT: "9100"
+  SS7_MODULE_KAFKA_BROKERS: "soc-kafka-0.soc-events:9092,soc-kafka-1.soc-events:9092,soc-kafka-2.soc-events:9092"
+  # ANRT Compliance
+  SS7_MODULE_ANRT_LOG_ALL_MESSAGES: "true"
+  SS7_MODULE_DATA_RETENTION_DAYS: "2555"
+
+# =============================================================================
+# Redis Configuration
+# =============================================================================
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: redis-config
+  namespace: soc-backend
+  labels:
+    app.kubernetes.io/name: redis
+    app.kubernetes.io/component: cache
+    app.kubernetes.io/part-of: soc-platform
+  annotations:
+    argocd.argoproj.io/sync-wave: "1"
+data:
+  redis.conf: |
+    bind 0.0.0.0
+    port 6379
+    requirepass ${REDIS_PASSWORD}
+    maxmemory 4gb
+    maxmemory-policy allkeys-lru
+    save 900 1
+    save 300 10
+    save 60 10000
+    appendonly yes
+    appendfsync everysec
+    tcp-backlog 511
+    timeout 0
+    tcp-keepalive 300
+    loglevel notice
+    databases 16

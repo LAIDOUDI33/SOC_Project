@@ -1,0 +1,746 @@
+# Djezzy SOC Platform - Multi-Layer Redis Cache Strategy
+# 
+# Architecture: L1 Browser -> L2 CDN/Edge -> L3 Redis Cluster -> L4 Database
+# Target: 95%+ cache hit rate, <1ms L1/L2 latency, <5ms L3 latency
+# Scale: 10K concurrent users, 500K EPS ingestion
+#
+# @version 2.0.0
+# @author Djezzy SOC Platform Team
+
+version: '3.8'
+
+redis-cache-strategy:
+  # ============================================================
+  # MULTI-LAYER CACHE ARCHITECTURE (L1-L4)
+  # ============================================================
+  layers:
+    # ----------------------------------------------------------
+    # L1: BROWSER CACHE (Client-Side)
+    # ----------------------------------------------------------
+    l1_browser:
+      name: "Browser Cache"
+      layer: 1
+      description: "Client-side caching for static assets and API responses"
+      enabled: true
+      technology: "HTTP Cache Headers + Service Worker"
+      
+      ttl:
+        static_assets:
+          js_css: 86400           # 24 hours for JS/CSS (with hash versioning)
+          images: 2592000         # 30 days for images (with content hash)
+          fonts: 31536000         # 1 year for fonts (immutable)
+          icons: 604800           # 7 days for SVG icons
+        api_responses:
+          public_api: 60          # 1 minute for public endpoints
+          dashboard_data: 30      # 30 seconds for real-time data
+          reference_data: 3600    # 1 hour for reference/lookup data
+          
+      headers:
+        cache_control: "public, max-age=AGE, immutable"
+        stale_while_revalidate: "86400"    # Serve stale for 24h while refreshing
+        stale_if_error: "3600"             # Serve stale for 1h on error
+        vary: "Accept-Encoding, Authorization"
+        
+      service_worker:
+        enabled: true
+        strategy: "StaleWhileRevalidate"
+        cache_names:
+          static: "djezzy-soc-static-v2"
+          dynamic: "djezzy-soc-dynamic-v2"
+          api: "djezzy-soc-api-v2"
+          images: "djezzy-soc-images-v2"
+
+    # ----------------------------------------------------------
+    # L2: CDN / EDGE CACHE
+    # ----------------------------------------------------------
+    l2_cdn:
+      name: "CDN Edge Cache"
+      layer: 2
+      description: "Geographically distributed edge caching for low-latency access"
+      enabled: true
+      provider: "cloudflare"
+      
+      locations:
+        primary:
+          city: "Algiers"
+          country: "DZ"
+          priority: 1
+          latency_target_ms: "<20ms for Algeria users"
+        secondary:
+          - city: "Paris"
+            country: "FR"
+            priority: 2
+            latency_target_ms: "<80ms for Europe"
+        tertiary:
+          - city: "Dubai"
+            country: "AE"
+            priority: 3
+            latency_target_ms: "<100ms for MENA"
+            
+      ttl:
+        static_content: 2592000     # 30 days (versioned)
+        api_public: 300            # 5 minutes for public API
+        api_authenticated: 0       # No cache (pass-through)
+        images_optimized: 604800   # 7 days with optimization
+        api_metrics: 60            # 1 minute for metrics
+        
+      features:
+        enabled:
+          - "Argo Smart Routing"
+          - "Tiered Caching"
+          - "Polish Image Optimization"
+          - "Rocket Loader"
+          - "Brotli Compression"
+          - "Early Hints"
+          - "HTTP/3 (QUIC)"
+        disabled:
+          - "Caching for authenticated routes"
+          - "Caching for real-time alerts"
+          
+      rate_limiting:
+        enabled: true
+        rules:
+          - name: "Global Rate Limit"
+            limit: "10000 requests/minute"
+            action: "throttle"
+          - name: "API Rate Limit"
+            paths: ["/api/*"]
+            limit: "1000 requests/minute"
+            action: "rate_limit_response"
+          - name: "Login Protection"
+            paths: ["/api/auth/*", "/auth/*"]
+            limit: "10 requests/minute"
+            action: "challenge"
+
+    # ----------------------------------------------------------
+    # L3: REDIS CLUSTER CACHE (Application Layer)
+    # ----------------------------------------------------------
+    l3_redis:
+      name: "Redis Cluster Cache"
+      layer: 3
+      description: "Distributed in-memory cache for application-level data"
+      enabled: true
+      mode: "cluster"
+      
+      cluster_config:
+        nodes: 6                   # 3 master + 3 replica
+        slots: 16384               # Standard Redis cluster slots
+        replication_factor: 1       # Each master has 1 replica
+        
+      node_specification:
+        memory_per_node: "32gb"    # Total ~192GB across cluster
+        cpu_per_node: 8 cores
+        network: "10Gbps dedicated"
+        
+      redis_configuration:
+        maxmemory_policy: "allkeys-lru"
+        maxmemory: "28gb"          # Leave headroom (32GB total)
+        
+        # Persistence configuration
+        save_interval: "900 1"     # RDB snapshot every 15min if 1+ changes
+        save_interval_2: "300 10"  # RDB snapshot every 5min if 10+ changes
+        save_interval_3: "60 10000" # RDB snapshot every minute if 10K+ changes
+        
+        appendonly: "yes"          # AOF persistence enabled
+        appendfsync: "everysec"    # Sync AOF every second (balance safety/perf)
+        auto_aof_rewrite_percentage: "100"
+        auto_aof_rewrite_min_size: "64mb"
+        
+        # Connection management
+        tcp_keepalive: "400"
+        timeout: "0"               # No blocking on connections
+        maxclients: "15000"        # Support 10K users + overhead
+        tcp_backlog: "65535"
+        
+        # Performance tuning
+        io_threads: "8"            # Match CPU cores
+        lazy_free_lazy_eviction: "yes"
+        lazy_free_lazy_expire: "yes"
+        lazy_free_lazy_server_del: "yes"
+        
+      memory_management:
+        eviction_policy: "allkeys-lru"
+        sample_size: 5             # LRU sampling size
+        max_memory_policy: "volatile-lru"
+        
+      # Node topology for Djezzy SOC deployment
+      topology:
+        - id: "redis-master-1"
+          host: "redis-cluster-node-1.djezzy-soc.internal"
+          port: 6379
+          role: "master"
+          slots: [0, 5461]
+          zone: "algiers-a"
+          
+        - id: "redis-master-2"
+          host: "redis-cluster-node-2.djezzy-soc.internal"
+          port: 6379
+          role: "master"
+          slots: [5462, 10922]
+          zone: "algiers-b"
+          
+        - id: "redis-master-3"
+          host: "redis-cluster-node-3.djezzy-soc.internal"
+          port: 6379
+          role: "master"
+          slots: [10923, 16383]
+          zone: "algiers-c"
+          
+        - id: "redis-replica-1"
+          host: "redis-cluster-node-4.djezzy-soc.internal"
+          port: 6379
+          role: "replica"
+          of: "redis-master-1"
+          priority: 100
+          zone: "oran-dr"
+          
+        - id: "redis-replica-2"
+          host: "redis-cluster-node-5.djezzy-soc.internal"
+          port: 6379
+          role: "replica"
+          of: "redis-master-2"
+          priority: 100
+          zone: "constantine-dr"
+          
+        - id: "redis-replica-3"
+          host: "redis-cluster-node-6.djezzy-soc.internal"
+          port: 6379
+          role: "replica"
+          of: "redis-master-3"
+          priority: 100
+          zone: "annaba-dr"
+
+    # ----------------------------------------------------------
+    # L4: DATABASE QUERY CACHE
+    # ----------------------------------------------------------
+    l4_database:
+      name: "Database Query Cache"
+      layer: 4
+      description: "PostgreSQL internal query result and plan caching"
+      enabled: true
+      
+      postgresql_cache_settings:
+        shared_buffers: "16gb"              # ~25% of available RAM
+        effective_cache_size: "48gb"        # ~75% of available RAM
+        work_mem: "256mb"                   # Per-operation memory
+        maintenance_work_mem: "2gb"         # Maintenance operations
+        huge_pages: "try"                   # Use huge pages if available
+        
+        # Query planner cache
+        plan_cache_mode: "auto"
+        prepared_statements: true
+        statement_timeout: "30s"
+        
+        # Result caching
+        effective_io_concurrency: 200       # For SSD storage
+
+  # ============================================================
+  # CACHE KEY STRATEGY
+  # ============================================================
+  key_patterns:
+    format: "{prefix}:{tenant_id}:{resource}:{identifier}:{version}"
+    
+    prefixes:
+      session: "sess"
+      user_data: "user"
+      user_permissions: "uperm"
+      alerts: "alert"
+      alert_count: "alertcnt"
+      incidents: "inc"
+      incident_timeline: "inctl"
+      events: "evt"
+      event_aggregates: "evtagg"
+      metrics: "metric"
+      kpi: "kpi"
+      permissions: "perm"
+      roles: "role"
+      rate_limit: "rl"
+      throttle: "throt"
+      threat_intel: "ti"
+      geoip: "geo"
+      compliance: "comp"
+      report: "rpt"
+      dashboard_widget: "dw"
+      
+    examples:
+      - "alert:djezzy:active:list:v1"
+      - "user:12345:permissions:v2"
+      - "metric:djezzy:dashboard:2024011510:v1"
+      - "kpi:djezzy:mttr:202401:v1"
+      - "ti:ioc:ip:1.2.3.4:v1"
+
+  # ============================================================
+  # TTL POLICIES BY DATA TYPE
+  # ============================================================
+  ttl_policies:
+    # ----------------------------------------
+    # SECURITY-SENSITIVE DATA (Short TTL)
+    # ----------------------------------------
+    authentication_tokens:
+      ttl: 1800                    # 30 minutes
+      refresh_on_access: true
+      sliding_expiration: true
+      layer: "l3_redis"
+      
+    user_sessions:
+      ttl: 3600                    # 1 hour idle timeout
+      absolute_timeout: 28800      # 8 hour max session
+      activity_tracking: true
+      layer: "l3_redis"
+      
+    user_permissions:
+      ttl: 600                     # 10 minutes
+      invalidate_on_change: true
+      layer: "l3_redis"
+      
+    mfa_state:
+      ttl: 300                     # 5 minutes
+      single_use: false
+      layer: "l3_redis"
+      
+    rate_limit_counters:
+      ttl: 60                      # 1 minute window
+      sliding_window: true
+      layer: "l3_redis"
+      
+    csrf_tokens:
+      ttl: 3600                    # 1 hour
+      rotate_on_use: true
+      layer: "l3_redis"
+      
+    # ----------------------------------------
+    # OPERATIONAL DATA (Medium TTL)
+    # ----------------------------------------
+    active_alerts:
+      ttl: 30                      # 30 seconds - near real-time
+      strategy: "write_through"
+      invalidation: "event_driven"
+      layer: "l3_redis"
+      cdn_ttl: 0                   # No CDN caching
+      
+    alert_details:
+      ttl: 300                     # 5 minutes
+      strategy: "lazy_loading"
+      background_refresh: true
+      layer: "l3_redis"
+      cdn_ttl: 60                  # 1 min at edge
+      
+    incident_list:
+      ttl: 120                     # 2 minutes
+      strategy: "cache_aside"
+      layer: "l3_redis"
+      cdn_ttl: 60
+      
+    incident_details:
+      ttl: 600                     # 10 minutes
+      tags: ["incident:{id}"]
+      layer: "l3_redis"
+      cdn_ttl: 120
+      
+    event_counts:
+      ttl: 60                      # 1 minute
+      granularity: "1m"
+      layer: "l3_redis"
+      cdn_ttl: 30
+      
+    event_search_results:
+      ttl: 180                     # 3 minutes
+      strategy: "cache_aside"
+      layer: "l3_redis"
+      cdn_ttl: 0
+      
+    # ----------------------------------------
+    # ANALYTICS & METRICS (Longer TTL with Refresh)
+    # ----------------------------------------
+    dashboard_metrics:
+      ttl: 60                      # 1 minute
+      refresh_strategy: "scheduled"
+      schedule: "*/1 * * * *"      # Every minute
+      layer: "l3_redis"
+      cdn_ttl: 30
+      
+    kpi_summary:
+      ttl: 300                     # 5 minutes
+      aggregation_window: "5m"
+      layer: "l3_redis"
+      cdn_ttl: 120
+      
+    historical_stats:
+      ttl: 3600                    # 1 hour
+      granularity: "hourly"
+      layer: "l3_redis"
+      cdn_ttl: 900                 # 15 min at edge
+      
+    trend_data:
+      ttl: 1800                    # 30 minutes
+      granularity: "daily"
+      layer: "l3_redis"
+      cdn_ttl: 1800                # 30 min at edge
+      
+    correlation_results:
+      ttl: 600                     # 10 minutes
+      layer: "l3_redis"
+      cdn_ttl: 0
+      
+    ml_predictions:
+      ttl: 900                     # 15 minutes
+      model_version_aware: true
+      layer: "l3_redis"
+      cdn_ttl: 300
+      
+    # ----------------------------------------
+    # REFERENCE DATA (Very Long TTL)
+    # ----------------------------------------
+    lookup_tables:
+      ttl: 86400                   # 24 hours
+      strategy: "eager_loading"
+      preload_at_startup: true
+      layer: "l3_redis"
+      cdn_ttl: 86400               # Full day at CDN
+      
+    threat_intel_feeds:
+      ttl: 1800                    # 30 minutes
+      external_source: true
+      refresh_async: true
+      layer: "l3_redis"
+      cdn_ttl: 600                 # 10 min at edge
+      
+    ioc_database:
+      ttl: 3600                    # 1 hour
+      incremental_updates: true
+      layer: "l3_redis"
+      cdn_ttl: 1800
+      
+    geoip_data:
+      ttl: 604800                  # 7 days
+      bulk_load: true
+      layer: "l3_redis"
+      cdn_ttl: 604800              
+      
+    compliance_frameworks:
+      ttl: 43200                   # 12 hours
+      version_aware: true
+      layer: "l3_redis"
+      cdn_ttl: 21600               # 6 hours at edge
+      
+    user_directory:
+      ttl: 3600                    # 1 hour
+      sync_with_ldap: true
+      layer: "l3_redis"
+      cdn_ttl: 1800
+      
+    playbooks:
+      ttl: 86400                   # 24 hours
+      version_controlled: true
+      layer: "l3_redis"
+      cdn_ttl: 43200               # 12 hours at edge
+      
+    runbook_templates:
+      ttl: 43200                   # 12 hours
+      layer: "l3_redis"
+      cdn_ttl: 21600
+
+  # ============================================================
+  # CACHE INVALIDATION RULES
+  # ============================================================
+  invalidation:
+    strategies:
+      immediate:
+        description: "Invalidate immediately on data change via pub/sub"
+        use_cases:
+          - "user_permissions"
+          - "authentication_events"
+          - "alert_status_changes"
+          - "incident_updates"
+          - "session_termination"
+        implementation: "redis_pubsub"
+        channels:
+          - "cache:invalidate"
+          - "soc:{entity}:changed"
+          
+      time_based:
+        description: "Let TTL expire naturally"
+        use_cases:
+          - "metrics_snapshots"
+          - "historical_aggregates"
+          - "trend_data"
+        implementation: "redis_ttl"
+        
+      version_based:
+        description: "Use cache version keys for atomic invalidation"
+        use_cases:
+          - "dashboard_widgets"
+          - "report_templates"
+          - "playbooks"
+        implementation: "version_key_increment"
+        version_key_prefix: "cacheversion"
+        
+      tag_based:
+        description: "Invalidate by associated tags"
+        use_cases:
+          - "related_alerts"
+          - "incident_timeline"
+          - "threat_actor_campaigns"
+        implementation: "tag_set_invalidation"
+        max_tags_per_key: 50
+    
+    # Event-driven invalidation triggers
+    triggers:
+      on_alert_created:
+        actions:
+          - invalidate: "alert:*:list:*"
+          - increment: "cacheversion:alerts"
+          - publish: "alerts:updated"
+          - push_to_cdn: "/api/alerts*"
+          
+      on_alert_updated:
+        actions:
+          - invalidate: "alert:{id}:*"
+          - invalidate: "alert:*:summary:*"
+          - publish: "alert:{id}:updated"
+          - purge_cdn: "/api/alerts/{id}*"
+          
+      on_alert_acknowledged:
+        actions:
+          - invalidate: "alert:*:active:*"
+          - invalidate: "alertcnt:*"
+          - publish: "alerts:acknowledged"
+          
+      on_incident_created:
+        actions:
+          - invalidate: "inc:*:list:*"
+          - invalidate: "metric:*:incident_count:*"
+          - increment: "cacheversion:incidents"
+          - publish: "incidents:updated"
+          
+      on_incident_status_changed:
+        actions:
+          - invalidate: "inc:{id}:*"
+          - invalidate: "inc:*:status:*"
+          - invalidate: "kpi:*:incidents:*"
+          - publish: "incident:{id}:updated"
+          
+      on_incident_task_updated:
+        actions:
+          - invalidate: "inc:{id}:timeline:*"
+          - invalidate: "inctl:{id}:*"
+          
+      on_user_login:
+        actions:
+          - set: "user:{id}:last_login"
+          - invalidate: "user:{id}:sessions:*"
+          
+      on_user_permission_changed:
+        actions:
+          - invalidate: "user:{user_id}:perm:*"
+          - invalidate: "user:{user_id}:roles:*"
+          - publish: "user:{user_id}:permissions_changed"
+          
+      on_threat_intel_update:
+        actions:
+          - invalidate: "ioc:{type}:{value}:*"
+          - publish: "threatintel:updated"
+          
+      on_compliance_check_complete:
+        actions:
+          - invalidate: "comp:*:status:*"
+          - invalidate: "comp:*:score:*"
+          - publish: "compliance:updated"
+
+  # ============================================================
+  # HIGH-AVAILABILITY CONFIGURATION
+  # ============================================================
+  high_availability:
+    failover_mode: "automatic"
+    failover_timeout_ms: 10000      # 10 seconds
+    quorum: 2                       # Need 2 of 3 masters to agree
+    
+    sentinel:
+      enabled: true
+      nodes: 3
+      down_after_milliseconds: 5000
+      failover_timeout_ms: 10000
+      parallel_syncs: 1
+      sentinel_ports: [26379, 26380, 26381]
+      
+    cross_dc_replication:
+      enabled: true
+      primary_dc: "algiers-datacenter"
+      secondary_dc: "oran-dr-site"
+      replication_mode: "async"
+      acceptable_lag_seconds: 5
+      rdb_sync_enabled: true
+      
+    backup:
+      enabled: true
+      schedule: "0 2 * * *"        # Daily at 2 AM
+      retention_days: 30
+      encryption: "aes256-gcm"
+      destination: "s3://djezzy-soc-backups/redis/"
+
+  # ============================================================
+  # MONITORING & ALERTING
+  # ============================================================
+  monitoring:
+    metrics_collection_interval_seconds: 10
+    slowlog_threshold_ms: 1000
+    
+    dashboards:
+      - "Redis Cluster Overview"
+      - "Cache Hit Rate Analysis"
+      - "Memory Usage Trends"
+      - "Latency Percentiles"
+      - "Replication Lag"
+      
+    alerts:
+      - metric: "memory_usage_percent"
+        threshold_warning: 85
+        threshold_critical: 95
+        severity: "warning"
+        action: "notify_ops"
+        message: "Redis node memory usage {value}% exceeds threshold"
+        
+      - metric: "memory_usage_percent"
+        threshold_critical: 95
+        severity: "critical"
+        action: "scale_or_evict"
+        message: "CRITICAL: Redis memory at {value}% - immediate action required"
+        
+      - metric: "connection_count"
+        threshold_warning: 13000
+        threshold_critical: 14500
+        severity: "warning"
+        action: "review_connections"
+        message: "Redis connections ({value}) approaching maxclients"
+        
+      - metric: "cache_hit_rate"
+        threshold_warning: 90
+        threshold_critical: 80
+        severity: "warning"
+        action: "investigate_misses"
+        message: "Cache hit rate dropped to {value}%"
+        
+      - metric: "command_latency_p99"
+        threshold_warning: 5
+        threshold_critical: 10
+        unit: "ms"
+        severity: "critical"
+        action: "investigate_performance"
+        message: "Redis P99 latency at {value}ms - performance degradation"
+        
+      - metric: "replication_lag_bytes"
+        threshold_warning: 10485760     # 10MB
+        threshold_critical: 52428800   # 50MB
+        severity: "warning"
+        action: "check_replication"
+        message: "Replication lag at {value} bytes"
+        
+      - metric: "cluster_available_slots"
+        threshold_warning: 16000
+        threshold_critical: 15000
+        severity: "critical"
+        action: "cluster_health_check"
+        message: "Only {value} of 16384 slots covered"
+        
+      - metric: "evicted_keys_per_second"
+        threshold_warning: 1000
+        threshold_critical: 10000
+        severity: "warning"
+        action: "review_memory"
+        message: "High eviction rate: {value} keys/sec"
+
+  # ============================================================
+  # SECURITY CONFIGURATION
+  # ============================================================
+  security:
+    tls:
+      enabled: true
+      cert_path: "/etc/ssl/certs/djezzy-redis.crt"
+      key_path: "/etc/ssl/private/djezzy-redis.key"
+      ca_path: "/etc/ssl/certs/djezzy-ca.crt"
+      require_client_certs: true
+      min_tls_version: "TLSv1.2"
+      cipher_suits: "ECDHE-RSA-AES256-GCM-SHA384:ECDHE-RSA-AES128-GCM-SHA256"
+      
+    acl:
+      enabled: true
+      default_user: "blocked"
+      users:
+        - username: "soc_app_readonly"
+          password: "${REDIS_APP_RO_PASS}"
+          enabled: true
+          commands: ["@read", "+ping", "+info"]
+          keys: "*"
+          categories: []
+          
+        - username: "soc_app_readwrite"
+          password: "${REDIS_APP_RW_PASS}"
+          enabled: true
+          commands: ["@all", "-@admin", "-@dangerous", "-debug", "-flushdb", "-flushall", "-keys", "-config"]
+          keys: "*"
+          categories: []
+          
+        - username: "soc_admin"
+          password: "${REDIS_ADMIN_PASS}"
+          enabled: true
+          commands: ["@all"]
+          keys: "*"
+          categories: []
+          
+        - username: "monitoring"
+          password: "${REDIS_MONITOR_PASS}"
+          enabled: true
+          commands: ["@read", "+ping", "+info", "+client", "+cluster"]
+          keys: "*"
+          categories: []
+          
+    network:
+      allowed_cidrs:
+        - "10.0.0.0/8"              # Internal network
+        - "172.16.0.0/12"           # Private network
+        - "192.168.0.0/16"         # Local network
+        - "100.64.0.0/10"          # Cloud internal
+      bind_interface: "eth0"
+      port: 6379
+      protected_mode: "yes"
+      requirepass: "${REDIS_REQUIRE_PASSWORD}"
+      
+    audit_log:
+      enabled: true
+      path: "/var/log/redis/audit.log"
+      log_commands: ["AUTH", "CONFIG", "FLUSHDB", "FLUSHALL", "KEYS", "DEL"]
+
+  # ============================================================
+  # PERFORMANCE TUNING PARAMETERS
+  # ============================================================
+  performance:
+    threading:
+      main_threads: 8
+      bio_threads: 4               # Background I/O threads
+      aio_threads: 2               # Async I/O threads
+      
+    networking:
+      tcp_backlog: 511
+      somaxconn: 65535
+      keepalive: 300
+      client_output_buffer_limit_normal: "0 0 0"
+      client_output_buffer_limit_replica: "256mb 64mb 300"
+      client_output_buffer_limit_pubsub: "32mb 8mb 60"
+      hz: 10                       # Background tasks frequency
+      
+    persistence:
+      rdb_compression: "yes"
+      rdb_checksum: "yes"
+      stop_writes_on_bgsave_error: "yes"
+      
+    memory_optimization:
+      hash_max_listpack_entries: 512
+      list_max_listpack_size: -2
+      set_max_intset_entries: 512
+      zset_max_listpack_entries: 128
+      zset_max_listpack_value: 64
+      
+    active_rehashing: "yes"
+    lazyfree_lazy_eviction: "yes"
+    lazyfree_lazy_expire: "yes"
+    lazyfree_lazy_server_del: "yes"

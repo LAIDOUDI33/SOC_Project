@@ -1,0 +1,671 @@
+# =============================================================================
+# Djezzy National SOC Platform - Network Policies
+# =============================================================================
+# Strict Zero-Trust Network Isolation | NSA K8s Hardening Guide
+# ANRT Compliance for Algerian Telecom Security Regulations
+# =============================================================================
+
+# =============================================================================
+# DEFAULT DENY ALL POLICY - Frontend Namespace
+# =============================================================================
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-all-ingress
+  namespace: soc-frontend
+  labels:
+    app.kubernetes.io/name: djezzy-soc
+    app.kubernetes.io/component: network-policy
+    policy.djezzy.soc/type: deny-all
+  annotations:
+    description: "Default deny all ingress traffic in frontend namespace"
+spec:
+  podSelector: {}
+  policyTypes:
+  - Ingress
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-all-egress
+  namespace: soc-frontend
+  labels:
+    app.kubernetes.io/name: djezzy-soc
+    app.kubernetes.io/component: network-policy
+    policy.djezzy.soc/type: deny-all
+  annotations:
+    description: "Default deny all egress traffic in frontend namespace"
+spec:
+  podSelector: {}
+  policyTypes:
+  - Egress
+
+# =============================================================================
+# FRONTEND NAMESPACE - Allow Kong Gateway Ingress
+# =============================================================================
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-kong-ingress
+  namespace: soc-frontend
+  labels:
+    app.kubernetes.io/name: djezzy-soc
+    app.kubernetes.io/component: network-policy
+    policy.djezzy.soc/type: allow-ingress
+  annotations:
+    description: "Allow ingress from Kong API Gateway"
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/part-of: soc-platform
+  policyTypes:
+  - Ingress
+  ingress:
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: soc-backend
+      podSelector:
+        matchLabels:
+          app.kubernetes.io/name: kong-gateway
+    ports:
+    - protocol: TCP
+      port: 3000
+    - protocol: TCP
+      port: 443
+
+# =============================================================================
+# FRONTEND NAMESPACE - Allow Egress to Backend
+# =============================================================================
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-frontend-to-backend
+  namespace: soc-frontend
+  labels:
+    app.kubernetes.io/name: djezzy-soc
+    app.kubernetes.io/component: network-policy
+    policy.djezzy.soc/type: allow-egress
+  annotations:
+    description: "Allow egress from frontend to backend services"
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/part-of: soc-platform
+  policyTypes:
+  - Egress
+  egress:
+  - to:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: soc-backend
+    ports:
+    - protocol: TCP
+      port: 8080
+    - protocol: TCP
+      port: 8443
+  - to:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: soc-monitoring
+      podSelector:
+        matchLabels:
+          app.kubernetes.io/name: prometheus
+    ports:
+    - protocol: TCP
+      port: 9090
+
+# =============================================================================
+# DEFAULT DENY ALL POLICY - Backend Namespace
+# =============================================================================
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-all-ingress
+  namespace: soc-backend
+  labels:
+    app.kubernetes.io/name: djezzy-soc
+    app.kubernetes.io/component: network-policy
+    policy.djezzy.soc/type: deny-all
+spec:
+  podSelector: {}
+  policyTypes:
+  - Ingress
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-all-egress
+  namespace: soc-backend
+  labels:
+    app.kubernetes.io/name: djezzy-soc
+    app.kubernetes.io/component: network-policy
+    policy.djezzy.soc/type: deny-all
+spec:
+  podSelector: {}
+  policyTypes:
+  - Egress
+
+# =============================================================================
+# BACKEND NAMESPACE - Kong Gateway Access Rules
+# =============================================================================
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-kong-to-services
+  namespace: soc-backend
+  labels:
+    app.kubernetes.io/name: djezzy-soc
+    app.kubernetes.io/component: network-policy
+    policy.djezzy.soc/type: allow-kong
+  annotations:
+    description: "Allow Kong gateway to reach all backend services"
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/part-of: soc-platform
+  policyTypes:
+  - Ingress
+  ingress:
+  - from:
+    - podSelector:
+        matchLabels:
+          app.kubernetes.io/name: kong-gateway
+    ports:
+    - protocol: TCP
+      port: 8080
+    - protocol: TCP
+      port: 8443
+
+# =============================================================================
+# BACKEND NAMESPACE - Service Mesh Internal Communication
+# =============================================================================
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-backend-internal
+  namespace: soc-backend
+  labels:
+    app.kubernetes.io/name: djezzy-soc
+    app.kubernetes.io/component: network-policy
+    policy.djezzy.soc/type: allow-internal
+  annotations:
+    description: "Allow internal communication between SOC platform components"
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/part-of: soc-platform
+  policyTypes:
+  - Ingress
+  - Egress
+  ingress:
+  - from:
+    - podSelector:
+        matchLabels:
+          app.kubernetes.io/part-of: soc-platform
+  egress:
+  - to:
+    - podSelector:
+        matchLabels:
+          app.kubernetes.io/part-of: soc-platform
+
+# =============================================================================
+# BACKEND NAMESPACE - Database Access Policy
+# =============================================================================
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-postgresql-access
+  namespace: soc-backend
+  labels:
+    app.kubernetes.io/name: djezzy-soc
+    app.kubernetes.io/component: network-policy
+    policy.djezzy.soc/type: database-access
+  annotations:
+    description: "Strict PostgreSQL access control - only allowed services"
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: postgresql
+  policyTypes:
+  - Ingress
+  ingress:
+  - from:
+    # Wazuh SIEM
+    - podSelector:
+        matchLabels:
+          app.kubernetes.io/name: wazuh-manager
+    # TheHive SOAR
+    - podSelector:
+        matchLabels:
+          app.kubernetes.io/name: thehive
+    # Cortex
+    - podSelector:
+        matchLabels:
+          app.kubernetes.io/name: cortex
+    # MISP
+    - podSelector:
+        matchLabels:
+          app.kubernetes.io/name: misp
+    # OpenCTI
+    - podSelector:
+        matchLabels:
+          app.kubernetes.io/name: opencti
+    # Next.js Application
+    - podSelector:
+        matchLabels:
+          app.kubernetes.io/name: soc-platform-api
+    ports:
+    - protocol: TCP
+      port: 5432
+
+# =============================================================================
+# BACKEND NAMESPACE - Elasticsearch Access Policy
+# =============================================================================
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-elasticsearch-access
+  namespace: soc-backend
+  labels:
+    app.kubernetes.io/name: djezzy-soc
+    app.kubernetes.io/component: network-policy
+    policy.djezzy.soc/type: database-access
+  annotations:
+    description: "Elasticsearch access control for SIEM and NSM tools"
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: elasticsearch
+  policyTypes:
+  - Ingress
+  ingress:
+  - from:
+    - podSelector:
+        matchLabels:
+          app.kubernetes.io/name: wazuh-manager
+    - podSelector:
+        matchLabels:
+          app.kubernetes.io/name: suricata
+    - podSelector:
+        matchLabels:
+          app.kubernetes.io/name: zeek
+    - podSelector:
+        matchLabels:
+          app.kubernetes.io/name: arkime
+    - podSelector:
+        matchLabels:
+          app.kubernetes.io/name: wazuh-dashboard
+    ports:
+    - protocol: TCP
+      port: 9200
+
+# =============================================================================
+# BACKEND NAMESPACE - Redis Access Policy
+# =============================================================================
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-redis-access
+  namespace: soc-backend
+  labels:
+    app.kubernetes.io/name: djezzy-soc
+    app.kubernetes.io/component: network-policy
+    policy.djezzy.soc/type: cache-access
+  annotations:
+    description: "Redis access control for caching layer"
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: redis
+  policyTypes:
+  - Ingress
+  ingress:
+  - from:
+    - podSelector:
+        matchLabels:
+          app.kubernetes.io/name: soc-platform-api
+    - podSelector:
+        matchLabels:
+          app.kubernetes.io/name: thehive
+    - podSelector:
+        matchLabels:
+          app.kubernetes.io/name: cortex
+    - podSelector:
+        matchLabels:
+          app.kubernetes.io/name: opencti
+    - podSelector:
+        matchLabels:
+          app.kubernetes.io/name: kong-gateway
+    ports:
+    - protocol: TCP
+      port: 6379
+
+# =============================================================================
+# EVENTS NAMESPACE - Default Deny
+# =============================================================================
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-all-ingress
+  namespace: soc-events
+  labels:
+    app.kubernetes.io/name: djezzy-soc
+    app.kubernetes.io/component: network-policy
+    policy.djezzy.soc/type: deny-all
+spec:
+  podSelector: {}
+  policyTypes:
+  - Ingress
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-all-egress
+  namespace: soc-events
+  labels:
+    app.kubernetes.io/name: djezzy-soc
+    app.kubernetes.io/component: network-policy
+    policy.djezzy.soc/type: deny-all
+spec:
+  podSelector: {}
+  policyTypes:
+  - Egress
+
+# =============================================================================
+# EVENTS NAMESPACE - Kafka Cluster Communication
+# =============================================================================
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-kafka-cluster
+  namespace: soc-events
+  labels:
+    app.kubernetes.io/name: djezzy-soc
+    app.kubernetes.io/component: network-policy
+    policy.djezzy.soc/type: kafka-cluster
+  annotations:
+    description: "Kafka broker cluster internal communication"
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: kafka
+  policyTypes:
+  - Ingress
+  - Egress
+  ingress:
+  - from:
+    - podSelector:
+        matchLabels:
+          app.kubernetes.io/name: kafka
+    - podSelector:
+        matchLabels:
+          app.kubernetes.io/name: zookeeper
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: soc-backend
+      podSelector:
+        matchLabels:
+          app.kubernetes.io/part-of: soc-platform
+    ports:
+    - protocol: TCP
+      port: 9092
+    - protocol: TCP
+      port: 29092
+  egress:
+  - to:
+    - podSelector:
+        matchLabels:
+          app.kubernetes.io/name: zookeeper
+    ports:
+    - protocol: TCP
+      port: 2181
+    - protocol: TCP
+      port: 2888
+    - protocol: TCP
+      port: 3888
+
+# =============================================================================
+# EVENTS NAMESPACE - Kafka Producers/Consumers
+# =============================================================================
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-kafka-clients
+  namespace: soc-events
+  labels:
+    app.kubernetes.io/name: djezzy-soc
+    app.kubernetes.io/component: network-policy
+    policy.djezzy.soc/type: kafka-clients
+  annotations:
+    description: "Allow SOC components to connect to Kafka"
+spec:
+  podSelector: {}
+  policyTypes:
+  - Egress
+  egress:
+  - to:
+    - podSelector:
+        matchLabels:
+          app.kubernetes.io/name: kafka
+    ports:
+    - protocol: TCP
+      port: 9092
+
+# =============================================================================
+# MONITORING NAMESPACE - Default Deny
+# =============================================================================
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-all-ingress
+  namespace: soc-monitoring
+  labels:
+    app.kubernetes.io/name: djezzy-soc
+    app.kubernetes.io/component: network-policy
+    policy.djezzy.soc/type: deny-all
+spec:
+  podSelector: {}
+  policyTypes:
+  - Ingress
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-all-egress
+  namespace: soc-monitoring
+  labels:
+    app.kubernetes.io/name: djezzy-soc
+    app.kubernetes.io/component: network-policy
+    policy.djezzy.soc/type: deny-all
+spec:
+  podSelector: {}
+  policyTypes:
+  - Egress
+
+# =============================================================================
+# MONITORING NAMESPACE - Prometheus Scraping
+# =============================================================================
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-prometheus-scraping
+  namespace: soc-monitoring
+  labels:
+    app.kubernetes.io/name: djezzy-soc
+    app.kubernetes.io/component: network-policy
+    policy.djezzy.soc/type: monitoring
+  annotations:
+    description: "Allow Prometheus to scrape metrics from all namespaces"
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: prometheus
+  policyTypes:
+  - Egress
+  egress:
+  - to:
+    - namespaceSelector: {}
+      podSelector:
+        matchExpressions:
+        - key: prometheus.io/scrape
+          operator: In
+          values:
+          - "true"
+    ports:
+    - protocol: TCP
+      port: 9090
+    - protocol: TCP
+      port: metrics
+    - protocol: TCP
+      port: 9100
+    - protocol: TCP
+      port: 9300
+
+# =============================================================================
+# MONITORING NAMESPACE - Grafana Access
+# =============================================================================
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-grafana-access
+  namespace: soc-monitoring
+  labels:
+    app.kubernetes.io/name: djezzy-soc
+    app.kubernetes.io/component: network-policy
+    policy.djezzy.soc/type: monitoring-ui
+  annotations:
+    description: "Allow access to Grafana UI from Kong gateway"
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: grafana
+  policyTypes:
+  - Ingress
+  ingress:
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: soc-backend
+      podSelector:
+        matchLabels:
+          app.kubernetes.io/name: kong-gateway
+    ports:
+    - protocol: TCP
+      port: 3000
+
+# =============================================================================
+# CROSS-NAMESPACE: Allow Metrics Export to Monitoring
+# =============================================================================
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-metrics-export
+  namespace: soc-backend
+  labels:
+    app.kubernetes.io/name: djezzy-soc
+    app.kubernetes.io/component: network-policy
+    policy.djezzy.soc/type: metrics-export
+  annotations:
+    description: "Export Prometheus metrics to monitoring namespace"
+spec:
+  podSelector:
+    matchLabels:
+      prometheus.io/scrape: "true"
+  policyTypes:
+  - Ingress
+  ingress:
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: soc-monitoring
+      podSelector:
+        matchLabels:
+          app.kubernetes.io/name: prometheus
+    ports:
+    - protocol: TCP
+      port: 9090
+    - protocol: TCP
+      port: metrics
+
+# =============================================================================
+# SS7 MODULE NAMESPACE - Isolated Network Policies
+# =============================================================================
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-all-ingress
+  namespace: soc-ss7
+  labels:
+    app.kubernetes.io/name: djezzy-soc
+    app.kubernetes.io/component: network-policy
+    policy.djezzy.soc/type: deny-all
+spec:
+  podSelector: {}
+  policyTypes:
+  - Ingress
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-all-egress
+  namespace: soc-ss7
+  labels:
+    app.kubernetes.io/name: djezzy-soc
+    app.kubernetes.io/component: network-policy
+    policy.djezzy.soc/type: deny-all
+spec:
+  podSelector: {}
+  policyTypes:
+  - Egress
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-ss7-internal
+  namespace: soc-ss7
+  labels:
+    app.kubernetes.io/name: djezzy-soc
+    app.kubernetes.io/component: network-policy
+    policy.djezzy.soc/type: ss7-internal
+  annotations:
+    description: "SS7 module internal communication - highly isolated"
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/part-of: ss7-module
+  policyTypes:
+  - Ingress
+  - Egress
+  ingress:
+  - from:
+    - podSelector:
+        matchLabels:
+          app.kubernetes.io/part-of: ss7-module
+  egress:
+  - to:
+    - podSelector:
+        matchLabels:
+          app.kubernetes.io/part-of: ss7-module
+  # Allow SS7 module to send events to Kafka
+  - to:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: soc-events
+      podSelector:
+        matchLabels:
+          app.kubernetes.io/name: kafka
+    ports:
+    - protocol: TCP
+      port: 9092
+  # Allow SS7 module to be scraped by Prometheus
+  - to:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: soc-monitoring
+      podSelector:
+        matchLabels:
+          app.kubernetes.io/name: prometheus
+    ports:
+    - protocol: TCP
+      port: 9090

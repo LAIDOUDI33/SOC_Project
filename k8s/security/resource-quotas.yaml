@@ -1,0 +1,395 @@
+# Djezzy National SOC Platform - Resource Quotas
+# DoS Prevention via Resource Limits
+# Compliance: NIST SC-5, ANRT Resource Management Requirements
+# Version: 1.0.0
+
+# ============================================
+# CLUSTER-WIDE RESOURCE QUOTAS
+# ============================================
+
+# Cluster Resource Quota (requires ResourceQuota CRD or management tool)
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: cluster-compute-quota
+  namespace: soc-frontend
+  labels:
+    quota.djezzy.dz/scope: "cluster"
+    quota.djezzy.dz/type: "compute"
+spec:
+  hard:
+    # Compute limits
+    requests.cpu: "16"
+    limits.cpu: "32"
+    requests.memory: 32Gi
+    limits.memory: 64Gi
+    # Object counts
+    pods: "50"
+    replicationcontrollers: "0"
+    resourcequotas: "5"
+    resourcequotas/status: "5"
+    services: "20"
+    services/loadbalancers: "2"   # Limited LBs (cost + attack surface)
+    services/nodeport: "0"        # No NodePorts (security)
+    secrets: "30"                 # Limit secrets exposure
+    configmaps: "50"
+    persistentvolumeclaims: "10"
+---
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: cluster-compute-quota
+  namespace: soc-backend
+  labels:
+    quota.djezzy.dz/scope: "cluster"
+    quota.djezzy.dz/type: "compute"
+spec:
+  hard:
+    requests.cpu: "48"
+    limits.cpu: "96"
+    requests.memory: 96Gi
+    limits.memory: 192Gi
+    pods: "100"
+    replicationcontrollers: "0"
+    resourcequotas: "5"
+    services: "40"
+    services/loadbalancers: "0"
+    services/nodeport: "0"
+    secrets: "50"
+    configmaps: "100"
+    persistentvolumeclaims: "20"
+    jobs: "20"
+    cronjobs: "15"
+---
+apiVersion: v1
+kind:ResourceQuota
+metadata:
+  name: cluster-compute-quota
+  namespace: soc-events
+  labels:
+    quota.djezzy.dz/scope: "cluster"
+    quota.djezzy.dz/type: "compute-critical"
+spec:
+  hard:
+    requests.cpu: "24"
+    limits.cpu: "48"
+    requests.memory: 64Gi
+    limits.memory: 128Gi
+    pods: "60"
+    replicationcontrollers: "0"
+    resourcequotas: "5"
+    services: "25"
+    services/loadbalancers: "0"
+    services/nodeport: "0"
+    secrets: "40"
+    configmaps: "60"
+    persistentvolumeclaims: "15"
+    statefulsets: "10"  # Kafka, Redis, Zookeeper
+---
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: cluster-compute-quota
+  namespace: soc-monitoring
+  labels:
+    quota.djezzy.dz/scope: "cluster"
+    quota.djezzy.dz/type: "monitoring"
+spec:
+  hard:
+    requests.cpu: "12"
+    limits.cpu: "24"
+    requests.memory: 24Gi
+    limits.memory: 48Gi
+    pods: "40"
+    replicationcontrollers: "0"
+    resourcequotas: "5"
+    services: "20"
+    services/loadbalancers: "1"
+    services/nodeport: "0"
+    secrets: "30"
+    configmaps: "40"
+    persistentvolumeclaims: "10"
+
+# ============================================
+# POD-LEVEL RESOURCE LIMITS (Container Defaults)
+# ============================================
+
+# LimitRange - Default resource requests/limits for frontend
+apiVersion: v1
+kind: LimitRange
+metadata:
+  name: resource-limits
+  namespace: soc-frontend
+  labels:
+    limitrange.djezzy.dz/enforcement: "mandatory"
+spec:
+  limits:
+  - type: Container
+    max:
+      cpu: "4"
+      memory: 8Gi
+    min:
+      cpu: "50m"
+      memory: 64Mi
+    default:
+      cpu: "500m"
+      memory: 512Mi
+    defaultRequest:
+      cpu: "100m"
+      memory: 128Mi
+    maxLimitRequestRatio:
+      cpu: "10"
+      memory: "4"
+  - type: Pod
+    max:
+      cpu: "8"
+      memory: 16Gi
+  - type: PersistentVolumeClaim
+    max:
+      storage: 50Gi
+    min:
+      storage: 1Gi
+---
+# Backend namespace limits (higher compute needs)
+apiVersion: v1
+kind: LimitRange
+metadata:
+  name: resource-limits
+  namespace: soc-backend
+  labels:
+    limitrange.djezzy.dz/enforcement: "mandatory"
+spec:
+  limits:
+  - type: Container
+    max:
+      cpu: "8"
+      memory: 16Gi
+    min:
+      cpu: "50m"
+      memory: 64Mi
+    default:
+      cpu: "1000m"
+      memory: 2Gi
+    defaultRequest:
+      cpu: "200m"
+      memory: 256Mi
+    maxLimitRequestRatio:
+      cpu: "10"
+      memory: "4"
+  - type: Pod
+    max:
+      cpu: "16"
+      memory: 32Gi
+  - type: PersistentVolumeClaim
+    max:
+      storage: 200Gi
+    min:
+      storage: 1Gi
+---
+# Events namespace limits (critical workloads)
+apiVersion: v1
+kind: LimitRange
+metadata:
+  name: resource-limits
+  namespace: soc-events
+  labels:
+    limitrange.djezzy.dz/enforcement: "mandatory"
+    limitrange.djezzy.dz/criticality: "high"
+spec:
+  limits:
+  - type: Container
+    max:
+      cpu: "8"
+      memory: 32Gi
+    min:
+      cpu: "100m"
+      memory: 128Mi
+    default:
+      cpu: "2000m"
+      memory: 4Gi
+    defaultRequest:
+      cpu: "500m"
+      memory: 512Mi
+    maxLimitRequestRatio:
+      cpu: "8"
+      memory: "4"
+  - type: Pod
+    max:
+      cpu: "16"
+      memory: 64Gi
+  - type: PersistentVolumeClaim
+    max:
+      storage: 500Gi
+    min:
+      storage: 10Gi
+---
+# Monitoring namespace limits
+apiVersion: v1
+kind: LimitRange
+metadata:
+  name: resource-limits
+  namespace: soc-monitoring
+  labels:
+    limitrange.djezzy.dz/enforcement: "mandatory"
+spec:
+  limits:
+  - type: Container
+    max:
+      cpu: "4"
+      memory: 8Gi
+    min:
+      cpu: "25m"
+      memory: 32Mi
+    default:
+      cpu: "500m"
+      memory: 512Mi
+    defaultRequest:
+      cpu: "50m"
+      memory: 64Mi
+    maxLimitRequestRatio:
+      cpu: "10"
+      memory: "8"
+  - type: Pod
+    max:
+      cpu: "8"
+      memory: 16Gi
+
+# ============================================
+# ANTI-DDoS SPECIFIC QUOTAS
+# ============================================
+
+# Rate limiting at infrastructure level
+# These complement application-level rate limiting
+
+# Quota to prevent runaway pod creation (cryptominer detection)
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: anti-abuse-pod-limit
+  namespace: soc-backend
+  labels:
+    quota.djezzy.dz/purpose: "anti-abuse"
+spec:
+  hard:
+    pods: "100"
+---
+# Limit large objects that could be used for DoS
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: object-size-limits
+  namespace: soc-frontend
+  labels:
+    quota.djezzy.dz/purpose: "anti-dos"
+spec:
+  hard:
+    requests.ephemeral-storage: "20Gi"
+    limits.ephemeral-storage: "50Gi"
+---
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: object-size-limits
+  namespace: soc-backend
+  labels:
+    quota.djezzy.dz/purpose: "anti-dos"
+spec:
+  hard:
+    requests.ephemeral-storage: "50Gi"
+    limits.ephemeral-storage: "100Gi"
+---
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: object-size-limits
+  namespace: soc-events
+  labels:
+    quota.djezzy.dz/purpose: "anti-dos"
+spec:
+  hard:
+    requests.ephemeral-storage: "100Gi"
+    limits.ephemeral-storage: "200Gi"
+
+# ============================================
+# PRIORITY CLASS DEFINITIONS
+# ============================================
+
+# Ensure critical security workloads get priority during resource contention
+apiVersion: scheduling.k8s.io/v1
+kind: PriorityClass
+metadata:
+  name: djezzy-security-critical
+  description: "Security-critical workloads (SIEM, Threat Intel)"
+  value: 1000000
+  globalDefault: false
+  preemptionPolicy: Never  # Don't preempt others, just prioritize scheduling
+---
+apiVersion: scheduling.k8s.io/v1
+kind: PriorityClass
+metadata:
+  name: djezzy-production-high
+  description: "High priority production workloads (Core API, Gateway)"
+  value: 100000
+  globalDefault: false
+  preemptionPolicy: PreemptLowerPriority
+---
+apiVersion: scheduling.k8s.io/v1
+kind: PriorityClass
+metadata:
+  name: djezzy-production-normal
+  description: "Normal production workloads"
+  value: 10000
+  globalDefault: true
+  preemptionPolicy: PreemptLowerPriority
+---
+apiVersion: scheduling.k8s.io/v1
+kind: PriorityClass
+metadata:
+  name: djezzy-batch-low
+  description: "Batch jobs and non-critical workloads"
+  value: 1000
+  globalDefault: false
+  preemptionPolicy: PreemptLowerPriority
+---
+apiVersion: scheduling.k8s.io/v1
+kind: PriorityClass
+metadata:
+  name: djezzy-best-effort
+  description: "Best effort/dev/test workloads (first to be evicted)"
+  value: 100
+  globalDefault: false
+  preemptionPolicy: PreemptLowerPriority
+
+# ============================================
+# HORIZONTAL POD AUTOSCALER LIMITS
+# ============================================
+
+# Prevent autoscaler from creating too many replicas (cost control + attack containment)
+# These are reference configurations - actual HPAs defined in deployment manifests
+
+# Example annotations for HPA limits
+# metadata.annotations:
+#   hpa.djezzy.dz/max-replicas: "20"
+#   hpa.djezzy.dz/min-replicas: "3"
+#   hpa.djezzy.dz/target-cpu-utilization: "70"
+
+# ============================================
+# RESOURCE QUOTA MONITORING ALERTS
+# ============================================
+
+# Prometheus alerting rules (reference)
+# - alert: NamespaceQuotaExceeded85Percent
+#   expr: kube_resourcequota{resource="pods", quantity!="-1"} / on(namespace,resource) kube_resourcequota_limit{resource="pods"} > 0.85
+#   for: 15m
+#   labels:
+#     severity: warning
+#   annotations:
+#     summary: "Namespace {{ $labels.namespace }} approaching quota limit for {{ $labels.resource }}"
+#
+# - alert: NamespaceQuotaExceeded95Percent
+#   expr: kube_resourcequota{resource="pods", quantity!="-1"} / on(namespace,resource) kube_resourcequota_limit{resource="pods"} > 0.95
+#   for: 5m
+#   labels:
+#     severity: critical
+#   annotations:
+#     summary: "Namespace {{ $labels.namespace }} nearly at quota limit for {{ $labels.resource }}"

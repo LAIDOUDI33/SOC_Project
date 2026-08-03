@@ -1,0 +1,948 @@
+     1→'use client'
+     2→
+     3→import React, { useState, useEffect } from 'react'
+     4→import {
+     5→  Search, Plus, Save, Play, Pause, RotateCcw,
+     6→  Filter, Tag, MessageSquare, Clock, User, Target,
+     7→  Shield, Crosshair, GitBranch, Database, FileText,
+     8→  ChevronRight, ChevronDown, ChevronUp, X, Check,
+     9→  AlertTriangle, Brain, Network, Lock, Eye, Download,
+    10→  Share2, Bookmark, MoreHorizontal, Grid3X3, List
+    11→} from 'lucide-react'
+    12→import {
+    13→  Card, CardContent, CardDescription, CardHeader, CardTitle
+    14→} from '@/components/ui/card'
+    15→import { Button } from '@/components/ui/button'
+    16→import { Badge } from '@/components/ui/badge'
+    17→import { Input } from '@/components/ui/input'
+    18→import { Textarea } from '@/components/ui/textarea'
+    19→import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
+    20→import {
+    21→  Select, SelectContent, SelectItem, SelectTrigger, SelectValue
+    22→} from '@/components/ui/select'
+    23→import { Separator } from '@/components/ui/separator'
+    24→import { ScrollArea } from '@/components/ui/scroll-area'
+    25→import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog'
+    26→import StatusIndicator from '@/components/shared/StatusIndicator'
+    27→
+    28→// Types for Threat Hunting
+    29→interface Hypothesis {
+    30→  id: string
+    31→  title: string
+    32→  description: string
+    33→  status: 'draft' | 'active' | 'completed' | 'archived'
+    34→  author: string
+    35→  createdAt: Date
+    36→  updatedAt: Date
+    37→  tags: string[]
+    38→  iocsFound: number
+    39→  relatedAlerts: number
+    40→}
+    41→
+    42→interface HuntSession {
+    43→  id: string
+    44→  hypothesisId: string
+    45→  name: string
+    46→  status: 'running' | 'paused' | 'completed' | 'failed'
+    47→  startedAt: Date
+    48→  resultsCount: number
+    49→  queriesExecuted: number
+    50→}
+    51→
+    52→interface IOCRecord {
+    53→  type: 'ip' | 'domain' | 'hash' | 'url' | 'email'
+    54→  value: string
+    55→  confidence: number
+    56→  source: string
+    57→  firstSeen: Date
+    58→  context?: string
+    59→}
+    60→
+    61→interface MITRETactic {
+    62→  id: string
+    63→  name: string
+    64→  description: string
+    65→  techniques: MITRETechnique[]
+    66→}
+    67→
+    68→interface MITRETechnique {
+    69→  id: string
+    70→  name: string
+    71→  description: string
+    72→  detected: boolean
+    73→}
+    74→
+    75→// Mock Data
+    76→const generateHypotheses = (): Hypothesis[] => [
+    77→  {
+    78→    id: 'HYP-001',
+    79→    title: 'APT-Style Lateral Movement Detection',
+    80→    description: 'Hunt for signs of lateral movement using RDP, SMB, and WinRM protocols that match known APT TTPs',
+    81→    status: 'active',
+    82→    author: 'Hunter Ahmed',
+    83→    createdAt: new Date(Date.now() - 86400000 * 2),
+    84→    updatedAt: new Date(Date.now() - 3600000),
+    85→    tags: ['apt', 'lateral-movement', 'detection'],
+    86→    iocsFound: 12,
+    87→    relatedAlerts: 5
+    88→  },
+    89→  {
+    90→    id: 'HYP-002',
+    91→    title: 'Data Exfiltration Patterns',
+    92→    description: 'Identify potential data exfiltration through DNS tunneling, cloud storage uploads, and unusual traffic patterns',
+    93→    status: 'active',
+    94→    author: 'Hunter Sarah',
+    95→    createdAt: new Date(Date.now() - 86400000 * 5),
+    96→    updatedAt: new Date(Date.now() - 7200000),
+    97→    tags: ['exfiltration', 'dns', 'cloud'],
+    98→    iocsFound: 8,
+    99→    relatedAlerts: 3
+   100→  },
+   101→  {
+   102→    id: 'HYP-003',
+   103→    title: 'Credential Access Campaign',
+   104→    description: 'Search for credential dumping, password spraying, and token theft indicators across authentication logs',
+   105→    status: 'completed',
+   106→    author: 'Hunter Mohammed',
+   107→    createdAt: new Date(Date.now() - 86400000 * 10),
+   108→    updatedAt: new Date(Date.now() - 86400000 * 2),
+   109→    tags: ['credentials', 'access', 'brute-force'],
+   110→    iocsFound: 24,
+   111→    relatedAlerts: 15
+   112→  }
+   113→]
+   114→
+   115→const generateHuntSessions = (): HuntSession[] => [
+   116→  { id: 'HS-001', hypothesisId: 'HYP-001', name: 'RDP Connection Analysis', status: 'running', startedAt: new Date(Date.now() - 7200000), resultsCount: 342, queriesExecuted: 12 },
+   117→  { id: 'HS-002', hypothesisId: 'HYP-001', name: 'SMB Enumeration Detection', status: 'running', startedAt: new Date(Date.now() - 3600000), resultsCount: 89, queriesExecuted: 5 },
+   118→  { id: 'HS-003', hypothesisId: 'HYP-002', name: 'DNS Tunneling Hunt', status: 'paused', startedAt: new Date(Date.now() - 14400000), resultsCount: 1567, queriesExecuted: 18 },
+   119→  { id: 'HS-004', hypothesisId: 'HYP-002', name: 'Cloud Upload Monitor', status: 'completed', startedAt: new Date(Date.now() - 86400000), resultsCount: 2341, queriesExecuted: 24 },
+   120→  { id: 'HS-005', hypothesisId: 'HYP-003', name: 'Kerberos Attack Pattern', status: 'completed', startedAt: new Date(Date.now() - 86400000 * 8), resultsCount: 4521, queriesExecuted: 42 }
+   121→]
+   122→
+   123→const generateIOCs = (): IOCRecord[] => [
+   124→  { type: 'ip', value: '185.220.101.45', confidence: 85, source: 'Session HS-001', firstSeen: new Date(Date.now() - 86400000) },
+   125→  { type: 'domain', value: 'evil-c2.djezzy-temp.tk', confidence: 92, source: 'Session HS-003', firstSeen: new Date(Date.now() - 172800000) },
+   126→  { type: 'hash', value: 'a1b2c3d4e5f6...', confidence: 78, source: 'Manual Analysis', firstSeen: new Date(Date.now() - 259200000) },
+   127→  { type: 'url', value: 'http://185.220.101.45:4444/beacon', confidence: 95, source: 'Session HS-001', firstSeen: new Date(Date.now() - 3600000) },
+   128→  { type: 'ip', value: '91.121.87.102', confidence: 67, source: 'Threat Intel Feed', firstSeen: new Date(Date.now() - 604800000) },
+   129→  { type: 'email', value: 'admin@secure-djezzy.com', confidence: 88, source: 'Phishing Report', firstSeen: new Date(Date.now() - 432000000) }
+   130→]
+   131→
+   132→const mitreTactics: MITRETactic[] = [
+   133→  {
+   134→    id: 'TA0001',
+   135→    name: 'Initial Access',
+   136→    description: 'The adversary is trying to get into your network.',
+   137→    techniques: [
+   138→      { id: 'T1566', name: 'Spearphishing Attachment', description: 'Sending malicious files via email', detected: true },
+   139→      { id: 'T1190', name: 'Exploit Public-Facing Application', description: 'Exploiting web app vulnerabilities', detected: false },
+   140→      { id: 'T1078', name: 'Valid Accounts', description: 'Using stolen credentials', detected: true }
+   141→    ]
+   142→  },
+   143→  {
+   144→    id: 'TA0002',
+   145→    name: 'Execution',
+   146→    description: 'The adversary is trying to run malicious code.',
+   147→    techniques: [
+   148→      { id: 'T1059', name: 'Command and Scripting Interpreter', description: 'Using PowerShell, cmd, etc.', detected: true },
+   149→      { id: 'T1204', name: 'User Execution', description: 'Tricking users into running malware', detected: false }
+   150→    ]
+   151→  },
+   152→  {
+   153→    id: 'TA0003',
+   154→    name: 'Persistence',
+   155→    description: 'The adversary is trying to maintain their foothold.',
+   156→    techniques: [
+   157→      { id: 'T1547', name: 'Boot or Logon Autostart Execution', description: 'Registry run keys, startup folders', detected: false },
+   158→      { id: 'T1053', name: 'Scheduled Task/Job', description: 'Using task scheduler for persistence', detected: true }
+   159→    ]
+   160→  },
+   161→  {
+   162→    id: 'TA0006',
+   163→    name: 'Credential Access',
+   164→    description: 'The adversary is trying to steal account names and passwords.',
+   165→    techniques: [
+   166→      { id: 'T1003', name: 'OS Credential Dumping', description: 'Extracting credentials from memory', detected: true },
+   167→      { id: 'T1110', name: 'Brute Force', description: 'Guessing passwords', detected: true },
+   168→      { id: 'T1557', name: 'Man-in-the-Middle', description: 'Intercepting authentication', detected: false }
+   169→    ]
+   170→  },
+   171→  {
+   172→    id: 'TA0007',
+   173→    name: 'Discovery',
+   174→    description: 'The adversary is trying to figure out your environment.',
+   175→    techniques: [
+   176→      { id: 'T1082', name: 'System Information Discovery', description: 'Gathering system details', detected: true },
+   177→      { id: 'T1046', name: 'Network Service Discovery', description: 'Scanning for services', detected: true },
+   178→      { id: 'T1083', name: 'File and Directory Discovery', description: 'Finding sensitive files', detected: false }
+   179→    ]
+   180→  },
+   181→  {
+   182→    id: 'TA0010',
+   183→    name: 'Exfiltration',
+   184→    description: 'The adversary is trying to steal data.',
+   185→    techniques: [
+   186→      { id: 'T1048', name: 'Exfiltration Over Alternative Protocol', description: 'Using DNS, ICMP, etc.', detected: true },
+   187→      { id: 'T1041', name: 'Exfiltration Over C2 Channel', description: 'Sending data via C2', detected: false },
+   188→      { id: 'T1530', name: 'Data from Cloud Storage Object', description: 'Exfiltrating via cloud', detected: true }
+   189→    ]
+   190→  }
+   191→]
+   192→
+   193→// Hypothesis Form Component
+   194→function HypothesisForm({ 
+   195→  onSubmit, 
+   196→  onCancel 
+   197→}: { 
+   198→  onSubmit: (hypothesis: Omit<Hypothesis, 'id' | 'createdAt' | 'updatedAt' | 'iocsFound' | 'relatedAlerts'>) => void
+   199→  onCancel: () => void 
+   200→}) {
+   201→  const [title, setTitle] = useState('')
+   202→  const [description, setDescription] = useState('')
+   203→  const [tags, setTags] = useState<string[]>([])
+   204→  const [tagInput, setTagInput] = useState('')
+   205→
+   206→  const addTag = () => {
+   207→    if (tagInput.trim() && !tags.includes(tagInput.trim())) {
+   208→      setTags([...tags, tagInput.trim()])
+   209→      setTagInput('')
+   210→    }
+   211→  }
+   212→
+   213→  const removeTag = (tag: string) => {
+   214→    setTags(tags.filter(t => t !== tag))
+   215→  }
+   216→
+   217→  return (
+   218→    <Card className="bg-slate-900 border-slate-700">
+   219→      <CardHeader>
+   220→        <CardTitle className="text-white flex items-center gap-2">
+   221→          <Plus className="h-5 w-5 text-green-400" />
+   222→          Create New Hypothesis
+   223→        </CardTitle>
+   224→        <CardDescription className="text-slate-400">
+   225→          Define a threat hunting hypothesis to guide your investigation
+   226→        </CardDescription>
+   227→      </CardHeader>
+   228→      <CardContent className="space-y-4">
+   229→        <div className="space-y-2">
+   230→          <label className="text-sm font-medium text-slate-300">Hypothesis Title</label>
+   231→          <Input
+   232→            placeholder="e.g., Detecting lateral movement via RDP"
+   233→            value={title}
+   234→            onChange={(e) => setTitle(e.target.value)}
+   235→            className="bg-slate-800 border-slate-600 text-white"
+   236→          />
+   237→        </div>
+   238→
+   239→        <div className="space-y-2">
+   240→          <label className="text-sm font-medium text-slate-300">Description</label>
+   241→          <Textarea
+   242→            placeholder="Describe what you're hunting for and why..."
+   243→            value={description}
+   244→            onChange={(e) => setDescription(e.target.value)}
+   245→            rows={4}
+   246→            className="bg-slate-800 border-slate-600 text-white resize-none"
+   247→          />
+   248→        </div>
+   249→
+   250→        <div className="space-y-2">
+   251→          <label className="text-sm font-medium text-slate-300">Tags</label>
+   252→          <div className="flex gap-2">
+   253→            <Input
+   254→              placeholder="Add a tag..."
+   255→              value={tagInput}
+   256→              onChange={(e) => setTagInput(e.target.value)}
+   257→              onKeyDown={(e) => e.key === 'Enter' && (e.preventDefault(), addTag())}
+   258→              className="bg-slate-800 border-slate-600 text-white flex-1"
+   259→            />
+   260→            <Button variant="outline" onClick={addTag} className="border-slate-600">
+   261→              Add
+   262→            </Button>
+   263→          </div>
+   264→          <div className="flex flex-wrap gap-2 mt-2">
+   265→            {tags.map(tag => (
+   266→              <Badge key={tag} variant="outline" className="border-slate-600 text-slate-300 gap-1">
+   267→                {tag}
+   268→                <X className="h-3 w-3 cursor-pointer" onClick={() => removeTag(tag)} />
+   269→              </Badge>
+   270→            ))}
+   271→          </div>
+   272→        </div>
+   273→
+   274→        <div className="flex justify-end gap-3 pt-4">
+   275→          <Button variant="outline" onClick={onCancel} className="border-slate-600 text-slate-300">
+   276→            Cancel
+   277→          </Button>
+   278→          <Button 
+   279→            onClick={() => onSubmit({ title, description, status: 'draft', author: 'Current User', tags })}
+   280→            disabled={!title || !description}
+   281→            className="bg-green-600 hover:bg-green-700"
+   282→          >
+   283→            <Save className="h-4 w-4 mr-2" />
+   284→            Save Hypothesis
+   285→          </Button>
+   286→        </div>
+   287→      </CardContent>
+   288→    </Card>
+   289→  )
+   290→}
+   291→
+   292→// Saved Hypotheses List
+   293→function HypothesesList({ 
+   294→  hypotheses, 
+   295→  onSelect, 
+   296→  selectedId 
+   297→}: { 
+   298→  hypotheses: Hypothesis[]
+   299→  onSelect: (id: string) => void
+   300→  selectedId?: string 
+   301→}) {
+   302→  const getStatusColor = (status: Hypothesis['status']) => {
+   303→    switch (status) {
+   304→      case 'active': return 'bg-green-500/20 text-green-400 border-green-500/30'
+   305→      case 'completed': return 'bg-blue-500/20 text-blue-400 border-blue-500/30'
+   306→      case 'draft': return 'bg-slate-500/20 text-slate-400 border-slate-500/30'
+   307→      case 'archived': return 'bg-gray-500/20 text-gray-400 border-gray-500/30'
+   308→    }
+   309→  }
+   310→
+   311→  return (
+   312→    <div className="space-y-3">
+   313→      {hypotheses.map(hypothesis => (
+   314→        <Card 
+   315→          key={hypothesis.id}
+   316→          className={`cursor-pointer transition-all ${
+   317→            selectedId === hypothesis.id ? 'border-blue-500 bg-blue-500/10' : 'bg-slate-900 border-slate-700 hover:border-slate-600'
+   318→          }`}
+   319→          onClick={() => onSelect(hypothesis.id)}
+   320→        >
+   321→          <CardContent className="p-4">
+   322→            <div className="flex items-start justify-between mb-2">
+   323→              <h3 className="font-medium text-white">{hypothesis.title}</h3>
+   324→              <Badge variant="outline" className={`text-xs ${getStatusColor(hypothesis.status)}`}>
+   325→                {hypothesis.status}
+   326→              </Badge>
+   327→            </div>
+   328→            
+   329→            <p className="text-sm text-slate-400 line-clamp-2 mb-3">{hypothesis.description}</p>
+   330→            
+   331→            <div className="flex items-center justify-between">
+   332→              <div className="flex items-center gap-3 text-xs text-slate-500">
+   333→                <span className="flex items-center gap-1">
+   334→                  <User className="h-3 w-3" />
+   335→                  {hypothesis.author}
+   336→                </span>
+   337→                <span className="flex items-center gap-1">
+   338→                  <Clock className="h-3 w-3" />
+   339→                  {Math.floor((Date.now() - hypothesis.updatedAt.getTime()) / 86400000)}d ago
+   340→                </span>
+   341→              </div>
+   342→              
+   343→              <div className="flex items-center gap-3 text-xs">
+   344→                <span className="text-red-400">{hypothesis.iocsFound} IOCs</span>
+   345→                <span className="text-orange-400">{hypothesis.relatedAlerts} alerts</span>
+   346→              </div>
+   347→            </div>
+   348→
+   349→            <div className="flex flex-wrap gap-1 mt-3">
+   350→              {hypothesis.tags.map(tag => (
+   351→                <Badge key={tag} variant="secondary" className="text-xs bg-slate-800 text-slate-400">
+   352→                  #{tag}
+   353→                </Badge>
+   354→              ))}
+   355→            </div>
+   356→          </CardContent>
+   357→        </Card>
+   358→      ))}
+   359→    </div>
+   360→  )
+   361→}
+   362→
+   363→// Hunt Sessions Panel
+   364→function HuntSessionsPanel({ sessions }: { sessions: HuntSession[] }) {
+   365→  const getStatusIcon = (status: HuntSession['status']) => {
+   366→    switch (status) {
+   367→      case 'running': return <Play className="h-4 w-4 text-green-400" />
+   368→      case 'paused': return <Pause className="h-4 w-4 text-yellow-400" />
+   369→      case 'completed': return <Check className="h-4 w-4 text-blue-400" />
+   370→      case 'failed': return <X className="h-4 w-4 text-red-400" />
+   371→    }
+   372→  }
+   373→
+   374→  return (
+   375→    <Card className="bg-slate-900 border-slate-700">
+   376→      <CardHeader className="pb-3">
+   377→        <div className="flex items-center justify-between">
+   378→          <CardTitle className="text-white text-lg flex items-center gap-2">
+   379→            <Crosshair className="h-5 w-5 text-purple-400" />
+   380→            Active Hunt Sessions
+   381→          </CardTitle>
+   382→          <Badge variant="outline" className="border-green-500/50 text-green-400">
+   383→            {sessions.filter(s => s.status === 'running').length} Running
+   384→          </Badge>
+   385→        </div>
+   386→      </CardHeader>
+   387→      <CardContent>
+   388→        <div className="space-y-3">
+   389→          {sessions.map(session => (
+   390→            <div key={session.id} className="p-3 bg-slate-800 rounded-lg border border-slate-700">
+   391→              <div className="flex items-center justify-between mb-2">
+   392→                <div className="flex items-center gap-2">
+   393→                  {getStatusIcon(session.status)}
+   394→                  <span className="font-medium text-white text-sm">{session.name}</span>
+   395→                </div>
+   396→                <Badge variant="outline" className={`text-xs ${
+   397→                  session.status === 'running' ? 'border-green-500/50 text-green-400' :
+   398→                  session.status === 'paused' ? 'border-yellow-500/50 text-yellow-400' :
+   399→                  session.status === 'completed' ? 'border-blue-500/50 text-blue-400' :
+   400→                  'border-red-500/50 text-red-400'
+   401→                }`}>
+   402→                  {session.status}
+   403→                </Badge>
+   404→              </div>
+   405→              
+   406→              <div className="grid grid-cols-3 gap-2 mt-3">
+   407→                <div className="text-center p-2 bg-slate-700/50 rounded">
+   408→                  <p className="text-lg font-bold text-white">{session.resultsCount.toLocaleString()}</p>
+   409→                  <p className="text-xs text-slate-400">Results</p>
+   410→                </div>
+   411→                <div className="text-center p-2 bg-slate-700/50 rounded">
+   412→                  <p className="text-lg font-bold text-white">{session.queriesExecuted}</p>
+   413→                  <p className="text-xs text-slate-400">Queries</p>
+   414→                </div>
+   415→                <div className="text-center p-2 bg-slate-700/50 rounded">
+   416→                  <p className="text-lg font-bold text-white">
+   417→                    {Math.floor((Date.now() - session.startedAt.getTime()) / 3600000)}h
+   418→                  </p>
+   419→                  <p className="text-xs text-slate-400">Duration</p>
+   420→                </div>
+   421→              </div>
+   422→
+   423→              <div className="flex gap-2 mt-3">
+   424→                {session.status === 'running' && (
+   425→                  <Button size="sm" variant="ghost" className="h-7 text-xs text-yellow-400 flex-1">
+   426→                    <Pause className="h-3 w-3 mr-1" />
+   427→                    Pause
+   428→                  </Button>
+   429→                )}
+   430→                {session.status === 'paused' && (
+   431→                  <Button size="sm" variant="ghost" className="h-7 text-xs text-green-400 flex-1">
+   432→                    <Play className="h-3 w-3 mr-1" />
+   433→                    Resume
+   434→                  </Button>
+   435→                )}
+   436→                <Button size="sm" variant="ghost" className="h-7 text-xs text-blue-400 flex-1">
+   437→                  <Eye className="h-3 w-3 mr-1" />
+   438→                  View Results
+   439→                </Button>
+   440→                <Button size="sm" variant="ghost" className="h-7 text-xs text-slate-400 flex-1">
+   441→                  <Download className="h-3 w-3 mr-1" />
+   442→                  Export
+   443→                </Button>
+   444→              </div>
+   445→            </div>
+   446→          ))}
+   447→        </div>
+   448→      </CardContent>
+   449→    </Card>
+   450→  )
+   451→}
+   452→
+   453→// IOC Pivot Analysis
+   454→function IOCPivotAnalysis({ iocs }: { iocs: IOCRecord[] }) {
+   455→  const [selectedIOC, setSelectedIOC] = useState<IOCRecord | null>(null)
+   456→
+   457→  const getTypeIcon = (type: IOCRecord['type']) => {
+   458→    switch (type) {
+   459→      case 'ip': return <Network className="h-4 w-4 text-blue-400" />
+   460→      case 'domain': return <Database className="h-4 w-4 text-green-400" />
+   461→      case 'hash': return <Lock className="h-4 w-4 text-orange-400" />
+   462→      case 'url': return <FileText className="h-4 w-4 text-purple-400" />
+   463→      case 'email': return <User className="h-4 w-4 text-cyan-400" />
+   464→    }
+   465→  }
+   466→
+   467→  const getConfidenceColor = (confidence: number) => {
+   468→    if (confidence >= 80) return 'text-green-400'
+   469→    if (confidence >= 60) return 'text-yellow-400'
+   470→    return 'text-red-400'
+   471→  }
+   472→
+   473→  return (
+   474→    <Card className="bg-slate-900 border-slate-700">
+   475→      <CardHeader className="pb-3">
+   476→        <div className="flex items-center justify-between">
+   477→          <CardTitle className="text-white text-lg flex items-center gap-2">
+   478→            <Shield className="h-5 w-5 text-red-400" />
+   479→            IOC Pivot Analysis
+   480→          </CardTitle>
+   481→          <Button size="sm" variant="outline" className="border-slate-600 text-slate-300 h-8">
+   482→            <Share2 className="h-4 w-4 mr-1" />
+   483→            Push to MISP
+   484→          </Button>
+   485→        </div>
+   486→      </CardHeader>
+   487→      <CardContent>
+   488→        <div className="space-y-2 max-h-[400px] overflow-y-auto">
+   489→          {iocs.map((ioc, index) => (
+   490→            <div 
+   491→              key={index}
+   492→              className={`p-3 rounded-lg border cursor-pointer transition-all ${
+   493→                selectedIOC?.value === ioc.value 
+   494→                  ? 'border-blue-500 bg-blue-500/10' 
+   495→                  : 'border-slate-700 bg-slate-800 hover:border-slate-600'
+   496→              }`}
+   497→              onClick={() => setSelectedIOC(ioc)}
+   498→            >
+   499→              <div className="flex items-center justify-between">
+   500→                <div className="flex items-center gap-3">
+   501→                  {getTypeIcon(ioc.type)}
+   502→                  <div>
+   503→                    <code className="text-sm text-white font-mono">{ioc.value}</code>
+   504→                    <p className="text-xs text-slate-500 mt-1">{ioc.source}</p>
+   505→                  </div>
+   506→                </div>
+   507→                <div className="text-right">
+   508→                  <span className={`text-sm font-medium ${getConfidenceColor(ioc.confidence)}`}>
+   509→                    {ioc.confidence}%
+   510→                  </span>
+   511→                  <p className="text-xs text-slate-500">confidence</p>
+   512→                </div>
+   513→              </div>
+   514→              
+   515→              {/* Pivot options shown when selected */}
+   516→              {selectedIOC?.value === ioc.value && (
+   517→                <div className="mt-3 pt-3 border-t border-slate-700 flex gap-2">
+   518→                  <Button size="sm" variant="outline" className="h-7 text-xs border-slate-600">
+   519→                    <Search className="h-3 w-3 mr-1" />
+   520→                    Find Related
+   521→                  </Button>
+   522→                  <Button size="sm" variant="outline" className="h-7 text-xs border-slate-600">
+   523→                    <Network className="h-3 w-3 mr-1" />
+   524→                    Network Context
+   525→                  </Button>
+   526→                  <Button size="sm" variant="outline" className="h-7 text-xs border-slate-600">
+   527→                    <Eye className="h-3 w-3 mr-1" />
+   528→                    Threat Intel
+   529→                  </Button>
+   530→                  <Button size="sm" variant="outline" className="h-7 text-xs border-slate-600">
+   531→                    <Bookmark className="h-3 w-3 mr-1" />
+   532→                    Save
+   533→                  </Button>
+   534→                </div>
+   535→              )}
+   536→            </div>
+   537→          ))}
+   538→        </div>
+   539→      </CardContent>
+   540→    </Card>
+   541→  )
+   542→}
+   543→
+   544→// MITRE ATT&CK Navigator
+   545→function MITRENavigator({ tactics }: { tactics: MITRETactic[] }) {
+   546→  const [expandedTactics, setExpandedTactics] = useState<string[]>(['TA0001'])
+   547→
+   548→  const toggleTactic = (id: string) => {
+   549→    setExpandedTactics(prev =>
+   550→      prev.includes(id) ? prev.filter(t => t !== id) : [...prev, id]
+   551→    )
+   552→  }
+   553→
+   554→  return (
+   555→    <Card className="bg-slate-900 border-slate-700">
+   556→      <CardHeader className="pb-3">
+   557→        <CardTitle className="text-white text-lg flex items-center gap-2">
+   558→          <Target className="h-5 w-5 text-indigo-400" />
+   559→          MITRE ATT&amp;CK Coverage
+   560→        </CardTitle>
+   561→        <CardDescription className="text-slate-400">
+   562→          Techniques detected in current hunting operations
+   563→        </CardDescription>
+   564→      </CardHeader>
+   565→      <CardContent>
+   566→        <div className="space-y-2">
+   567→          {tactics.map(tactic => (
+   568→            <div key={tactic.id} className="border border-slate-700 rounded-lg overflow-hidden">
+   569→              <button
+   570→                className="w-full p-3 bg-slate-800 flex items-center justify-between hover:bg-slate-750 transition-colors"
+   571→                onClick={() => toggleTactic(tactic.id)}
+   572→              >
+   573→                <div className="flex items-center gap-3">
+   574→                  <Badge variant="outline" className="font-mono text-xs border-indigo-500/50 text-indigo-400">
+   575→                    {tactic.id}
+   576→                  </Badge>
+   577→                  <span className="font-medium text-white text-sm">{tactic.name}</span>
+   578→                </div>
+   579→                <div className="flex items-center gap-2">
+   580→                  <span className="text-xs text-slate-400">
+   581→                    {tactic.techniques.filter(t => t.detected).length}/{tactic.techniques.length}
+   582→                  </span>
+   583→                  {expandedTactics.includes(tactic.id) ? (
+   584→                    <ChevronUp className="h-4 w-4 text-slate-400" />
+   585→                  ) : (
+   586→                    <ChevronDown className="h-4 w-4 text-slate-400" />
+   587→                  )}
+   588→                </div>
+   589→              </button>
+   590→              
+   591→              {expandedTactics.includes(tactic.id) && (
+   592→                <div className="p-3 space-y-2 bg-slate-850 border-t border-slate-700">
+   593→                  <p className="text-xs text-slate-400 mb-2">{tactic.description}</p>
+   594→                  {tactic.techniques.map(technique => (
+   595→                    <div 
+   596→                      key={technique.id}
+   597→                      className={`flex items-center justify-between p-2 rounded ${
+   598→                        technique.detected ? 'bg-green-500/10 border border-green-500/20' : 'bg-slate-800'
+   599→                      }`}
+   600→                    >
+   601→                      <div className="flex items-center gap-2">
+   602→                        <StatusIndicator status={technique.detected ? 'excellent' : 'warning'} size="sm" />
+   603→                        <div>
+   604→                          <span className="text-xs font-mono text-slate-500">{technique.id}</span>
+   605→                          <span className="text-sm text-white ml-2">{technique.name}</span>
+   606→                        </div>
+   607→                      </div>
+   608→                      {technique.detected && (
+   609→                        <Badge variant="outline" className="text-xs border-green-500/50 text-green-400">
+   610→                          Detected
+   611→                        </Badge>
+   612→                      )}
+   613→                    </div>
+   614→                  ))}
+   615→                </div>
+   616→              )}
+   617→            </div>
+   618→          ))}
+   619→        </div>
+   620→      </CardContent>
+   621→    </Card>
+   622→  )
+   623→}
+   624→
+   625→// Query Builder Component
+   626→function QueryBuilder() {
+   627→  const [queryParts, setQueryParts] = useState([
+   628→    { field: 'source_ip', operator: '=', value: '' }
+   629→  ])
+   630→
+   631→  const addQueryPart = () => {
+   632→    setQueryParts([...queryParts, { field: '', operator: '=', value: '' }])
+   633→  }
+   634→
+   635→  const removeQueryPart = (index: number) => {
+   636→    setQueryParts(queryParts.filter((_, i) => i !== index))
+   637→  }
+   638→
+   639→  const updateQueryPart = (index: number, updates: Partial<typeof queryParts[0]>) => {
+   640→    setQueryParts(queryParts.map((part, i) => i === index ? { ...part, ...updates } : part))
+   641→  }
+   642→
+   643→  return (
+   644→    <Card className="bg-slate-900 border-slate-700">
+   645→      <CardHeader className="pb-3">
+   646→        <CardTitle className="text-white text-lg flex items-center gap-2">
+   647→          <Brain className="h-5 w-5 text-cyan-400" />
+   648→          Advanced Query Builder
+   649→        </CardTitle>
+   650→      </CardHeader>
+   651→      <CardContent className="space-y-4">
+   652→        {queryParts.map((part, index) => (
+   653→          <div key={index} className="flex items-center gap-2">
+   654→            {index > 0 && (
+   655→              <Select defaultValue="AND">
+   656→                <SelectTrigger className="w-[70px] h-9 bg-slate-800 border-slate-600 text-xs">
+   657→                  <SelectValue />
+   658→                </SelectTrigger>
+   659→                <SelectContent>
+   660→                  <SelectItem value="AND">AND</SelectItem>
+   661→                  <SelectItem value="OR">OR</SelectItem>
+   662→                  <SelectItem value="NOT">NOT</SelectItem>
+   663→                </SelectContent>
+   664→              </Select>
+   665→            )}
+   666→            
+   667→            <Select 
+   668→              value={part.field} 
+   669→              onValueChange={(v) => updateQueryPart(index, { field: v })}
+   670→            >
+   671→              <SelectTrigger className="flex-1 h-9 bg-slate-800 border-slate-600 text-xs">
+   672→                <SelectValue placeholder="Field" />
+   673→              </SelectTrigger>
+   674→              <SelectContent>
+   675→                <SelectItem value="source_ip">Source IP</SelectItem>
+   676→                <SelectItem value="dest_ip">Destination IP</SelectItem>
+   677→                <SelectItem value="domain">Domain</SelectItem>
+   678→                <SelectItem value="hash">File Hash</SelectItem>
+   679→                <SelectItem value="signature">Signature</SelectItem>
+   680→                <SelectItem value="severity">Severity</SelectItem>
+   681→                <SelectItem value="event_type">Event Type</SelectItem>
+   682→              </SelectContent>
+   683→            </Select>
+   684→
+   685→            <Select 
+   686→              value={part.operator} 
+   687→              onValueChange={(v) => updateQueryPart(index, { operator: v })}
+   688→            >
+   689→              <SelectTrigger className="w-[80px] h-9 bg-slate-800 border-slate-600 text-xs">
+   690→                <SelectValue />
+   691→              </SelectTrigger>
+   692→              <SelectContent>
+   693→                <SelectItem value="=">=</SelectItem>
+   694→                <SelectItem value="!=">!=</SelectItem>
+   695→                <SelectItem value="contains">contains</SelectItem>
+   696→                <SelectItem value="starts_with">starts with</SelectItem>
+   697→                <SelectItem value="in">in</SelectItem>
+   698→                <SelectItem value="regex">regex</SelectItem>
+   699→              </SelectContent>
+   700→            </Select>
+   701→
+   702→            <Input
+   703→              placeholder="Value..."
+   704→              value={part.value}
+   705→              onChange={(e) => updateQueryPart(index, { value: e.target.value })}
+   706→              className="flex-1 h-9 bg-slate-800 border-slate-600 text-sm"
+   707→            />
+   708→
+   709→            {queryParts.length > 1 && (
+   710→              <Button
+   711→                size="icon"
+   712→                variant="ghost"
+   713→                className="h-9 w-9 text-slate-400 hover:text-red-400"
+   714→                onClick={() => removeQueryPart(index)}
+   715→              >
+   716→                <X className="h-4 w-4" />
+   717→              </Button>
+   718→            )}
+   719→          </div>
+   720→        ))}
+   721→
+   722→        <div className="flex gap-2">
+   723→          <Button 
+   724→            size="sm" 
+   725→            variant="outline" 
+   726→            onClick={addQueryPart}
+   727→            className="border-slate-600 text-slate-300"
+   728→          >
+   729→            <Plus className="h-4 w-4 mr-1" />
+   730→            Add Condition
+   731→          </Button>
+   732→          <Button size="sm" className="ml-auto bg-cyan-600 hover:bg-cyan-700">
+   733→            <Play className="h-4 w-4 mr-1" />
+   734→            Execute Query
+   735→          </Button>
+   736→        </div>
+   737→      </CardContent>
+   738→    </Card>
+   739→  )
+   740→}
+   741→
+   742→// Collaboration Features
+   743→function CollaborationPanel() {
+   744→  const [comments, setComments] = useState([
+   745→    { id: 1, user: 'Analyst Ahmed', text: 'Found correlation with recent phishing campaign', time: '2h ago' },
+   746→    { id: 2, user: 'Hunter Sarah', text: 'Added pivot on C2 infrastructure', time: '1h ago' }
+   747→  ])
+   748→  const [newComment, setNewComment] = useState('')
+   749→
+   750→  return (
+   751→    <Card className="bg-slate-900 border-slate-700">
+   752→      <CardHeader className="pb-3">
+   753→        <CardTitle className="text-white text-lg flex items-center gap-2">
+   754→          <MessageSquare className="h-5 w-5 text-pink-400" />
+   755→          Collaboration
+   756→        </CardTitle>
+   757→      </CardHeader>
+   758→      <CardContent>
+   759→        <div className="space-y-3 mb-4 max-h-[200px] overflow-y-auto">
+   760→          {comments.map(comment => (
+   761→            <div key={comment.id} className="p-3 bg-slate-800 rounded-lg">
+   762→              <div className="flex items-center justify-between mb-1">
+   763→                <span className="text-sm font-medium text-white">{comment.user}</span>
+   764→                <span className="text-xs text-slate-500">{comment.time}</span>
+   765→              </div>
+   766→              <p className="text-sm text-slate-400">{comment.text}</p>
+   767→            </div>
+   768→          ))}
+   769→        </div>
+   770→        
+   771→        <div className="flex gap-2">
+   772→          <Input
+   773→            placeholder="Add a comment..."
+   774→            value={newComment}
+   775→            onChange={(e) => setNewComment(e.target.value)}
+   776→            className="flex-1 bg-slate-800 border-slate-600 text-sm"
+   777→          />
+   778→          <Button 
+   779→            size="icon" 
+   780→            disabled={!newComment}
+   781→            className="bg-pink-600 hover:bg-pink-700"
+   782→          >
+   783→            <Send className="h-4 w-4" />
+   784→          </Button>
+   785→        </div>
+   786→        
+   787→        <div className="mt-4 flex gap-2">
+   788→          <Badge variant="secondary" className="bg-slate-800 text-slate-300 cursor-pointer hover:bg-slate-700">
+   789→            #apt
+   790→          </Badge>
+   791→          <Badge variant="secondary" className="bg-slate-800 text-slate-300 cursor-pointer hover:bg-slate-700">
+   792→            #lateral-movement
+   793→          </Badge>
+   794→          <Badge variant="secondary" className="bg-slate-800 text-slate-300 cursor-pointer hover:bg-slate-700">
+   795→            #high-priority
+   796→          </Badge>
+   797→          <Button size="sm" variant="ghost" className="h-6 text-xs text-slate-400">
+   798→            + Add Tag
+   799→          </Button>
+   800→        </div>
+   801→      </CardContent>
+   802→    </Card>
+   803→  )
+   804→}
+   805→
+   806→// Main Threat Hunting Dashboard
+   807→export default function ThreatHuntingDashboard() {
+   808→  const [hypotheses, setHypotheses] = useState<Hypothesis[]>([])
+   809→  const [selectedHypothesis, setSelectedHypothesis] = useState<string | null>(null)
+   810→  const [showCreateForm, setShowCreateForm] = useState(false)
+   811→  const [activeTab, setActiveTab] = useState('hypotheses')
+   812→  const [isLoading, setIsLoading] = useState(true)
+   813→
+   814→  useEffect(() => {
+   815→    setIsLoading(true)
+   816→    setTimeout(() => {
+   817→      setHypotheses(generateHypotheses())
+   818→      setIsLoading(false)
+   819→    }, 300)
+   820→  }, [])
+   821→
+   822→  const handleCreateHypothesis = (data: Omit<Hypothesis, 'id' | 'createdAt' | 'updatedAt' | 'iocsFound' | 'relatedAlerts'>) => {
+   823→    const newHypothesis: Hypothesis = {
+   824→      ...data,
+   825→      id: `HYP-${String(hypotheses.length + 1).padStart(3, '0')}`,
+   826→      createdAt: new Date(),
+   827→      updatedAt: new Date(),
+   828→      iocsFound: 0,
+   829→      relatedAlerts: 0
+   830→    }
+   831→    setHypotheses([newHypothesis, ...hypotheses])
+   832→    setShowCreateForm(false)
+   833→  }
+   834→
+   835→  if (isLoading) {
+   836→    return (
+   837→      <div className="min-h-screen bg-slate-950 p-6 flex items-center justify-center">
+   838→        <div className="animate-spin h-12 w-12 border-4 border-blue-500 border-t-transparent rounded-full"></div>
+   839→      </div>
+   840→    )
+   841→  }
+   842→
+   843→  return (
+   844→    <div className="min-h-screen bg-slate-950">
+   845→      {/* Header */}
+   846→      <header className="border-b border-slate-800 bg-slate-900/50 backdrop-blur-sm sticky top-0 z-40">
+   847→        <div className="px-6 py-4">
+   848→          <div className="flex items-center justify-between">
+   849→            <div>
+   850→              <h1 className="text-2xl font-bold text-white flex items-center gap-3">
+   851→                <Crosshair className="h-7 w-7 text-red-400" />
+   852→                Threat Hunting Dashboard
+   853→              </h1>
+   854→              <p className="text-slate-400 text-sm mt-1">
+   855→                Proactive threat detection and hypothesis-driven investigations
+   856→              </p>
+   857→            </div>
+   858→            
+   859→            <div className="flex items-center gap-3">
+   860→              <Dialog open={showCreateForm} onOpenChange={setShowCreateForm}>
+   861→                <DialogTrigger asChild>
+   862→                  <Button className="bg-green-600 hover:bg-green-700">
+   863→                    <Plus className="h-4 w-4 mr-2" />
+   864→                    New Hypothesis
+   865→                  </Button>
+   866→                </DialogTrigger>
+   867→                <DialogContent className="bg-slate-900 border-slate-700 max-w-2xl">
+   868→                  <DialogHeader>
+   869→                    <DialogTitle className="text-white">Create Hunting Hypothesis</DialogTitle>
+   870→                  </DialogHeader>
+   871→                  <HypothesisForm 
+   872→                    onSubmit={handleCreateHypothesis}
+   873→                    onCancel={() => setShowCreateForm(false)}
+   874→                  />
+   875→                </DialogContent>
+   876→              </Dialog>
+   877→            </div>
+   878→          </div>
+   879→        </div>
+   880→      </header>
+   881→
+   882→      {/* Main Content */}
+   883→      <main className="p-6">
+   884→        <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-6">
+   885→          <TabsList className="bg-slate-800 border-slate-700">
+   886→            <TabsTrigger value="hypotheses" className="data-[state=active]:bg-slate-700">
+   887→              <Brain className="h-4 w-4 mr-2" />
+   888→              Hypotheses
+   889→            </TabsTrigger>
+   890→            <TabsTrigger value="sessions" className="data-[state=active]:bg-slate-700">
+   891→              <Crosshair className="h-4 w-4 mr-2" />
+   892→              Hunt Sessions
+   893→            </TabsTrigger>
+   894→            <TabsTrigger value="analysis" className="data-[state=active]:bg-slate-700">
+   895→              <Shield className="h-4 w-4 mr-2" />
+   896→              IOC Analysis
+   897→            </TabsTrigger>
+   898→            <TabsTrigger value="mitre" className="data-[state=active]:bg-slate-700">
+   899→              <Target className="h-4 w-4 mr-2" />
+   900→              MITRE ATT&amp;CK
+   901→            </TabsTrigger>
+   902→            <TabsTrigger value="query" className="data-[state=active]:bg-slate-700">
+   903→              <Search className="h-4 w-4 mr-2" />
+   904→              Query Builder
+   905→            </TabsTrigger>
+   906→          </TabsList>
+   907→
+   908→          {/* Hypotheses Tab */}
+   909→          <TabsContent value="hypotheses" className="space-y-6">
+   910→            <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+   911→              <div className="lg:col-span-2">
+   912→                <HypothesesList 
+   913→                  hypotheses={hypotheses}
+   914→                  onSelect={setSelectedHypothesis}
+   915→                  selectedId={selectedHypothesis || undefined}
+   916→                />
+   917→              </div>
+   918→              <div>
+   919→                <CollaborationPanel />
+   920→              </div>
+   921→            </div>
+   922→          </TabsContent>
+   923→
+   924→          {/* Hunt Sessions Tab */}
+   925→          <TabsContent value="sessions">
+   926→            <HuntSessionsPanel sessions={generateHuntSessions()} />
+   927→          </TabsContent>
+   928→
+   929→          {/* IOC Analysis Tab */}
+   930→          <TabsContent value="sessions">
+   931→            <IOCPivotAnalysis iocs={generateIOCs()} />
+   932→          </TabsContent>
+   933→
+   934→          {/* MITRE ATT&CK Tab */}
+   935→          <TabsContent value="mitre">
+   936→            <MITRENavigator tactics={mitreTactics} />
+   937→          </TabsContent>
+   938→
+   939→          {/* Query Builder Tab */}
+   940→          <TabsContent value="query">
+   941→            <QueryBuilder />
+   942→          </TabsContent>
+   943→        </Tabs>
+   944→      </main>
+   945→    </div>
+   946→  )
+   947→}
+   948→

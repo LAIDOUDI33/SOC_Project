@@ -1,0 +1,583 @@
+# Djezzy National SOC Platform - Zero Trust Network Policies
+# Default Deny All - Explicit Allow Only
+# ANRT Compliant - East-West Traffic Encrypted (mTLS)
+
+---
+# DEFAULT DENY ALL POLICY - Applied to all namespaces
+# This is the foundation of Zero Trust architecture
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-all-ingress
+  namespace: djezzy-soc
+spec:
+  podSelector: {}
+  policyTypes:
+  - Ingress
+  ingress: []
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-all-egress
+  namespace: djezzy-soc
+spec:
+  podSelector: {}
+  policyTypes:
+  - Egress
+  egress: []
+
+---
+# DNS RESOLUTION - Allow all pods to resolve DNS
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-dns-resolution
+  namespace: djezzy-soc
+spec:
+  podSelector: {}
+  policyTypes:
+  - Egress
+  egress:
+  - to:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: kube-system
+    ports:
+    - protocol: UDP
+      port: 53
+    - protocol: TCP
+      port: 53
+
+---
+# SIEM COLLECTOR NETWORK POLICY
+# Can collect logs from all pods, can send to SIEM backend
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: siem-collector-netpol
+  namespace: djezzy-soc
+spec:
+  podSelector:
+    matchLabels:
+      app: siem-collector
+  policyTypes:
+  - Ingress
+  - Egress
+  
+  # Ingress - No direct inbound connections needed (pull-based collection)
+  ingress: []
+  
+  # Egress - Connect to pods for log collection and SIEM backend
+  egress:
+  # Collect logs from application pods
+  - to:
+    - podSelector:
+        matchLabels:
+          security.djezzy.dz/log-collection: enabled
+    ports:
+    - protocol: TCP
+      port: 8080  # Application port for log endpoints
+  
+  # Send to SIEM backend (internal cluster IP)
+  - to:
+    - podSelector:
+        matchLabels:
+          app: siem-backend
+    ports:
+    - protocol: TCP
+      port: 9200  # Elasticsearch/Logstash port
+  
+  # Health check responses
+  - to:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: monitoring
+    ports:
+    - protocol: TCP
+      port: 9090
+
+---
+# SIEM BACKEND NETWORK POLICY
+# Receives data from collectors, serves queries to frontend
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: siem-backend-netpol
+  namespace: djezzy-soc
+spec:
+  podSelector:
+    matchLabels:
+      app: siem-backend
+  policyTypes:
+  - Ingress
+  - Egress
+  
+  # Ingress - Accept from collectors and API gateway
+  ingress:
+  - from:
+    - podSelector:
+        matchLabels:
+          app: siem-collector
+    ports:
+    - protocol: TCP
+      port: 9200
+  
+  - from:
+    - podSelector:
+        matchLabels:
+          app: api-gateway
+    ports:
+    - protocol: TCP
+      port: 9200
+  
+  # Egress - Database connections and external threat feeds
+  egress:
+  # Internal database (PostgreSQL/TimescaleDB)
+  - to:
+    - podSelector:
+        matchLabels:
+          app: timescaledb
+    ports:
+    - protocol: TCP
+      port: 5432
+  
+  # Object storage for long-term retention
+  - to:
+    - podSelector:
+        matchLabels:
+          app: minio
+    ports:
+    - protocol: TCP
+      port: 9000
+
+---
+# API GATEWAY NETWORK POLICY
+# Entry point for all external traffic
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: api-gateway-netpol
+  namespace: djezzy-soc
+spec:
+  podSelector:
+    matchLabels:
+      app: api-gateway
+  policyTypes:
+  - Ingress
+  - Egress
+  
+  # Ingress - Accept from load balancer / ingress controller only
+  ingress:
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: ingress-nginx
+    ports:
+    - protocol: TCP
+      port: 8443  # HTTPS only
+  
+  - from:
+    - ipBlock:
+        cidr: 10.0.0.0/8  # Internal network only
+        except:
+        - 10.0.0.0/24     # Exclude DMZ
+    ports:
+    - protocol: TCP
+      port: 8443
+  
+  # Egress - Route to backend services
+  egress:
+  # To Next.js frontend
+  - to:
+    - podSelector:
+        matchLabels:
+          app: soc-frontend
+    ports:
+    - protocol: TCP
+      port: 3000
+  
+  # To SIEM Backend
+  - to:
+    - podSelector:
+        matchLabels:
+          app: siem-backend
+    ports:
+    - protocol: TCP
+      port: 9200
+  
+  # To Auth service
+  - to:
+    - podSelector:
+        matchLabels:
+          app: auth-service
+    ports:
+    - protocol: TCP
+      port: 8080
+  
+  # To Alert Manager
+  - to:
+    - podSelector:
+        matchLabels:
+          app: alert-manager
+    ports:
+    - protocol: TCP
+      port: 9093
+
+---
+# FRONTEND (NEXT.JS) NETWORK POLICY
+# Receives traffic from API Gateway only
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: frontend-netpol
+  namespace: djezzy-soc
+spec:
+  podSelector:
+    matchLabels:
+      app: soc-frontend
+  policyTypes:
+  - Ingress
+  - Egress
+  
+  # Ingress - From API Gateway only
+  ingress:
+  - from:
+    - podSelector:
+        matchLabels:
+          app: api-gateway
+    ports:
+    - protocol: TCP
+      port: 3000
+  
+  # Egress - To API Gateway for API calls
+  egress:
+  - to:
+    - podSelector:
+        matchLabels:
+          app: api-gateway
+    ports:
+    - protocol: TCP
+      port: 8443
+
+---
+# AUTH SERVICE NETWORK POLICY
+# Critical service - highly restricted access
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: auth-service-netpol
+  namespace: djezzy-soc
+spec:
+  podSelector:
+    matchLabels:
+      app: auth-service
+  policyTypes:
+  - Ingress
+  - Egress
+  
+  # Ingress - From API Gateway only
+  ingress:
+  - from:
+    - podSelector:
+        matchLabels:
+          app: api-gateway
+    ports:
+    - protocol: TCP
+      port: 8080
+  
+  # Egress - LDAP/AD connection and database
+  egress:
+  # Corporate LDAP/AD (via internal network)
+  - to:
+    - ipBlock:
+        cidr: 10.10.0.0/16  # Corporate network segment
+    ports:
+    - protocol: TCP
+      port: 636   # LDAPS only
+    - protocol: TCP
+      port: 3269  # LDAPS GC
+  
+  # Auth database
+  - to:
+    - podSelector:
+        matchLabels:
+          app: auth-db
+    ports:
+    - protocol: TCP
+      port: 5432
+
+---
+# ALERT MANAGER NETWORK POLICY
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: alert-manager-netpol
+  namespace: djezzy-soc
+spec:
+  podSelector:
+    matchLabels:
+      app: alert-manager
+  policyTypes:
+  - Ingress
+  - Egress
+  
+  # Ingress - From API Gateway and internal services
+  ingress:
+  - from:
+    - podSelector:
+        matchLabels:
+          app: api-gateway
+    ports:
+    - protocol: TCP
+      port: 9093
+  
+  - from:
+    - podSelector:
+        matchLabels:
+          app: siem-backend
+    ports:
+    - protocol: TCP
+      port: 9093
+  
+  # Egress - Email/SMS gateway and notification channels
+  egress:
+  # Internal SMTP relay
+  - to:
+    - ipBlock:
+        cidr: 10.20.0.0/24  # Mail server subnet
+    ports:
+    - protocol: TCP
+      port: 465   # SMTPS
+    - protocol: TCP
+      port: 587   # Submission
+  
+  # SMS Gateway
+  - to:
+    - ipBlock:
+        cidr: 10.20.0.0/24  # SMS gateway subnet
+    ports:
+    - protocol: TCP
+      port: 443
+
+---
+# THREAT INTELLIGENCE FEED NETWORK POLICY
+# Controlled external egress for threat intel updates
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: threat-intel-netpol
+  namespace: djezzy-soc
+spec:
+  podSelector:
+    matchLabels:
+      app: threat-intel-feed
+  policyTypes:
+  - Ingress
+  - Egress
+  
+  # Ingress - None (pull-based updates)
+  ingress: []
+  
+  # Egress - Approved external threat intel sources ONLY
+  egress:
+  # MISP instance (if internal)
+  - to:
+    - ipBlock:
+        cidr: 10.30.0.0/24
+    ports:
+    - protocol: TCP
+      port: 443
+  
+  # Approved external threat feed providers (whitelisted IPs)
+  - to:
+    - ipBlock:
+        cidr: 203.0.113.0/24  # Example: Threat feed provider A
+    ports:
+    - protocol: TCP
+      port: 443
+  
+  - to:
+    - ipBlock:
+        cidr: 198.51.100.0/24  # Example: Threat feed provider B
+    ports:
+    - protocol: TCP
+      port: 443
+  
+  # Database for storing threat intel
+  - to:
+    - podSelector:
+        matchLabels:
+          app: threat-intel-db
+    ports:
+    - protocol: TCP
+      port: 5432
+
+---
+# DATABASE NETWORK POLICIES
+# Highly restricted - no direct external access
+
+# TimescaleDB (SIEM Data)
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: timescaledb-netpol
+  namespace: djezzy-soc
+spec:
+  podSelector:
+    matchLabels:
+      app: timescaledb
+  policyTypes:
+  - Ingress
+  - Egress
+  ingress:
+  - from:
+    - podSelector:
+        matchLabels:
+          app: siem-backend
+    ports:
+    - protocol: TCP
+      port: 5432
+  
+  # Backup service
+  - from:
+    - podSelector:
+        matchLabels:
+          app: backup-agent
+    ports:
+    - protocol: TCP
+      port: 5432
+  egress: []  # No outbound needed
+
+# Auth Database
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: authdb-netpol
+  namespace: djezzy-soc
+spec:
+  podSelector:
+    matchLabels:
+      app: auth-db
+  policyTypes:
+  - Ingress
+  - Egress
+  ingress:
+  - from:
+    - podSelector:
+        matchLabels:
+          app: auth-service
+    ports:
+    - protocol: TCP
+      port: 5432
+  egress: []
+
+# Threat Intel Database
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: threatinteldb-netpol
+  namespace: djezzy-soc
+spec:
+  podSelector:
+    matchLabels:
+      app: threat-intel-db
+  policyTypes:
+  - Ingress
+  - Egress
+  ingress:
+  - from:
+    - podSelector:
+        matchLabels:
+          app: threat-intel-feed
+    ports:
+    - protocol: TCP
+      port: 5432
+  egress: []
+
+---
+# MONITORING ACCESS - Prometheus/Grafana
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: monitoring-scrape-netpol
+  namespace: djezzy-soc
+spec:
+  podSelector: {}  # All pods in namespace
+  policyTypes:
+  - Ingress
+  ingress:
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: monitoring
+    ports:
+    - protocol: TCP
+      port: 9100  # Node exporter
+    - protocol: TCP
+      port: 9090  # Custom metrics
+
+---
+# EGRESS GATEWAY FOR EXTERNAL COMMUNICATIONS
+# All external traffic must go through dedicated egress gateway
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: egress-gateway-netpol
+  namespace: djezzy-soc
+spec:
+  podSelector:
+    matchLabels:
+      app: egress-gateway
+  policyTypes:
+  - Ingress
+  - Egress
+  ingress:
+  - from:
+    - podSelector: {}  # Internal pods can use egress gateway
+    ports:
+    - protocol: TCP
+      port: 8080  # HTTP proxy
+    - protocol: TCP
+      port: 8443  # HTTPS proxy
+  egress:
+  - {}  # Allow all egress (gateway handles filtering)
+
+---
+# CNI-LEVEL ENCRYPTION REQUIREMENTS
+# Note: Apply these annotations for mTLS enforcement (Calico/Cilium)
+# This is a reference for the CNI configuration
+
+# Calico Global Network Policy for mTLS
+# apiVersion: projectcalico.org/v3
+# kind: GlobalNetworkPolicy
+# metadata:
+#   name: enforce-mtls-eastwest
+# spec:
+#   selector: "namespace == 'djezzy-soc'"
+#   types:
+#   - Egress
+#   - Ingress
+#   egress:
+#   - action: Allow
+#     destination:
+#       selector: "namespace == 'djezzy-soc'"
+#     tls:
+#       client:
+#         cert: djezzy-soc-client-cert
+#         key: djezzy-soc-client-key
+#       server:
+#         ca: djezzy-soc-ca
+#         cert: djezzy-soc-server-cert
+#         key: djezzy-soc-server-key
+#   ingress:
+#   - action: Allow
+#     source:
+#       selector: "namespace == 'djezzy-soc'"
+#     tls:
+#       client:
+#         ca: djezzy-soc-ca
+#         cert: djezzy-soc-client-cert
+#       server:
+#         cert: djezzy-soc-server-cert
+#         key: djezzy-soc-server-key

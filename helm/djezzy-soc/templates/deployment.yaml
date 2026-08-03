@@ -1,0 +1,295 @@
+{{/*
+=============================================================================
+Djezzy National SOC Platform - Generic Deployment Template
+=============================================================================
+Production-ready deployment template with all security hardening
+NSA K8s Hardening Guide | ANRT Compliant | GitOps Ready
+=============================================================================
+*/}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "djezzy-soc.fullname" . }}
+  namespace: {{ include "djezzy-soc.namespace" . }}
+  labels:
+    {{- include "djezzy-soc.labels" . | nindent 4 }}
+    app.kubernetes.io/component: {{ .Values.componentName | default "application" }}
+    {{- include "djezzy-soc.anrtLabels" . | nindent 4 }}
+  annotations:
+    {{- include "djezzy-soc.annotations" . | nindent 4 }}
+    {{- if .Values.prometheusEnabled }}
+    {{- include "djezzy-soc.prometheusAnnotations" . | nindent 4 }}
+    {{- end }}
+spec:
+  {{- if not .Values.statefulSet }}
+  replicas: {{ .Values.replicas | default 1 }}
+  {{- end }}
+  {{- if .Values.strategy }}
+  strategy:
+    {{- toYaml .Values.strategy | nindent 4 }}
+  {{- else }}
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: {{ .Values.rollingUpdate.maxSurge | default 1 }}
+      maxUnavailable: {{ .Values.rollingUpdate.maxUnavailable | default 0 }}
+  {{- end }}
+  selector:
+    matchLabels:
+      {{- include "djezzy-soc.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: {{ .Values.componentName | default "application" }}
+  template:
+    metadata:
+      labels:
+        {{- include "djezzy-soc.labels" . | nindent 8 }}
+        app.kubernetes.io/component: {{ .Values.componentName | default "application" }}
+        {{- if .Values.prometheusEnabled }}
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "{{ .Values.service.port | default "8080" }}"
+        prometheus.io/path: "{{ .Values.prometheusPath | default "/metrics" }}"
+        {{- end }}
+        {{- with .Values.podLabels }}
+        {{ toYaml . | nindent 8 }}
+        {{- end }}
+      annotations:
+        {{- with .Values.podAnnotations }}
+        {{ toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      {{- /* Service Account */}}
+      serviceAccountName: {{ include "djezzy-soc.serviceAccountName" . }}
+      
+      {{- /* Pod Security Context */}}
+      {{- if .Values.podSecurityContext }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      {{- else }}
+      securityContext:
+        {{- include "djezzy-soc.podSecurityContext" . | nindent 8 }}
+      {{- end }}
+      
+      {{- /* Service Account Creation */}}
+      automountServiceAccountToken: {{ .Values.automountServiceAccountToken | default false }}
+      
+      {{- /* Host Network (for NSM tools) */}}
+      hostNetwork: {{ .Values.hostNetwork | default false }}
+      dnsPolicy: {{ .Values.dnsPolicy | default "ClusterFirst" }}
+      
+      {{- /* Init Containers */}}
+      {{- if .Values.initContainers }}
+      initContainers:
+        {{- range .Values.initContainers }}
+        - name: {{ .name }}
+          image: "{{ .image }}"
+          {{- if .command }}
+          command:
+            {{- toYaml .command | nindent 12 }}
+          {{- end }}
+          {{- if .env }}
+          env:
+            {{- toYaml .env | nindent 12 }}
+          {{- end }}
+          {{- if .resources }}
+          resources:
+            {{- toYaml .resources | nindent 12 }}
+          {{- end }}
+        {{- end }}
+      {{- end }}
+      
+      {{- /* Topology Spread Constraints */}}
+      {{- include "djezzy-soc.topologySpreadConstraints" . | nindent 6 }}
+      
+      {{- /* Affinity Rules */}}
+      affinity:
+        {{- include "djezzy-soc.affinity" . | nindent 8 }}
+      
+      {{- /* Node Selector */}}
+      {{- if .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml .Values.nodeSelector | nindent 8 }}
+      {{- end }}
+      
+      {{- /* Tolerations */}}
+      {{- if .Values.tolerations }}
+      tolerations:
+        {{- toYaml .Values.tolerations | nindent 8 }}
+      {{- end }}
+      
+      {{- /* Image Pull Secrets */}}
+      {{- if .Values.global.imagePullSecrets }}
+      imagePullSecrets:
+        {{- range .Values.global.imagePullSecrets }}
+        - name: {{ . }}
+        {{- end }}
+      {{- end }}
+      
+      {{- /* Main Container(s) */}}
+      containers:
+        {{- /* Primary Container */}}
+        - name: {{ .Values.componentName | default "main" }}
+          image: {{ include "djezzy-soc.image" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy | default "IfNotPresent" }}
+          
+          {{- /* Ports */}}
+          {{- if .Values.service.ports }}
+          ports:
+            {{- range $name, $port := .Values.service.ports }}
+            - name: {{ $name }}
+              containerPort: {{ $port }}
+              protocol: TCP
+            {{- end }}
+          {{- else }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.service.port | default 8080 }}
+              protocol: TCP
+          {{- end }}
+          
+          {{- /* Environment Variables */}}
+          {{- if .Values.configMap.enabled }}
+          envFrom:
+            {{- include "djezzy-soc.envFromConfigMap" . | nindent 12 }}
+          {{- end }}
+          {{- if .Values.secrets.enabled }}
+          envFrom:
+            {{- include "djezzy-soc.envFromSecret" . | nindent 12 }}
+          {{- end }}
+          {{- if .Values.env }}
+          env:
+            {{- toYaml .Values.env | nindent 12 }}
+          {{- end }}
+          
+          {{- /* Resource Limits */}}
+          resources:
+            requests:
+              cpu: {{ .Values.resources.requests.cpu | default "100m" }}
+              memory: {{ .Values.resources.requests.memory | default "128Mi" }}
+            limits:
+              cpu: {{ .Values.resources.limits.cpu | default "500m" }}
+              memory: {{ .Values.resources.limits.memory | default "256Mi" }}
+          
+          {{- /* Security Context */}}
+          {{- if .Values.containerSecurityContext }}
+          securityContext:
+            {{- toYaml .Values.containerSecurityContext | nindent 12 }}
+          {{- else }}
+          securityContext:
+            allowPrivilegeEscalation: {{ .Values.securityContext.allowPrivilegeEscalation | default false }}
+            readOnlyRootFilesystem: {{ .Values.securityContext.readOnlyRootFilesystem | default true }}
+            capabilities:
+              drop:
+              - ALL
+              {{- if .Values.securityContext.capabilities.add }}
+              add:
+                {{- toYaml .Values.securityContext.capabilities.add | nindent 14 }}
+              {{- end }}
+            seccompProfile:
+              type: RuntimeDefault
+          {{- end }}
+          
+          {{- /* Liveness Probe */}}
+          {{- if .Values.livenessProbe.enabled | default true }}
+          livenessProbe:
+            {{- if eq .Values.livenessProbe.type "tcpSocket" }}
+            tcpSocket:
+              port: {{ .Values.livenessProbe.port | default "http" }}
+            {{- else if eq .Values.livenessProbe.type "exec" }}
+            exec:
+              command:
+                {{- toYaml .Values.livenessProbe.command | nindent 16 }}
+            {{- else }}
+            httpGet:
+              path: {{ .Values.livenessProbe.path | default "/health" }}
+              port: {{ .Values.livenessProbe.port | default "http" }}
+            {{- end }}
+            initialDelaySeconds: {{ .Values.livenessProbe.initialDelaySeconds | default 30 }}
+            periodSeconds: {{ .Values.livenessProbe.periodSeconds | default 10 }}
+            timeoutSeconds: {{ .Values.livenessProbe.timeoutSeconds | default 5 }}
+            failureThreshold: {{ .Values.livenessProbe.failureThreshold | default 3 }}
+          {{- end }}
+          
+          {{- /* Readiness Probe */}}
+          {{- if .Values.readinessProbe.enabled | default true }}
+          readinessProbe:
+            {{- if eq .Values.readinessProbe.type "tcpSocket" }}
+            tcpSocket:
+              port: {{ .Values.readinessProbe.port | default "http" }}
+            {{- else if eq .Values.readinessProbe.type "exec" }}
+            exec:
+              command:
+                {{- toYaml .Values.readinessProbe.command | nindent 16 }}
+            {{- else }}
+            httpGet:
+              path: {{ .Values.readinessProbe.path | default "/health/readiness" }}
+              port: {{ .Values.readinessProbe.port | default "http" }}
+            {{- end }}
+            initialDelaySeconds: {{ .Values.readinessProbe.initialDelaySeconds | default 5 }}
+            periodSeconds: {{ .Values.readinessProbe.periodSeconds | default 5 }}
+            timeoutSeconds: {{ .Values.readinessProbe.timeoutSeconds | default 3 }}
+            failureThreshold: {{ .Values.readinessProbe.failureThreshold | default 3 }}
+          {{- end }}
+          
+          {{- /* Startup Probe */}}
+          {{- if .Values.startupProbe.enabled }}
+          startupProbe:
+            httpGet:
+              path: {{ .Values.startupProbe.path | default "/health" }}
+              port: {{ .Values.startupProbe.port | default "http" }}
+            initialDelaySeconds: {{ .Values.startupProbe.initialDelaySeconds | default 10 }}
+            periodSeconds: {{ .Values.startupProbe.periodSeconds | default 5 }}
+            timeoutSeconds: {{ .Values.startupProbe.timeoutSeconds | default 3 }}
+            failureThreshold: {{ .Values.startupProbe.failureThreshold | default 30 }}
+          {{- end }}
+          
+          {{- /* Volume Mounts */}}
+          volumeMounts:
+            {{- if .Values.persistence.enabled }}
+            - name: data
+              mountPath: {{ .Values.persistence.mountPath | default "/data" }}
+            {{- end }}
+            {{- if .Values.tmpDirMount }}
+            - name: tmp-dir
+              mountPath: /tmp
+            {{- end }}
+            {{- with .Values.extraVolumeMounts }}
+            {{ toYaml . | nindent 12 }}
+            {{- end }}
+        
+        {{- /* Sidecar Containers */}}
+        {{- if .Values.sidecars }}
+        {{- range .Values.sidecars }}
+        - name: {{ .name }}
+          image: "{{ .image }}"
+          {{- if .ports }}
+          ports:
+            {{- toYaml .ports | nindent 12 }}
+          {{- end }}
+          {{- if .env }}
+          env:
+            {{- toYaml .env | nindent 12 }}
+          {{- end }}
+          {{- if .resources }}
+          resources:
+            {{- toYaml .resources | nindent 12 }}
+          {{- end }}
+          {{- if .securityContext }}
+          securityContext:
+            {{- toYaml .securityContext | nindent 12 }}
+          {{- end }}
+        {{- end }}
+        {{- end }}
+      
+      {{- /* Volumes */}}
+      volumes:
+        {{- if .Values.persistence.enabled }}
+        - name: data
+          persistentVolumeClaim:
+            claimName: {{ include "djezzy-soc.pvcName" . }}
+        {{- end }}
+        {{- if .Values.tmpDirMount }}
+        - name: tmp-dir
+          emptyDir: {}
+        {{- end }}
+        {{- with .Values.extraVolumes }}
+        {{ toYaml . | nindent 8 }}
+        {{- end }}

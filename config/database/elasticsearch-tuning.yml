@@ -1,0 +1,689 @@
+# ============================================================
+# Djezzy SOC Platform - Elasticsearch 8.x Optimization
+# ============================================================
+# Target: Sub-second search, 500K+ EPS indexing capacity
+# Scale: Multi-node cluster, 100TB+ data, 10B+ documents
+#
+# @version 2.0.0
+# Hardware per node: 64GB RAM, 16 CPU cores, NVMe SSD
+# ============================================================
+
+# ----------------------
+# CLUSTER IDENTITY & DISCOVERY
+# ----------------------
+
+cluster.name: djezzy-soc-cluster
+node.name: ${HOSTNAME}
+
+# Dedicated node roles for production
+# Data nodes: store and search data
+# Master nodes: cluster management
+# Ingest nodes: pre-processing pipelines
+# Coordinating nodes: client requests (optional)
+node.roles: [ master, data, data_content, data_hot, data_warm, data_cold, ingest, ml, transform, remote_cluster_client ]
+
+# Discovery settings for multi-node cluster
+discovery.seed_hosts: ["es-master-1", "es-master-2", "es-master-3"]
+cluster.initial_master_nodes: ["es-master-1", "es-master-2", "es-master-3"]
+
+# Prevent swap usage (critical for performance)
+bootstrap.memory_lock: true
+
+# Security settings
+action.destructive_requires_name: true
+xpack.security.enabled: true
+xpack.security.enrollment.enabled: true
+xpack.security.http.ssl.enabled: true
+xpack.security.transport.ssl.enabled: true
+
+
+# ----------------------
+# MEMORY & JVM SETTINGS
+# ----------------------
+
+# Heap size configuration (in jvm.options)
+# Rule of thumb: 50% of RAM, max 32GB
+# For 64GB node: -Xms31g -Xmx31g
+#
+# G1GC Configuration (recommended for ES 8.x):
+# -XX:+UseG1GC
+# -XX:G1ReservePercent=25
+# -XX:InitiatingHeapOccupancyPercent=30
+# -XX:G1HeapRegionSize=16m
+# -XX:+UseStringDeduplication
+# -XX:StringDeduplicationAgeThreshold=3
+
+# Circuit breakers to prevent OOM
+indices.breaker.total.limit: 70%
+indices.breaker.fielddata.limit: 20%
+indices.breaker.request.limit: 10%
+network.breaker.inflight_requests.limit: 100%
+parent.breaker.total.limit: 95%
+
+# Script compilation limits
+script.max_compilations_rate: 150/1m
+script.context.query.max_compilations_rate: 300/1m
+script.context.index.max_compilations_rate: 100/1m
+
+# Field data cache
+indices.fielddata.cache.size: 15%
+indices.fielddata.cache.expire: 6h
+
+# Node query cache
+indices.queries.cache.size: 5%
+indices.requests.cache.size: 3%
+
+
+# ----------------------
+# INDEX TEMPLATES - SECURITY EVENTS (Highest Volume)
+# ----------------------
+
+PUT _index_template/soc-events-template
+{
+  "index_patterns": ["soc-events-*"],
+  "priority": 100,
+  "template": {
+    "settings": {
+      # Sharding strategy for high-volume ingestion
+      "number_of_shards": 24,
+      "number_of_replicas": 1,
+      
+      # Refresh interval - balance freshness vs indexing throughput
+      # Default 1s is too aggressive for 500K EPS; use 30s
+      "refresh_interval": "30s",
+      
+      # Translog durability vs performance
+      "translog.durability": "async",
+      "translog.sync_interval": "30s",
+      "translog.flush_threshold_size": "512mb",
+      
+      # Merge policy optimization
+      "merge.scheduler.max_thread_count": 4,
+      "merge.policy.max_merged_segment": "5gb",
+      "merge.policy.segments_per_tier": 8,
+      "merge.policy.floor_segment": "100mb",
+      
+      # Compression for storage efficiency
+      "index.codec": "best_compression",
+      "index.compression_level": "best_compression",
+      
+      # Caching
+      "index.queries.cache.enabled": true,
+      
+      # Allocation awareness
+      "index.routing.allocation.total_shards_per_node": 2,
+      "index.balance.shard": 0.45
+      
+    },
+    "mappings": {
+      "dynamic": false,
+      "dynamic_templates": [
+        {
+          "strings_as_keyword_and_text": {
+            "match_mapping_type": "string",
+            "mapping": {
+              "type": "text",
+              "fields": {
+                "keyword": { 
+                  "type": "keyword",
+                  "ignore_above": 256 
+                },
+                "search_as_you_spell": {
+                  "type": "search_as_you_type"
+                }
+              }
+            }
+          }
+        },
+        {
+          "ip_addresses": {
+            "match": "*_ip",
+            "mapping": {
+              "type": "ip"
+            }
+          }
+        },
+        {
+          "numeric_fields": {
+            "match": "*_count|*_size|*_port|*_id$",
+            "match_mapping_type": "long",
+            "mapping": {
+              "type": "long"
+            }
+          }
+        }
+      ],
+      "properties": {
+        "@timestamp": {
+          "type": "date",
+          "format": "strict_date_optional_time||epoch_millis"
+        },
+        "event_id": {
+          "type": "keyword",
+          "ignore_above": 128
+        },
+        "event_type": {
+          "type": "keyword",
+          "fields": { "text": { "type": "text" } }
+        },
+        "severity": {
+          "type": "keyword"
+        },
+        "severity_level": {
+          "type": "integer"
+        },
+        "source": {
+          "type": "keyword"
+        },
+        "source_ip": {
+          "type": "ip"
+        },
+        "destination_ip": {
+          "type": "ip"
+        },
+        "source_port": {
+          "type": "integer"
+        },
+        "destination_port": {
+          "type": "integer"
+        },
+        "protocol": {
+          "type": "keyword"
+        },
+        "raw_data": {
+          "type": "text",
+          "index": false,
+          "store": true
+        },
+        "custom_fields": {
+          "type": "object",
+          "enabled": true,
+          "dynamic": true
+        },
+        "geoip": {
+          "properties": {
+            "location": { "type": "geo_point" },
+            "country_iso_code": { "type": "keyword" },
+            "country_name": { "type": "keyword" },
+            "city_name": { "type": "keyword" },
+            "region_name": { "type": "keyword" }
+          }
+        },
+        "threat": {
+          "properties": {
+            "indicator_type": { "type": "keyword" },
+            "confidence": { "type": "integer" },
+            "iocs": {
+              "type": "nested",
+              "properties": {
+                "type": { "type": "keyword" },
+                "value": { "type": "keyword" }
+              }
+            }
+          }
+        },
+        "mitre": {
+          "properties": {
+            "tactic_id": { "type": "keyword" },
+            "tactic_name": { "type": "keyword" },
+            "technique_id": { "type": "keyword" },
+            "technique_name": { "type": "keyword" }
+          }
+        },
+        "correlation_id": {
+          "type": "keyword",
+          "ignore_above": 128
+        },
+        "tags": {
+          "type": "keyword"
+        },
+        "labels": {
+          "type": "keyword"
+        }
+      }
+    },
+    "aliases": {}
+  }
+}
+
+
+# ----------------------
+# INDEX TEMPLATES - ALERTS (Lower Volume, More Querying)
+# ----------------------
+
+PUT _index_template/soc-alerts-template
+{
+  "index_patterns": ["soc-alerts-*"],
+  "priority": 90,
+  "template": {
+    "settings": {
+      "number_of_shards": 6,
+      "number_of_replicas": 1,
+      "refresh_interval": "5s",
+      "index.codec": "best_compression"
+    },
+    "mappings": {
+      "properties": {
+        "@timestamp": { "type": "date" },
+        "alert_id": { "type": "keyword" },
+        "title": { 
+          "type": "text",
+          "fields": { 
+            "keyword": { "type": "keyword" },
+            "completion": { "type": "completion", "analyzer": "simple" }
+          } 
+        },
+        "description": { "type": "text" },
+        "severity": { "type": "keyword" },
+        "status": { "type": "keyword" },
+        "source_event_ids": { "type": "keyword" },
+        "assigned_to": { "type": "keyword" },
+        "assigned_team": { "type": "keyword" },
+        "created_at": { "type": "date" },
+        "updated_at": { "type": "date" },
+        "acknowledged_at": { "type": "date" },
+        "closed_at": { "type": "date" },
+        "tags": { "type": "keyword" },
+        "ioc": {
+          "type": "nested",
+          "properties": {
+            "type": { "type": "keyword" },
+            "value": { "type": "keyword" },
+            "is_suspicious": { "type": "boolean" }
+          }
+        },
+        "context": {
+          "properties": {
+            "source_ip": { "type": "ip" },
+            "destination_ip": { "type": "ip" },
+            "hostname": { "type": "keyword" },
+            "user": { "type": "keyword" }
+          }
+        }
+      }
+    }
+  }
+}
+
+
+# ----------------------
+# COMPONENT TEMPLATE FOR TIME-SERIES (ILM Ready)
+# ----------------------
+
+PUT _component_template/soc-timeseries-settings
+{
+  "template": {
+    "settings": {
+      "index.lifecycle.name": "soc-data-policy",
+      "index.lifecycle.rollover_alias": "soc-data-write",
+      "index.priority": 100,
+      "index.routing.allocation.require.data_tier": "hot"
+    }
+  }
+}
+
+PUT _component_template/soc-mapping-settings
+{
+  "template": {
+    "settings": {
+      "index.mapping.ignore_malformed": true,
+      "index.mapping.coerce": false
+    },
+    "mappings": {
+      "date_detection": true,
+      "dynamic_date_formats": [
+        "strict_date_optional_time",
+        "strict_date_optional_time_nanos",
+        "yyyy/MM/dd HH:mm:ss Z||yyyy/MM/dd Z",
+        "epoch_millis"
+      ],
+      "numeric_detection": true,
+      "runtime_mappings": {}
+    }
+  }
+}
+
+
+# ----------------------
+# INDEX LIFECYCLE MANAGEMENT (ILM) POLICY
+# ----------------------
+
+PUT _ilm/policy/soc-events-policy
+{
+  "policy": {
+    "phases": {
+      "hot": {
+        "min_age": "0ms",
+        "actions": {
+          "rollover": { 
+            "max_primary_shard_size": "50gb", 
+            "max_age": "7d",
+            "max_docs": 500000000
+          },
+          "set_priority": { "priority": 100 },
+          "unfollow": {}
+        }
+      },
+      "warm": {
+        "min_age": "7d",
+        "actions": {
+          "shrink": { "number_of_shards": 3 },
+          "forcemerge": { "max_num_segments": 1 },
+          "allocate": { "require": { "data_tier": "warm" } },
+          "set_priority": { "priority": 50 },
+          "readonly": {}
+        }
+      },
+      "cold": {
+        "min_age": "30d",
+        "actions": {
+          "searchable_snapshot": { "snapshot_repository": "soc-snapshots" },
+          "allocate": { "require": { "data_tier": "cold" } },
+          "set_priority": { "priority": 0 }
+        }
+      },
+      "frozen": {
+        "min_age": "180d",
+        "actions": {
+          "searchable_snapshot": { "snapshot_repository": "soc-snapshots" },
+          "allocate": { "require": { "data_tier": "frozen" } }
+        }
+      },
+      "delete": {
+        "min_age": "365d",
+        "actions": {
+          "delete": {}
+        }
+      }
+    }
+  }
+}
+
+PUT _ilm/policy/soc-alerts-policy
+{
+  "policy": {
+    "phases": {
+      "hot": {
+        "min_age": "0ms",
+        "actions": {
+          "rollover": { "max_primary_shard_size": "25gb", "max_age": "30d" },
+          "set_priority": { "priority": 100 }
+        }
+      },
+      "warm": {
+        "min_age": "30d",
+        "actions": {
+          "shrink": { "number_of_shards": 2 },
+          "forcemerge": { "max_num_segments": 1 },
+          "allocate": { "require": { "data_tier": "warm" } }
+        }
+      },
+      "cold": {
+        "min_age": "90d",
+        "actions": {
+          "allocate": { "require": { "data_tier": "cold" } }
+        }
+      },
+      "delete": {
+        "min_age": "730d",
+        "actions": { "delete": {} }
+      }
+    }
+  }
+}
+
+
+# ----------------------
+# SHARD ALLOCATION & AWARENESS
+# ----------------------
+
+# Availability zone awareness for HA
+cluster.routing.allocation.awareness.attributes: az
+cluster.routing.allocation.awareness.attributes.az: zone-a,zone-b,zone-c
+
+# Disk watermark thresholds
+cluster.routing.allocation.disk.watermark.low: 85%
+cluster.routing.allocation.disk.watermark.high: 90%
+cluster.routing.allocation.disk.watermark.flood_stage: 95%
+
+# Rebalance settings
+cluster.routing.rebalance.enable: all
+cluster.routing.allocation.cluster_concurrent_rebalance: 6
+cluster.routing.allocation.node_concurrent_recoveries: 6
+cluster.routing.allocation.node_initial_primaries_recoveries: 8
+cluster.routing.allocation.node_initial_replicas_recoveries: 8
+
+# Recovery settings (faster recovery but more I/O)
+indices.recovery.max_bytes_per_sec: 500mb
+indices.recovery.concurrent_streams: 12
+indices.recovery.retry_delay_state: 50ms
+indices.recovery.retry_delay_network: 5s
+
+
+# ----------------------
+# THREAD POOL TUNING
+# ----------------------
+
+# Search thread pool (query-heavy workload)
+thread_pool.search.size: 24
+thread_pool.search.queue_size: 2000
+thread_pool.search_throttled.size: 16
+thread_pool.search_throttled.queue_size: 1000
+
+# Get operations (document retrieval by ID)
+thread_pool.get.size: 16
+thread_pool.get.queue_size: 2000
+
+# Write operations (ingestion)
+thread_pool.write.size: 16
+thread_pool.write.queue_size: 2000
+
+# Bulk operations (high-volume ingestion)
+thread_pool.bulk.size: 12
+thread_pool.bulk.queue_size: 1000
+
+# Management operations
+thread_pool.management.size: 4
+thread_pool.management.queue_size: 500
+
+
+# ----------------------
+# SEARCH PERFORMANCE TUNING
+# ----------------------
+
+# Result window limits (prevent deep pagination issues)
+max_result_window: 50000
+max_inner_result_window: 500
+max_rescore_window: 1000
+max_slices_per_scroll: 1024
+
+# Search throttling (disable for maximum throughput in SOC)
+search.throttled: false
+
+# Request cache
+indices.requests.cache.expire: 10m
+indices.requests.cache.size: 3%
+
+# Pre-filter cache
+indices.queries.cache.enabled: true
+
+# Highlighting performance
+highlight.max_analyzed_offset: 1000000
+
+# Search max allowed offset (for pagination)
+max_slices_per_scroll: 1024
+
+
+# ----------------------
+# INGESTION THROUGHPUT OPTIMIZATION
+# ----------------------
+
+# HTTP layer settings
+http.max_content_length: 500mb
+http.max_initial_line_length: 12kb
+http.max_header_size: 16kb
+http.compression: true
+http.pipelining: true
+
+# Bulk request settings
+# Increase for higher throughput bulk operations
+bulk.max_size_bytes: 100mb
+bulk.max_concurrent_bulk_requests: 16
+
+# Ingest pipeline defaults
+ingest.pipeline.default: soc-events-enrichment
+
+# Network compression between nodes
+transport.compress: true
+transport.compression_scheme: lz4
+transport.connect_timeout: 30s
+transport.compress: true
+transport.tcp.keep_alive: true
+transport.tcp.keep_idle: 30s
+transport.tcp.keep_interval: 10s
+transport.tcp.keep_count: 3
+
+
+# ----------------------
+# INGEST PIPELINE CONFIGURATION
+# ----------------------
+
+PUT _ingest/pipeline/soc-events-enrichment
+{
+  "description": "Enrich security events with geoip, user-agent, and threat intel",
+  "processors": [
+    {
+      "geoip": {
+        "field": "source_ip",
+        "target_field": "source_geoip",
+        "ignore_missing": true,
+        "properties": ["city_name", "country_name", "country_iso_code", "location"]
+      }
+    },
+    {
+      "geoip": {
+        "field": "destination_ip",
+        "target_field": "dest_geoip",
+        "ignore_missing": true,
+        "properties": ["country_name", "country_iso_code"]
+      }
+    },
+    {
+      "user_agent": {
+        "field": "custom_fields.user_agent",
+        "target_field": "user_agent_info",
+        "ignore_missing": true
+      }
+    },
+    {
+      "script": {
+        "source": """
+          if (ctx._source.severity != null) {
+            def levels = ['info': 1, 'low': 2, 'medium': 3, 'high': 4, 'critical': 5];
+            ctx._source.severity_level = levels.get(ctx._source.severity.toLowerCase(), 0);
+          }
+        """
+      }
+    },
+    {
+      "set": {
+        "field": "@timestamp",
+        "value": "{{_ingest.timestamp}}"
+      }
+    },
+    {
+      "rename": {
+        "field": "_ingest.timestamp",
+        "target_field": "ingested_at",
+        "ignore_missing": true
+      }
+    }
+  ]
+}
+
+
+# ----------------------
+# SLOW LOGGING CONFIGURATION
+# ----------------------
+
+# Search slow log thresholds
+index.search.slowlog.threshold.query.warn: 5s
+index.search.slowlog.threshold.query.info: 2s
+index.search.slowlog.threshold.query.debug: 500ms
+index.search.slowlog.threshold.query.trace: 200ms
+index.search.slowlog.threshold.fetch.warn: 1s
+index.search.slowlog.threshold.fetch.info: 500ms
+index.search.slowlog.threshold.fetch.debug: 200ms
+index.search.slowlog.threshold.fetch.trace: 100ms
+
+# Indexing slow log
+index.indexing.slowlog.threshold.index.warn: 10s
+index.indexing.slowlog.threshold.index.info: 5s
+index.indexing.slowlog.threshold.index.debug: 2s
+index.indexing.slowlog.threshold.index.trace: 500ms
+index.indexing.slowlog.level: info
+index.indexing.slowlog.source: 1000
+
+
+# ----------------------
+# MONITORING & AUDITING
+# ----------------------
+
+# Monitoring collection
+xpack.monitoring.collection.enabled: true
+xpack.monitoring.collection.interval: 10s
+xpack.monitoring.history.duration: 7d
+
+# Audit logging
+xpack.security.audit.logfile.events.include: access_granted, access_denied, authentication_failed, connection_denied
+xpack.security.audit.logfile.emit_request_body: false
+xpack.security.audit.logfile.emit_node_name: true
+
+
+# ----------------------
+# SNAPSHOT & BACKUP SETTINGS
+# ----------------------
+
+# Repository configuration
+path.repo: ["/mnt/elasticsearch/snapshots", "/mnt/backup/es-snapshots"]
+
+# Snapshot lifecycle management
+slm.retention_schedule: "0 0 2 * * ?"
+slm.history_retained: 30
+slm.successful_retention: "30d"
+slm.failed_retention: "7d"
+
+
+# ----------------------
+# CLUSTER LEVEL SETTINGS (Apply via API)
+# ----------------------
+
+# These are applied at runtime via cluster settings API:
+# PUT /_cluster/settings
+
+/*
+{
+  "persistent": {
+    // Search optimizations
+    "search.max_open_scroll_context": 10000,
+    
+    // Reindexing settings
+    "reindex.remote.whitelist": "*.djezzy.dz:*",
+    "reindex.ssl.verification_mode": "certificate",
+    
+    // Snapshot settings
+    "snapshot.max_concurrent_operations": 20,
+    "snapshot.max_chunk_size": "2gb",
+    
+    // Scripting settings
+    "script.max_compilations_rate": "200/1m",
+    "script.context.query.max_compilations_rate": "400/1m",
+    "script.context.field.max_compilations_rate": "100/1m",
+    
+    // ML settings
+    "ml.max_machine_memory_percent": 30,
+    "ml.max_jvm_size": "2gb",
+    "ml.node_concurrent_job_allocations": 10
+  }
+}
+*/

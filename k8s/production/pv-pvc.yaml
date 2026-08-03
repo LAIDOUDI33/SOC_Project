@@ -1,0 +1,405 @@
+# =============================================================================
+# Djezzy National SOC Platform - Persistent Volumes & Claims
+# =============================================================================
+# Production Storage | Local Path / NFS / Ceph | ANRT Compliant
+# =============================================================================
+
+# =============================================================================
+# POSTGRESQL DATA - PVC
+# =============================================================================
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: postgresql-data-pvc
+  namespace: soc-backend
+  labels:
+    app.kubernetes.io/name: postgresql
+    app.kubernetes.io/component: database-storage
+    app.kubernetes.io/part-of: soc-platform
+  annotations:
+    volume.beta.kubernetes.io/storage-class: local-path
+spec:
+  accessModes:
+  - ReadWriteOnce
+  storageClassName: local-path
+  resources:
+    requests:
+      storage: 500Gi
+
+---
+# =============================================================================
+# POSTGRESQL BACKUP - PVC
+# =============================================================================
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: postgresql-backup-pvc
+  namespace: soc-backend
+  labels:
+    app.kubernetes.io/name: postgresql
+    app.kubernetes.io/component: backup-storage
+    app.kubernetes.io/part-of: soc-platform
+spec:
+  accessModes:
+  - ReadWriteOnce
+  storageClassName: local-path
+  resources:
+    requests:
+      storage: 200Gi
+
+---
+# =============================================================================
+# ELASTICSEARCH DATA - PVC
+# =============================================================================
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: elasticsearch-data-pvc
+  namespace: soc-backend
+  labels:
+    app.kubernetes.io/name: elasticsearch
+    app.kubernetes.io/component: search-storage
+    app.kubernetes.io/part-of: soc-platform
+spec:
+  accessModes:
+  - ReadWriteOnce
+  storageClassName: local-path
+  resources:
+    requests:
+      storage: 1Ti
+
+---
+# =============================================================================
+# REDIS DATA - PVC
+# =============================================================================
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: redis-data-pvc
+  namespace: soc-backend
+  labels:
+    app.kubernetes.io/name: redis
+    app.kubernetes.io/component: cache-storage
+    app.kubernetes.io/part-of: soc-platform
+spec:
+  accessModes:
+  - ReadWriteOnce
+  storageClassName: local-path
+  resources:
+    requests:
+      storage: 10Gi
+
+---
+# =============================================================================
+# WAZUH DATA - PVC
+# =============================================================================
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: wazuh-data-pvc
+  namespace: soc-backend
+  labels:
+    app.kubernetes.io/name: wazuh-manager
+    app.kubernetes.io/component: siem-storage
+    app.kubernetes.io/part-of: soc-platform
+spec:
+  accessModes:
+  - ReadWriteOnce
+  storageClassName: local-path
+  resources:
+    requests:
+      storage: 100Gi
+
+---
+# =============================================================================
+# THEHIVE DATA - PVC
+# =============================================================================
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: thehive-data-pvc
+  namespace: soc-backend
+  labels:
+    app.kubernetes.io/name: thehive
+    app.kubernetes.io/component: soar-storage
+    app.kubernetes.io/part-of: soc-platform
+spec:
+  accessModes:
+  - ReadWriteOnce
+  storageClassName: local-path
+  resources:
+    requests:
+      storage: 50Gi
+
+---
+# =============================================================================
+# MISP DATA - PVC
+# =============================================================================
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: misp-data-pvc
+  namespace: soc-backend
+  labels:
+    app.kubernetes.io/name: misp
+    app.kubernetes.io/component: threat-intel-storage
+    app.kubernetes.io/part-of: soc-platform
+spec:
+  accessModes:
+  - ReadWriteOnce
+  storageClassName: local-path
+  resources:
+    requests:
+      storage: 50Gi
+
+---
+# =============================================================================
+# ZEEK LOGS - PVC
+# =============================================================================
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: zeek-logs-pvc
+  namespace: soc-backend
+  labels:
+    app.kubernetes.io/name: zeek
+    app.kubernetes.io/component: nsm-storage
+    app.kubernetes.io/part-of: soc-platform
+spec:
+  accessModes:
+  - ReadWriteOnce
+  storageClassName: local-path
+  resources:
+    requests:
+      storage: 200Gi
+
+---
+# =============================================================================
+# ARKIME PCAP STORAGE - PVC
+# =============================================================================
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: arkime-pcaps-pvc
+  namespace: soc-backend
+  labels:
+    app.kubernetes.io/name: arkime
+    app.kubernetes.io/component: fpc-storage
+    app.kubernetes.io/part-of: soc-platform
+spec:
+  accessModes:
+  - ReadWriteOnce
+  storageClassName: local-path
+  resources:
+    requests:
+      storage: 2Ti  # Full packet capture requires significant storage
+
+---
+# =============================================================================
+# OPENVAS DATA - PVC
+# =============================================================================
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: openvas-data-pvc
+  namespace: soc-backend
+  labels:
+    app.kubernetes.io/name: openvas
+    app.kubernetes.io/component: vulnerability-storage
+    app.kubernetes.io/part-of: soc-platform
+spec:
+  accessModes:
+  - ReadWriteOnce
+  storageClassName: local-path
+  resources:
+    requests:
+      storage: 50Gi
+
+---
+# =============================================================================
+# DEFECTDOJO MEDIA - PVC
+# =============================================================================
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: defectdojo-media-pvc
+  namespace: soc-backend
+  labels:
+    app.kubernetes.io/name: defectdojo
+    app.kubernetes.io/component: vuln-mgmt-storage
+    app.kubernetes.io/part-of: soc-platform
+spec:
+  accessModes:
+  - ReadWriteOnce
+  storageClassName: local-path
+  resources:
+    requests:
+      storage: 50Gi
+
+---
+# =============================================================================
+# GRR EDR DATA - PVC
+# =============================================================================
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: grr-data-pvc
+  namespace: soc-backend
+  labels:
+    app.kubernetes.io/name: grr-edr
+    app.kubernetes.io/component: edr-storage
+    app.kubernetes.io/part-of: soc-platform
+spec:
+  accessModes:
+  - ReadWriteOnce
+  storageClassName: local-path
+  resources:
+    requests:
+      storage: 100Gi
+
+---
+# =============================================================================
+# PROMETHEUS METRICS STORAGE - PVC
+# =============================================================================
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: prometheus-data-pvc
+  namespace: soc-monitoring
+  labels:
+    app.kubernetes.io/name: prometheus
+    app.kubernetes.io/component: monitoring-storage
+    app.kubernetes.io/part-of: soc-platform
+spec:
+  accessModes:
+  - ReadWriteOnce
+  storageClassName: local-path
+  resources:
+    requests:
+      storage: 200Gi  # Long-term retention per ANRT requirements
+
+---
+# =============================================================================
+# GRAFANA DATA - PVC
+# =============================================================================
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: grafana-data-pvc
+  namespace: soc-monitoring
+  labels:
+    app.kubernetes.io/name: grafana
+    app.kubernetes.io/component: monitoring-ui-storage
+    app.kubernetes.io/part-of: soc-platform
+spec:
+  accessModes:
+  - ReadWriteOnce
+  storageClassName: local-path
+  resources:
+    requests:
+      storage: 10Gi
+
+---
+# =============================================================================
+# KAFKA DATA - PVC (Per Broker)
+# =============================================================================
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: kafka-data-pvc
+  namespace: soc-events
+  labels:
+    app.kubernetes.io/name: kafka
+    app.kubernetes.io/component: messaging-storage
+    app.kubernetes.io/part-of: soc-platform
+spec:
+  accessModes:
+  - ReadWriteOnce
+  storageClassName: local-path
+  resources:
+    requests:
+      storage: 100Gi
+
+---
+# =============================================================================
+# ZOOKEEPER DATA - PVC
+# =============================================================================
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: zookeeper-data-pvc
+  namespace: soc-events
+  labels:
+    app.kubernetes.io/name: zookeeper
+    app.kubernetes.io/component: coordination-storage
+    app.kubernetes.io/part-of: soc-platform
+spec:
+  accessModes:
+  - ReadWriteOnce
+  storageClassName: local-path
+  resources:
+    requests:
+      storage: 10Gi
+
+---
+# =============================================================================
+# SS7 COLLECTOR DATA - PVC
+# =============================================================================
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: ss7-collector-data-pvc
+  namespace: soc-ss7
+  labels:
+    app.kubernetes.io/name: ss7-collector
+    app.kubernetes.io/component: ss7-storage
+    app.kubernetes.io/part-of: ss7-module
+    anrt.djezzy.soc/classification: restricted
+spec:
+  accessModes:
+  - ReadWriteOnce
+  storageClassName: local-path
+  resources:
+    requests:
+      storage: 100Gi
+
+---
+# =============================================================================
+# OPTIONAL: NFS BACKEND FOR SHARED STORAGE (Production)
+# =============================================================================
+# Uncomment and configure if using NFS or Ceph for production shared storage
+#
+# apiVersion: v1
+# kind: PersistentVolume
+# metadata:
+#   name: soc-shared-nfs-pv
+#   labels:
+#     app.kubernetes.io/name: djezzy-soc
+#     app.kubernetes.io/component: shared-storage
+# spec:
+#   capacity:
+#     storage: 5Ti
+#   accessModes:
+#   - ReadWriteMany
+#   persistentVolumeReclaimPolicy: Retain
+#   nfs:
+#     server: nfs.soc.djezzy.dz
+#     path: /data/soc-platform
+#   mountOptions:
+#   - hard
+#   - nfsvers=4.1
+# ---
+# apiVersion: v1
+# kind: PersistentVolumeClaim
+#   name: soc-shared-nfs-pvc
+#   namespace: soc-backend
+# spec:
+#   accessModes:
+#   - ReadWriteMany
+#   storageClassName: ""
+#   selector:
+#     matchLabels:
+#       app.kubernetes.io/component: shared-storage
+#   resources:
+#     requests:
+#       storage: 5Ti

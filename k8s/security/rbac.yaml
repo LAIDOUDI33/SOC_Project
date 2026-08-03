@@ -1,0 +1,346 @@
+# Djezzy National SOC Platform - Role-Based Access Control (RBAC)
+# Principle of Least Privilege - Minimal Permissions for SOC Services
+# ANRT Compliant Access Controls
+
+---
+# SOC Analyst Role - Read access to security events and alerts
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: djezzy-soc-analyst
+  labels:
+    role.djezzy.soc/tier: analyst
+    role.djezzy.soc/access-level: read-mostly
+rules:
+  # Read access to pods and logs for investigation
+  - apiGroups: [""]
+    resources: ["pods", "pods/log", "events"]
+    verbs: ["get", "list", "watch"]
+  
+  # Read access to configmaps (non-sensitive)
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    verbs: ["get", "list"]
+  
+  # Read access to security-related custom resources
+  - apiGroups: ["security.djezzy.dz"]
+    resources: ["securityalerts", "incidents", "threatintel"]
+    verbs: ["get", "list", "watch"]
+  
+  # Limited write access for incident response actions
+  - apiGroups: ["security.djezzy.dz"]
+    resources: ["incidents"]
+    verbs: ["update", "patch"]
+    resourceNames: []  # Must specify specific incidents
+  
+  # No access to secrets, nodes, or cluster-wide configs
+
+---
+# SOC Engineer Role - Extended access for remediation
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: djezzy-soc-engineer
+  labels:
+    role.djezzy.soc/tier: engineer
+    role.djezzy.soc/access-level: read-write
+rules:
+  # Full read access to core resources
+  - apiGroups: [""]
+    resources: ["pods", "pods/log", "events", "services", "endpoints", "configmaps"]
+    verbs: ["get", "list", "watch"]
+  
+  # Deploy and manage SOC application deployments
+  - apiGroups: ["apps"]
+    resources: ["deployments", "replicasets", "daemonsets", "statefulsets"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  
+  # Manage jobs and cronjobs for security scanning
+  - apiGroups: ["batch"]
+    resources: ["jobs", "cronjobs"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  
+  # Full access to security custom resources
+  - apiGroups: ["security.djezzy.dz"]
+    resources: ["securityalerts", "incidents", "threatintel", "vulnerabilities", "compliancechecks"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  
+  # Network policy management
+  - apiGroups: ["networking.k8s.io"]
+    resources: ["networkpolicies"]
+    verbs: ["get", "list", "watch", "create", "update", "patch"]
+  
+  # Secret access limited to non-critical secrets
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["get", "list"]
+    resourceFieldSelector:
+      fieldPath: metadata.annotations.[security.djezzy.dz/classification]
+      value: "internal"
+
+---
+# SOC Admin Role - Administrative privileges (highly restricted)
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: djezzy-soc-admin
+  labels:
+    role.djezzy.soc/tier: admin
+    role.djezzy.soc/access-level: full
+    security.djezzy.dz/requires-mfa: "true"
+    security.djezzy.dz/requires-approval: "true"
+rules:
+  # Full access within SOC namespace
+  - apiGroups: [""]
+    resources: ["*"]
+    verbs: ["*"]
+  
+  - apiGroups: ["apps"]
+    resources: ["*"]
+    verbs: ["*"]
+  
+  - apiGroups: ["batch"]
+    resources: ["*"]
+    verbs: ["*"]
+  
+  - apiGroups: ["networking.k8s.io"]
+    resources: ["*"]
+    verbs: ["*"]
+  
+  - apiGroups: ["security.djezzy.dz"]
+    resources: ["*"]
+    verbs: ["*"]
+  
+  # RBAC management (for managing team access)
+  - apiGroups: ["rbac.authorization.k8s.io"]
+    resources: ["roles", "rolebindings"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+
+---
+# Service Account for SIEM Collector
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: siem-collector
+  namespace: djezzy-soc
+  annotations:
+    iam.amazonaws.com/role: djezzy-soc-siem-collector
+automountServiceAccountToken: true
+---
+# Role for SIEM Collector - Minimal permissions
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: siem-collector-role
+  namespace: djezzy-soc
+rules:
+  # Collect pod logs only
+  - apiGroups: [""]
+    resources: ["pods", "pods/log"]
+    verbs: ["get", "list", "watch"]
+  
+  # Read events for security correlation
+  - apiGroups: [""]
+    resources: ["events"]
+    verbs: ["get", "list", "watch"]
+  
+  # Write to specific configmap for collector state
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    verbs: ["get", "update", "patch"]
+    resourceNames: ["siem-collector-state"]
+---
+# Bind SIEM Collector to its role
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: siem-collector-binding
+  namespace: djezzy-soc
+subjects:
+- kind: ServiceAccount
+  name: siem-collector
+  namespace: djezzy-soc
+roleRef:
+  kind: Role
+  name: siem-collector-role
+  apiGroup: rbac.authorization.k8s.io
+
+---
+# Service Account for Threat Intelligence Feed
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: threat-intel-feed
+  namespace: djezzy-soc
+automountServiceAccountToken: true
+---
+# Role for Threat Intel Feed
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: threat-intel-role
+  namespace: djezzy-soc
+rules:
+  # Read/write threat intel custom resources
+  - apiGroups: ["security.djezzy.dz"]
+    resources: ["threatintel"]
+    verbs: ["get", "list", "watch", "create", "update", "patch"]
+  
+  # External network access via egress (controlled by network policy)
+  - apiGroups: [""]
+    resources: ["services"]
+    verbs: ["get", "list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: threat-intel-binding
+  namespace: djezzy-soc
+subjects:
+- kind: ServiceAccount
+  name: threat-intel-feed
+  namespace: djezzy-soc
+roleRef:
+  kind: Role
+  name: threat-intel-role
+  apiGroup: rbac.authorization.k8s.io
+
+---
+# Service Account for Alert Manager
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: alert-manager
+  namespace: djezzy-soc
+automountServiceAccountToken: true
+---
+# Role for Alert Manager
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: alert-manager-role
+  namespace: djezzy-soc
+rules:
+  # Create/update events for alerts
+  - apiGroups: [""]
+    resources: ["events"]
+    verbs: ["create", "patch", "update"]
+  
+  # Manage alert custom resources
+  - apiGroups: ["security.djezzy.dz"]
+    resources: ["securityalerts"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  
+  # Read incidents for correlation
+  - apiGroups: ["security.djezzy.dz"]
+    resources: ["incidents"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: alert-manager-binding
+  namespace: djezzy-soc
+subjects:
+- kind: ServiceAccount
+  name: alert-manager
+  namespace: djezzy-soc
+roleRef:
+  kind: Role
+  name: alert-manager-role
+  apiGroup: rbac.authorization.k8s.io
+
+---
+# Group Bindings for Team Access
+# These would be mapped to corporate identity groups via OIDC
+
+# Analyst Group Binding
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: djezzy-soc-analysts-group
+subjects:
+- kind: Group
+  name: djezzy-soc-analysts@corporate.djezzy.dz
+  apiGroup: rbac.authorization.k8s.io
+roleRef:
+  kind: ClusterRole
+  name: djezzy-soc-analyst
+  apiGroup: rbac.authorization.k8s.io
+
+# Engineer Group Binding
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: djezzy-soc-engineers-group
+subjects:
+- kind: Group
+  name: djezzy-soc-engineers@corporate.djezzy.dz
+  apiGroup: rbac.authorization.k8s.io
+roleRef:
+  kind: ClusterRole
+  name: djezzy-soc-engineer
+  apiGroup: rbac.authorization.k8s.io
+
+# Admin Group Binding (requires MFA + approval workflow)
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: djezzy-soc-admins-group
+  annotations:
+    security.djezzy.dz/mfa-required: "true"
+    security.djezzy.dz/approval-required: "true"
+subjects:
+- kind: Group
+  name: djezzy-soc-admins@corporate.djezzy.dz
+  apiGroup: rbac.authorization.k8s.io
+roleRef:
+  kind: ClusterRole
+  name: djezzy-soc-admin
+  apiGroup: rbac.authorization.k8s.io
+
+---
+# Audit Role - For compliance officers (read-only audit access)
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: djezzy-soc-auditor
+  labels:
+    role.djezzy.soc/tier: auditor
+    role.djezzy.soc/access-level: read-only-audit
+rules:
+  # Read all resources for audit purposes
+  - apiGroups: [""]
+    resources: ["pods", "pods/log", "events", "configmaps", "secrets"]  # Secrets visible to auditors with justification
+    verbs: ["get", "list"]
+  
+  - apiGroups: ["apps"]
+    resources: ["deployments", "daemonsets", "statefulsets", "replicasets"]
+    verbs: ["get", "list"]
+  
+  - apiGroups: ["rbac.authorization.k8s.io"]
+    resources: ["roles", "rolebindings", "clusterroles", "clusterrolebindings"]
+    verbs: ["get", "list"]
+  
+  - apiGroups: ["security.djezzy.dz"]
+    resources: ["*"]
+    verbs: ["get", "list"]
+  
+  # Access to audit logs
+  - apiGroups: [""]
+    resources: ["pods/log"]
+    verbs: ["get", "list"]
+    resourceNames: ["audit-log-aggregator"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: djezzy-soc-auditors-group
+subjects:
+- kind: Group
+  name: djezzy-soc-auditors@corporate.djezzy.dz
+  apiGroup: rbac.authorization.k8s.io
+roleRef:
+  kind: ClusterRole
+  name: djezzy-soc-auditor
+  apiGroup: rbac.authorization.k8s.io

@@ -1,0 +1,284 @@
+# =============================================================================
+# Djezzy National SOC Platform - Production Namespaces
+# =============================================================================
+# ANRT Compliant | NSA K8s Hardening Guide | GitOps Ready (ArgoCD)
+# =============================================================================
+
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: soc-frontend
+  labels:
+    app.kubernetes.io/name: djezzy-soc
+    app.kubernetes.io/component: frontend
+    app.kubernetes.io/part-of: soc-platform
+    app.kubernetes.io/managed-by: argocd
+    security.djezzy.soc/network-zone: dmz
+    security.djezzy.soc/classification: public
+    anrt.djezzy.soc/compliance: telecom-regulation
+  annotations:
+    argocd.argoproj.io/sync-options: Prune=false
+    description: "Frontend services namespace - DMZ zone"
+---
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: frontend-resource-quota
+  namespace: soc-frontend
+  labels:
+    app.kubernetes.io/name: djezzy-soc
+    app.kubernetes.io/component: resource-quota
+spec:
+  hard:
+    requests.cpu: "4"
+    requests.memory: 8Gi
+    limits.cpu: "8"
+    limits.memory: 16Gi
+    persistentvolumeclaims: "2"
+    pods: "10"
+    services: "5"
+    secrets: "20"
+    configmaps: "20"
+---
+apiVersion: v1
+kind: LimitRange
+metadata:
+  name: frontend-limit-range
+  namespace: soc-frontend
+  labels:
+    app.kubernetes.io/name: djezzy-soc
+spec:
+  limits:
+  - type: Container
+    default:
+      cpu: "500m"
+      memory: "512Mi"
+    defaultRequest:
+      cpu: "100m"
+      memory: "128Mi"
+    max:
+      cpu: "2"
+      memory: "2Gi"
+    min:
+      cpu: "50m"
+      memory: "64Mi"
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: soc-backend
+  labels:
+    app.kubernetes.io/name: djezzy-soc
+    app.kubernetes.io/component: backend
+    app.kubernetes.io/part-of: soc-platform
+    app.kubernetes.io/managed-by: argocd
+    security.djezzy.soc/network-zone: internal
+    security.djezzy.soc/classification: confidential
+    anrt.djezzy.soc/compliance: telecom-regulation
+  annotations:
+    argocd.argoproj.io/sync-options: Prune=false
+    description: "Backend services namespace - Internal network zone"
+---
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: backend-resource-quota
+  namespace: soc-backend
+  labels:
+    app.kubernetes.io/name: djezzy-soc
+    app.kubernetes.io/component: resource-quota
+spec:
+  hard:
+    requests.cpu: "16"
+    requests.memory: 32Gi
+    limits.cpu: "32"
+    limits.memory: 64Gi
+    persistentvolumeclaims: "15"
+    pods: "50"
+    services: "30"
+    secrets: "100"
+    configmaps: "100"
+---
+apiVersion: v1
+kind: LimitRange
+metadata:
+  name: backend-limit-range
+  namespace: soc-backend
+  labels:
+    app.kubernetes.io/name: djezzy-soc
+spec:
+  limits:
+  - type: Container
+    default:
+      cpu: "1"
+      memory: "1Gi"
+    defaultRequest:
+      cpu: "200m"
+      memory: "256Mi"
+    max:
+      cpu: "4"
+      memory: "8Gi"
+    min:
+      cpu: "50m"
+      memory: "64Mi"
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: soc-events
+  labels:
+    app.kubernetes.io/name: djezzy-soc
+    app.kubernetes.io/component: events
+    app.kubernetes.io/part-of: soc-platform
+    app.kubernetes.io/managed-by: argocd
+    security.djezzy.soc/network-zone: internal
+    security.djezzy.soc/classification: confidential
+    anrt.djezzy.soc/compliance: telecom-regulation
+  annotations:
+    argocd.argoproj.io/sync-options: Prune=false
+    description: "Event streaming and messaging namespace"
+---
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: events-resource-quota
+  namespace: soc-events
+  labels:
+    app.kubernetes.io/name: djezzy-soc
+    app.kubernetes.io/component: resource-quota
+spec:
+  hard:
+    requests.cpu: "12"
+    requests.memory: 24Gi
+    limits.cpu: "24"
+    limits.memory: 48Gi
+    persistentvolumeclaims: "10"
+    pods: "20"
+    services: "15"
+    secrets: "50"
+    configmaps: "50"
+---
+apiVersion: v1
+kind: LimitRange
+metadata:
+  name: events-limit-range
+  namespace: soc-events
+  labels:
+    app.kubernetes.io/name: djezzy-soc
+spec:
+  limits:
+  - type: Container
+    default:
+      cpu: "2"
+      memory: "2Gi"
+    defaultRequest:
+      cpu: "500m"
+      memory: "512Mi"
+    max:
+      cpu: "6"
+      memory: "12Gi"
+    min:
+      cpu: "100m"
+      memory: "128Mi"
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: soc-monitoring
+  labels:
+    app.kubernetes.io/name: djezzy-soc
+    app.kubernetes.io/component: monitoring
+    app.kubernetes.io/part-of: soc-platform
+    app.kubernetes.io/managed-by: argocd
+    security.djezzy.soc/network-zone: management
+    security.djezzy.soc/classification: internal
+    anrt.djezzy.soc/compliance: telecom-regulation
+  annotations:
+    argocd.argoproj.io/sync-options: Prune=false
+    description: "Monitoring and observability namespace"
+---
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: monitoring-resource-quota
+  namespace: soc-monitoring
+  labels:
+    app.kubernetes.io/name: djezzy-soc
+    app.kubernetes.io/component: resource-quota
+spec:
+  hard:
+    requests.cpu: "8"
+    requests.memory: 16Gi
+    limits.cpu: "16"
+    limits.memory: 32Gi
+    persistentvolumeclaims: "10"
+    pods: "30"
+    services: "20"
+    secrets: "50"
+    configmaps: "50"
+---
+apiVersion: v1
+kind: LimitRange
+metadata:
+  name: monitoring-limit-range
+  namespace: soc-monitoring
+  labels:
+    app.kubernetes.io/name: djezzy-soc
+spec:
+  limits:
+  - type: Container
+    default:
+      cpu: "500m"
+      memory: "512Mi"
+    defaultRequest:
+      cpu: "100m"
+      memory: "128Mi"
+    max:
+      cpu: "4"
+      memory: "4Gi"
+    min:
+      cpu: "50m"
+      memory: "64Mi"
+---
+# Pod Security Policies via Labels (K8s 1.25+ uses PSA)
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: soc-ss7
+  labels:
+    app.kubernetes.io/name: djezzy-soc
+    app.kubernetes.io/component: ss7-module
+    app.kubernetes.io/part-of: soc-platform
+    app.kubernetes.io/managed-by: argocd
+    security.djezzy.soc/network-zone: isolated
+    security.djezzy.soc/classification: restricted
+    anrt.djezzy.soc/compliance: telecom-regulation
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/enforce-version: latest
+    pod-security.kubernetes.io/audit: restricted
+    pod-security.kubernetes.io/audit-version: latest
+    pod-security.kubernetes.io/warn: restricted
+    pod-security.kubernetes.io/warn-version: latest
+  annotations:
+    argocd.argoproj.io/sync-options: Prune=false
+    description: "SS7/Diameter signaling module namespace - Isolated"
+---
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: ss7-resource-quota
+  namespace: soc-ss7
+  labels:
+    app.kubernetes.io/name: djezzy-soc
+    app.kubernetes.io/component: resource-quota
+spec:
+  hard:
+    requests.cpu: "4"
+    requests.memory: 8Gi
+    limits.cpu: "8"
+    limits.memory: 16Gi
+    persistentvolumeclaims: "3"
+    pods: "10"
+    services: "10"
+    secrets: "30"
+    configmaps: "30"

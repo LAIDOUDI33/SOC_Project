@@ -1,0 +1,880 @@
+# =============================================================================
+# Djezzy National SOC Platform - Default Values
+# =============================================================================
+# Production-ready defaults for all components
+# =============================================================================
+
+# Global configuration applied to all components
+global:
+  # Image registry
+  imageRegistry: registry.djezzy.dz
+  
+  # Image pull secrets
+  imagePullSecrets:
+    - name: djezzy-registry-credentials
+  
+  # Environment (development, staging, production)
+  environment: development
+  
+  # Storage class for all PVCs
+  storageClass: local-path
+  
+  # Common labels applied to all resources
+  labels:
+    app.kubernetes.io/name: djezzy-soc
+    app.kubernetes.io/part-of: soc-platform
+    app.kubernetes.io/managed-by: helm
+  
+  # ANRT compliance settings
+  anrt:
+    compliance: true
+    dataRetentionDays: 2555  # 7 years per ANRT requirements
+    auditLogging: true
+  
+  # Monitoring
+  monitoring:
+    enabled: true
+    prometheus: true
+    grafana: true
+
+# =============================================================================
+# NAMESPACES
+# =============================================================================
+namespaces:
+  create: true
+  frontend:
+    name: soc-frontend
+    resourceQuota:
+      cpu: "4"
+      memory: 8Gi
+      pods: 10
+  backend:
+    name: soc-backend
+    resourceQuota:
+      cpu: "16"
+      memory: 32Gi
+      pods: 50
+  events:
+    name: soc-events
+    resourceQuota:
+      cpu: "12"
+      memory: 24Gi
+      pods: 20
+  monitoring:
+    name: soc-monitoring
+    resourceQuota:
+      cpu: "8"
+      memory: 16Gi
+      pods: 30
+  ss7:
+    name: soc-ss7
+    resourceQuota:
+      cpu: "4"
+      memory: 8Gi
+      pods: 10
+
+# =============================================================================
+# NETWORK POLICIES
+# =============================================================================
+networkPolicies:
+  enabled: true
+  defaultDenyAll: true  # Zero-trust default deny
+
+# =============================================================================
+# SOC PLATFORM API (Next.js)
+# =============================================================================
+socPlatformApi:
+  enabled: true
+  namespace: soc-backend
+  replicas: 3
+  
+  image:
+    repository: soc/platform-api
+    tag: latest
+    pullPolicy: Always
+  
+  service:
+    type: ClusterIP
+    port: 3000
+  
+  resources:
+    requests:
+      cpu: 500m
+      memory: 512Mi
+    limits:
+      cpu: "2"
+      memory: 2Gi
+  
+  autoscaling:
+    enabled: true
+    minReplicas: 3
+    maxReplicas: 10
+    targetCPUUtilization: 70
+    targetMemoryUtilization: 80
+  
+  pdb:
+    enabled: true
+    minAvailable: 2
+  
+  nodeSelector: {}
+  tolerations: []
+  affinity:
+    podAntiAffinity:
+      preferredDuringSchedulingIgnoredDuringExecution:
+        - weight: 100
+          podAffinityTerm:
+            labelSelector:
+              matchExpressions:
+                - key: app.kubernetes.io/name
+                  operator: In
+                  values: [soc-platform-api]
+            topologyKey: kubernetes.io/hostname
+  
+  config:
+    nodeEnv: production
+    port: 3000
+    enableSS7Module: true
+    enableAIAutomation: true
+    enableThreatHunting: true
+    enableGeomarketing: true
+    rateLimitWindowMs: 60000
+    rateLimitMaxRequests: 1000
+
+# =============================================================================
+# KONG API GATEWAY
+# =============================================================================
+kongGateway:
+  enabled: true
+  namespace: soc-backend
+  replicas: 2
+  
+  image:
+    repository: kong/kong-gateway
+    tag: 3.6-ubuntu
+    pullPolicy: Always
+  
+  service:
+    type: ClusterIP
+    ports:
+      proxy: 8000
+      proxySsl: 8443
+      admin: 8001
+  
+  resources:
+    requests:
+      cpu: 500m
+      memory: 512Mi
+    limits:
+      cpu: "2"
+      memory: 2Gi
+  
+  declarativeConfig:
+    services:
+      - name: soc-platform-api
+        url: http://soc-platform-api.soc-backend:3000
+        routes:
+          - paths: [/api]
+            stripPath: true
+      - name: grafana-service
+        url: http://grafana.soc-monitoring:3000
+        routes:
+          - paths: [/grafana]
+            stripPath: true
+      - name: thehive-service
+        url: http://thehive.soc-backend:9000
+        routes:
+          - paths: [/thehive]
+            stripPath: true
+
+# =============================================================================
+# WAZUH SIEM
+# =============================================================================
+wazuh:
+  enabled: true
+  namespace: soc-backend
+  
+  manager:
+    replicas: 1
+    image:
+      repository: wazuh/wazuh-manager
+      tag: 4.7.0
+    resources:
+      requests:
+        cpu: "1"
+        memory: 2Gi
+      limits:
+        cpu: "4"
+        memory: 8Gi
+    persistence:
+      enabled: true
+      size: 100Gi
+  
+  dashboard:
+    enabled: true
+    image:
+      repository: wazuh/wazuh-dashboard
+      tag: 4.7.0
+    resources:
+      requests:
+        cpu: 500m
+        memory: 1Gi
+      limits:
+        cpu: "2"
+        memory: 4Gi
+
+# =============================================================================
+# THEHIVE SOAR
+# =============================================================================
+thehive:
+  enabled: true
+  namespace: soc-backend
+  replicas: 1
+  
+  image:
+    repository: thehiveproject/thehive4
+    tag: latest
+  
+  service:
+    port: 9000
+  
+  resources:
+    requests:
+      cpu: 500m
+      memory: 1Gi
+    limits:
+      cpu: "2"
+      memory: 4Gi
+  
+  persistence:
+    enabled: true
+    size: 50Gi
+
+# =============================================================================
+# CORTEX ANALYZERS
+# =============================================================================
+cortex:
+  enabled: true
+  namespace: soc-backend
+  replicas: 1
+  
+  image:
+    repository: thehiveproject/cortex
+    tag: latest
+  
+  service:
+    port: 9001
+  
+  resources:
+    requests:
+      cpu: 500m
+      memory: 1Gi
+    limits:
+      cpu: "4"
+      memory: 8Gi
+  
+  analyzers:
+    misp:
+      enabled: true
+    opencti:
+      enabled: true
+    virustotal:
+      enabled: false  # Requires API key
+    abuseipdb:
+      enabled: false  # Requires API key
+
+# =============================================================================
+# MISP THREAT INTELLIGENCE
+# =============================================================================
+misp:
+  enabled: true
+  namespace: soc-backend
+  replicas: 1
+  
+  image:
+    repository: misp/misp
+    tag: latest
+  
+  service:
+    port: 80
+    zmqPort: 50000
+  
+  resources:
+    requests:
+      cpu: "1"
+      memory: 2Gi
+    limits:
+      cpu: "4"
+      memory: 8Gi
+  
+  persistence:
+    enabled: true
+    size: 50Gi
+
+# =============================================================================
+# OPENCTI THREAT INTELLIGENCE
+# =============================================================================
+opencti:
+  enabled: true
+  namespace: soc-backend
+  replicas: 1
+  
+  image:
+    repository: opencti/opencti
+    tag: latest
+  
+  service:
+    port: 8080
+  
+  resources:
+    requests:
+      cpu: "1"
+      memory: 2Gi
+    limits:
+      cpu: "4"
+      memory: 8Gi
+
+# =============================================================================
+# SURICATA NSM
+# =============================================================================
+suricata:
+  enabled: true
+  namespace: soc-backend
+  replicas: 2
+  
+  image:
+    repository: jasonish/suricata
+    tag: latest
+  
+  hostNetwork: true
+  dnsPolicy: ClusterFirstWithHostNet
+  
+  resources:
+    requests:
+      cpu: "2"
+      memory: 2Gi
+    limits:
+      cpu: "4"
+      memory: 8Gi
+  
+  config:
+    interface: eth0
+    afPacketThreads: 4
+    homeNet: "[192.168.0.0/16,10.0.0.0/8,172.16.0.0/12]"
+
+# =============================================================================
+# ZEEK NSM
+# =============================================================================
+zeek:
+  enabled: true
+  namespace: soc-backend
+  replicas: 2
+  
+  image:
+    repository: blackzeek/zeek
+    tag: latest
+  
+  hostNetwork: true
+  dnsPolicy: ClusterFirstWithHostNet
+  
+  resources:
+    requests:
+      cpu: "2"
+      memory: 4Gi
+    limits:
+      cpu: "4"
+      memory: 12Gi
+  
+  persistence:
+    enabled: true
+    size: 200Gi
+
+# =============================================================================
+# ARKIME (Full Packet Capture)
+# =============================================================================
+arkime:
+  enabled: true
+  namespace: soc-backend
+  replicas: 2
+  
+  image:
+    repository: arkime/arkime
+    tag: latest
+  
+  hostNetwork: true
+  dnsPolicy: ClusterFirstWithHostNet
+  
+  viewerPort: 8005
+  
+  resources:
+    capture:
+      requests:
+        cpu: "2"
+        memory: 2Gi
+      limits:
+        cpu: "4"
+        memory: 8Gi
+    viewer:
+      requests:
+        cpu: 500m
+        memory: 512Mi
+      limits:
+        cpu: "2"
+        memory: 2Gi
+  
+  persistence:
+    enabled: true
+    size: 2Ti  # Full packet capture requires significant storage
+
+# =============================================================================
+# OPENVAS VULNERABILITY SCANNER
+# =============================================================================
+openvas:
+  enabled: true
+  namespace: soc-backend
+  
+  images:
+    scanner: greenbone/ospd-openvas:22.4
+    manager: greenbone/gvmd:22.4
+    webui: greenbone/gsa:22.4
+  
+  resources:
+    scanner:
+      requests:
+        cpu: "2"
+        memory: 4Gi
+      limits:
+        cpu: "4"
+        memory: 8Gi
+    manager:
+      requests:
+        cpu: 500m
+        memory: 512Mi
+      limits:
+        cpu: "2"
+        memory: 2Gi
+    webui:
+      requests:
+        cpu: 200m
+        memory: 256Mi
+      limits:
+        cpu: 500m
+        memory: 512Mi
+  
+  persistence:
+    enabled: true
+    size: 50Gi
+
+# =============================================================================
+# DEFECTDOJO VULNERABILITY MANAGEMENT
+# =============================================================================
+defectdojo:
+  enabled: true
+  namespace: soc-backend
+  replicas: 1
+  
+  image:
+    repository: defectdojo/defectdojo-latest
+    tag: latest
+  
+  service:
+    port: 8080
+  
+  resources:
+    uwsgi:
+      requests:
+        cpu: 500m
+        memory: 1Gi
+      limits:
+        cpu: "2"
+        memory: 4Gi
+    celeryWorker:
+      requests:
+        cpu: 500m
+        memory: 1Gi
+      limits:
+        cpu: "2"
+        memory: 4Gi
+  
+  persistence:
+    enabled: true
+    size: 50Gi
+
+# =============================================================================
+# GRR EDR
+# =============================================================================
+grr:
+  enabled: true
+  namespace: soc-backend
+  replicas: 1
+  
+  image:
+    repository: grrdocker/grr
+    tag: latest
+  
+  service:
+    frontendPort: 8000
+    adminUiPort: 4443
+  
+  resources:
+    requests:
+      cpu: "1"
+      memory: 2Gi
+    limits:
+      cpu: "4"
+      memory: 8Gi
+  
+  persistence:
+    enabled: true
+    size: 100Gi
+
+# =============================================================================
+# DATABASE CONFIGURATION
+# =============================================================================
+postgresql:
+  enabled: true
+  namespace: soc-backend
+  auth:
+    username: soc_user
+    database: soc_platform
+  primary:
+    persistence:
+      enabled: true
+      size: 500Gi
+    resources:
+      requests:
+        cpu: "1"
+        memory: 2Gi
+      limits:
+        cpu: "4"
+        memory: 16Gi
+
+elasticsearch:
+  enabled: true
+  namespace: soc-backend
+  replicaCount: 3
+  clusterName: djezzy-soc-cluster
+  masterOnly: false
+  persistence:
+    enabled: true
+    size: 1Ti
+  resources:
+    requests:
+      cpu: "2"
+      memory: 4Gi
+    limits:
+      cpu: "8"
+      memory: 16Gi
+
+redis:
+  enabled: true
+  namespace: soc-backend
+  architecture: standalone
+  auth:
+    enabled: true
+  master:
+    persistence:
+      enabled: true
+      size: 10Gi
+    resources:
+      requests:
+        cpu: 200m
+        memory: 256Mi
+      limits:
+        cpu: "2"
+        memory: 4Gi
+
+# =============================================================================
+# EVENT STREAMING (Kafka & Zookeeper)
+# =============================================================================
+kafka:
+  enabled: true
+  namespace: soc-events
+  replicaCount: 3
+  
+  controller:
+    replicaCount: 3
+  
+  broker:
+    configOverrides:
+      server:
+        - "default.replication.factor=3"
+        - "min.insync.replicas=2"
+        - "log.retention.hours=168"
+        - "num.partitions=12"
+    
+    persistence:
+      enabled: true
+      size: 100Gi
+    
+    resources:
+      requests:
+        cpu: "1"
+        memory: 4Gi
+      limits:
+        cpu: "4"
+        memory: 8Gi
+  
+  zookeeper:
+    replicaCount: 3
+    persistence:
+      enabled: true
+      size: 10Gi
+    resources:
+      requests:
+        cpu: 200m
+        memory: 512Mi
+      limits:
+        cpu: "1"
+        memory: 2Gi
+
+# =============================================================================
+# MONITORING
+# =============================================================================
+prometheus:
+  enabled: true
+  namespace: soc-monitoring
+  
+  server:
+    retention: 2555h  # ANRT compliance - 7 years
+    persistentVolume:
+      enabled: true
+      size: 200Gi
+    resources:
+      requests:
+        cpu: 500m
+        memory: 1Gi
+      limits:
+        cpu: "2"
+        memory: 8Gi
+
+grafana:
+  enabled: true
+  namespace: soc-monitoring
+  
+  persistence:
+    enabled: true
+    size: 10Gi
+  
+  resources:
+    requests:
+      cpu: 200m
+      memory: 256Mi
+    limits:
+      cpu: "1"
+      memory: 2Gi
+  
+  dashboards:
+    enabled: true
+  
+  datasources:
+    datasources.yaml:
+      apiVersion: 1
+      datasources:
+        - name: Prometheus
+          type: prometheus
+          access: proxy
+          url: http://prometheus:9090
+          isDefault: true
+        - name: Loki
+          type: loki
+          access: proxy
+          url: http://loki:3100
+
+# =============================================================================
+# SS7 MODULE
+# =============================================================================
+ss7Module:
+  enabled: true
+  namespace: soc-ss7
+  
+  collector:
+    enabled: true
+    replicas: 2
+    image:
+      repository: soc/ss7-collector
+      tag: production
+    hostNetwork: true
+    resources:
+      requests:
+        cpu: "1"
+        memory: 1Gi
+      limits:
+        cpu: "4"
+        memory: 4Gi
+    persistence:
+      enabled: true
+      size: 100Gi
+  
+  analyzer:
+    enabled: true
+    replicas: 2
+    image:
+      repository: soc/ss7-analyzer
+      tag: production
+    resources:
+      requests:
+        cpu: "1"
+        memory: 2Gi
+      limits:
+        cpu: "4"
+        memory: 8Gi
+  
+  diameterMonitor:
+    enabled: true
+    replicas: 2
+    image:
+      repository: soc/diameter-monitor
+      tag: production
+    hostNetwork: true
+    diameterPort: 3868
+    resources:
+      requests:
+        cpu: 500m
+        memory: 512Mi
+      limits:
+        cpu: "2"
+        memory: 2Gi
+
+# =============================================================================
+# INGRESS CONFIGURATION
+# =============================================================================
+ingress:
+  enabled: true
+  className: nginx
+  annotations:
+    kubernetes.io/ingress.class: nginx
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+    nginx.ingress.kubernetes.io/rate-limit: "1000"
+    nginx.ingress.kubernetes.io/rate-limit-window: "1m"
+  
+  hosts:
+    main:
+      host: soc.djezzy.dz
+      paths:
+        - path: /
+          pathType: Prefix
+          service: kong-gateway
+          port: 8443
+    api:
+      host: api.soc.djezzy.dz
+      paths:
+        - path: /
+          pathType: Prefix
+          service: kong-gateway
+          port: 8443
+    monitoring:
+      host: grafana.soc.djezzy.dz
+      paths:
+        - path: /
+          pathType: Prefix
+          service: grafana
+          port: 3000
+    siem:
+      host: siem.soc.djezzy.dz
+      paths:
+        - path: /
+          pathType: Prefix
+          service: wazuh-dashboard
+          port: 5601
+    soar:
+      host: soar.soc.djezzy.dz
+      paths:
+        - path: /
+          pathType: Prefix
+          service: thehive
+          port: 9000
+    threatIntel:
+      host: ti.soc.djezzy.dz
+      paths:
+        - path: /
+          pathType: Prefix
+          service: misp
+          port: 80
+    nsm:
+      host: nsm.soc.djezzy.dz
+      paths:
+        - path: /
+          pathType: Prefix
+          service: arkime
+          port: 8005
+    vulnerability:
+      host: vuln.soc.djezzy.dz
+      paths:
+        - path: /defectdojo
+          pathType: Prefix
+          service: defectdojo
+          port: 8080
+        - path: /openvas
+          pathType: Prefix
+          service: openvas
+          port: 8080
+    edr:
+      host: edr.soc.djezzy.dz
+      paths:
+        - path: /
+          pathType: Prefix
+          service: grr
+          port: 8000
+    opencti:
+      host: opencti.soc.djezzy.dz
+      paths:
+        - path: /
+          pathType: Prefix
+          service: opencti
+          port: 8080
+  
+  tls:
+    enabled: true
+    secretName: soc-platform-tls-cert
+
+# =============================================================================
+# SERVICE ACCOUNTS & RBAC
+# =============================================================================
+serviceAccounts:
+  create: true
+  annotations: {}
+
+rbac:
+  create: true
+
+# =============================================================================
+# SECRETS MANAGEMENT
+# =============================================================================
+secretsManagement:
+  # Options: sealed-secrets, external-secrets-operator, vault
+  provider: sealed-secrets
+  
+  sealedSecrets:
+    enabled: true
+  
+  externalSecrets:
+    enabled: false
+    backend: aws-secretsmanager  # or vault, gcp-secret-manager
+  
+  vault:
+    enabled: false
+    address: ""
+    role: ""
+
+# =============================================================================
+# BACKUP CONFIGURATION
+# =============================================================================
+backup:
+  enabled: true
+  schedule: "0 2 * * *"  # Daily at 2 AM
+  retention: 30d
+  databases:
+    - postgresql
+    - elasticsearch
+    - redis
+  destinations:
+    s3:
+      enabled: false
+      bucket: ""
+      region: ""
+    nfs:
+      enabled: false
+      path: ""
+    local:
+      enabled: true
+      path: /backups

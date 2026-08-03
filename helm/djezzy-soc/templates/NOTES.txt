@@ -1,0 +1,114 @@
+{{/*
+=============================================================================
+Djezzy National SOC Platform - Post-Install Notes
+=============================================================================
+Installation summary and next steps
+ANRT Compliant | Production Ready
+=============================================================================
+*/}}
+
+1. **Deployment Summary**
+   Chart: {{ .Chart.Name }}-{{ .Chart.Version }}
+   Release: {{ .Release.Name }}
+   Namespace: {{ .Release.Namespace }}
+   Environment: {{ .Values.global.environment | default "development" }}
+
+2. **Access URLs**{{- if .Values.ingress.enabled }}
+   
+   Main Platform: https://{{ (index .Values.ingress.hosts 0).host | default "soc.djezzy.dz" }}
+   API Gateway: https://{{ (index .Values.ingress.hosts 1).host | default "api.soc.djezzy.dz" }}{{- end }}
+
+3. **Component Status**
+
+   {{- if .Values.socPlatformApi.enabled }}
+   ✓ SOC Platform API ({{ .Values.socPlatformApi.replicas | default 1 }} replicas){{- end }}
+   {{- if .Values.kongGateway.enabled }}
+   ✓ Kong API Gateway ({{ .Values.kongGateway.replicas | default 1 }} replicas){{- end }}
+   {{- if .Values.wazuh.enabled }}
+   ✓ Wazuh SIEM{{- end }}
+   {{- if .Values.thehive.enabled }}
+   ✓ TheHive SOAR{{- end }}
+   {{- if .Values.cortex.enabled }}
+   ✓ Cortex Analyzers{{- end }}
+   {{- if .Values.misp.enabled }}
+   ✓ MISP Threat Intelligence{{- end }}
+   {{- if .Values.opencti.enabled }}
+   ✓ OpenCTI Threat Intelligence{{- end }}
+   {{- if .Values.suricata.enabled }}
+   ✓ Suricata NSM ({{ .Values.suricata.replicas | default 1 }} replicas){{- end }}
+   {{- if .Values.zeek.enabled }}
+   ✓ Zeek NSM ({{ .Values.zeek.replicas | default 1 }} replicas){{- end }}
+   {{- if .Values.arkime.enabled }}
+   ✓ Arkime FPC ({{ .Values.arkime.replicas | default 1 }} replicas){{- end }}
+   {{- if .Values.openvas.enabled }}
+   ✓ OpenVAS Vulnerability Scanner{{- end }}
+   {{- if .Values.defectdojo.enabled }}
+   ✓ DefectDojo Vulnerability Management{{- end }}
+   {{- if .Values.grr.enabled }}
+   ✓ GRR EDR{{- end }}
+   {{- if .Values.ss7Module.enabled }}
+   ✓ SS7 Module (Collector, Analyzer, Diameter Monitor){{- end }}
+   {{- if .Values.prometheus.enabled }}
+   ✓ Prometheus Monitoring{{- end }}
+   {{- if .Values.grafana.enabled }}
+   ✓ Grafana Dashboards{{- end }}
+
+4. **Security Configuration**
+
+   {{- if .Values.networkPolicies.enabled }}
+   ✓ Network Policies Enabled (Zero-Trust){{- end }}
+   {{- if .Values.secretsManagement.provider }}
+   ✓ Secrets Provider: {{ .Values.secretsManagement.provider }}{{- end }}
+   ANRT Compliance: {{ .Values.anrt.compliance | default "enabled" }}
+   Data Retention: {{ .Values.anrt.dataRetentionDays | default 2555 }} days
+
+5. **Next Steps**
+
+   a. Configure secrets using sealed-secrets:
+      ```bash
+      kubeseal --format yaml < secrets-template.yaml > sealed-secrets.yaml
+      kubectl apply -f sealed-secrets.yaml
+      ```
+
+   b. Verify all pods are running:
+      ```bash
+      kubectl get pods -n {{ .Release.Namespace }} -l app.kubernetes.io/name=djezzy-soc
+      ```
+
+   c. Check component health:
+      ```bash
+      kubectl exec -it deployment/{{ include "djezzy-soc.fullname" . }} -n {{ .Release.Namespace }} -- curl localhost:{{ .Values.service.port | default 8080 }}/health
+      ```
+
+   d. Access Grafana dashboards at the monitoring URL above.
+
+6. **Backup & Recovery**
+
+   Backup schedule: {{ .Values.backup.schedule | default "0 2 * * *" }}
+   Retention period: {{ .Values.backup.retention | default "30d" }}
+
+   To trigger a manual backup:
+   ```bash
+   kubectl create job --from=cronjob/soc-platform-backup manual-backup-$(date +%s)
+   ```
+
+7. **Support & Documentation**
+
+   Documentation: https://docs.soc.djezzy.dz
+   Support Portal: https://support.djezzy.dz/soc
+   Incident Response: soc-incidents@djezzy.dz
+
+   For ANRT compliance inquiries: anrt-compliance@djezzy.dz
+
+{{- /*
+ANRT Compliance Notice
+This deployment complies with Algerian telecommunications security regulations.
+Data retention: 2555 days (7 years) per ARPT/ANRT requirements.
+Audit logging: Enabled for all components.
+Encryption: TLS 1.3 required for all external communications.
+*/ -}}
+
+=============================================================================
+Djezzy National SOC Platform v{{ .Chart.AppVersion }} | © Djezzy Telecom Algeria
+ANRT Certification: {{ .Values.anrt.certification | default "Pending" }}
+=============================================================================

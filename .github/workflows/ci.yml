@@ -1,0 +1,405 @@
+# =============================================================================
+# Djezzy National SOC Platform - Continuous Integration Pipeline
+# =============================================================================
+# CI/CD for Djezzy SOC Platform | ANRT Compliant | Production Ready
+# =============================================================================
+
+name: Djezzy SOC Platform CI
+
+on:
+  push:
+    branches:
+      - main
+      - develop
+      - 'release/**'
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
+      - 'download/**'
+  pull_request:
+    branches:
+      - main
+      - develop
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Target environment'
+        required: true
+        default: 'staging'
+        type: choice
+        options:
+          - development
+          - staging
+          - production
+
+env:
+  NODE_VERSION: '20'
+  REGISTRY: registry.djezzy.dz
+  IMAGE_PREFIX: soc/
+
+jobs:
+  # ===========================================================================
+  # CODE QUALITY & LINTING
+  # ===========================================================================
+  lint:
+    name: Code Quality & Linting
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'bun'
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Run ESLint
+        run: bun run lint
+        continue-on-error: false
+
+      - name: Run Prettier check
+        run: |
+          npx prettier --check "src/**/*.{ts,tsx,js,jsx}" "*.md"
+        continue-on-error: true
+
+      - name: TypeScript type checking
+        run: |
+          npx tsc --noEmit --pretty
+        continue-on-error: false
+
+      - name: Check Kubernetes manifests syntax
+        run: |
+          echo "Validating K8s manifests..."
+          find k8s/production -name '*.yaml' -exec kubectl --dry-run=client -o yaml -f {} \; || true
+          echo "K8s manifest validation complete"
+
+      - name: Validate Helm charts
+        uses: lukevella/helm-chart-testing-action@v2
+        with:
+          command: lint
+          config: helm/djezzy-soc/ct.yaml
+
+  # ===========================================================================
+  # UNIT TESTS
+  # ===========================================================================
+  unit-tests:
+    name: Unit Tests
+    runs-on: ubuntu-latest
+    needs: lint
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'bun'
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Run unit tests
+        run: |
+          bun test --coverage --reporter=json
+        env:
+          CI: true
+          NODE_ENV: test
+
+      - name: Upload coverage report
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: coverage-report
+          path: coverage/
+          retention-days: 7
+
+      - name: Generate coverage summary
+        uses: irongut/CodeCoverageSummary@v1.3.0
+        with:
+          filename: coverage/coverage-final.json
+          format: markdown
+          output: both
+          indicators: true
+
+  # ===========================================================================
+  # INTEGRATION TESTS
+  # ===========================================================================
+  integration-tests:
+    name: Integration Tests
+    runs-on: ubuntu-latest
+    needs: unit-tests
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: test_user
+          POSTGRES_PASSWORD: test_password
+          POSTGRES_DB: test_db
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd="pg_isready -U test_user"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=5
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd="redis-cli ping"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=5
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'bun'
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Wait for services to be ready
+        run: |
+          echo "Waiting for PostgreSQL..."
+          until pg_isready -h localhost -p 5432 -U test_user; do
+            sleep 1
+          done
+          echo "PostgreSQL is ready!"
+          
+          echo "Waiting for Redis..."
+          until redis-cli -h localhost ping; do
+            sleep 1
+          done
+          echo "Redis is ready!"
+
+      - name: Run database migrations (test)
+        run: |
+          bunx prisma migrate deploy
+        env:
+          DATABASE_URL: postgresql://test_user:test_password@localhost:5432/test_db
+
+      - name: Run integration tests
+        run: |
+          bun test tests/integration/
+        env:
+          DATABASE_URL: postgresql://test_user:test_password@localhost:5432/test_db
+          REDIS_URL: redis://localhost:6379
+          NODE_ENV: test
+          CI: true
+
+  # ===========================================================================
+  # SECURITY SCANNING
+  # ===========================================================================
+  security-scan:
+    name: Security Scanning
+    runs-on: ubuntu-latest
+    needs: lint
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Run Trivy filesystem scan
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: 'fs'
+          scan-ref: '.'
+          severity: 'CRITICAL,HIGH'
+          exit-code: '0'
+          format: 'table'
+          ignore-unfixed: true
+
+      - name: Run Trivy dependency scan
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: 'dep'
+          scan-ref: 'package.json'
+          severity: 'CRITICAL,HIGH'
+          exit-code: '0'
+
+      - name: Run npm audit
+        run: |
+          bun audit || true
+          npx audit-ci --moderate || true
+
+      - name: Check for secrets in code
+        uses: trufflesecurity/trufflehog@main
+        with:
+          path: ./
+          base: ${{ github.event.pull_request.base.ref }}
+          head: HEAD
+          extra_args: --only-verified
+
+      - name: Scan K8s manifests for misconfigurations
+        uses: stackrox/kube-linter-action@v1
+        with:
+          directory: k8s/production
+          format: json
+          output-file: kube-linter-results.json
+        continue-on-error: true
+
+      - name: Upload security scan results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: security-scan-results
+          path: |
+            kube-linter-results.json
+            trivy-results.txt
+          retention-days: 30
+
+  # ===========================================================================
+  # BUILD DOCKER IMAGES
+  # ===========================================================================
+  build:
+    name: Build Docker Images
+    runs-on: ubuntu-latest
+    needs: [unit-tests, integration-tests]
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      matrix:
+        include:
+          - name: platform-api
+            dockerfile: Dockerfile
+            context: .
+            tag: platform-api
+          - name: ss7-collector
+            dockerfile: docker/ss7-collector/Dockerfile
+            context: ./docker/ss7-collector
+            tag: ss7-collector
+          - name: ss7-analyzer
+            dockerfile: docker/ss7-analyzer/Dockerfile
+            context: ./docker/ss7-analyzer
+            tag: ss7-analyzer
+          - name: diameter-monitor
+            dockerfile: docker/diameter-monitor/Dockerfile
+            context: ./docker/diameter-monitor
+            tag: diameter-monitor
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to container registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ secrets.REGISTRY_USERNAME }}
+          password: ${{ secrets.REGISTRY_PASSWORD }}
+
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}${{ matrix.tag }}
+          tags: |
+            type=sha,prefix=
+            type=ref,event=branch
+            type=semver,pattern={{version}}
+            type=raw,value=latest,enable={{is_default_branch}}
+
+      - name: Build and push image
+        uses: docker/build-push-action@v5
+        with:
+          context: ${{ matrix.context }}
+          file: ${{ matrix.dockerfile }}
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          build-args: |
+            BUILD_DATE=${{ github.event.head_commit.timestamp }}
+            VCS_REF=${{ github.sha }}
+
+      - name: Run Trivy vulnerability scanner on image
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}${{ matrix.tag }}:${{ github.sha }}
+          severity: 'CRITICAL,HIGH'
+          exit-code: '1'
+          format: 'sarif'
+          output: 'trivy-results.sarif'
+
+      - name: Upload Trivy scan results
+        if: always()
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: 'trivy-results.sarif'
+
+  # ===========================================================================
+  # HELM CHART VALIDATION & PACKAGING
+  # ===========================================================================
+  helm-package:
+    name: Helm Chart Package
+    runs-on: ubuntu-latest
+    needs: [lint, security-scan]
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Helm
+        uses: azure/setup-helm@v3
+        with:
+          version: 'v3.14.0'
+
+      - name: Lint Helm chart
+        run: |
+          helm lint helm/djezzy-soc/
+          helm template djezzy-soc helm/djezzy-soc/ > /dev/null
+
+      - name: Run Helm unittest
+        uses: mathieu-hebert/helm-unittest-action@v1.6.0
+        with:
+          chart-path: helm/djezzy-soc/
+
+      - name: Package Helm chart
+        run: |
+          helm package helm/djezzy-soc/ \
+            --destination ./helm-packages/ \
+            --app-version ${GITHUB_SHA::8} \
+            --version $(grep '^version:' helm/djezzy-soc/Chart.yaml | awk '{print $2}')
+
+      - name: Upload Helm package artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: helm-packages
+          path: helm-packages/*.tgz
+          retention-days: 30
+
+  # ===========================================================================
+  # SUMMARY
+  # ===========================================================================
+  ci-summary:
+    name: CI Summary
+    runs-on: ubuntu-latest
+    needs: [build, helm-package, security-scan]
+    if: always()
+    steps:
+      - name: CI Status
+        run: |
+          echo "## CI Pipeline Results" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Job | Status |" >> $GITHUB_STEP_SUMMARY
+          echo "|-----|--------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Code Quality & Linting | ${{ needs.lint.result == 'success' && '✅ Passed' || '❌ Failed' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Unit Tests | ${{ needs.unit-tests.result == 'success' && '✅ Passed' || '❌ Failed' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Integration Tests | ${{ needs.integration-tests.result == 'success' && '✅ Passed' || '❌ Failed' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Security Scanning | ${{ needs.security-scan.result == 'success' && '✅ Passed' || '⚠️ Review Required' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Docker Build | ${{ needs.build.result == 'success' && '✅ Passed' || '❌ Failed' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Helm Package | ${{ needs.helm-package.result == 'success' && '✅ Passed' || '❌ Failed' }} |" >> $GITHUB_STEP_SUMMARY

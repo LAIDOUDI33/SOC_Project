@@ -1,0 +1,360 @@
+# Djezzy National SOC Platform - Encryption at Rest Configuration
+# Data Protection for ANRT Compliance (AES-256 minimum)
+# Compliance: ANRT-SEC-009, NIST SC-28, NIST AC-19
+# Version: 1.0.0
+
+encryptionAtRest:
+  # ============================================
+  # GLOBAL ENCRYPTION POLICY
+  # ============================================
+  
+  policy:
+    enabled: true
+    standard: "AES-256-GCM"  # Minimum per ANRT requirements
+    keyLength: 256
+    algorithm: "GCM"  # Galois/Counter Mode for authenticated encryption
+    complianceNote: "ANRT requires AES-256 minimum for all data at rest"
+    
+  # Key Management Service Configuration
+  kms:
+    provider: "hashicorp-vault"
+    primaryRegion: "algeria-central"
+    dataLocalization:
+      enforceAlgeriaOnly: true
+      allowedRegions: ["algeria-central"]
+      
+    vaultConfig:
+      address: "https://vault.soc-backend.svc.cluster.local:8200"
+      namespace: "djezzy-soc"
+      authMethod: "kubernetes"
+      kubernetesAuthRole: "djezzy-soc-apps"
+      transitEnginePath: "transit"
+      
+    keyRotation:
+      enabled: true
+      automaticRotation: true
+      rotationInterval: 90d  # ANRT recommends quarterly rotation
+      minRotationInterval: 30d
+      
+    # HSM Integration (for root keys)
+    hsmIntegration:
+      enabled: true
+      provider: "thales-luna"  # FIPS 140-2 Level 3 certified
+      fipsCompliant: true
+      haEnabled: true  # High availability cluster
+
+  # ============================================
+  # DATABASE ENCRYPTION (PostgreSQL)
+  # ============================================
+  
+  database:
+    postgresql:
+      enabled: true
+      method: "TDE"  # Transparent Data Encryption
+      
+      # Cluster-level encryption
+      clusterEncryption:
+        enabled: true
+        algorithm: "AES-256-GCM"
+        keySource: "kms/vault"
+        
+      # Column-level encryption for PII/PHI
+      columnEncryption:
+        enabled: true
+        encryptedColumns:
+          - table: "subscribers"
+            columns:
+              - name: "imsi"
+                algorithm: "AES-256-GCM"
+                format: "deterministic"  # For searchable encryption
+              - name: "msisdn"
+                algorithm: "AES-256-GCM"
+                format: "deterministic"
+              - name: "full_name"
+                algorithm: "AES-256-GCM"
+                format: "randomized"
+              - name: "national_id"
+                algorithm: "AES-256-GCM"
+                format: "randomized"
+          - table: "incidents"
+            columns:
+              - name: "reporter_details"
+                algorithm: "AES-256-GCM"
+                format: "randomized"
+              - name: "victim_data"
+                algorithm: "AES-256-GCM"
+                format: "randomized"
+                
+      # TDE with pgcrypto extension
+      pgcryptoExtension:
+        enabled: true
+        keyRetrieval: "vault-transit"
+        
+      # WAL (Write-Ahead Log) encryption
+      walEncryption:
+        enabled: true
+        
+      # Backup encryption
+      backupEncryption:
+        enabled: true
+        algorithm: "AES-256-GCM"
+        separateBackupKey: true
+        
+  # ============================================
+  # REDIS ENCRYPTION
+  # ============================================
+  
+  redis:
+    enabled: true
+    
+    # Redis Enterprise / Valkey encryption options
+    encryptionAtRest:
+      enabled: false  # Redis typically encrypts in transit; data in memory
+      note: "Sensitive data should be encrypted before caching"
+      
+    encryptionInTransit:
+      enabled: true
+      tlsVersion: "1.3"
+      requireClientCerts: true
+      
+    # Data classification for Redis
+    sensitiveDataPolicy:
+      allowedDataTypes:
+        - session_tokens  # Encrypted before storage
+        - rate_limit_counters  # Non-sensitive
+        - cache_keys  # Hashed only
+      prohibitedDataTypes:
+        - raw_pii
+        - credentials
+        - encryption_keys
+
+  # ============================================
+  # KAFKA ENCRYPTION
+  # ============================================
+  
+  kafka:
+    enabled: true
+    
+    # Topic-level encryption policies
+    topicEncryption:
+      defaultPolicy: "encrypt-sensitive-only"
+      topics:
+        - name: "soc.security.events"
+          encryption: "required"
+          algorithm: "AES-256-GCM"
+          keyAlias: "kafka-security-events-key"
+          dataClassification: "confidential"
+          
+        - name: "soc.incidents"
+          encryption: "required"
+          algorithm: "AES-256-GCM"
+          keyAlias: "kafka-incidents-key"
+          dataClassification: "confidential"
+          
+        - name: "soc.subscriber.data"
+          encryption: "required"
+          algorithm: "AES-256-GCM"
+          keyAlias: "kafka-subscriber-key"
+          dataClassification: "restricted"
+          additionalProtection: "tokenization"
+          
+        - name: "soc.metrics"
+          encryption: "optional"
+          dataClassification: "internal"
+          
+        - name: "soc.audit.logs"
+          encryption: "required"
+          algorithm: "AES-256-GCM"
+          keyAlias: "kafka-audit-key"
+          dataClassification: "confidential"
+          integrityCheck: true
+          
+    # Disk encryption for Kafka brokers
+    diskEncryption:
+      enabled: true
+      method: "LUKS"  # Linux Unified Key Setup
+      algorithm: "AES-XTS-512"
+
+  # ============================================
+  # ELASTICSEARCH ENCRYPTION
+  # ============================================
+  
+  elasticsearch:
+    enabled: true
+    
+    nodeEncryption:
+      enabled: true
+      transportTLS: true
+      httpTLS: true
+      
+    indexEncryption:
+      enabled: true
+      encryptedIndices:
+        - pattern: "soc-*"
+          encryption: "required"
+        - pattern: "audit-*"
+          encryption: "required"
+          additionalSecurity: "signed"
+          
+    snapshotEncryption:
+      enabled: true
+      snapshotRepositories:
+        - name: "secure_backup"
+          type: "gcs"  # Google Cloud Storage (Algeria region)
+          encryption: "aws-kms"  # Or Vault-backed KMS
+
+  # ============================================
+  # KUBERNETES SECRETS ENCRYPTION
+  # ============================================
+  
+  kubernetesSecrets:
+    enabled: true
+    
+    # ETCD encryption
+    etcdEncryption:
+      enabled: true
+      providers:
+        - name: "vault-secret-provider"
+          aescbc:
+            keys:
+              - name: "key-etcd-1"
+                secret: "${ETCD_ENCRYPTION_KEY}"
+              - name: "key-etcd-2"
+                secret: "${ETCD_ENCRYPTION_KEY_BACKUP}"
+                
+    # External Secrets Operator integration
+    externalSecrets:
+      enabled: true
+      provider: "hashicorp-vault"
+      refreshInterval: "1h"
+      
+    secretStore:
+      kind: ClusterSecretStore
+      name: vault-backend
+      config:
+        address: "https://vault.soc-backend.svc.cluster.local:8200"
+        authKubernetes:
+          mountPath: "kubernetes"
+          role: "external-secrets-operator"
+
+  # ============================================
+  # FILE SYSTEM / VOLUME ENCRYPTION
+  # ============================================
+  
+  storage:
+    persistentVolumeEncryption:
+      enabled: true
+      
+      # Kubernetes CSI secrets-store driver
+      csiSecretsStore:
+        enabled: true
+        providers:
+          - name: "vault-provider"
+            objects:
+              - objectName: "db-password"
+                secretName: "database-credentials"
+                secretKey: "password"
+              - objectName: "api-signing-key"
+                secretName: "api-keys"
+                secretKey: "signing-key"
+                
+      # Ceph/RBD encryption
+      cephEncryption:
+        enabled: true
+        algorithm: "AES-256-XTS"
+        
+      # AWS EBS encryption (if using cloud storage)
+      ebsEncryption:
+        enabled: true
+        kmsKeyId: "alias/djezzy-soc-ebs-key"
+
+  # ============================================
+  # APPLICATION-LAYER ENCRYPTION
+  # ============================================
+  
+  applicationLayer:
+    fieldLevelEncryption:
+      enabled: true
+      libraries:
+        - name: "crypto-js"
+          version: "^4.2.0"
+          purpose: "client-side field encryption"
+        - name: "@google/tink"
+          version: "^3.0.0"
+          purpose: "server-side envelope encryption"
+          
+      encryptionContext:
+        subscriberData:
+          fields: ["imsi", "msisdn", "imei"]
+          algorithm: "AES-256-GCM"
+          keyPurpose: "asymmetric"
+          deidentification: "tokenization"
+          
+        incidentData:
+          fields: ["victim_info", "evidence_files"]
+          algorithm: "AES-256-GCM"
+          keyPurpose: "symmetric"
+          
+    tokenization:
+      enabled: true
+      vaultTokenization:
+        enginePath: "transform"
+        transformations:
+          - name: "social_security"
+            template: "ssn"
+          - name: "phone_number"
+            template: "phone"
+          - name: "national_id"
+            template: "dni"  # Custom Algerian ID template
+
+  # ============================================
+  # BACKUP ENCRYPTION
+  # ============================================
+  
+  backup:
+    enabled: true
+    encryptionRequired: true
+    
+    backupTargets:
+      - name: "primary-backup"
+        type: "s3-compatible"
+        endpoint: "storage.djezzy.dz"
+        bucket: "djezzy-soc-backups"
+        encryption:
+          type: "sse-kms"  # Server-side encryption with KMS
+          keyId: "alias/djezzy-backup-key"
+          algorithm: "AES256"
+          
+      - name: "dr-backup"
+        type: "s3-compatible"
+        endpoint: "dr-storage.djezzy.dz"
+        bucket: "djezzy-soc-dr"
+        location: "different-datacenter"
+        encryption:
+          type: "client-side"
+          algorithm: "AES-256-GCM"
+          keyRotation: true
+          
+    retention:
+      dailyBackups: 30
+      weeklyBackups: 12
+      monthlyBackups: 24
+      yearlyBackups: 7
+      complianceRetention: 5y  # ANRT requirement
+
+  # ============================================
+  # COMPLIANCE & AUDIT
+  # ============================================
+  
+  compliance:
+    anrt:
+      dataLocalizationVerified: true
+      encryptionStandardMet: "AES-256-GCM"
+      keyManagementDocumented: true
+      auditTrailEnabled: true
+      
+    auditLogging:
+      keyAccessLogs: true
+      encryptionOperationLogs: true
+      logDestination: "soc.audit.logs"
+      retentionPeriod: "5 years"

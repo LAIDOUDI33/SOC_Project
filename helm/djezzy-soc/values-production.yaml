@@ -1,0 +1,374 @@
+# =============================================================================
+# Djezzy National SOC Platform - Production Values Override
+# =============================================================================
+# Production-specific configuration with hardened security settings
+# =============================================================================
+
+global:
+  environment: production
+  
+  # Production image registry
+  imageRegistry: registry.djezzy.dz/production
+  
+  # Production labels
+  labels:
+    environment: production
+    tier: production
+    anrt.djezzy.soc/compliance: telecom-regulation
+    anrt.djezzy.soc/certification: ANRT-SOC-2024-001
+  
+  # Production ANRT compliance (strict)
+  anrt:
+    compliance: true
+    dataRetentionDays: 2555  # 7 years mandatory
+    auditLogging: true
+    encryptionRequired: true
+    keyRotationDays: 90
+
+# =============================================================================
+# NAMESPACES - Production Resource Quotas
+# =============================================================================
+namespaces:
+  create: true
+  frontend:
+    resourceQuota:
+      cpu: "8"
+      memory: 16Gi
+      pods: 20
+      services: 10
+  backend:
+    resourceQuota:
+      cpu: "32"
+      memory: 64Gi
+      pods: 100
+      services: 50
+  events:
+    resourceQuota:
+      cpu: "24"
+      memory: 48Gi
+      pods: 40
+      services: 30
+  monitoring:
+    resourceQuota:
+      cpu: "16"
+      memory: 32Gi
+      pods: 50
+      services: 40
+  ss7:
+    resourceQuota:
+      cpu: "8"
+      memory: 16Gi
+      pods: 20
+      services: 15
+
+# =============================================================================
+# SOC PLATFORM API - Production Configuration
+# =============================================================================
+socPlatformApi:
+  replicas: 5  # Higher replica count for production
+  
+  image:
+    tag: "1.0.0-production"  # Pinned production tag
+  
+  resources:
+    requests:
+      cpu: "1"
+      memory: 1Gi
+    limits:
+      cpu: "4"
+      memory: 4Gi
+  
+  autoscaling:
+    enabled: true
+    minReplicas: 5
+    maxReplicas: 20
+    targetCPUUtilization: 65
+    targetMemoryUtilization: 75
+  
+  pdb:
+    enabled: true
+    minAvailable: 3
+  
+  config:
+    nodeEnv: production
+    enableSS7Module: true
+    enableAIAutomation: true
+    rateLimitMaxRequests: 2000  # Higher limit for production traffic
+    corsAllowedOrigins: "https://soc.djezzy.dz,https://api.soc.djezzy.dz"
+
+# =============================================================================
+# KONG GATEWAY - Production Configuration
+# =============================================================================
+kongGateway:
+  replicas: 3  # HA for production
+  
+  image:
+    tag: "3.6-production"
+  
+  resources:
+    requests:
+      cpu: "1"
+      memory: 1Gi
+    limits:
+      cpu: "4"
+      memory: 4Gi
+  
+  declarativeConfig:
+    plugins:
+      rateLimiting:
+        minute: 2000
+        policy: cluster
+        faultTolerant: true
+      cors:
+        origins:
+          - https://soc.djezzy.dz
+          - https://api.soc.djezzy.dz
+        credentials: true
+
+# =============================================================================
+# WAZUH SIEM - Production Configuration
+# =============================================================================
+wazuh:
+  enabled: true
+  manager:
+    replicas: 2  # HA for production
+    resources:
+      requests:
+        cpu: "2"
+        memory: 4Gi
+      limits:
+        cpu: "8"
+        memory: 16Gi
+    persistence:
+      size: 500Gi  # Larger storage for production logs
+
+# =============================================================================
+# THEHIVE SOAR - Production Configuration
+# =============================================================================
+thehive:
+  replicas: 2  # HA for production
+  resources:
+    requests:
+      cpu: "1"
+      memory: 2Gi
+    limits:
+      cpu: "4"
+      memory: 8Gi
+  persistence:
+    size: 200Gi
+
+# =============================================================================
+# CORTEX ANALYZERS - Production Configuration
+# =============================================================================
+cortex:
+  replicas: 2
+  resources:
+    requests:
+      cpu: "1"
+      memory: 2Gi
+    limits:
+      cpu: "6"
+      memory: 12Gi  # More memory for concurrent analyzers
+
+# =============================================================================
+# NSM TOOLS - Production Configuration
+# =============================================================================
+suricata:
+  replicas: 4  # More instances for high-throughput networks
+  resources:
+    requests:
+      cpu: "4"
+      memory: 4Gi
+    limits:
+      cpu: "8"
+      memory: 16Gi
+
+zeek:
+  replicas: 4
+  resources:
+    requests:
+      cpu: "4"
+      memory: 8Gi
+    limits:
+      cpu: "8"
+      memory: 24Gi
+  persistence:
+    size: 1Ti
+
+arkime:
+  replicas: 4
+  persistence:
+    size: 10Ti  # Large storage for full packet capture in production
+
+# =============================================================================
+# DATABASES - Production Configuration
+# =============================================================================
+postgresql:
+  auth:
+    password: ""  # Use sealed secrets
+  primary:
+    persistence:
+      size: 2Ti  # Large storage for production data
+    resources:
+      requests:
+        cpu: "2"
+        memory: 4Gi
+      limits:
+        cpu: "8"
+        memory: 32Gi
+
+elasticsearch:
+  replicaCount: 5  # 5-node ES cluster for production
+  persistence:
+    size: 5Ti
+  resources:
+    requests:
+      cpu: "4"
+      memory: 8Gi
+    limits:
+      cpu: "12"
+      memory: 32Gi
+
+redis:
+  architecture: replication  # Redis Sentinel for HA
+  auth:
+    enabled: true
+  master:
+    persistence:
+      size: 50Gi
+    resources:
+      requests:
+        cpu: 500m
+        memory: 512Mi
+      limits:
+        cpu: "4"
+        memory: 8Gi
+  replica:
+    replicaCount: 3
+
+# =============================================================================
+# KAFKA - Production Configuration
+# =============================================================================
+kafka:
+  replicaCount: 5  # 5-broker Kafka cluster
+  controller:
+    replicaCount: 3
+  broker:
+    configOverrides:
+      server:
+        - "default.replication.factor=3"
+        - "min.insync.replicas=2"
+        - "log.retention.hours=720"  # 30 days retention
+        - "num.partitions=24"
+        - "message.max.bytes=10485760"  # 10MB messages
+        - "socket.request.max.bytes=104857600"
+    persistence:
+      size: 500Gi
+    resources:
+      requests:
+        cpu: "2"
+        memory: 8Gi
+      limits:
+        cpu: "6"
+        memory: 16Gi
+  zookeeper:
+    replicaCount: 5  # 5-node Zookeeper ensemble
+    persistence:
+      size: 50Gi
+
+# =============================================================================
+# MONITORING - Production Configuration
+# =============================================================================
+prometheus:
+  server:
+    retention: 2555h  # 7 years per ANRT requirements
+    persistentVolume:
+      size: 1Ti
+    resources:
+      requests:
+        cpu: "1"
+        memory: 2Gi
+      limits:
+        cpu: "4"
+        memory: 16Gi
+
+grafana:
+  persistence:
+    size: 50Gi
+  resources:
+    requests:
+      cpu: 500m
+      memory: 512Mi
+    limits:
+      cpu: "2"
+      memory: 4Gi
+
+# =============================================================================
+# SS7 MODULE - Production Configuration
+# =============================================================================
+ss7Module:
+  collector:
+    replicas: 4
+    resources:
+      requests:
+        cpu: "2"
+        memory: 2Gi
+      limits:
+        cpu: "6"
+        memory: 8Gi
+    persistence:
+      size: 500Gi
+  analyzer:
+    replicas: 4
+    resources:
+      requests:
+        cpu: "2"
+        memory: 4Gi
+      limits:
+        cpu: "6"
+        memory: 12Gi
+  diameterMonitor:
+    replicas: 4
+
+# =============================================================================
+# INGRESS - Production TLS & Security
+# =============================================================================
+ingress:
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+    nginx.ingress.kubernetes.io/rate-limit: "5000"
+    nginx.ingress.kubernetes.io/rate-limit-window: "1m"
+    nginx.ingress.kubernetes.io/ssl-ciphers: "ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384:ECDHE-ECDSA-CHACHA20-POLY1305:ECDHE-RSA-CHACHA20-POLY1305"
+    nginx.ingress.kubernetes.io/ssl-protocols: "TLSv1.2 TLSv1.3"
+  
+  tls:
+    enabled: true
+    secretName: soc-platform-tls-cert-production
+
+# =============================================================================
+# BACKUP - Production Configuration
+# =============================================================================
+backup:
+  enabled: true
+  schedule: "0 */4 * * *"  # Every 4 hours in production
+  retention: 90d
+  destinations:
+    s3:
+      enabled: true
+      bucket: djezzy-soc-backups-production
+      region: eu-west-1  # Use appropriate region
+    local:
+      enabled: false  # Don't store locally in production
+
+# =============================================================================
+# SECRETS MANAGEMENT - Production
+# =============================================================================
+secretsManagement:
+  provider: external-secrets-operator
+  externalSecrets:
+    enabled: true
+    backend: vault
+  vault:
+    enabled: true
+    address: https://vault.soc.djezzy.dz:8200
+    role: djezzy-soc-platform

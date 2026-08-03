@@ -1,0 +1,317 @@
+# Djezzy National SOC Platform - Kubernetes Audit Policy
+# ANRT Compliant - 5-Year Log Retention Minimum
+# Comprehensive audit logging for security and compliance
+
+apiVersion: audit.k8s.io/v1
+kind: Policy
+rules:
+
+# ============================================================================
+# LEVEL 1: CRITICAL AUDIT EVENTS - Log everything (Request + Response Body)
+# Authentication failures, authorization denials, secret access
+# ============================================================================
+
+# Authentication attempts - CRITICAL for security monitoring
+- level: RequestResponse
+  users: ["*"]
+  verbs: ["create"]
+  resources:
+  - group: ""
+    resources: ["serviceaccounts/token"]
+  omitStages:
+  - RequestReceived
+
+# Secret access - HIGH SENSITIVITY (IMSI/MSISDN data protection)
+- level: RequestResponse
+  resources:
+  - group: ""
+    resources: ["secrets"]
+  omitStages:
+  - RequestReceived
+
+# RBAC changes - Track who has what access
+- level: RequestResponse
+  resources:
+  - group: "rbac.authorization.k8s.io"
+    resources: ["roles", "rolebindings", "clusterroles", "clusterrolebindings"]
+  verbs: ["create", "update", "patch", "delete"]
+  omitStages:
+  - RequestReceived
+
+# Admission webhook configurations - Prevent tampering
+- level: RequestResponse
+  resources:
+  - group: "admissionregistration.k8s.io"
+    resources: ["mutatingwebhookconfigurations", "validatingwebhookconfigurations"]
+  verbs: ["create", "update", "patch", "delete"]
+  omitStages:
+  - RequestReceived
+
+# Certificate signing requests - PKI monitoring
+- level: RequestResponse
+  resources:
+  - group: "certificates.k8s.io"
+    resources: ["certificatesigningrequests"]
+  verbs: ["create", "update"]
+  omitStages:
+  - RequestReceived
+
+# Token reviews - Authentication tracking
+- level: RequestResponse
+  resources:
+  - group: "authentication.k8s.io"
+    resources: ["tokenreviews"]
+  omitStages:
+  - RequestReceived
+
+# Authorization decisions - Track denied requests specifically
+- level: RequestResponse
+  resources:
+  - group: "authorization.k8s.io"
+    resources: ["subjectaccessreviews", "localsubjectaccessreviews"]
+  omitStages:
+  - RequestReceived
+
+# Pod/exec and pod/port-forward - Remote execution auditing
+- level: RequestResponse
+  resources:
+  - group: ""
+    resources: ["pods/exec", "pods/portforward", "pods/attach", "pods/proxy"]
+  omitStages:
+  - RequestReceived
+
+# Node access - Infrastructure security
+- level: RequestResponse
+  resources:
+  - group: ""
+    resources: ["nodes"]
+  verbs: ["create", "update", "patch", "delete"]
+  omitStages:
+  - RequestReceived
+
+# Configmap/secrets modifications in SOC namespace
+- level: RequestResponse
+  namespaces: ["djezzy-soc"]
+  resources:
+  - group: ""
+    resources: ["configmaps", "secrets"]
+  verbs: ["create", "update", "patch", "delete"]
+  omitStages:
+  - RequestReceived
+
+# Custom security resources (SOC-specific)
+- level: RequestResponse
+  namespaces: ["djezzy-soc"]
+  resources:
+  - group: "security.djezzy.dz"
+    resources: ["*"]
+  omitStages:
+  - RequestReceived
+
+# ============================================================================
+# LEVEL 2: IMPORTANT EVENTS - Log request metadata (no response body)
+# Deployment changes, scaling operations, network policies
+# ============================================================================
+
+# Pod lifecycle - Track container creation/deletion
+- level: Metadata
+  resources:
+  - group: ""
+    resources: ["pods"]
+  verbs: ["create", "delete"]
+  omitStages:
+  - RequestReceived
+
+# Deployment/StatefulSet/DaemonSet changes
+- level: Metadata
+  resources:
+  - group: "apps"
+    resources: ["deployments", "statefulsets", "daemonsets", "replicasets"]
+  verbs: ["create", "update", "patch", "delete", "scale"]
+  omitStages:
+  - RequestReceived
+
+# Job/CronJob executions
+- level: Metadata
+  resources:
+  - group: "batch"
+    resources: ["jobs", "cronjobs"]
+  verbs: ["create", "delete"]
+  omitStages:
+  - RequestReceived
+
+# Network policy changes - Zero trust enforcement
+- level: Metadata
+  resources:
+  - group: "networking.k8s.io"
+    resources: ["networkpolicies", "ingresses", "services"]
+  verbs: ["create", "update", "patch", "delete"]
+  omitStages:
+  - RequestReceived
+
+# Persistent volume claims - Data access tracking
+- level: Metadata
+  resources:
+  - group: ""
+    resources: ["persistentvolumeclaims"]
+  verbs: ["create", "delete"]
+  omitStages:
+  - RequestReceived
+
+# Namespace creation/deletion
+- level: Metadata
+  resources:
+  - group: ""
+    resources: ["namespaces"]
+  verbs: ["create", "delete", "update"]
+  omitStages:
+  - RequestReceived
+
+# Service account changes
+- level: Metadata
+  resources:
+  - group: ""
+    resources: ["serviceaccounts"]
+  verbs: ["create", "delete"]
+  omitStages:
+  - RequestReceived
+
+# PriorityClass changes - Resource priority
+- level: Metadata
+  resources:
+  - group: "scheduling.k8s.io"
+    resources: ["priorityclasses"]
+  verbs: ["create", "update", "patch", "delete"]
+  omitStages:
+  - RequestReceived
+
+# LimitRange/ResourceQuota changes
+- level: Metadata
+  resources:
+  - group: ""
+    resources: ["limitranges", "resourcequotas"]
+  verbs: ["create", "update", "patch", "delete"]
+  omitStages:
+  - RequestReceived
+
+# ============================================================================
+# LEVEL 3: STANDARD EVENTS - Log request metadata for SOC namespace
+# General operational activities within SOC environment
+# ============================================================================
+
+# All requests in SOC namespace at metadata level
+- level: Metadata
+  namespaces: ["djezzy-soc"]
+  verbs: ["*"]
+  resources:
+  - group: ""
+    resources: ["*"]
+  omitStages:
+  - RequestReceived
+
+# ============================================================================
+# LEVEL 4: MINIMAL LOGGING - Errors only
+# Reduce noise while catching issues
+# ============================================================================
+
+# All other requests - log errors/failures only
+- level: None
+  users: ["system:kube-proxy", "system:unauthenticated", "system:anonymous"]
+  verbs: ["watch"]
+  resources:
+  - group: ""
+    resources: ["events", "endpoints"]
+
+# System component health checks - minimal logging
+- level: None
+  users: ["kubelet", "system:node-problem-detector"]
+  verbs: ["get", "list"]
+  resources:
+  - group: ""
+    resources: ["nodes", "nodes/status", "pods", "pods/status"]
+  omitStages:
+  - RequestReceived
+
+# ============================================================================
+# CATCH-ALL RULE - Log everything else at metadata level
+# ============================================================================
+
+# Default: Log all other requests at metadata level
+- level: Metadata
+  omitStages:
+  - RequestReceived
+
+---
+# Audit Sink Configuration for forwarding to SIEM
+# Requires Kubernetes 1.18+
+apiVersion: auditregistration.k8s.io/v1alpha1
+kind: AuditSink
+metadata:
+  name: djezzy-soc-audit-sink
+  namespace: djezzy-soc
+spec:
+  policy:
+    level: Metadata
+    stages:
+    - ResponseComplete
+  webhooks:
+  - name: siem-audit-webhook
+    clientConfig:
+      url: "https://siem-backend.djezzy-soc.svc.cluster.local:9200/api/audit-events"
+      caBundle: ${CA_BUNDLE_BASE64}
+    throttle:
+      qps: 100
+      burst: 200
+
+---
+# Dynamic Audit Configuration Sidecar Spec
+# Add this sidecar to API Server pod for real-time audit forwarding
+# This is a reference configuration for deployment
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: audit-config
+  namespace: djezzy-soc
+data:
+  audit-policy.yaml: |
+    # (Include above policy here)
+  audit-webhook.conf: |
+    apiVersion: audit.k8s.io/v1
+    kind: AuditConfiguration
+    logFile: /var/log/kubernetes/audit.log
+    logMaxAge: 1827  # 5 years (ANRT requirement)
+    logMaxBackup: 60
+    logMaxSize: 500  # MB
+    batchSize: 100
+    batchThrottleBucketSize: 200
+    batchThrottleQPS: 100
+    webhookBatchConfig:
+      maxWait: 5s
+      maxBatchSize: 500
+
+---
+# Retention Policy Notes (for external log aggregation system):
+#
+# ANRT COMPLIANCE REQUIREMENTS:
+# =============================
+# 1. Minimum retention period: 5 YEARS (1827 days)
+# 2. Log integrity: Cryptographic hashing required (SHA-256)
+# 3. Log immutability: WORM storage (Write Once, Read Many)
+# 4. Log encryption: AES-256 at rest, TLS 1.3 in transit
+# 5. Log accessibility: Authorized personnel only with audit trail
+# 6. Data localization: All logs must remain within Algeria borders
+#
+# Recommended Storage Classes:
+# - Hot tier (30 days): SSD-backed, searchable
+# - Warm tier (1 year): HDD-backed, compressed
+# - Cold tier (5 years): Object storage (S3-compatible), encrypted archive
+#
+# Log Fields Required by ANRT:
+# - Timestamp (UTC+1 Algeria timezone)
+# - Source IP address
+# - User identity (authenticated)
+# - Action performed
+# - Resource affected
+# - Result (success/failure)
+# - Client agent information
+# - Correlation ID (for distributed tracing)

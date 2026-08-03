@@ -1,0 +1,200 @@
+# Djezzy National SOC Platform - Pod Security Standards
+# ANRT Compliant - Data Localization & Encryption Requirements
+# Reference: K8s Pod Security Standards v1.28+
+
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: djezzy-soc
+  labels:
+    name: djezzy-soc
+    security.djezzy.dz/compliance: anrt-certified
+    security.djezzy.dz/data-classification: restricted
+---
+# Pod Security Standards at Namespace Level (Baseline)
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: djezzy-soc-baseline
+  labels:
+    pod-security.kubernetes.io/enforce: baseline
+    pod-security.kubernetes.io/enforce-version: latest
+    pod-security.kubernetes.io/audit: baseline
+    pod-security.kubernetes.io/audit-version: latest
+    pod-security.kubernetes.io/warn: baseline
+    pod-security.kubernetes.io/warn-version: latest
+---
+# Pod Security Standards at Namespace Level (Restricted)
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: djezzy-soc-restricted
+  labels:
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/enforce-version: latest
+    pod-security.kubernetes.io/audit: restricted
+    pod-security.kubernetes.io/audit-version: latest
+    pod-security.kubernetes.io/warn: restricted
+    pod-security.kubernetes.io/warn-version: latest
+---
+# Baseline Pod Security Policy
+apiVersion: policy/v1beta1
+kind: PodSecurityPolicy
+metadata:
+  name: djezzy-soc-baseline
+  annotations:
+    seccomp.security.alpha.kubernetes.io/allowedProfiles: runtime/default
+    apparmor.security.beta.kubernetes.io/allowedProfiles: runtime/default
+spec:
+  privileged: false
+  allowPrivilegeEscalation: false
+  # Volumes - Only allowed types for SOC workloads
+  volumes:
+    - 'configMap'
+    - 'emptyDir'
+    - 'projected'
+    - 'secret'
+    - 'downwardAPI'
+    - 'persistentVolumeClaim'
+  hostNetwork: false
+  hostIPC: false
+  hostPID: false
+  runAsUser:
+    rule: MustRunAsNonRoot
+  runAsGroup:
+    rule: MustRunAs
+    ranges:
+      - min: 1000
+        max: 65535
+  supplementalGroups:
+    rule: MustRunAs
+    ranges:
+      - min: 1000
+        max: 65535
+  fsGroup:
+    rule: MustRunAs
+    ranges:
+      - min: 1000
+        max: 65535
+  readOnlyRootFilesystem: true
+  # Required drop capabilities
+  requiredDropCapabilities:
+    - ALL
+  # Allowed capabilities for specific SOC services
+  allowedCapabilities:
+    - NET_BIND_SERVICE
+  seLinux:
+    rule: RunAsAny
+  # Host directories that can be mounted as read-only
+  allowedHostPaths:
+    - pathPrefix: "/var/log"
+      readOnly: true
+---
+# Restricted Pod Security Policy for Critical SOC Services
+apiVersion: policy/v1beta1
+kind: PodSecurityPolicy
+metadata:
+  name: djezzy-soc-restricted
+  annotations:
+    seccomp.security.alpha.kubernetes.io/allowedProfiles: runtime/default
+    apparmor.security.beta.kubernetes.io/allowedProfiles: runtime/default
+spec:
+  privileged: false
+  allowPrivilegeEscalation: false
+  volumes:
+    - 'configMap'
+    - 'emptyDir'
+    - 'projected'
+    - 'secret'
+    - 'downwardAPI'
+  hostNetwork: false
+  hostIPC: false
+  hostPID: false
+  runAsUser:
+    rule: MustRunAs
+    ranges:
+      - min: 1000
+      - max: 65535
+  runAsGroup:
+    rule: MustRunAs
+    ranges:
+      - min: 1000
+      - max: 65535
+  supplementalGroups:
+    rule: MustRunAs
+    ranges:
+      - min: 1000
+      - max: 65535
+  fsGroup:
+    rule: MustRunAs
+    ranges:
+      - min: 1000
+      - max: 65535
+  readOnlyRootFilesystem: true
+  requiredDropCapabilities:
+    - ALL
+  seLinux:
+    rule: RunAsAny
+  # Prohibit host path mounts for restricted pods
+  allowedHostPaths: []
+---
+# ValidatingAdmissionPolicy for Enhanced PSP Enforcement (K8s 1.28+)
+apiVersion: admissionregistration.k8s.io/v1alpha1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: djezzy-soc-pod-validation
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: ["v1"]
+        resources: ["pods"]
+        operations: ["CREATE", "UPDATE"]
+  validations:
+    - expression: "object.spec.hostNetwork == false"
+      message: "Host network is not permitted in Djezzy SOC environment"
+    - expression: "object.spec.hostPID == false"
+      message: "Host PID namespace is not permitted"
+    - expression: "object.spec.hostIPC == false"
+      message: "Host IPC namespace is not permitted"
+    - expression: "!has(object.spec.securityContext) || object.spec.securityContext.privileged == false"
+      message: "Privileged pods are not allowed"
+    - expression: "!has(object.spec.securityContext) || object.spec.securityContext.allowPrivilegeEscalation != true"
+      message: "Privilege escalation is not allowed"
+    - expression: "!has(object.spec.containers) || all(c, !has(c.securityContext) || c.securityContext.runAsNonRoot == true)"
+      message: "Containers must run as non-root user"
+    - expression: "!has(object.spec.containers) || all(c, !has(c.securityContext) || c.securityContext.readOnlyRootFilesystem == true)"
+      message: "Containers must have read-only root filesystem"
+    - expression: "!has(object.spec.containers) || all(c, !has(c.securityContext) || !has(c.securityContext.capabilities) || 'ALL' in c.securityContext.capabilities.drop)"
+      message: "Containers must drop ALL capabilities"
+---
+# ClusterRole for PSP Usage
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: psp:djezzy-soc-baseline
+rules:
+- apiGroups: ['policy']
+  resources: ['podsecuritypolicies']
+  verbs: ['use']
+  resourceNames: ['djezzy-soc-baseline']
+- apiGroups: ['policy']
+  resources: ['podsecuritypolicies']
+  verbs: ['use']
+  resourceNames: ['djezzy-soc-restricted']
+---
+# ServiceAccount Binding for SOC Workloads
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: soc-workloads-psp
+  namespace: djezzy-soc
+subjects:
+- kind: ServiceAccount
+  name: default
+  namespace: djezzy-soc
+roleRef:
+  kind: ClusterRole
+  name: psp:djezzy-soc-baseline
+  apiGroup: rbac.authorization.k8s.io

@@ -1,0 +1,688 @@
+# Djezzy National SOC Platform - Admission Controller Configuration
+# OPA/Gatekeeper Constraint Templates and Constraints
+# Compliance: ANRT, NIST CM-2, SI-7
+# Version: 1.0.0
+
+# ============================================
+# GATEKEEPER CONSTRAINT TEMPLATES
+# ============================================
+
+# Template: Require labels on all resources
+apiVersion: templates.gatekeeper.sh/v1
+kind: ConstraintTemplate
+metadata:
+  name: k8srequiredlabels
+  annotations:
+    description: "Requires resources to have specified labels"
+spec:
+  crd:
+    spec:
+      names:
+        kind: K8sRequiredLabels
+      validation:
+        openAPIV3Schema:
+          type: object
+          properties:
+            labels:
+              type: array
+              items:
+                type: string
+            message:
+              type: string
+  targets:
+    - target: admission.k8s.gatekeeper.sh
+      rego: |
+        package k8srequiredlabels
+
+        violation[{"msg": msg}] {
+          provided := {label | input.review.object.metadata.labels[label]}
+          required := {label | label := input.parameters.labels[_]}
+          missing := required - provided
+          count(missing) > 0
+          msg := sprintf("Missing required labels: %v", [missing])
+        }
+---
+# Template: Disallow privileged containers
+apiVersion: templates.gatekeeper.sh/v1
+kind: ConstraintTemplate
+metadata:
+  name: k8snoprivileged
+  annotations:
+    description: "Disallows containers from running as privileged"
+spec:
+  crd:
+    spec:
+      names:
+        kind: K8sNoPrivileged
+      validation:
+        # OpenAPIV3 schema for the constraint
+        openAPIV3Schema:
+          type: object
+          properties:
+            excludedNamespaces:
+              type: array
+              items:
+                type: string
+  targets:
+    - target: admission.k8s.gatekeeper.sh
+      rego: |
+        package k8sprivileged
+
+        violation[{"msg": msg}] {
+          container := input.review.object.spec.containers[_]
+          container.securityContext.privileged == true
+          not input_review_object_excluded
+          msg := sprintf("Container %v must not run as privileged", [container.name])
+        }
+
+        input_review_object_excluded {
+          ns := input.review.object.metadata.namespace
+          excluded := input.parameters.excludedNamespaces[_]
+          ns == excluded
+        }
+---
+# Template: Require non-root users
+apiVersion: templates.gatekeeper.sh/v1
+kind: ConstraintTemplate
+metadata:
+  name: k8snonrootcontainers
+  annotations:
+    description: "Requires containers to run as non-root"
+spec:
+  crd:
+    spec:
+      names:
+        kind: K8sNonRootContainers
+      validation:
+        openAPIV3Schema:
+          type: object
+          properties:
+            exemptImages:
+              type: array
+              items:
+                type: string
+  targets:
+    - target: admission.k8s.gatekeeper.sh
+      rego: |
+        package k8snonrootcontainers
+
+        violation[{"msg": msg}] {
+          container := input.review.object.spec.containers[_]
+          not container_with_nonroot(container)
+          not is_exempt(container.image)
+          msg := sprintf("Container %v must run as non-root", [container.name])
+        }
+
+        container_with_nonroot(container) {
+          container.securityContext.runAsNonRoot == true
+        }
+        container_with_nonroot(container) {
+          container.securityContext.runAsUser != 0
+        }
+        container_with_nonroot(container) {
+          container.securityContext.runAsUser != 0
+        }
+
+        is_exempt(image) {
+          exempt := input.parameters.exemptImages[_]
+          startswith(image, exempt)
+        }
+---
+# Template: Require read-only root filesystem
+apiVersion: templates.gatekeeper.sh/v1
+kind: ConstraintTemplate
+metadata:
+  name: k8sreadonlyrootfilesystem
+  annotations:
+    description: "Requires read-only root filesystem"
+spec:
+  crd:
+    spec:
+      names:
+        kind: K8sReadOnlyRootFilesystem
+  targets:
+    - target: admission.k8s.gatekeeper.sh
+      rego: |
+        package k8sreadonlyrootfilesystem
+
+        violation[{"msg": msg}] {
+          container := input.review.object.spec.containers[_]
+          not container.securityContext.readOnlyRootFilesystem == true
+          msg := sprintf("Container %v must have readOnlyRootFilesystem set to true", [container.name])
+        }
+---
+# Template: Disallow host network/PID/IPC namespaces
+apiVersion: templates.gatekeeper.sh/v1
+kind: ConstraintTemplate
+metadata:
+  name: k8shostnamespaces
+  annotations:
+    description: "Disallows sharing host namespaces"
+spec:
+  crd:
+    spec:
+      names:
+        kind: K8sHostNamespaces
+  targets:
+    - target: admission.k8s.gatekeeper.sh
+      rego: |
+        package k8shostnamespaces
+
+        violation[{"msg": msg}] {
+          input.review.object.spec.hostNetwork == true
+          msg := "Host network is not allowed"
+        }
+
+        violation[{"msg": msg}] {
+          input.review.object.spec.hostPID == true
+          msg := "Host PID namespace is not allowed"
+        }
+
+        violation[{"msg": msg}] {
+          input.review.object.spec.hostIPC == true
+          msg := "Host IPC namespace is not allowed"
+        }
+---
+# Template: Restrict image registries
+apiVersion: templates.gatekeeper.sh/v1
+kind: ConstraintTemplate
+metadata:
+  name: k8sallowedrepos
+  annotations:
+    description: "Restricts container images to approved registries"
+spec:
+  crd:
+    spec:
+      names:
+        kind: K8sAllowedRepos
+      validation:
+        openAPIV3Schema:
+          type: object
+          properties:
+            repos:
+              type: array
+              items:
+                type: string
+  targets:
+    - target: admission.k8s.gatekeeper.sh
+      rego: |
+        package k8sallowedrepos
+
+        violation[{"msg": msg}] {
+          container := input.review.object.spec.containers[_]
+          not allowed_repo(container.image)
+          msg := sprintf("Container image %v must come from an approved registry", [container.image])
+        }
+
+        allowed_repo(image) {
+          repo := input.parameters.repos[_]
+          startswith(image, repo)
+        }
+---
+# Template: Require resource limits
+apiVersion: templates.gatekeeper.sh/v1
+kind: ConstraintTemplate
+metadata:
+  name: k8sresourcelimits
+  annotations:
+    description: "Requires resource limits on all containers"
+spec:
+  crd:
+    spec:
+      names:
+        kind: K8sResourceLimits
+      validation:
+        openAPIV3Schema:
+          type: object
+          properties:
+            cpuLimit:
+              type: string
+            memoryLimit:
+              type: string
+  targets:
+    - target: admission.k8s.gatekeeper.sh
+      rego: |
+        package k8sresourcelimits
+
+        violation[{"msg": msg}] {
+          container := input.review.object.spec.containers[_]
+          not container.resources.limits.cpu
+          msg := sprintf("Container %v must specify CPU limit", [container.name])
+        }
+
+        violation[{"msg": msg}] {
+          container := input.review.object.spec.containers[_]
+          not container.resources.limits.memory
+          msg := sprintf("Container %v must specify memory limit", [container.name])
+        }
+---
+# Template: Disallow latest tag (immutable tags required)
+apiVersion: templates.gatekeeper.sh/v1
+kind: ConstraintTemplate
+metadata:
+  name: k8simagetag
+  annotations:
+    description: "Disallows using 'latest' tag for container images"
+spec:
+  crd:
+    spec:
+      names:
+        kind: K8sImageTag
+  targets:
+    - target: admission.k8s.gatekeeper.sh
+      rego: |
+        package k8simagetag
+
+        violation[{"msg": msg}] {
+          container := input.review.object.spec.containers[_]
+          endswith(container.image, ":latest")
+          msg := sprintf("Using 'latest' tag for image %v is not allowed; use a specific version", [container.image])
+        }
+
+        violation[{"msg": msg}] {
+          container := input.review.object.spec.containers[_]
+          not contains(container.image, ":")
+          msg := sprintf("Image %v must specify a tag (no 'latest')", [container.image])
+        }
+
+        contains(s, substr) {
+          contains_with_delimiter(s, substr, ":")
+        }
+
+        contains_with_delimiter(s, substr, delim) {
+          i := indexof(s, delim)
+          s[i+1] == substr[0]
+        }
+---
+# Template: Block default namespaces for production workloads
+apiVersion: templates.gatekeeper.sh/v1
+kind: ConstraintTemplate
+metadata:
+  name: k8sdisallowednamespaces
+  annotations:
+    description: "Prevents deployment in disallowed namespaces"
+spec:
+  crd:
+    spec:
+      names:
+        kind: K8sDisallowedNamespaces
+      validation:
+        openAPIV3Schema:
+          type: object
+          properties:
+            badNamespaces:
+              type: array
+              items:
+                type: string
+  targets:
+    - target: admission.k8s.gatekeeper.sh
+      rego: |
+        package k8sdisallowednamespaces
+
+        violation[{"msg": msg}] {
+          ns := input.review.object.metadata.namespace
+          forbidden := input.parameters.badNamespaces[_]
+          ns == forbidden
+          msg := sprintf("Deployment in namespace '%v' is not allowed", [ns])
+        }
+
+# ============================================
+# GATEKEEPER CONSTRAINTS (Active Policies)
+# ============================================
+
+# Constraint: Required security labels
+apiVersion: constraints.gatekeeper.sh/v1beta1
+kind: K8sRequiredLabels
+metadata:
+  name: require-security-labels
+  labels:
+    enforcement: "active"
+    severity: "high"
+spec:
+  match:
+    kinds:
+      - apiGroups: [""]
+        kinds: ["Pod", "Deployment", "StatefulSet", "DaemonSet"]
+    namespaces:
+      - soc-backend
+      - soc-events
+      - soc-frontend
+    excludedNamespaces:
+      - kube-system
+      - gatekeeper-system
+  parameters:
+    labels:
+      - app.kubernetes.io/name
+      - app.kubernetes.io/component
+      - security.djezzy.dz/data-classification
+    message: "All workloads must have security classification labels"
+---
+# Constraint: No privileged containers
+apiVersion: constraints.gatekeeper.sh/v1beta1
+kind: K8sNoPrivileged
+metadata:
+  name: deny-privileged-containers
+  labels:
+    enforcement: "active"
+    severity: "critical"
+spec:
+  match:
+    kinds:
+      - apiGroups: [""]
+        kinds: ["Pod"]
+    namespaces:
+      - soc-backend
+      - soc-events
+      - soc-frontend
+      - soc-monitoring
+  parameters:
+    excludedNamespaces: []
+---
+# Constraint: Non-root containers required
+apiVersion: constraints.gatekeeper.sh/v1beta1
+kind: K8sNonRootContainers
+metadata:
+  name: require-non-root-users
+  labels:
+    enforcement: "active"
+    severity: "high"
+spec:
+  match:
+    kinds:
+      - apiGroups: [""]
+        kinds: ["Pod", "Deployment"]
+    namespaces:
+      - soc-backend
+      - soc-events
+      - soc-frontend
+  parameters:
+    exemptImages:
+      - "quay.io/calico/
+      - "docker.io/library/nginx:"  # If absolutely needed
+---
+# Constraint: Read-only root filesystem
+apiVersion: constraints.gatekeeper.sh/v1beta1
+kind: K8sReadOnlyRootFilesystem
+metadata:
+  name: require-readonly-filesystem
+  labels:
+    enforcement: "active"
+    severity: "high"
+spec:
+  match:
+    kinds:
+      - apiGroups: [""]
+        kinds: ["Pod", "Deployment"]
+    namespaces:
+      - soc-backend
+      - soc-events
+      - soc-frontend
+---
+# Constraint: No host namespaces
+apiVersion: constraints.gatekeeper.sh/v1beta1
+kind: K8sHostNamespaces
+metadata:
+  name: deny-host-namespaces
+  labels:
+    enforcement: "active"
+    severity: "critical"
+spec:
+  match:
+    kinds:
+      - apiGroups: [""]
+        kinds: ["Pod"]
+    namespaces:
+      - soc-backend
+      - soc-events
+      - soc-frontend
+      - soc-monitoring
+---
+# Constraint: Allowed image registries only
+apiVersion: constraints.gatekeeper.sh/v1beta1
+kind: K8sAllowedRepos
+metadata:
+  name: allowed-image-repositories
+  labels:
+    enforcement: "active"
+    severity: "high"
+spec:
+  match:
+    kinds:
+      - apiGroups: [""]
+        kinds: ["Pod", "Deployment", "StatefulSet", "DaemonSet", "Job", "CronJob"]
+    namespaces:
+      - soc-backend
+      - soc-events
+      - soc-frontend
+      - soc-monitoring
+  parameters:
+    repos:
+      - registry.djezzy.local/
+      - harbor.djezzy.dz/
+      - ghcr.io/djezzy-soc/
+      - gcr.io/djezzy-soc-prod/
+---
+# Constraint: No 'latest' tags
+apiVersion: constraints.gatekeeper.sh/v1beta1
+kind: K8sImageTag
+metadata:
+  name: reject-latest-tag
+  labels:
+    enforcement: "active"
+    severity: "medium"
+spec:
+  match:
+    kinds:
+      - apiGroups: [""]
+        kinds: ["Pod", "Deployment", "StatefulSet", "DaemonSet", "Job", "CronJob"]
+    namespaces:
+      - soc-backend
+      - soc-events
+      - soc-frontend
+---
+# Constraint: Resource limits required
+apiVersion: constraints.gatekeeper.sh/v1beta1
+kind: K8sResourceLimits
+metadata:
+  name: require-resource-limits
+  labels:
+    enforcement: "active"
+    severity: "medium"
+spec:
+  match:
+    kinds:
+      - apiGroups: [""]
+        kinds: ["Pod", "Deployment"]
+    namespaces:
+      - soc-backend
+      - soc-events
+      - soc-frontend
+      - soc-monitoring
+---
+# Constraint: Block default namespace usage
+apiVersion: constraints.gatekeeper.sh/v1beta1
+kind: K8sDisallowedNamespaces
+metadata:
+  name: block-default-namespace
+  labels:
+    enforcement: "active"
+    severity: "high"
+spec:
+  match:
+    kinds:
+      - apiGroups: [""]
+        kinds: ["Pod", "Deployment", "Service", "ConfigMap", "Secret"]
+      - apiGroups: ["apps"]
+        kinds: ["Deployment", "StatefulSet", "DaemonSet"]
+  parameters:
+    badNamespaces:
+      - "default"
+      - "kube-node-lease"
+      - "kube-public"
+
+# ============================================
+# OPA POLICIES (For Rego-based Evaluation)
+# ============================================
+
+# These can be used with standalone OPA or Gatekeeper's Rego engine
+
+# Policy: Data localization compliance (ANRT requirement)
+# All data must remain within Algeria borders
+"""
+package djezzy.datalocalization
+
+# Check that persistent volumes use local storage classes
+violation[msg] {
+  input.kind = "PersistentVolumeClaim"
+  not local_storage_class(input.spec.storageClassName)
+  msg := sprintf("PVC %s must use local storage class for data localization compliance", [input.metadata.name])
+}
+
+local_storage_class(class) {
+  startswith(class, "local-")
+}
+
+local_storage_class(class) {
+  startswith(class, "algeria-")
+}
+"""
+
+# Policy: Encryption at rest verification
+"""
+package djezzy.encryption
+
+# Ensure encrypted PVCs for confidential data
+violation[msg] {
+  input.kind = "PersistentVolumeClaim"
+  confidential_label(input.metadata.labels)
+  not encrypted_pvc(input.spec)
+  msg := sprintf("Confidential data PVC %s must have encryption enabled", [input.metadata.name])
+}
+
+confidential_label(labels) {
+  labels["security.djezzy.dz/data-classification"] = "confidential"
+}
+
+confidential_label(labels) {
+  labels["security.djezzy.dz/data-classification"] = "restricted"
+}
+
+encrypted_pvc(spec) {
+  spec.annotations["encryption.djezzy.dz/enabled"] = "true"
+}
+"""
+
+# Policy: Subscriber data protection (IMSI/MSISDN masking)
+"""
+package djezzy.subscriberprivacy
+
+# Detect potential subscriber data exposure
+violation[msg] {
+  input.kind = "ConfigMap"
+  data := input.data
+  sensitive_pattern(data)
+  msg := sprintf("ConfigMap %s may contain unmasked subscriber data (IMSI/MSISDN)", [input.metadata.name])
+}
+
+sensitive_pattern(data) {
+  value := data[_]
+  regex.match("(?i)(imsi|msisdn|subscriber).*(?:[0-9]{10,15})", value)
+}
+"""
+
+# ============================================
+# VALIDATING ADMISSION POLICY (Kubernetes 1.28+)
+# ============================================
+
+# Native Kubernetes admission policies (alternative to OPA/Gatekeeper)
+
+apiVersion: admissionregistration.k8s.io/v1alpha1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: djezzy-container-security-policy
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: ["v1"]
+        operations: ["CREATE", "UPDATE"]
+        resources: ["pods"]
+  validations:
+    # No privileged containers
+    - expression: |
+        object.spec.containers.all(c,
+          c.securityContext == null ||
+          c.securityContext.privileged != true
+      )
+      message: "Privileged containers are not permitted"
+      reason: Forbidden
+    
+    # Non-root user required
+    - expression: |
+        object.spec.containers.all(c,
+          c.securityContext == null ||
+          c.securityContext.runAsNonRoot == true ||
+          (c.securityContext.runAsUser != null && c.securityContext.runAsUser > 0)
+      )
+      message: "Containers must run as non-root users"
+    
+    # Read-only root filesystem
+    - expression: |
+        object.spec.containers.all(c,
+          c.securityContext == null ||
+          c.securityContext.readOnlyRootFilesystem == true
+      )
+      message: "Containers must have read-only root filesystem"
+    
+    # No host namespaces
+    - expression: |
+        !object.spec.hostNetwork &&
+        !object.spec.hostPID &&
+        !object.spec.hostIPC
+      message: "Host namespaces are not permitted"
+    
+    # Drop all capabilities
+    - expression: |
+        object.spec.containers.all(c,
+          !has(c.securityContext.capabilities.add) ||
+          c.securityContext.capabilities.add.size() == 0
+      )
+      message: "Adding capabilities is not permitted"
+    
+    # Resource limits required
+    - expression: |
+        object.spec.containers.all(c,
+          has(c.resources) &&
+          has(c.resources.limits) &&
+          has(c.resources.limits.cpu) &&
+          has(c.resources.limits.memory)
+      )
+      message: "Resource limits are required for all containers"
+    
+    # Image tag cannot be 'latest'
+    - expression: |
+        object.spec.containers.all(c,
+          !endswith(c.image, ':latest') &&
+          contains(c.image, ':')
+      )
+      message: "Container images must use specific tags, not 'latest'"
+  
+  auditAnnotations:
+    - key: "security-djezzy-dz/container-security-check"
+      valueExpression: "\"Container security policy evaluated\""
+---
+# Binding for validating admission policy
+apiVersion: admissionregistration.k8s.io/v1alpha1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: djezzy-container-security-binding
+spec:
+  policyName: djezzy-container-security-policy
+  matchResources:
+    namespaceSelector:
+      matchExpressions:
+        - key: kubernetes.io/metadata.name
+          operator: NotIn
+          values: ["kube-system", "gatekeeper-system"]
+  validationActions: [Deny, Warn]  # Deny violations, also warn

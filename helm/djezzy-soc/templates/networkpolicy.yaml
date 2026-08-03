@@ -1,0 +1,181 @@
+{{/*
+=============================================================================
+Djezzy National SOC Platform - Network Policy Template
+=============================================================================
+Zero-trust network isolation policies
+NSA K8s Hardening Guide | ANRT Compliant
+=============================================================================
+*/}}
+{{- if .Values.networkPolicy.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "djezzy-soc.fullname" . }}-network-policy
+  namespace: {{ include "djezzy-soc.namespace" . }}
+  labels:
+    {{- include "djezzy-soc.labels" . | nindent 4 }}
+    app.kubernetes.io/component: network-policy
+  annotations:
+    description: "Network policy for {{ .Values.componentName | default "application" }}"
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "djezzy-soc.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: {{ .Values.componentName | default "application" }}
+  
+  policyTypes:
+    {{- if or .Values.networkPolicy.ingressRules .Values.networkPolicy.allowAllIngress }}
+    - Ingress
+    {{- end }}
+    {{- if or .Values.networkPolicy.egressRules .Values.networkPolicy.allowAllEgress }}
+    - Egress
+    {{- end }}
+  
+  {{- /* Ingress Rules */}}
+  {{- if .Values.networkPolicy.ingressRules }}
+  ingress:
+    {{- range .Values.networkPolicy.ingressRules }}
+    - from:
+        {{- /* Allow from specific pods */}}
+        {{- if .from.podSelector }}
+        - podSelector:
+            matchLabels:
+              {{- toYaml .from.podSelector.matchLabels | nindent 14 }}
+        {{- end }}
+        
+        {{- /* Allow from pods in specific namespaces */}}
+        {{- if .from.namespaceSelector }}
+        - namespaceSelector:
+            matchLabels:
+              {{- toYaml .from.namespaceSelector.matchLabels | nindent 14 }}
+            {{- if .from.podSelectorInNamespace }}
+            podSelector:
+              matchLabels:
+                {{- toYaml .from.podSelectorInNamespace.matchLabels | nindent 16 }}
+            {{- end }}
+        {{- end }}
+        
+        {{- /* Allow from IP blocks */}}
+        {{- if .from.ipBlock }}
+        - ipBlock:
+            cidr: {{ .from.ipBlock.cidr }}
+            {{- if .from.ipBlock.except }}
+            except:
+              {{- toYaml .from.ipBlock.except | nindent 14 }}
+            {{- end }}
+        {{- end }}
+      
+      ports:
+        {{- range .ports }}
+        - port: {{ .port }}
+          protocol: {{ .protocol | default "TCP" }}
+        {{- end }}
+    {{- end }}
+  {{- else if .Values.networkPolicy.allowAllIngress }}
+  ingress:
+    - from:
+        - podSelector: {}
+  {{- end }}
+  
+  {{- /* Egress Rules */}}
+  {{- if .Values.networkPolicy.egressRules }}
+  egress:
+    {{- range .Values.networkPolicy.egressRules }}
+    - to:
+        {{- if .to.podSelector }}
+        - podSelector:
+            matchLabels:
+              {{- toYaml .to.podSelector.matchLabels | nindent 14 }}
+        {{- end }}
+        
+        {{- if .to.namespaceSelector }}
+        - namespaceSelector:
+            matchLabels:
+              {{- toYaml .to.namespaceSelector.matchLabels | nindent 14 }}
+            {{- if .to.podSelectorInNamespace }}
+            podSelector:
+              matchLabels:
+                {{- toYaml .to.podSelectorInNamespace.matchLabels | nindent 16 }}
+            {{- end }}
+        {{- end }}
+        
+        {{- if .to.ipBlock }}
+        - ipBlock:
+            cidr: {{ .to.ipBlock.cidr }}
+            {{- if .to.ipBlock.except }}
+            except:
+              {{- toYaml .to.ipBlock.except | nindent 14 }}
+            {{- end }}
+        {{- end }}
+      
+      ports:
+        {{- range .ports }}
+        - port: {{ .port }}
+          protocol: {{ .protocol | default "TCP" }}
+        {{- end }}
+    {{- end }}
+  {{- else if .Values.networkPolicy.allowAllEgress }}
+  egress:
+    - to:
+        - podSelector: {}
+  {{- end }}
+{{- end }}
+
+---
+{{/*
+Default Deny All Policy (Zero Trust Foundation)
+*/}}
+{{- if and .Values.networkPolicy.enabled .Values.networkPolicy.defaultDenyAll }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "djezzy-soc.fullname" . }}-default-deny-all
+  namespace: {{ include "djezzy-soc.namespace" . }}
+  labels:
+    {{- include "djezzy-soc.labels" . | nindent 4 }}
+    app.kubernetes.io/component: network-policy
+    network.djezzy.soc/type: deny-all
+  annotations:
+    description: "Default deny all traffic in namespace"
+spec:
+  podSelector: {}  # Apply to all pods
+  policyTypes:
+  - Ingress
+  - Egress
+{{- end }}
+
+---
+{{/*
+Allow Prometheus Scraping (if monitoring is enabled)
+*/}}
+{{- if and .Values.networkPolicy.enabled .Values.prometheusEnabled }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "djezzy-soc.fullname" . }}-allow-metrics
+  namespace: {{ include "djezzy-soc.namespace" . }}
+  labels:
+    {{- include "djezzy-soc.labels" . | nindent 4 }}
+    app.kubernetes.io/component: network-policy
+    network.djezzy.soc/type: metrics-export
+  annotations:
+    description: "Allow Prometheus to scrape metrics"
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "djezzy-soc.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: {{ .Values.componentName | default "application" }}
+  policyTypes:
+  - Ingress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ .Values.monitoringNamespace | default "soc-monitoring" }}
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: prometheus
+      ports:
+        - port: {{ .Values.service.port | default 8080 }}
+          protocol: TCP
+{{- end }}

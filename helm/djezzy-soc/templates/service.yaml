@@ -1,0 +1,103 @@
+{{/*
+=============================================================================
+Djezzy National SOC Platform - Service Template
+=============================================================================
+Generic service template with proper labeling
+GitOps Ready | Production Ready
+=============================================================================
+*/}}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "djezzy-soc.fullname" . }}
+  namespace: {{ include "djezzy-soc.namespace" . }}
+  labels:
+    {{- include "djezzy-soc.labels" . | nindent 4 }}
+    app.kubernetes.io/component: {{ .Values.componentName | default "service" }}
+  annotations:
+    description: "{{ .Values.description | default (printf "Service for %s" (.Values.componentName | default "component")) }}"
+    {{- with .Values.serviceAnnotations }}
+    {{ toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  type: {{ .Values.service.type | default "ClusterIP" }}
+  
+  {{- if and (eq .Values.service.type "LoadBalancer") .Values.service.loadBalancerIP }}
+  loadBalancerIP: {{ .Values.service.loadBalancerIP }}
+  {{- end }}
+  
+  {{- if and (eq .Values.service.type "LoadBalancer") .Values.service.loadBalancerSourceRanges }}
+  loadBalancerSourceRanges:
+    {{- toYaml .Values.service.loadBalancerSourceRanges | nindent 4 }}
+  {{- end }}
+  
+  {{- if .Values.service.externalTrafficPolicy }}
+  externalTrafficPolicy: {{ .Values.service.externalTrafficPolicy }}
+  {{- end }}
+  
+  {{- if .Values.service.sessionAffinity }}
+  sessionAffinity: {{ .Values.service.sessionAffinity }}
+  {{- end }}
+  
+  selector:
+    {{- include "djezzy-soc.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: {{ .Values.componentName | default "application" }}
+  
+  ports:
+    {{- if .Values.service.ports }}
+    {{- range $name, $port := .Values.service.ports }}
+    - name: {{ $name }}
+      port: {{ $port }}
+      targetPort: {{ $port }}
+      protocol: TCP
+      {{- if $.Values.service.nodePort }}
+      nodePort: {{ $.Values.service.nodePort }}
+      {{- end }}
+    {{- end }}
+    {{- else }}
+    - name: http
+      port: {{ .Values.service.port | default 8080 }}
+      targetPort: http
+      protocol: TCP
+      {{- if .Values.service.nodePort }}
+      nodePort: {{ .Values.service.nodePort }}
+      {{- end }}
+    {{- end }}
+
+---
+{{/*
+Headless Service for StatefulSets
+*/}}
+{{- if .Values.headlessService.enabled | default false }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "djezzy-soc.fullname" . }}-headless
+  namespace: {{ include "djezzy-soc.namespace" . }}
+  labels:
+    {{- include "djezzy-soc.labels" . | nindent 4 }}
+    app.kubernetes.io/component: {{ .Values.componentName | default "service" }}
+  annotations:
+    service.alpha.kubernetes.io/tolerate-unready-endpoints: "true"
+spec:
+  type: ClusterIP
+  clusterIP: None
+  publishNotReadyAddresses: true
+  selector:
+    {{- include "djezzy-soc.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: {{ .Values.componentName | default "application" }}
+  ports:
+    {{- if .Values.service.ports }}
+    {{- range $name, $port := .Values.service.ports }}
+    - name: {{ $name }}
+      port: {{ $port }}
+      targetPort: {{ $port }}
+      protocol: TCP
+    {{- end }}
+    {{- else }}
+    - name: http
+      port: {{ .Values.service.port | default 8080 }}
+      targetPort: http
+      protocol: TCP
+    {{- end }}
+{{- end }}

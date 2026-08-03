@@ -1,0 +1,981 @@
+     1→'use client'
+     2→
+     3→import React, { useState, useEffect } from 'react'
+     4→import {
+     5→  ShieldCheck, FileText, Clock, AlertTriangle, CheckCircle,
+     6→  XCircle, Calendar, Download, Filter, Search, Eye,
+     7→  TrendingUp, TrendingDown, Minus, ChevronRight, BookOpen,
+     8→  ClipboardCheck, Scale, Award, AlertCircle, RefreshCw,
+     9→  Upload, FolderOpen, Tag, Users, Building
+    10→} from 'lucide-react'
+    11→import {
+    12→  Card, CardContent, CardDescription, CardHeader, CardTitle
+    13→} from '@/components/ui/card'
+    14→import { Button } from '@/components/ui/button'
+    15→import { Badge } from '@/components/ui/badge'
+    16→import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
+    17→import {
+    18→  Select, SelectContent, SelectItem, SelectTrigger, SelectValue
+    19→} from '@/components/ui/select'
+    20→import { Progress } from '@/components/ui/progress'
+    21→import { Separator } from '@/components/ui/separator'
+    22→import { ScrollArea } from '@/components/ui/scroll-area'
+    23→import StatusIndicator from '@/components/shared/StatusIndicator'
+    24→import DataExporter from '@/components/shared/DataExporter'
+    25→
+    26→// Types for Compliance Dashboard
+    27→interface ANRTRequirement {
+    28→  id: string
+    29→  category: string
+    30→  reference: string
+    31→  title: string
+    32→  description: string
+    33→  status: 'compliant' | 'partial' | 'non-compliant' | 'not-assessed'
+    34→  controlOwner: string
+    35→  lastAssessment: Date
+    36→  nextReview: Date
+    37→  evidenceCount: number
+    38→  riskLevel: 'critical' | 'high' | 'medium' | 'low'
+    39→}
+    40→
+    41→interface AuditFinding {
+    42→  id: string
+    43→  title: string
+    44→  category: string
+    45→  severity: 'critical' | 'major' | 'minor' | 'observation'
+    46→  status: 'open' | 'in-progress' | 'remediated' | 'closed' | 'accepted-risk'
+    47→  discoveredDate: Date
+    48→  targetResolution: Date
+    49→  assignee: string
+    50→  description: string
+    51→}
+    52→
+    53→interface ControlEffectiveness {
+    54→  controlId: string
+    55→  controlName: string
+    56→  domain: string
+    57→  effectiveness: number
+    58→  trend: 'improving' | 'stable' | 'declining'
+    59→  lastTested: Date
+    60→}
+    61→
+    62→interface PolicyViolation {
+    63→  id: string
+    64→  policyName: string
+    65→  violationType: string
+    66→  severity: 'high' | 'medium' | 'low'
+    67→  count: number
+    68→  period: string
+    69→  trend: 'up' | 'down' | 'stable'
+    70→}
+    71→
+    72→interface RegulatoryDeadline {
+    73→  regulation: string
+    74→  deadline: Date
+    75→  status: 'on-track' | 'at-risk' | 'overdue' | 'completed'
+    76→  progress: number
+    77→  owner: string
+    78→  description: string
+    79→}
+    80→
+    81→interface EvidenceItem {
+    82→  id: string
+    83→  requirementId: string
+    84→  name: string
+    85→  type: 'document' | 'screenshot' | 'log' | 'report' | 'certificate'
+    86→  uploadedAt: Date
+    87→  uploadedBy: string
+    88→  status: 'approved' | 'pending' | 'rejected'
+    89→  size?: string
+    90→}
+    91→
+    92→// Mock Data Generators
+    93→const generateANRTRequirements = (): ANRTRequirement[] => [
+    94→  {
+    95→    id: 'ANRT-001',
+    96→    category: 'Security Management',
+    97→    reference: 'ANRT-SEC-01',
+    98→    title: 'Information Security Policy',
+    99→    description: 'Organization must maintain a documented information security policy approved by management',
+   100→    status: 'compliant',
+   101→    controlOwner: 'CISO Office',
+   102→    lastAssessment: new Date(Date.now() - 86400000 * 30),
+   103→    nextReview: new Date(Date.now() + 86400000 * 60),
+   104→    evidenceCount: 5,
+   105→    riskLevel: 'low'
+   106→  },
+   107→  {
+   108→    id: 'ANRT-002',
+   109→    category: 'Access Control',
+   110→    reference: 'ANRT-ACC-02',
+   111→    title: 'User Access Management',
+   112→    description: 'Implement proper user access provisioning and de-provisioning procedures',
+   113→    status: 'partial',
+   114→    controlOwner: 'IT Security',
+   115→    lastAssessment: new Date(Date.now() - 86400000 * 15),
+   116→    nextReview: new Date(Date.now() + 86400000 * 15),
+   117→    evidenceCount: 3,
+   118→    riskLevel: 'medium'
+   119→  },
+   120→  {
+   121→    id: 'ANRT-003',
+   122→    category: 'Incident Response',
+   123→    reference: 'ANRT-INC-03',
+   124→    title: 'Security Incident Handling',
+   125→    description: 'Establish and maintain incident response capabilities with defined SLAs',
+   126→    status: 'compliant',
+   127→    controlOwner: 'SOC Team',
+   128→    lastAssessment: new Date(Date.now() - 86400000 * 7),
+   129→    nextReview: new Date(Date.now() + 86400000 * 23),
+   130→    evidenceCount: 8,
+   131→    riskLevel: 'low'
+   132→  },
+   133→  {
+   134→    id: 'ANRT-004',
+   135→    category: 'Network Security',
+   136→    reference: 'ANRT-NET-04',
+   137→    title: 'Network Segmentation & Monitoring',
+   138→    description: 'Implement network segmentation and continuous security monitoring',
+   139→    status: 'non-compliant',
+   140→    controlOwner: 'Network Ops',
+   141→    lastAssessment: new Date(Date.now() - 86400000 * 45),
+   142→    nextReview: new Date(Date.now() + 86400000 * 5),
+   143→    evidenceCount: 1,
+   144→    riskLevel: 'critical'
+   145→  },
+   146→  {
+   147→    id: 'ANRT-005',
+   148→    category: 'Data Protection',
+   149→    reference: 'ANRT-DAT-05',
+   150→    title: 'Personal Data Protection',
+   151→    description: 'Comply with data protection requirements for subscriber data handling',
+   152→    status: 'partial',
+   153→    controlOwner: 'DPO Office',
+   154→    lastAssessment: new Date(Date.now() - 86400000 * 20),
+   155→    nextReview: new Date(Date.now() + 86400000 * 10),
+   156→    evidenceCount: 4,
+   157→    riskLevel: 'high'
+   158→  },
+   159→  {
+   160→    id: 'ANRT-006',
+   161→    category: 'Business Continuity',
+   162→    reference: 'ANRT-BCP-06',
+   163→    title: 'Business Continuity Planning',
+   164→    description: 'Maintain tested business continuity and disaster recovery plans',
+   165→    status: 'compliant',
+   166→    controlOwner: 'Operations',
+   167→    lastAssessment: new Date(Date.now() - 86400000 * 60),
+   168→    nextReview: new Date(Date.now() + 86400000 * 30),
+   169→    evidenceCount: 6,
+   170→    riskLevel: 'low'
+   171→  }
+   172→]
+   173→
+   174→const generateAuditFindings = (): AuditFinding[] => [
+   175→  {
+   176→    id: 'AUD-001',
+   177→    title: 'Insufficient Network Segmentation',
+   178→    category: 'Network Security',
+   179→    severity: 'major',
+   180→    status: 'open',
+   181→    discoveredDate: new Date(Date.now() - 86400000 * 14),
+   182→    targetResolution: new Date(Date.now() + 86400000 * 16),
+   183→    assignee: 'Network Team Lead',
+   184→    description: 'Critical systems not properly segmented from general network traffic'
+   185→  },
+   186→  {
+   187→    id: 'AUD-002',
+   188→    title: 'Incomplete Access Review Process',
+   189→    category: 'Access Control',
+   190→    severity: 'minor',
+   191→    status: 'in-progress',
+   192→    discoveredDate: new Date(Date.now() - 86400000 * 7),
+   193→    targetResolution: new Date(Date.now() + 86400000 * 7),
+   194→    assignee: 'IAM Administrator',
+   195→    description: 'Quarterly access reviews not completed for all privileged accounts'
+   196→  },
+   197→  {
+   198→    id: 'AUD-003',
+   199→    title: 'Missing Encryption for Data at Rest',
+   200→    category: 'Data Protection',
+   201→    severity: 'major',
+   202→    status: 'remediated',
+   203→    discoveredDate: new Date(Date.now() - 86400000 * 30),
+   204→    targetResolution: new Date(Date.now() - 86400000 * 2),
+   205→    assignee: 'Database Team',
+   206→    description: 'Customer PII databases lacked encryption at rest'
+   207→  },
+   208→  {
+   209→    id: 'AUD-004',
+   210→    title: 'Outdated Incident Response Procedures',
+   211→    category: 'Incident Response',
+   212→    severity: 'observation',
+   213→    status: 'closed',
+   214→    discoveredDate: new Date(Date.now() - 86400000 * 45),
+   215→    targetResolution: new Date(Date.now() - 86400000 * 15),
+   216→    assignee: 'SOC Manager',
+   217→    description: 'IR playbooks needed updating to reflect current threat landscape'
+   218→  }
+   219→]
+   220→
+   221→const generateControlEffectiveness = (): ControlEffectiveness[] => [
+   222→  { controlId: 'CTL-001', controlName: 'Firewall Rule Management', domain: 'Technical', effectiveness: 92, trend: 'improving', lastTested: new Date(Date.now() - 86400000 * 10) },
+   223→  { controlId: 'CTL-002', controlName: 'Endpoint Detection & Response', domain: 'Technical', effectiveness: 87, trend: 'stable', lastTested: new Date(Date.now() - 86400000 * 5) },
+   224→  { controlId: 'CTL-003', controlName: 'Security Awareness Training', domain: 'Organizational', effectiveness: 74, trend: 'improving', lastTested: new Date(Date.now() - 86400000 * 20) },
+   225→  { controlId: 'CTL-004', controlName: 'Vulnerability Management', domain: 'Technical', effectiveness: 68, trend: 'declining', lastTested: new Date(Date.now() - 86400000 * 15) },
+   226→  { controlId: 'CTL-005', controlName: 'Change Management Process', domain: 'Operational', effectiveness: 81, trend: 'stable', lastTested: new Date(Date.now() - 86400000 * 8) },
+   227→  { controlId: 'CTL-006', controlName: 'Third-Party Risk Assessment', domain: 'Governance', effectiveness: 55, trend: 'declining', lastTested: new Date(Date.now() - 86400000 * 35) },
+   228→  { controlId: 'CTL-007', controlName: 'Data Loss Prevention', domain: 'Technical', effectiveness: 79, trend: 'improving', lastTested: new Date(Date.now() - 86400000 * 12) },
+   229→  { controlId: 'CTL-008', controlName: 'Privileged Access Management', domain: 'Technical', effectiveness: 95, trend: 'stable', lastTested: new Date(Date.now() - 86400000 * 3) }
+   230→]
+   231→
+   232→const generatePolicyViolations = (): PolicyViolation[] => [
+   233→  { id: 'PV-001', policyName: 'Acceptable Use Policy', violationType: 'Unauthorized Software', severity: 'high', count: 12, period: 'This Month', trend: 'down' },
+   234→  { id: 'PV-002', policyName: 'Password Policy', violationType: 'Weak Passwords', severity: 'high', count: 28, period: 'This Month', trend: 'up' },
+   235→  { id: 'PV-003', policyName: 'Data Classification', violationType: 'Unclassified Sensitive Data', severity: 'medium', count: 45, period: 'This Month', trend: 'stable' },
+   236→  { id: 'PV-004', policyName: 'Remote Access Policy', violationType: 'Unapproved VPN Usage', severity: 'medium', count: 8, period: 'This Month', trend: 'down' },
+   237→  { id: 'PV-005', policyName: 'Clean Desk Policy', violationType: 'Documents Left Visible', severity: 'low', count: 67, period: 'This Month', trend: 'stable' }
+   238→]
+   239→
+   240→const generateRegulatoryDeadlines = (): RegulatoryDeadline[] => [
+   241→  {
+   242→    regulation: 'ANRT Annual Security Report',
+   243→    deadline: new Date(Date.now() + 86400000 * 15),
+   244→    status: 'at-risk',
+   245→    progress: 65,
+   246→    owner: 'Compliance Officer',
+   247→    description: 'Submit annual cybersecurity posture report to ANRT'
+   248→  },
+   249→  {
+   250→    regulation: 'SS7 Security Compliance (Decree 18-06)',
+   251→    deadline: new Date(Date.now() + 86400000 * 45),
+   252→    status: 'on-track',
+   253→    progress: 82,
+   254→    owner: 'Telecom Security Lead',
+   255→    description: 'Complete SS7/Diameter security controls implementation'
+   256→  },
+   257→  {
+   258→    regulation: 'Data Breach Notification (within 72h)',
+   259→    deadline: new Date(Date.now() - 86400000 * 2),
+   260→    status: 'completed',
+   261→    progress: 100,
+   262→    owner: 'DPO',
+   263→    description: 'Report data breach incident to regulatory authority'
+   264→  },
+   265→  {
+   266→    regulation: 'Subscriber Consent Records',
+   267→    deadline: new Date(Date.now() + 86400000 * 90),
+   268→    status: 'on-track',
+   269→    progress: 40,
+   270→    owner: 'Legal Department',
+   271→    description: 'Audit subscriber consent records for marketing communications'
+   272→  },
+   273→  {
+   274→    regulation: 'Interception Law Compliance',
+   275→    deadline: new Date(Date.now() + 86400000 * 5),
+   276→    status: 'overdue',
+   277→    progress: 75,
+   278→    owner: 'LI Coordinator',
+   279→    description: 'Submit lawful interception capability certification'
+   280→  }
+   281→]
+   282→
+   283→const generateEvidenceItems = (): EvidenceItem[] => [
+   284→  { id: 'EVD-001', requirementId: 'ANRT-001', name: 'Security Policy v3.2.pdf', type: 'document', uploadedAt: new Date(Date.now() - 86400000 * 25), uploadedBy: 'CISO', status: 'approved', size: '2.4 MB' },
+   285→  { id: 'EVD-002', requirementId: 'ANRT-001', name: 'Policy Approval Email.pdf', type: 'document', uploadedAt: new Date(Date.now() - 86400000 * 25), uploadedBy: 'CISO', status: 'approved', size: '156 KB' },
+   286→  { id: 'EVD-003', requirementId: 'ANRT-003', name: 'IR Playbook Screenshots.zip', type: 'screenshot', uploadedAt: new Date(Date.now() - 86400000 * 5), uploadedBy: 'SOC Manager', status: 'pending', size: '8.1 MB' },
+   287→  { id: 'EVD-004', requirementId: 'ANRT-003', name: 'Incident Response Metrics Q4.xlsx', type: 'report', uploadedAt: new Date(Date.now() - 86400000 * 3), uploadedBy: 'SOC Analyst', status: 'approved', size: '245 KB' },
+   288→  { id: 'EVD-005', requirementId: 'ANRT-006', name: 'DR Test Results Dec2025.pdf', type: 'report', uploadedAt: new Date(Date.now() - 86400000 * 50), uploadedBy: 'Ops Manager', status: 'approved', size: '1.8 MB' }
+   289→]
+   290→
+   291→// Helper Components
+   292→function RequirementStatusBadge({ status }: { status: ANRTRequirement['status'] }) {
+   293→  const styles = {
+   294→    compliant: 'bg-green-500/20 text-green-400 border-green-500/30',
+   295→    partial: 'bg-yellow-500/20 text-yellow-400 border-yellow-500/30',
+   296→    'non-compliant': 'bg-red-500/20 text-red-400 border-red-500/30',
+   297→    'not-assessed': 'bg-slate-500/20 text-slate-400 border-slate-500/30'
+   298→  }
+   299→
+   300→  return (
+   301→    <Badge variant="outline" className={`text-xs ${styles[status]}`}>
+   302→      {status.replace('-', ' ').toUpperCase()}
+   303→    </Badge>
+   304→  )
+   305→}
+   306→
+   307→function SeverityBadge({ severity }: { severity: string }) {
+   308→  const styles: Record<string, string> = {
+   309→    critical: 'bg-red-500/20 text-red-400 border-red-500/30',
+   310→    major: 'bg-orange-500/20 text-orange-400 border-orange-500/30',
+   311→    minor: 'bg-yellow-500/20 text-yellow-400 border-yellow-500/30',
+   312→    observation: 'bg-blue-500/20 text-blue-400 border-blue-500/30',
+   313→    high: 'bg-red-500/20 text-red-400 border-red-500/30',
+   314→    medium: 'bg-yellow-500/20 text-yellow-400 border-yellow-500/30',
+   315→    low: 'bg-green-500/20 text-green-400 border-green-500/30'
+   316→  }
+   317→
+   318→  return (
+   319→    <Badge variant="outline" className={`text-xs ${styles[severity] || styles.observation}`}>
+   320→      {severity.toUpperCase()}
+   321→    </Badge>
+   322→  )
+   323→}
+   324→
+   325→// ANRT Requirements Matrix Component
+   326→function ANRTRequirementsMatrix({ requirements }: { requirements: ANRTRequirement[] }) {
+   327→  const [filterCategory, setFilterCategory] = useState('all')
+   328→  
+   329→  const filtered = filterCategory === 'all' 
+   330→    ? requirements 
+   331→    : requirements.filter(r => r.category === filterCategory)
+   332→
+   333→  const categories = [...new Set(requirements.map(r => r.category))]
+   334→
+   335→  const complianceScore = Math.round(
+   336→    (requirements.filter(r => r.status === 'compliant').length / requirements.length) * 100
+   337→  )
+   338→
+   339→  return (
+   340→    <Card className="bg-slate-900 border-slate-700">
+   341→      <CardHeader className="pb-3">
+   342→        <div className="flex items-center justify-between">
+   343→          <div>
+   344→            <CardTitle className="text-white text-lg flex items-center gap-2">
+   345→              <Scale className="h-5 w-5 text-purple-400" />
+   346→              ANRT Requirements Tracking Matrix
+   347→            </CardTitle>
+   348→            <CardDescription className="text-slate-400 mt-1">
+   349→              Overall Compliance Score: <span className="text-green-400 font-bold">{complianceScore}%</span>
+   350→            </CardDescription>
+   351→          </div>
+   352→          <Select value={filterCategory} onValueChange={setFilterCategory}>
+   353→            <SelectTrigger className="w-[180px] bg-slate-800 border-slate-600">
+   354→              <SelectValue placeholder="Filter by category" />
+   355→            </SelectTrigger>
+   356→            <SelectContent>
+   357→              <SelectItem value="all">All Categories</SelectItem>
+   358→              {categories.map(cat => (
+   359→                <SelectItem key={cat} value={cat}>{cat}</SelectItem>
+   360→              ))}
+   361→            </SelectContent>
+   362→          </Select>
+   363→        </div>
+   364→      </CardHeader>
+   365→      <CardContent>
+   366→        {/* Compliance Summary */}
+   367→        <div className="grid grid-cols-4 gap-3 mb-4">
+   368→          <div className="p-3 bg-green-500/10 rounded-lg text-center border border-green-500/20">
+   369→            <p className="text-2xl font-bold text-green-400">{requirements.filter(r => r.status === 'compliant').length}</p>
+   370→            <p className="text-xs text-slate-400">Compliant</p>
+   371→          </div>
+   372→          <div className="p-3 bg-yellow-500/10 rounded-lg text-center border border-yellow-500/20">
+   373→            <p className="text-2xl font-bold text-yellow-400">{requirements.filter(r => r.status === 'partial').length}</p>
+   374→            <p className="text-xs text-slate-400">Partial</p>
+   375→          </div>
+   376→          <div className="p-3 bg-red-500/10 rounded-lg text-center border border-red-500/20">
+   377→            <p className="text-2xl font-bold text-red-400">{requirements.filter(r => r.status === 'non-compliant').length}</p>
+   378→            <p className="text-xs text-slate-400">Non-Compliant</p>
+   379→          </div>
+   380→          <div className="p-3 bg-slate-500/10 rounded-lg text-center border border-slate-500/20">
+   381→            <p className="text-2xl font-bold text-slate-400">{requirements.filter(r => r.status === 'not-assessed').length}</p>
+   382→            <p className="text-xs text-slate-400">Not Assessed</p>
+   383→          </div>
+   384→        </div>
+   385→
+   386→        {/* Requirements List */}
+   387→        <ScrollArea className="max-h-[350px]">
+   388→          <div className="space-y-2">
+   389→            {filtered.map(req => (
+   390→              <div key={req.id} className="p-3 bg-slate-800 rounded-lg border border-slate-700 hover:border-slate-600 transition-colors">
+   391→                <div className="flex items-start justify-between mb-2">
+   392→                  <div className="flex items-center gap-2">
+   393→                    <code className="text-xs font-mono text-slate-500">{req.reference}</code>
+   394→                    <RequirementStatusBadge status={req.status} />
+   395→                    <SeverityBadge severity={req.riskLevel} />
+   396→                  </div>
+   397→                  <Button size="sm" variant="ghost" className="h-7 text-xs text-slate-400">
+   398→                    View Details
+   399→                  </Button>
+   400→                </div>
+   401→                
+   402→                <h4 className="font-medium text-white text-sm mb-1">{req.title}</h4>
+   403→                <p className="text-xs text-slate-400 line-clamp-2 mb-2">{req.description}</p>
+   404→                
+   405→                <div className="flex items-center justify-between text-xs text-slate-500">
+   406→                  <div className="flex items-center gap-3">
+   407→                    <span>👤 {req.controlOwner}</span>
+   408→                    <span>📎 {req.evidenceCount} evidence items</span>
+   409→                  </div>
+   410→                  <div className="flex items-center gap-2">
+   411→                    <Clock className="h-3 w-3" />
+   412→                    <span>Next review: {req.nextReview.toLocaleDateString()}</span>
+   413→                  </div>
+   414→                </div>
+   415→              </div>
+   416→            ))}
+   417→          </div>
+   418→        </ScrollArea>
+   419→      </CardContent>
+   420→    </Card>
+   421→  )
+   422→}
+   423→
+   424→// Audit Findings Lifecycle Component
+   425→function AuditFindingsLifecycle({ findings }: { findings: AuditFinding[] }) {
+   426→  const getStatusColor = (status: AuditFinding['status']) => {
+   427→    switch (status) {
+   428→      case 'open': return 'border-red-500/30 bg-red-500/5'
+   429→      case 'in-progress': return 'border-yellow-500/30 bg-yellow-500/5'
+   430→      case 'remediated': return 'border-blue-500/30 bg-blue-500/5'
+   431→      case 'closed': return 'border-green-500/30 bg-green-500/5'
+   432→      case 'accepted-risk': return 'border-orange-500/30 bg-orange-500/5'
+   433→    }
+   434→  }
+   435→
+   436→  const getDaysUntilDeadline = (date: Date) => {
+   437→    const diff = date.getTime() - Date.now()
+   438→    return Math.ceil(diff / 86400000)
+   439→  }
+   440→
+   441→  return (
+   442→    <Card className="bg-slate-900 border-slate-700">
+   443→      <CardHeader className="pb-3">
+   444→        <div className="flex items-center justify-between">
+   445→          <CardTitle className="text-white text-lg flex items-center gap-2">
+   446→            <ClipboardCheck className="h-5 w-5 text-orange-400" />
+   447→            Audit Findings Lifecycle
+   448→          </CardTitle>
+   449→          <Badge variant="outline" className="border-red-500/50 text-red-400">
+   450→            {findings.filter(f => f.status === 'open').length} Open
+   451→          </Badge>
+   452→        </div>
+   453→      </CardHeader>
+   454→      <CardContent>
+   455→        <div className="space-y-3 max-h-[380px] overflow-y-auto">
+   456→          {findings.map(finding => {
+   457→            const daysLeft = getDaysUntilDeadline(finding.targetResolution)
+   458→            
+   459→            return (
+   460→              <div key={finding.id} className={`p-4 rounded-lg border ${getStatusColor(finding.status)}`}>
+   461→                <div className="flex items-start justify-between mb-2">
+   462→                  <div className="flex items-center gap-2">
+   463→                    <SeverityBadge severity={finding.severity} />
+   464→                    <Badge variant="outline" className={`text-xs ${
+   465→                      finding.status === 'open' ? 'border-red-500 text-red-400' :
+   466→                      finding.status === 'in-progress' ? 'border-yellow-500 text-yellow-400' :
+   467→                      finding.status === 'remediated' ? 'border-blue-500 text-blue-400' :
+   468→                      finding.status === 'closed' ? 'border-green-500 text-green-400' :
+   469→                      'border-orange-500 text-orange-400'
+   470→                    }`}>
+   471→                      {finding.status.replace('-', ' ').toUpperCase()}
+   472→                    </Badge>
+   473→                  </div>
+   474→                  <span className={`text-xs font-mono ${
+   475→                    daysLeft < 0 ? 'text-red-400' : 
+   476→                    daysLeft <= 7 ? 'text-yellow-400' : 
+   477→                    'text-slate-400'
+   478→                  }`}>
+   479→                    {daysLeft < 0 ? `${Math.abs(daysLeft)}d overdue` : `${daysLeft}d remaining`}
+   480→                  </span>
+   481→                </div>
+   482→
+   483→                <h4 className="font-medium text-white text-sm mb-1">{finding.title}</h4>
+   484→                <p className="text-xs text-slate-400 mb-3">{finding.description}</p>
+   485→
+   486→                <div className="flex items-center justify-between text-xs text-slate-500">
+   487→                  <div className="flex items-center gap-3">
+   488→                    <span className="flex items-center gap-1">
+   489→                      <Tag className="h-3 w-3" />
+   490→                      {finding.category}
+   491→                    </span>
+   492→                    <span className="flex items-center gap-1">
+   493→                      <Users className="h-3 w-3" />
+   494→                      {finding.assignee}
+   495→                    </span>
+   496→                  </div>
+   497→                  
+   498→                  <Progress 
+   499→                    value={
+   500→                      finding.status === 'closed' ? 100 :
+   501→                      finding.status === 'remediated' ? 90 :
+   502→                      finding.status === 'in-progress' ? 50 : 10
+   503→                    } 
+   504→                    className="w-20 h-1.5 bg-slate-700"
+   505→                  />
+   506→                </div>
+   507→              </div>
+   508→            )
+   509→          })}
+   510→        </div>
+   511→      </CardContent>
+   512→    </Card>
+   513→  )
+   514→}
+   515→
+   516→// Control Effectiveness Scoring Component
+   517→function ControlEffectivenessScoring({ controls }: { controls: ControlEffectiveness[] }) {
+   518→  const getTrendIcon = (trend: ControlEffectiveness['trend']) => {
+   519→    switch (trend) {
+   520→      case 'improving': return <TrendingUp className="h-4 w-4 text-green-400" />
+   521→      case 'stable': return <Minus className="h-4 w-4 text-slate-400" />
+   522→      case 'declining': return <TrendingDown className="h-4 w-4 text-red-400" />
+   523→    }
+   524→  }
+   525→
+   526→  const getEffectivenessColor = (score: number) => {
+   527→    if (score >= 80) return 'text-green-400'
+   528→    if (score >= 60) return 'text-yellow-400'
+   529→    return 'text-red-400'
+   530→  }
+   531→
+   532→  const getBarColor = (score: number) => {
+   533→    if (score >= 80) return 'bg-green-500'
+   534→    if (score >= 60) return 'bg-yellow-500'
+   535→    return 'bg-red-500'
+   536→  }
+   537→
+   538→  return (
+   539→    <Card className="bg-slate-900 border-slate-700">
+   540→      <CardHeader className="pb-3">
+   541→        <CardTitle className="text-white text-lg flex items-center gap-2">
+   542→          <Award className="h-5 w-5 text-cyan-400" />
+   543→          Control Effectiveness Scoring
+   544→        </CardTitle>
+   545→      </CardHeader>
+   546→      <CardContent>
+   547→        <div className="space-y-4">
+   548→          {controls.map(control => (
+   549→            <div key={control.controlId} className="space-y-2">
+   550→              <div className="flex items-center justify-between">
+   551→                <div className="flex items-center gap-2">
+   552→                  <span className="font-medium text-white text-sm">{control.controlName}</span>
+   553→                  {getTrendIcon(control.trend)}
+   554→                </div>
+   555→                <div className="flex items-center gap-2">
+   556→                  <span className={`text-lg font-bold ${getEffectivenessColor(control.effectiveness)}`}>
+   557→                    {control.effectiveness}%
+   558→                  </span>
+   559→                  <Badge variant="secondary" className="text-xs bg-slate-800 text-slate-400">
+   560→                    {control.domain}
+   561→                  </Badge>
+   562→                </div>
+   563→              </div>
+   564→              
+   565→              <div className="relative">
+   566→                <Progress value={control.effectiveness} className="h-2 bg-slate-700" />
+   567→                <div 
+   568→                  className={`absolute top-0 left-0 h-2 rounded-full ${getBarColor(control.effectiveness)} transition-all`}
+   569→                  style={{ width: `${control.effectiveness}%` }}
+   570→                />
+   571→              </div>
+   572→              
+   573→              <div className="flex items-center justify-between text-xs text-slate-500">
+   574→                <span>Last tested: {control.lastTested.toLocaleDateString()}</span>
+   575→                <span>{control.controlId}</span>
+   576→              </div>
+   577→            </div>
+   578→          ))}
+   579→        </div>
+   580→      </CardContent>
+   581→    </Card>
+   582→  )
+   583→}
+   584→
+   585→// Policy Violation Trends Component
+   586→function PolicyViolationTrends({ violations }: { violations: PolicyViolation[] }) {
+   587→  return (
+   588→    <Card className="bg-slate-900 border-slate-700">
+   589→      <CardHeader className="pb-3">
+   590→        <CardTitle className="text-white text-lg flex items-center gap-2">
+   591→          <AlertCircle className="h-5 w-5 text-pink-400" />
+   592→          Policy Violation Trends
+   593→        </CardTitle>
+   594→      </CardHeader>
+   595→      <CardContent>
+   596→        <div className="space-y-3">
+   597→          {violations.map(violation => (
+   598→            <div key={violation.id} className="flex items-center justify-between p-3 bg-slate-800 rounded-lg">
+   599→              <div className="flex items-center gap-3">
+   600→                <SeverityBadge severity={violation.severity} />
+   601→                <div>
+   602→                  <p className="text-sm font-medium text-white">{violation.policyName}</p>
+   603→                  <p className="text-xs text-slate-400">{violation.violationType}</p>
+   604→                </div>
+   605→              </div>
+   606→              
+   607→              <div className="flex items-center gap-4">
+   608→                <div className="text-right">
+   609→                  <p className="text-lg font-bold text-white">{violation.count}</p>
+   610→                  <p className="text-xs text-slate-500">{violation.period}</p>
+   611→                </div>
+   612→                
+   613→                <div className="flex items-center gap-1">
+   614→                  {violation.trend === 'up' && <TrendingUp className="h-4 w-4 text-red-400" />}
+   615→                  {violation.trend === 'down' && <TrendingDown className="h-4 w-4 text-green-400" />}
+   616→                  {violation.trend === 'stable' && <Minus className="h-4 w-4 text-slate-400" />}
+   617→                </div>
+   618→              </div>
+   619→            </div>
+   620→          ))}
+   621→        </div>
+   622→      </CardContent>
+   623→    </Card>
+   624→  )
+   625→}
+   626→
+   627→// Regulatory Deadline Countdown Component
+   628→function RegulatoryDeadlines({ deadlines }: { deadlines: RegulatoryDeadline[] }) {
+   629→  const getDaysRemaining = (date: Date) => {
+   630→    const diff = date.getTime() - Date.now()
+   631→    return Math.ceil(diff / 86400000)
+   632→  }
+   633→
+   634→  const getStatusStyle = (status: RegulatoryDeadline['status']) => {
+   635→    switch (status) {
+   636→      case 'on-track': return 'border-green-500/30 bg-green-500/5'
+   637→      case 'at-risk': return 'border-yellow-500/30 bg-yellow-500/5'
+   638→      case 'overdue': return 'border-red-500/30 bg-red-500/5'
+   639→      case 'completed': return 'border-blue-500/30 bg-blue-500/5'
+   640→    }
+   641→  }
+   642→
+   643→  return (
+   644→    <Card className="bg-slate-900 border-slate-700">
+   645→      <CardHeader className="pb-3">
+   646→        <CardTitle className="text-white text-lg flex items-center gap-2">
+   647→          <Calendar className="h-5 w-5 text-indigo-400" />
+   648→          Regulatory Deadline Countdown
+   649→        </CardTitle>
+   650→      </CardHeader>
+   651→      <CardContent>
+   652→        <div className="space-y-3">
+   653→          {deadlines.map((deadline, index) => {
+   654→            const daysRemaining = getDaysRemaining(deadline.deadline)
+   655→            
+   656→            return (
+   657→              <div key={index} className={`p-4 rounded-lg border ${getStatusStyle(deadline.status)}`}>
+   658→                <div className="flex items-start justify-between mb-2">
+   659→                  <div className="flex items-center gap-2">
+   660→                    <StatusIndicator 
+   661→                      status={
+   662→                        deadline.status === 'completed' ? 'excellent' :
+   663→                        deadline.status === 'on-track' ? 'good' :
+   664→                        deadline.status === 'at-risk' ? 'warning' : 'critical'
+   665→                      } 
+   666→                      size="sm"
+   667→                    />
+   668→                    <h4 className="font-medium text-white text-sm">{deadline.regulation}</h4>
+   669→                  </div>
+   670→                  <Badge variant="outline" className={`text-xs ${
+   671→                    deadline.status === 'completed' ? 'border-blue-500 text-blue-400' :
+   672→                    deadline.status === 'on-track' ? 'border-green-500 text-green-400' :
+   673→                    deadline.status === 'at-risk' ? 'border-yellow-500 text-yellow-400' :
+   674→                    'border-red-500 text-red-400'
+   675→                  }`}>
+   676→                    {deadline.status.replace('-', ' ').toUpperCase()}
+   677→                  </Badge>
+   678→                </div>
+   679→
+   680→                <p className="text-xs text-slate-400 mb-3">{deadline.description}</p>
+   681→
+   682→                <div className="grid grid-cols-3 gap-3">
+   683→                  <div>
+   684→                    <p className="text-xs text-slate-500">Days Remaining</p>
+   685→                    <p className={`text-lg font-bold ${
+   686→                      daysRemaining < 0 ? 'text-red-400' :
+   687→                      daysRemaining <= 15 ? 'text-yellow-400' :
+   688→                      'text-green-400'
+   689→                    }`}>
+   690→                      {daysRemaining < 0 ? `+${Math.abs(daysRemaining)}` : daysRemaining}
+   691→                    </p>
+   692→                  </div>
+   693→                  <div>
+   694→                    <p className="text-xs text-slate-500">Progress</p>
+   695→                    <div className="flex items-center gap-2 mt-1">
+   696→                      <Progress value={deadline.progress} className="flex-1 h-2 bg-slate-700" />
+   697→                      <span className="text-sm text-white">{deadline.progress}%</span>
+   698→                    </div>
+   699→                  </div>
+   700→                  <div>
+   701→                    <p className="text-xs text-slate-500">Owner</p>
+   702→                    <p className="text-sm text-white">{deadline.owner}</p>
+   703→                  </div>
+   704→                </div>
+   705→              </div>
+   706→            )
+   707→          })}
+   708→        </div>
+   709→      </CardContent>
+   710→    </Card>
+   711→  )
+   712→}
+   713→
+   714→// Evidence Collection Status Component
+   715→function EvidenceCollectionStatus({ evidence }: { evidence: EvidenceItem[] }) {
+   716→  const getTypeIcon = (type: EvidenceItem['type']) => {
+   717→    switch (type) {
+   718→      case 'document': return <FileText className="h-4 w-4 text-blue-400" />
+   719→      case 'screenshot': return <Eye className="h-4 w-4 text-purple-400" />
+   720→      case 'log': return <FileText className="h-4 w-4 text-orange-400" />
+   721→      case 'report': return <BookOpen className="h-4 w-4 text-green-400" />
+   722→      case 'certificate': return <Award className="h-4 w-4 text-cyan-400" />
+   723→    }
+   724→  }
+   725→
+   726→  const getStatusStyle = (status: EvidenceItem['status']) => {
+   727→    switch (status) {
+   728→      case 'approved': return 'border-green-500/30'
+   729→      case 'pending': return 'border-yellow-500/30'
+   730→      case 'rejected': return 'border-red-500/30'
+   731→    }
+   732→  }
+   733→
+   734→  return (
+   735→    <Card className="bg-slate-900 border-slate-700">
+   736→      <CardHeader className="pb-3">
+   737→        <div className="flex items-center justify-between">
+   738→          <CardTitle className="text-white text-lg flex items-center gap-2">
+   739→            <FolderOpen className="h-5 w-5 text-emerald-400" />
+   740→            Evidence Collection Status
+   741→          </CardTitle>
+   742→          <Button size="sm" variant="outline" className="border-slate-600 text-slate-300 h-8">
+   743→            <Upload className="h-4 w-4 mr-1" />
+   744→            Upload Evidence
+   745→          </Button>
+   746→        </div>
+   747→      </CardHeader>
+   748→      <CardContent>
+   749→        <div className="space-y-2 max-h-[300px] overflow-y-auto">
+   750→          {evidence.map(item => (
+   751→            <div key={item.id} className={`flex items-center justify-between p-3 bg-slate-800 rounded-lg border ${getStatusStyle(item.status)}`}>
+   752→              <div className="flex items-center gap-3">
+   753→                {getTypeIcon(item.type)}
+   754→                <div>
+   755→                  <p className="text-sm font-medium text-white">{item.name}</p>
+   756→                  <div className="flex items-center gap-2 text-xs text-slate-500">
+   757→                    <span>Uploaded by {item.uploadedBy}</span>
+   758→                    <span>•</span>
+   759→                    <span>{item.uploadedAt.toLocaleDateString()}</span>
+   760→                    {item.size && <span>• {item.size}</span>}
+   761→                  </div>
+   762→                </div>
+   763→              </div>
+   764→              
+   765→              <Badge variant="outline" className={`text-xs ${
+   766→                item.status === 'approved' ? 'border-green-500 text-green-400' :
+   767→                item.status === 'pending' ? 'border-yellow-500 text-yellow-400' :
+   768→                'border-red-500 text-red-400'
+   769→              }`}>
+   770→                {item.status.toUpperCase()}
+   771→              </Badge>
+   772→            </div>
+   773→          ))}
+   774→        </div>
+   775→        
+   776→        <div className="mt-4 pt-4 border-t border-slate-700 flex items-center justify-between text-sm">
+   777→          <span className="text-slate-400">
+   778→            {evidence.filter(e => e.status === 'approved').length}/{evidence.length} approved
+   779→          </span>
+   780→          <Button size="sm" variant="outline" className="border-slate-600 text-slate-300 h-8">
+   781→            <Download className="h-4 w-4 mr-1" />
+   782→            Export All
+   783→          </Button>
+   784→        </div>
+   785→      </CardContent>
+   786→    </Card>
+   787→  )
+   788→}
+   789→
+   790→// Main Compliance Dashboard Component
+   791→export default function ComplianceDashboard() {
+   792→  const [requirements, setRequirements] = useState<ANRTRequirement[]>([])
+   793→  const [findings, setFindings] = useState<AuditFinding[]>([])
+   794→  const [controls, setControls] = useState<ControlEffectiveness[]>([])
+   795→  const [violations, setViolations] = useState<PolicyViolation[]>([])
+   796→  const [deadlines, setDeadlines] = useState<RegulatoryDeadline[]>([])
+   797→  const [evidence, setEvidence] = useState<EvidenceItem[]>([])
+   798→  const [isLoading, setIsLoading] = useState(true)
+   799→  const [activeTab, setActiveTab] = useState('requirements')
+   800→
+   801→  useEffect(() => {
+   802→    setIsLoading(true)
+   803→    setTimeout(() => {
+   804→      setRequirements(generateANRTRequirements())
+   805→      setFindings(generateAuditFindings())
+   806→      setControls(generateControlEffectiveness())
+   807→      setViolations(generatePolicyViolations())
+   808→      setDeadlines(generateRegulatoryDeadlines())
+   809→      setEvidence(generateEvidenceItems())
+   810→      setIsLoading(false)
+   811→    }, 500)
+   812→  }, [])
+   813→
+   814→  const handleExport = async (format: string) => {
+   815→    console.log(`Exporting compliance report as ${format}`)
+   816→  }
+   817→
+   818→  if (isLoading) {
+   819→    return (
+   820→      <div className="min-h-screen bg-slate-950 p-6 flex items-center justify-center">
+   821→        <RefreshCw className="h-12 w-12 animate-spin text-blue-500" />
+   822→      </div>
+   823→    )
+   824→  }
+   825→
+   826→  // Calculate overall compliance metrics
+   827→  const overallCompliance = Math.round(
+   828→    (requirements.filter(r => r.status === 'compliant').length / requirements.length) * 100
+   829→  )
+   830→  const openFindings = findings.filter(f => f.status === 'open' || f.status === 'in-progress').length
+   831→  const avgControlEffectiveness = Math.round(
+   832→    controls.reduce((sum, c) => sum + c.effectiveness, 0) / controls.length
+   833→  )
+   834→
+   835→  return (
+   836→    <div className="min-h-screen bg-slate-950">
+   837→      {/* Header */}
+   838→      <header className="border-b border-slate-800 bg-slate-900/50 backdrop-blur-sm sticky top-0 z-40">
+   839→        <div className="px-6 py-4">
+   840→          <div className="flex items-center justify-between">
+   841→            <div>
+   842→              <h1 className="text-2xl font-bold text-white flex items-center gap-3">
+   843→                <ShieldCheck className="h-7 w-7 text-green-400" />
+   844→                Compliance Dashboard
+   845→              </h1>
+   846→              <p className="text-slate-400 text-sm mt-1">
+   847→                ANRT Framework Compliance &amp; Governance Monitoring
+   848→              </p>
+   849→            </div>
+   850→            
+   851→            <div className="flex items-center gap-3">
+   852→              <DataExporter onExport={handleExport} formats={['pdf', 'csv']} />
+   853→              <Button 
+   854→                variant="outline" 
+   855→                size="icon" 
+   856→                className="border-slate-600 text-slate-300"
+   857→                onClick={() => window.location.reload()}
+   858→              >
+   859→                <RefreshCw className="h-4 w-4" />
+   860→              </Button>
+   861→            </div>
+   862→          </div>
+   863→        </div>
+   864→      </header>
+   865→
+   866→      {/* KPI Summary */}
+   867→      <div className="px-6 pt-6 pb-4">
+   868→        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+   869→          <Card className="bg-slate-900 border-slate-700">
+   870→            <CardContent className="pt-4 pb-4">
+   871→              <div className="flex items-center gap-3">
+   872→                <div className="p-2 rounded-lg bg-green-500/20">
+   873→                  <ShieldCheck className="h-5 w-5 text-green-400" />
+   874→                </div>
+   875→                <div>
+   876→                  <p className="text-2xl font-bold text-green-400">{overallCompliance}%</p>
+   877→                  <p className="text-xs text-slate-400">Overall Compliance</p>
+   878→                </div>
+   879→              </div>
+   880→            </CardContent>
+   881→          </Card>
+   882→
+   883→          <Card className="bg-slate-900 border-slate-700">
+   884→            <CardContent className="pt-4 pb-4">
+   885→              <div className="flex items-center gap-3">
+   886→                <div className="p-2 rounded-lg bg-orange-500/20">
+   887→                  <AlertTriangle className="h-5 w-5 text-orange-400" />
+   888→                </div>
+   889→                <div>
+   890→                  <p className="text-2xl font-bold text-orange-400">{openFindings}</p>
+   891→                  <p className="text-xs text-slate-400">Open Findings</p>
+   892→                </div>
+   893→              </div>
+   894→            </CardContent>
+   895→          </Card>
+   896→
+   897→          <Card className="bg-slate-900 border-slate-700">
+   898→            <CardContent className="pt-4 pb-4">
+   899→              <div className="flex items-center gap-3">
+   900→                <div className="p-2 rounded-lg bg-cyan-500/20">
+   901→                  <Award className="h-5 w-5 text-cyan-400" />
+   902→                </div>
+   903→                <div>
+   904→                  <p className="text-2xl font-bold text-cyan-400">{avgControlEffectiveness}%</p>
+   905→                  <p className="text-xs text-slate-400">Avg Control Effectiveness</p>
+   906→                </div>
+   907→              </div>
+   908→            </CardContent>
+   909→          </Card>
+   910→
+   911→          <Card className="bg-slate-900 border-slate-700">
+   912→            <CardContent className="pt-4 pb-4">
+   913→              <div className="flex items-center gap-3">
+   914→                <div className="p-2 rounded-lg bg-purple-500/20">
+   915→                  <Calendar className="h-5 w-5 text-purple-400" />
+   916→                </div>
+   917→                <div>
+   918→                  <p className="text-2xl font-bold text-purple-400">
+   919→                    {deadlines.filter(d => d.status === 'at-risk' || d.status === 'overdue').length}
+   920→                  </p>
+   921→                  <p className="text-xs text-slate-400">At-Risk Deadlines</p>
+   922→                </div>
+   923→              </div>
+   924→            </CardContent>
+   925→          </Card>
+   926→        </div>
+   927→      </div>
+   928→
+   929→      {/* Main Content */}
+   930→      <main className="px-6 pb-6">
+   931→        <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-6">
+   932→          <TabsList className="bg-slate-800 border-slate-700">
+   933→            <TabsTrigger value="requirements" className="data-[state=active]:bg-slate-700">
+   934→              ANRT Requirements
+   935→            </TabsTrigger>
+   936→            <TabsTrigger value="findings" className="data-[state=active]:bg-slate-700">
+   937→              Audit Findings
+   938→            </TabsTrigger>
+   939→            <TabsTrigger value="controls" className="data-[state=active]:bg-slate-700">
+   940→              Controls
+   941→            </TabsTrigger>
+   942→            <TabsTrigger value="violations" className="data-[state=active]:bg-slate-700">
+   943→              Violations
+   944→            </TabsTrigger>
+   945→            <TabsTrigger value="deadlines" className="data-[state=active]:bg-slate-700">
+   946→              Deadlines
+   947→            </TabsTrigger>
+   948→            <TabsTrigger value="evidence" className="data-[state=active]:bg-slate-700">
+   949→              Evidence
+   950→            </TabsTrigger>
+   951→          </TabsList>
+   952→
+   953→          <TabsContent value="requirements">
+   954→            <ANRTRequirementsMatrix requirements={requirements} />
+   955→          </TabsContent>
+   956→
+   957→          <TabsContent value="findings">
+   958→            <AuditFindingsLifecycle findings={findings} />
+   959→          </TabsContent>
+   960→
+   961→          <TabsContent value="controls">
+   962→            <ControlEffectivenessScoring controls={controls} />
+   963→          </TabsContent>
+   964→
+   965→          <TabsContent value="violations">
+   966→            <PolicyViolationTrends violations={violations} />
+   967→          </TabsContent>
+   968→
+   969→          <TabsContent value="deadlines">
+   970→            <RegulatoryDeadlines deadlines={deadlines} />
+   971→          </TabsContent>
+   972→
+   973→          <TabsContent value="evidence">
+   974→            <EvidenceCollectionStatus evidence={evidence} />
+   975→          </TabsContent>
+   976→        </Tabs>
+   977→      </main>
+   978→    </div>
+   979→  )
+   980→}
+   981→

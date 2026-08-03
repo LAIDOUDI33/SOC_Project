@@ -1,0 +1,440 @@
+# ============================================================
+# Djezzy SOC Platform - Kafka 3.6+ Performance Tuning
+# ============================================================
+# Target: 500K+ EPS sustained throughput, <100ms end-to-end latency
+# Scale: Multi-broker cluster, 100TB+ daily data volume
+#
+# @version 2.0.0
+# Hardware: 32GB RAM, 16 CPU cores, NVMe SSD storage
+# ============================================================
+
+# ----------------------
+# BROKER IDENTIFICATION & NETWORKING
+# ----------------------
+
+# Broker ID (unique per broker)
+broker.id=0
+
+# Listener configuration (internal + external)
+listeners=INTERNAL://0.0.0.0:9092,EXTERNAL://0.0.0.0:9093
+listener.security.protocol.map=INTERNAL:PLAINTEXT,EXTERNAL:SSL
+inter.broker.listener.name=INTERNAL
+advertised.listeners=INTERNAL://kafka-broker-1.djezzy-soc.internal:9092,EXTERNAL://soc-events.djezzy.dz:9093
+listener.name.internal.ssl.client.auth=none
+listener.name.external.ssl.client.auth=requested
+
+# Controller configuration (KRaft mode recommended for new clusters)
+# For Zookeeper-based deployments:
+zookeeper.connect=zookeeper-1.djezzy-soc.internal:2181,zookeeper-2.djezzy-soc.internal:2181,zookeeper-3.djezzy-soc.internal:2181
+zookeeper.session.timeout.ms=18000
+zookeeper.connection.timeout.ms=15000
+zookeeper.sync.time.ms=2000
+
+
+# ----------------------
+# TOPIC CONFIGURATION FOR SOC EVENTS
+# ----------------------
+
+# Default topic settings (can be overridden per-topic)
+num.partitions=48                    # Start with 48 for high-throughput topics
+default.replication.factor=3         # 3-way replication for durability
+min.insync.replicas=2                # Require acks from 2 replicas + leader
+
+# Log retention - balance storage vs analysis needs
+log.retention.hours=168              # 7 days default retention
+log.retention.bytes=-1               # Unlimited by size (use time-based)
+log.segment.bytes=1073741824         # 1GB segments (good for rolling)
+log.retention.check.interval.ms=300000  # Check every 5 minutes
+log.segment.delete.delay.ms=60000    # Delay deletion by 60s
+
+# Log flush settings - CRITICAL for throughput vs durability tradeoff
+# For maximum throughput (acceptable some data loss on crash):
+log.flush.interval.messages=100000   # Flush after 100K messages
+log.flush.interval.ms=1000           # Or every second max
+log.flush.scheduler.interval.ms=1000
+log.flush.offset.checkpoint.interval.ms=60000
+log.flush.messages.interval=100000
+log.preallocate=false                 # Don't preallocate files (faster on modern FS)
+
+# Index and log cleanup settings
+log.index.size.max.bytes=10485760    # 10MB index file max
+log.index.interval.bytes=4096         # Index every 4KB written
+log.cleanup.policy=delete             # Delete old segments (vs compact)
+log.cleaner.enable=true              # Enable compaction for compacted topics
+log.cleaner.delete.retention.ms=86400000  # Clean after 24 hours
+log.cleaner.min.compaction.lag.ratio=0.5
+log.cleaner.min.cleanable.ratio=0.5
+log.cleaner.threads=4                # Parallel cleaning threads
+log.cleaner.io.max.bytes.per.second= null  # No I/O throttle during cleaning
+
+
+# ----------------------
+# NETWORK & IO TUNING
+# ----------------------
+
+# Socket buffers (critical for high throughput)
+socket.send.buffer.bytes=1048576     # 1MB send buffer
+socket.receive.buffer.bytes=1048576  # 1MB receive buffer
+socket.request.max.bytes=104857600   # 100MB max request size
+socket.max.connections=0             # No limit (OS handles this)
+
+# Thread configuration (based on CPU cores)
+num.network.threads=12               # Network I/O threads
+num.io.16                            # Disk I/O threads
+background.threads=10                # Background task threads
+num.recovery.threads.per.data.dir=4  # Recovery threads per data dir
+
+# Request handling
+queued.max.requests=20000            # Queued requests before blocking
+queued.max.request.bytes=-1          # Unlimited request bytes
+max.connections.per.ip=100            # Limit per IP to prevent abuse
+max.connections=50000                # Total max connections
+
+
+# ----------------------
+# COMPRESSION SETTINGS
+# ----------------------
+
+# Compression type (broker-level default for producers)
+compression.type=lz4                  # Best speed/ratio balance
+# Options: none, gzip, snappy, lz4, zstd
+
+# Compression level (for zstd if used)
+compression.level=3                   # 1-22, higher = better compression but slower
+
+
+# ----------------------
+# REPLICATION TUNING
+# ----------------------
+
+# Replica fetch settings
+replica.fetch.wait.max.ms=500         # Max wait for fetch response
+replica.fetch.min.bytes=1             # Fetch immediately when any data available
+replica.fetch.response.max.bytes=10485760  # 10MB max fetch response
+replica.fetch.max.bytes=1048576       # 1MB per partition fetch
+replica.high.watermark.check.interval.seconds=5
+replica.socket.timeout.ms=30000        # 30s socket timeout for replication
+replica.socket.receive.buffer.bytes=131072  # 128KB receive buffer
+replica.lag.time.max.ms=30000         # 30s max lag before considering out-of-sync
+
+# Leader settings
+leader.imbalance.check.interval.seconds=300
+leader.imbalance.per.broker.percentage=15
+unclean.leader.election.enable=false   # Don't elect unclean leaders (data loss risk)
+auto.create.topics.enable=false        # Disable auto-create in production
+auto.leader.rebalance.enable=true      # Auto-rebalance leadership
+
+
+# ----------------------
+# PRODUCER PERFORMANCE CONFIGURATION
+# ----------------------
+
+# These are defaults; producers should tune their own configs
+
+# Batch sizing - MOST IMPORTANT FOR THROUGHPUT
+batch.size=65536                      # 64KB batch buffer (increase for higher throughput)
+linger.ms=5                           # Wait up to 5ms for batch fill
+buffer.memory=268435456               # 256MB total buffer memory per producer
+max.block.ms=60000                    # Block up to 60s if buffer full
+max.request.size=10485760             # 10MB max request size
+max.in.flight.requests.per.connection=5  # Allow pipelining
+
+# Compression at producer level
+compression.type=lz4
+compression.level=3
+
+# Retry configuration
+retries=3                              # Retry 3 times before failing
+retry.backoff.ms=100                   # Initial backoff 100ms
+retry.backoff.max.ms=1000              # Max backoff 1s
+delivery.timeout.ms=120000             # 2 min total delivery timeout
+
+# Acks configuration
+acks=all                               # Wait for all in-sync replicas (most durable)
+enable.idempotence=true                # Enable exactly-once semantics
+enable.parallel.transactions=true      # Parallel transaction support
+
+
+# ----------------------
+# CONSUMER PERFORMANCE CONFIGURATION
+# ----------------------
+
+# Fetch settings
+fetch.min.bytes=1                     # Return as soon as any data available
+fetch.max.bytes=52428800              # 50MB max per partition fetch
+fetch.max.wait.ms=500                 # Max wait for enough data
+max.partition.fetch.bytes=10485760    # 10MB per partition limit
+fetch.max.bytes.per.partition=10485760 # Per-partition limit
+max.poll.records=1000                 # Max records per poll
+max.poll.interval.ms=300000           # 5 min max between polls
+
+# Session management
+session.timeout.ms=15000              # 15s session timeout
+heartbeat.interval.ms=5000            # Send heartbeat every 5s
+max.poll.interval.ms=300000           # 5 min between polls allowed
+
+# Offset management
+enable.auto.commit=true               # Auto-commit offsets
+auto.commit.interval.ms=5000          # Commit every 5 seconds
+auto.offset.reset=latest               # Start from latest if no offset
+auto.offset.reset.earliest.version=-2  # Version check for earliest reset
+
+# Consumer group management
+group.initial.rebalance.delay.ms=3000 # Delay initial rebalance
+group.max.session.timeout.ms=180000   # Max session timeout
+group.max.heartbeat.interval.ms=60000 # Max heartbeat interval
+group.min.session.timeout.ms=6000     # Min session timeout
+group.min.heartbeat.interval.ms=3000  # Min heartbeat interval
+group.remote.assignor=cooperative-sticky  # Use cooperative sticky assignor
+
+
+# ----------------------
+# TOPIC DEFINITIONS FOR DJEZZY SOC PLATFORM
+# ----------------------
+
+/*
+ * ============================================================
+ * TOPIC DESIGN GUIDELINES
+ * ============================================================
+ *
+ * 1. SECURITY-EVENTS (Primary ingestion topic)
+ *    Purpose: Raw security events from all sources
+ *    Partitions: 96 (for 500K EPS target)
+ *    Replication: 3
+ *    Retention: 7 days
+ *    Throughput target: ~10K msg/sec/partition
+ *
+ * 2. SECURITY-EVENTS-HIGH-PRIORITY (Critical events only)
+ *    Purpose: High-severity events requiring immediate processing
+ *    Partitions: 24
+ *    Replication: 3
+ *    Retention: 3 days
+ *
+ * 3. ALERTS (Generated alerts)
+ *    Purpose: Alerts generated by correlation/ML engines
+ *    Partitions: 12
+ *    Replication: 3
+ *    Retention: 30 days
+ *    Cleanup: compacted (keep latest state)
+ *
+ * 4. ALERTS-REALTIME (Real-time alert stream)
+ *    Purpose: WebSocket/SSE feed for dashboards
+ *    Partitions: 12
+ *    Replication: 2
+ *    Retention: 1 hour
+ *
+ * 5. CORRELATION-EVENTS (For correlation engine)
+ *    Purpose: Pre-correlated event groups
+ *    Partitions: 24
+ *    Replication: 2
+ *    Retention: 3 days
+ *
+ * 6. INCIDENT-UPDATES (Incident lifecycle changes)
+ *    Purpose: Incident status updates, assignments
+ *    Partitions: 6
+ *    Replication: 3
+ *    Retention: 90 days
+ *    Cleanup: compacted
+ *
+ * 7. AUDIT-LOGS (Compliance audit trail)
+ *    Purpose: All user actions for compliance
+ *    Partitions: 12
+ *    Replication: 3
+ *    Retention: 365 days (regulatory requirement)
+ *
+ * 8. METRICS-SNAPSHOTS (Aggregated metrics)
+ *    Purpose: Pre-calculated KPIs and metrics
+ *    Partitions: 6
+ *    Replication: 2
+ *    Retention: 7 days
+ *    Cleanup: compacted
+ *
+ * 9. THREAT-INTEL-FEEDS (External threat intelligence)
+ *    Purpose: IOC feeds, threat actor updates
+ *    Partitions: 6
+ *    Replication: 3
+ *    Retention: 30 days
+ *    Cleanup: compacted
+ */
+
+# Example topic creation commands:
+# ---------------------------------------------------------
+# Primary security events topic (highest throughput):
+# bin/kafka-topics.sh --bootstrap-server localhost:9092 \
+#   --create --topic security-events \
+#   --partitions 96 --replication-factor 3 \
+#   --config retention.ms=604800000 \
+#   --config segment.bytes=1073741824 \
+#   --config cleanup.policy=delete \
+#   --config compression.type=lz4 \
+#   --config max.message.bytes=10485760 \
+#   --config flush.messages=100000 \
+#   --config flush.ms=1000
+
+# Alerts topic (compacted for latest state):
+# bin/kafka-topics.sh --bootstrap-server localhost:9092 \
+#   --create --topic alerts \
+#   --partitions 12 --replication-factor 3 \
+#   --config retention.ms=2592000000 \
+#   --config cleanup.policy=compact \
+#   --config min.cleanable.dirty.ratio=0.05 \
+#   --config delete.retention.ms=86400000 \
+#   --config segment.bytes=536870912
+
+# Real-time alerts for dashboard streaming:
+# bin/kafka-topics.sh --bootstrap-server localhost:9092 \
+#   --create --topic alerts-realtime \
+#   --partitions 12 --replication-factor 2 \
+#   --config retention.ms=3600000 \
+#   --config segment.bytes=268435456
+
+
+# ----------------------
+# PARTITION SIZING GUIDELINES
+# ----------------------
+
+/*
+ * ============================================================
+ * PARTITION SIZING FORMULA
+ * ============================================================
+ *
+ * Target Partitions = max(throughput_target / partition_capacity, consumer_count * 2)
+ *
+ * Variables:
+ * - throughput_target: Desired messages/second (e.g., 500,000 EPS)
+ * - partition_capacity: Single-partition throughput (~15K msg/s on good hardware)
+ * - consumer_count: Number of consumers reading from this topic
+ *
+ * Djezzy SOC Calculations:
+ * - Security Events: 500K EPS / 15K = 34 partitions minimum
+ * - Plan for 3x growth: 96-100 partitions recommended
+ * - Account for consumer parallelism: 96 / 24 consumers = 4 partitions each
+ *
+ * Resource Impact:
+ * - Each partition uses ~10-50MB RAM on broker (with 1GB segments)
+ * - More partitions = more open file descriptors
+ * - More partitions = longer leader election time
+ * - More partitions = higher replication latency
+ *
+ * Recommended Limits:
+ * - Per broker (32GB heap): 4000 partitions
+ * - Per cluster (multi-broker): 20,000+ partitions
+ * - Monitor: under-replicated partitions, leader skew
+ */
+
+
+# ----------------------
+# MONITORING & METRICS EXPORT
+# ----------------------
+
+# Metrics reporting configuration
+metric.reporters=prometheus,jmx
+metric.sample.window.ms=15000         # 15-second sampling window
+metric.num.samples=10                 # Keep 10 samples (2.5 minutes history)
+metric.recording.level=info
+
+# JMX Exporter (for Prometheus)
+# Configure via environment variables or jmx-exporter config
+# KAFKA_JMX_OPTS="-javaagent:/opt/jmx-exporter/jmx_prometheus_javaagent.jar=7071:/etc/jmx-exporter/config.yml"
+
+# Auto-create topics (DISABLED IN PRODUCTION)
+auto.create.topics.enable=false
+
+# Log configuration
+log.dirs=/var/lib/kafka/data,/mnt/kafka-data-1,/mnt/kafka-data-2,/mnt/kafka-data-3
+log.roll.hours=168                    # Roll weekly
+log.dir=/var/log/kafka
+controller.log.dir=/var/log/kafka
+
+# Log levels
+log4j.root.logger=INFO, kafkaAppender
+log4j.logger.org.apache.kafka.controller INFO=INFO
+log4j.logger.org.apache.kafka.server=INFO
+log4j.logger.state.change.logger TRACE
+log4j.logger.request.logger=INFO
+
+
+# ----------------------
+# KAFKA STREAMS CONFIGURATION (for real-time processing)
+# ----------------------
+
+/*
+ * Streams Application Settings (configure in application code):
+ *
+ * # Processing guarantees
+ * processing.guarantee=exactly_once_v2
+ * 
+ * # Performance tuning
+ * commit.interval.ms=5000
+ * cache.max.bytes.buffering=10485760    # 10MB record cache
+ * buffered.records.per.partition=1000
+ * num.stream.threads=16                  # Stream threads (match CPU cores)
+ * concurrency=8                          # Tasks per thread
+ * 
+ * # State store (RocksDB)
+ * state.dir=/var/lib/kafka-streams/state
+ * num.standby.replicas=1                 # Standby replicas for fast recovery
+ * acceptable.recovery.lag=10000          # Max lag before rebalance
+ * rocksdb.config=rocksdb-performance.ini
+ * 
+ * # Replication
+ * replication.factor=3
+ * topic.min.insync.replicas=2
+ * 
+ * # Consumer tuning
+ * max.poll.records=2000
+ * poll.ms=100
+ * 
+ * # Producer tuning (for output topics)
+ * batch.size=65536
+ * linger.ms=5
+ * compression.type=lz4
+ *
+ * RocksDB Performance Config (rocksdb-performance.ini):
+ * block_cache_size=2147483648           # 2GB block cache
+ * write_buffer_size=67108864           # 64MB write buffer
+ * max_write_buffer_number=4
+ * compression_type=snappy
+ * stats_level=kAllStats
+ */
+
+
+# ----------------------
+# MIRROR MAKER 2 (Cross-Cluster Replication)
+# ----------------------
+
+/*
+ * MirrorMaker2 Configuration for DR:
+ *
+ * topics=.*
+ * topics.exclude=.*\.internal,.*__consumer_offsets
+ * replication.factor=3
+ * sync.group.offsets.enabled=true
+ * sync.topic.configs.enabled=true
+ * refresh.topics.interval.seconds=600
+ * replication.policy.separator=-
+ * offset.sync.interval.seconds=5
+ * auto.offset.sync.interval.seconds=5
+ */
+
+
+# ----------------------
+# CRUISER CONTROL (Cluster Rebalancing)
+# ----------------------
+
+/*
+ * Cruise Control Configuration for automated operations:
+ *
+ * # Goals (priority order)
+ * goals=RackAwareGoal,ReplicaCapacityGoal,DiskCapacityGoal,NetworkInboundGoal,NetworkOutboundGoal,CpuCapacityGoal,TopicReplicationDistributionGoal,LeaderBytesInDistributionGoal,PreferredLeaderElectionGoal
+ * hard.goals=RackAwareGoal
+ * 
+ * # Execution settings
+ * execution.progress.check.interval.ms=5000
+ * proposal.expiration.minutes=5
+ * 
+ * # Anomaly detection
+ * anomaly.detection.goals.metrics=[BrokerCountMetric,RackAwareMetric]
+ * self.healing.anomaly.detection.enabled=true
+ * anomaly.detection.interval.ms=60000
+ */

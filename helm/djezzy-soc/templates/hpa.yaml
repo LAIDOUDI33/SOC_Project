@@ -1,0 +1,132 @@
+{{/*
+=============================================================================
+Djezzy National SOC Platform - Horizontal Pod Autoscaler Template
+=============================================================================
+HPA configuration for automatic scaling
+Production Ready | GitOps Ready
+=============================================================================
+*/}}
+{{- if .Values.autoscaling.enabled }}
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: {{ include "djezzy-soc.fullname" . }}-hpa
+  namespace: {{ include "djezzy-soc.namespace" . }}
+  labels:
+    {{- include "djezzy-soc.labels" . | nindent 4 }}
+    app.kubernetes.io/component: hpa
+  annotations:
+    description: "Horizontal Pod Autoscaler for {{ .Values.componentName | default "application" }}"
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: {{ .Values.autoscaling.scaleTargetKind | default "Deployment" }}
+    name: {{ include "djezzy-soc.fullname" . }}
+  
+  minReplicas: {{ .Values.autoscaling.minReplicas | default 1 }}
+  maxReplicas: {{ .Values.autoscaling.maxReplicas | default 10 }}
+  
+  metrics:
+    {{- /* CPU-based scaling */}}
+    {{- if .Values.autoscaling.targetCPUUtilization }}
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: {{ .Values.autoscaling.targetCPUUtilization }}
+    {{- end }}
+    
+    {{- /* Memory-based scaling */}}
+    {{- if .Values.autoscaling.targetMemoryUtilization }}
+    - type: Resource
+      resource:
+        name: memory
+        target:
+          type: Utilization
+          averageUtilization: {{ .Values.autoscaling.targetMemoryUtilization }}
+    {{- end }}
+    
+    {{- /* Custom metrics */}}
+    {{- range .Values.autoscaling.customMetrics }}
+    - type: {{ .type | default "Pods" }}
+      {{- if eq .type "Pods" }}
+      pods:
+        metric:
+          name: {{ .metricName }}
+        target:
+          type: AverageValue
+          averageValue: "{{ .targetValue }}"
+      {{- else if eq .type "Resource" }}
+      resource:
+        name: {{ .resourceName }}
+        target:
+          type: Utilization
+          averageUtilization: {{ .targetValue }}
+      {{- else if eq .type "External" }}
+      external:
+        metric:
+          name: {{ .metricName }}
+          selector:
+            matchLabels:
+              {{- toYaml .selectorLabels | nindent 14 }}
+        target:
+          type: AverageValue
+          averageValue: "{{ .targetValue }}"
+      {{- end }}
+    {{- end }}
+  
+  {{- /* Scaling Behavior */}}
+  behavior:
+    scaleDown:
+      stabilizationWindowSeconds: {{ .Values.autoscaling.scaleDownStabilizationSeconds | default 300 }}
+      policies:
+        {{- range .Values.autoscaling.scaleDownPolicies }}
+        - type: {{ .type | default "Percent" }}
+          value: {{ .value | default 10 }}
+          periodSeconds: {{ .periodSeconds | default 60 }}
+        {{- end }}
+    scaleUp:
+      stabilizationWindowSeconds: {{ .Values.autoscaling.scaleUpStabilizationSeconds | default 0 }}
+      policies:
+        {{- range .Values.autoscaling.scaleUpPolicies }}
+        - type: {{ .type | default "Percent" }}
+          value: {{ .value | default 100 }}
+          periodSeconds: {{ .periodSeconds | default 15 }}
+        {{- end }}
+      selectPolicy: {{ .Values.autoscaling.selectPolicy | default "Max" }}
+
+---
+{{/*
+Vertical Pod Autoscaler (Optional)
+*/}}
+{{- if .Values.vpa.enabled }}
+apiVersion: autoscaling.k8s.io/v1
+kind: VerticalPodAutoscaler
+metadata:
+  name: {{ include "djezzy-soc.fullname" . }}-vpa
+  namespace: {{ include "djezzy-soc.namespace" . }}
+  labels:
+    {{- include "djezzy-soc.labels" . | nindent 4 }}
+    app.kubernetes.io/component: vpa
+spec:
+  targetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: {{ include "djezzy-soc.fullname" . }}
+  
+  updatePolicy:
+    updateMode: {{ .Values.vpa.updateMode | default "Auto" }}
+  
+  resourcePolicy:
+    containerPolicies:
+    - containerName: {{ .Values.componentName | default "main" }}
+      minAllowed:
+        cpu: {{ .Values.vpa.minAllowed.cpu | default "50m" }}
+        memory: {{ .Values.vpa.minAllowed.memory | default "64Mi" }}
+      maxAllowed:
+        cpu: {{ .Values.vpa.maxAllowed.cpu | default "8" }}
+        memory: {{ .Values.vpa.maxAllowed.memory | default "16Gi" }}
+      controlledResources: ["cpu", "memory"]
+{{- end }}
+{{- end }}

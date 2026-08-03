@@ -1,0 +1,68 @@
+{{/*
+=============================================================================
+Djezzy National SOC Platform - ConfigMap Template
+=============================================================================
+Configuration management template
+ANRT Compliant | GitOps Ready
+=============================================================================
+*/}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "djezzy-soc.configmapName" . }}
+  namespace: {{ include "djezzy-soc.namespace" . }}
+  labels:
+    {{- include "djezzy-soc.labels" . | nindent 4 }}
+    app.kubernetes.io/component: config
+  annotations:
+    argocd.argoproj.io/sync-wave: "1"
+    description: "Configuration for {{ .Values.componentName | default "application" }}"
+data:
+  {{- /* Global Environment */}}
+  NODE_ENV: {{ .Values.global.environment | default "production" }}
+  
+  {{- /* Application-specific configuration */}}
+  {{- range $key, $value := .Values.config.data }}
+  {{ $key }}: {{ $value | quote }}
+  {{- end }}
+  
+  {{- /* ANRT Compliance Settings */}}
+  {{- if .Values.anrt.compliance }}
+  ANRT_LOG_LEVEL: {{ .Values.anrt.logLevel | default "audit" }}
+  ANRT_DATA_RETENTION_DAYS: "{{ .Values.anrt.dataRetentionDays | default 2555 }}"
+  ANRT_AUDIT_ENABLED: "{{ .Values.anrt.auditLogging | default true }}"
+  {{- end }}
+  
+  {{- /* Feature Flags */}}
+  ENABLE_SS7_MODULE: "{{ .Values.enableSS7Module | default false }}"
+  ENABLE_AI_AUTOMATION: "{{ .Values.enableAIAutomation | default false }}"
+  ENABLE_THREAT_HUNTING: "{{ .Values.enableThreatHunting | default false }}"
+  ENABLE_GEOMARKETING: "{{ .Values.enableGeomarketing | default false }}"
+  
+  {{- /* Custom Configuration Files */}}
+  {{- if .Values.configFiles }}
+  {{- range $fileName, $fileContent := .Values.configFiles }}
+  {{ $fileName }}: |
+    {{- $fileContent | nindent 4 }}
+  {{- end }}
+  {{- end }}
+
+---
+{{/*
+Additional ConfigMap for sensitive but non-secret configuration
+*/}}
+{{- if .Values.additionalConfigMap.enabled | default false }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "djezzy-soc.fullname" . }}-additional-config
+  namespace: {{ include "djezzy-soc.namespace" . }}
+  labels:
+    {{- include "djezzy-soc.labels" . | nindent 4 }}
+    app.kubernetes.io/component: additional-config
+data:
+  {{- range $key, $value := .Values.additionalConfigMap.data }}
+  {{ $key }}: |
+    {{- $value | nindent 4 }}
+  {{- end }}
+{{- end }}

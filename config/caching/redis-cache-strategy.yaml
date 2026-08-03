@@ -1,0 +1,395 @@
+# Djezzy SOC Platform - Redis Caching Architecture
+# Multi-layer cache configuration for high-performance SOC operations
+#
+# Target: 95%+ cache hit rate, <1ms cache read latency
+# Scale: 10,000+ concurrent users, 500K+ EPS
+
+version: '3.8'
+
+redis-cache-strategy:
+  # ============================================================
+  # CACHE LAYER ARCHITECTURE
+  # ============================================================
+  layers:
+    l1_browser:
+      name: "Browser Cache"
+      description: "Client-side caching for static assets and API responses"
+      enabled: true
+      ttl:
+        static_assets: 86400        # 24 hours for JS/CSS/images
+        api_responses: 60           # 1 minute for API (stale-while-revalidate)
+        dashboard_data: 30          # 30 seconds for real-time data
+      headers:
+        Cache-Control: "public, max-age=AGE"
+        stale-while-revalidate: "86400"
+        stale-if-error: "3600"
+
+    l2_cdn:
+      name: "CDN/Edge Cache"
+      description: "Cloudflare edge caching for geographic distribution"
+      enabled: true
+      provider: cloudflare
+      locations:
+        - algiers  # Primary POP for Algeria-first routing
+        - paris    # European fallback
+        - dubai    # Middle East coverage
+      ttl:
+        static_content: 2592000     # 30 days
+        api_public: 300            # 5 minutes for public endpoints
+        api_authenticated: 0       # No caching for authenticated (pass-through)
+        images: 604800             # 7 days with versioning
+
+    l3_redis:
+      name: "Redis Cluster Cache"
+      description: "Distributed Redis cluster for application-level caching"
+      enabled: true
+      mode: cluster
+      nodes: 6                     # 3 master + 3 replica
+      memory_per_node: 32gb       # Total ~192GB cache
+      configuration:
+        maxmemory-policy: allkeys-lru
+        save_interval: 900 1       # RDB snapshot every 15min if 1+ changes
+        appendonly: yes            # AOF persistence
+        appendfsync: everysec
+        tcp-keepalive: 400
+        timeout: 0                 # No blocking on connections
+        maxclients: 15000          # Support 10K users + overhead
+
+    l4_database:
+      name: "Database Query Cache"
+      description: "PostgreSQL internal query result caching"
+      enabled: true
+      shared_buffers: 16gb
+      effective_cache_size: 48gb
+      work_mem: 256mb
+
+  # ============================================================
+  # CACHE KEY STRATEGY
+  # ============================================================
+  key_patterns:
+    format: "{prefix}:{tenant}:{resource}:{identifier}:{version}"
+    
+    prefixes:
+      session: "sess"
+      user_data: "user"
+      alerts: "alert"
+      incidents: "inc"
+      events: "evt"
+      metrics: "metric"
+      permissions: "perm"
+      rate_limit: "rl"
+      throttle: "throt"
+      
+    examples:
+      - "alert:djezzy:active:list:v1"
+      - "user:12345:permissions:v2"
+      - "metric:djezzy:dashboard:2024011510:v1"
+
+  # ============================================================
+  # TTL POLICIES BY DATA TYPE
+  # ============================================================
+  ttl_policies:
+    # Security-sensitive data (short TTL)
+    authentication_tokens:
+      ttl: 1800                    # 30 minutes
+      refresh_on_access: true
+      sliding_expiration: true
+      
+    user_sessions:
+      ttl: 3600                    # 1 hour idle timeout
+      absolute_timeout: 28800      # 8 hour max session
+      activity_tracking: true
+      
+    user_permissions:
+      ttl: 600                     # 10 minutes
+      invalidate_on_change: true
+      
+    rate_limit_counters:
+      ttl: 60                      # 1 minute window
+      sliding_window: true
+        
+    # Operational data (medium TTL)
+    active_alerts:
+      ttl: 30                      # 30 seconds - near real-time
+      strategy: write_through
+      invalidation: event_driven
+      
+    alert_details:
+      ttl: 300                     # 5 minutes
+      strategy: lazy_loading
+      background_refresh: true
+      
+    incident_list:
+      ttl: 120                     # 2 minutes
+      strategy: cache_aside
+      
+    incident_details:
+      ttl: 600                     # 10 minutes
+      tags: ["incident:{id}"]
+      
+    # Analytics & Metrics (longer TTL with scheduled refresh)
+    dashboard_metrics:
+      ttl: 60                      # 1 minute
+      refresh_strategy: scheduled
+      schedule: "*/1 * * * *"      # Every minute
+      
+    kpi_summary:
+      ttl: 300                     # 5 minutes
+      aggregation_window: 5m
+      
+    historical_stats:
+      ttl: 3600                    # 1 hour
+      granularity: hourly
+      
+    # Reference Data (very long TTL)
+    lookup_tables:
+      ttl: 86400                   # 24 hours
+      strategy: eager_loading
+      preload_at_startup: true
+      
+    threat_intel_feeds:
+      ttl: 1800                    # 30 minutes
+      external_source: true
+      refresh_async: true
+      
+    geoip_data:
+      ttl: 604800                  # 7 days
+      bulk_load: true
+      
+    compliance_frameworks:
+      ttl: 43200                   # 12 hours
+      version_aware: true
+
+  # ============================================================
+  # CACHE INVALIDATION RULES
+  # ============================================================
+  invalidation:
+    strategies:
+      immediate:
+        description: "Invalidate immediately on data change"
+        use_cases:
+          - user_permissions
+          - authentication_events
+          - alert_status_changes
+          - incident_updates
+        implementation: pub/sub
+          
+      time_based:
+        description: "Let TTL expire naturally"
+        use_cases:
+          - metrics_snapshots
+          - historical_aggregates
+        implementation: redis_ttl
+          
+      version_based:
+        description: "Use cache version keys"
+        use_cases:
+          - dashboard_widgets
+          - report_templates
+        implementation: version_key_increment
+          
+      tag_based:
+        description: "Invalidate by associated tags"
+        use_cases:
+          - related_alerts
+          - incident_timeline
+        implementation: tag_set_invalidation
+    
+    # Event-driven invalidation triggers
+    triggers:
+      on_alert_created:
+        - invalidate: "alert:*:list:*"
+        - publish: "alerts:updated"
+        
+      on_alert_updated:
+        - invalidate: "alert:{id}:*"
+        - invalidate: "alert:*:summary:*"
+        - publish: "alert:{id}:updated"
+        
+      on_incident_created:
+        - invalidate: "inc:*:list:*"
+        - invalidate: "metric:*:incident_count:*"
+        
+      on_incident_status_changed:
+        - invalidate: "inc:{id}:*"
+        - invalidate: "inc:*:status:*"
+        - publish: "incident:{id}:updated"
+        
+      on_user_permission_changed:
+        - invalidate: "user:{user_id}:perm:*"
+        - invalidate: "user:{user_id}:roles:*"
+        - publish: "user:{user_id}:permissions_changed"
+
+  # ============================================================
+  # REDIS CLUSTER TOPOLOGY FOR DJEZZY SOC
+  # ============================================================
+  cluster_topology:
+    mode: redis-cluster
+    slots: 16384
+    nodes:
+      - id: node-1
+        host: redis-cluster-node-1.djezzy-soc.internal
+        port: 6379
+        role: master
+        slots: [0, 5461]
+        memory_limit: 32gb
+        
+      - id: node-2
+        host: redis-cluster-node-2.djezzy-soc.internal
+        port: 6379
+        role: master
+        slots: [5462, 10922]
+        memory_limit: 32gb
+        
+      - id: node-3
+        host: redis-cluster-node-3.djezzy-soc.internal
+        port: 6379
+        role: master
+        slots: [10923, 16383]
+        memory_limit: 32gb
+        
+      - id: node-4
+        host: redis-cluster-node-4.djezzy-soc.internal
+        port: 6379
+        role: replica
+        of: node-1
+        priority: 100
+        
+      - id: node-5
+        host: redis-cluster-node-5.djezzy-soc.internal
+        port: 6379
+        role: replica
+        of: node-2
+        priority: 100
+        
+      - id: node-6
+        host: redis-cluster-node-6.djezzy-soc.internal
+        port: 6379
+        role: replica
+        of: node-3
+        priority: 100
+
+  # ============================================================
+  # HIGH-AVAILABILITY CONFIGURATION
+  # ============================================================
+  high_availability:
+    failover_mode: automatic
+    failover_timeout: 10000        # 10 seconds
+    quorum: 2                      # Need 2 of 3 masters to agree
+    
+    sentinel:
+      enabled: true
+      nodes: 3
+      down_after_milliseconds: 5000
+      failover_timeout: 10000
+      parallel_syncs: 1
+      
+    cross_dc_replication:
+      enabled: true
+      primary_dc: algiers-datacenter
+      secondary_dc: oran-dr-site
+      replication_mode: async
+      acceptable_lag_seconds: 5
+
+  # ============================================================
+  # MONITORING & ALERTING
+  # ============================================================
+  monitoring:
+    metrics_collection_interval: 10  # seconds
+    slowlog_threshold: 1000         # milliseconds
+    
+    alerts:
+      - metric: memory_usage_percent
+        threshold: 85
+        severity: warning
+        action: notify_ops
+        
+      - metric: memory_usage_percent
+        threshold: 95
+        severity: critical
+        action: scale_or_evict
+        
+      - metric: connection_count
+        threshold: 13000            # Near maxclients
+        severity: warning
+        action: review_connections
+        
+      - metric: cache_hit_rate
+        threshold: 80               # Below target
+        severity: warning
+        action: investigate_misses
+        
+      - metric: command_latency_p99
+        threshold: 10               # ms
+        severity: critical
+        action: investigate_performance
+        
+      - metric: replication_lag_bytes
+        threshold: 10485760         # 10MB
+        severity: warning
+        action: check_replication
+
+  # ============================================================
+  # SECURITY CONFIGURATION
+  # ============================================================
+  security:
+    tls:
+      enabled: true
+      cert_path: /etc/ssl/certs/djezzy-redis.crt
+      key_path: /etc/ssl/private/djezzy-redis.key
+      ca_path: /etc/ssl/certs/djezzy-ca.crt
+      require_client_certs: true
+      
+    acl:
+      enabled: true
+      users:
+        - username: soc_app_readonly
+          password: ${REDIS_APP_RO_PASS}
+          commands: ["@read", "+ping"]
+          keys: "*"
+          
+        - username: soc_app_readwrite
+          password: ${REDIS_APP_RW_PASS}
+          commands: ["@all", "-@admin", "-@dangerous"]
+          keys: "*"
+          
+        - username: soc_admin
+          password: ${REDIS_ADMIN_PASS}
+          commands: ["@all"]
+          keys: "*"
+          
+    network:
+      allowed_cidrs:
+        - 10.0.0.0/8              # Internal network
+        - 172.16.0.0/12           # Private network
+        - 192.168.0.0/16         # Local network
+      bind_interface: eth0
+      port: 6379
+      protected_mode: yes
+
+  # ============================================================
+  # PERFORMANCE TUNING PARAMETERS
+  # ============================================================
+  performance:
+    threading:
+      io_threads: 8               # Match CPU cores per node
+      
+    networking:
+      tcp-backlog: 511
+      somaxconn: 65535
+      keepalive: 300
+      
+    persistence:
+      rdb_compression: yes
+      rdb_checksum: yes
+      aof_rewrite_percentage: 100
+      aof_rewrite_min_size: 64mb
+      
+    client_output_buffer_limits:
+      normal: "0 0 0"              # No limit for normal clients
+      replica: "256mb 64mb 300"    # Replication clients
+      pubsub: "32mb 8mb 60"        # Pub/Sub clients
+      
+    max_memory_policy: allkeys-lru
+    lazy_expiration: yes
+    lazy_reclaim: yes

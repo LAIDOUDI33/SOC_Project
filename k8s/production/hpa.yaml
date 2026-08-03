@@ -1,0 +1,592 @@
+# =============================================================================
+# Djezzy National SOC Platform - Horizontal Pod Autoscaling (HPA)
+# =============================================================================
+# Production Autoscaling Policies | GitOps Ready
+# =============================================================================
+
+# =============================================================================
+# SOC PLATFORM API - HPA
+# =============================================================================
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: soc-platform-api-hpa
+  namespace: soc-backend
+  labels:
+    app.kubernetes.io/name: djezzy-soc
+    app.kubernetes.io/component: hpa
+    app.kubernetes.io/part-of: soc-platform
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: soc-platform-api
+  minReplicas: 3
+  maxReplicas: 10
+  metrics:
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: 70
+  - type: Resource
+    resource:
+      name: memory
+      target:
+        type: Utilization
+        averageUtilization: 80
+  behavior:
+    scaleDown:
+      stabilizationWindowSeconds: 300
+      policies:
+      - type: Percent
+        value: 10
+        periodSeconds: 60
+    scaleUp:
+      stabilizationWindowSeconds: 0
+      policies:
+      - type: Percent
+        value: 100
+        periodSeconds: 15
+      - type: Pods
+        value: 4
+        periodSeconds: 15
+      selectPolicy: Max
+
+---
+# =============================================================================
+# KONG GATEWAY - HPA
+# =============================================================================
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: kong-gateway-hpa
+  namespace: soc-backend
+  labels:
+    app.kubernetes.io/name: djezzy-soc
+    app.kubernetes.io/component: hpa
+    app.kubernetes.io/part-of: soc-platform
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: kong-gateway
+  minReplicas: 2
+  maxReplicas: 6
+  metrics:
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: 60
+  - type: Resource
+    resource:
+      name: memory
+      target:
+        type: Utilization
+        averageUtilization: 75
+  behavior:
+    scaleDown:
+      stabilizationWindowSeconds: 300
+      policies:
+      - type: Percent
+        value: 20
+        periodSeconds: 120
+    scaleUp:
+      stabilizationWindowSeconds: 0
+      policies:
+      - type: Percent
+        value: 50
+        periodSeconds: 30
+
+---
+# =============================================================================
+# WAZUH MANAGER - HPA (Stateful - Limited Scaling)
+# =============================================================================
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: wazuh-manager-hpa
+  namespace: soc-backend
+  labels:
+    app.kubernetes.io/name: djezzy-soc
+    app.kubernetes.io/component: hpa
+    app.kubernetes.io/part-of: soc-platform
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: wazuh-manager
+  minReplicas: 1
+  maxReplicas: 2
+  metrics:
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: 75
+  - type: Resource
+    resource:
+      name: memory
+      target:
+        type: Utilization
+        averageUtilization: 85
+
+---
+# =============================================================================
+# THEHIVE SOAR - HPA
+# =============================================================================
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: thehive-hpa
+  namespace: soc-backend
+  labels:
+    app.kubernetes.io/name: djezzy-soc
+    app.kubernetes.io/component: hpa
+    app.kubernetes.io/part-of: soc-platform
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: thehive
+  minReplicas: 1
+  maxReplicas: 3
+  metrics:
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: 65
+  - type: Resource
+    resource:
+      name: memory
+      target:
+        type: Utilization
+        averageUtilization: 80
+
+---
+# =============================================================================
+# CORTEX ANALYZERS - HPA
+# =============================================================================
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: cortex-hpa
+  namespace: soc-backend
+  labels:
+    app.kubernetes.io/name: djezzy-soc
+    app.kubernetes.io/component: hpa
+    app.kubernetes.io/part-of: soc-platform
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: cortex
+  minReplicas: 1
+  maxReplicas: 5
+  metrics:
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: 70
+  - type: Resource
+    resource:
+      name: memory
+      target:
+        type: Utilization
+        averageUtilization: 85
+  behavior:
+    scaleDown:
+      stabilizationWindowSeconds: 600
+      policies:
+      - type: Percent
+        value: 25
+        periodSeconds: 180
+    scaleUp:
+      stabilizationWindowSeconds: 30
+      policies:
+      - type: Percent
+        value: 100
+        periodSeconds: 30
+
+---
+# =============================================================================
+# MISP THREAT INTEL - HPA
+# =============================================================================
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: misp-hpa
+  namespace: soc-backend
+  labels:
+    app.kubernetes.io/name: djezzy-soc
+    app.kubernetes.io/component: hpa
+    app.kubernetes.io/part-of: soc-platform
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: misp
+  minReplicas: 1
+  maxReplicas: 2
+  metrics:
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: 70
+  - type: Resource
+    resource:
+      name: memory
+      target:
+        type: Utilization
+        averageUtilization: 80
+
+---
+# =============================================================================
+# OPENCTI THREAT INTEL - HPA
+# =============================================================================
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: opencti-hpa
+  namespace: soc-backend
+  labels:
+    app.kubernetes.io/name: djezzy-soc
+    app.kubernetes.io/component: hpa
+    app.kubernetes.io/part-of: soc-platform
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: opencti
+  minReplicas: 1
+  maxReplicas: 3
+  metrics:
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: 65
+  - type: Resource
+    resource:
+      name: memory
+      target:
+        type: Utilization
+        averageUtilization: 80
+
+---
+# =============================================================================
+# SURICATA NSM - HPA
+# =============================================================================
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: suricata-hpa
+  namespace: soc-backend
+  labels:
+    app.kubernetes.io/name: djezzy-soc
+    app.kubernetes.io/component: hpa
+    app.kubernetes.io/part-of: soc-platform
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: suricata
+  minReplicas: 2
+  maxReplicas: 6
+  metrics:
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: 60
+  - type: Resource
+    resource:
+      name: memory
+      target:
+        type: Utilization
+        averageUtilization: 75
+
+---
+# =============================================================================
+# ZEEK NSM - HPA
+# =============================================================================
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: zeek-hpa
+  namespace: soc-backend
+  labels:
+    app.kubernetes.io/name: djezzy-soc
+    app.kubernetes.io/component: hpa
+    app.kubernetes.io/part-of: soc-platform
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: zeek
+  minReplicas: 2
+  maxReplicas: 4
+  metrics:
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: 55
+  - type: Resource
+    resource:
+      name: memory
+      target:
+        type: Utilization
+        averageUtilization: 70
+
+---
+# =============================================================================
+# ARKIME FPC - HPA
+# =============================================================================
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: arkime-hpa
+  namespace: soc-backend
+  labels:
+    app.kubernetes.io/name: djezzy-soc
+    app.kubernetes.io/component: hpa
+    app.kubernetes.io/part-of: soc-platform
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: arkime
+  minReplicas: 2
+  maxReplicas: 4
+  metrics:
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: 60
+  - type: Resource
+    resource:
+      name: memory
+      target:
+        type: Utilization
+        averageUtilization: 75
+
+---
+# =============================================================================
+# DEFECTDOJO VULN MGMT - HPA
+# =============================================================================
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: defectdojo-hpa
+  namespace: soc-backend
+  labels:
+    app.kubernetes.io/name: djezzy-soc
+    app.kubernetes.io/component: hpa
+    app.kubernetes.io/part-of: soc-platform
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: defectdojo
+  minReplicas: 1
+  maxReplicas: 3
+  metrics:
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: 65
+  - type: Resource
+    resource:
+      name: memory
+      target:
+        type: Utilization
+        averageUtilization: 80
+
+---
+# =============================================================================
+# GRR EDR - HPA
+# =============================================================================
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: grr-hpa
+  namespace: soc-backend
+  labels:
+    app.kubernetes.io/name: djezzy-soc
+    app.kubernetes.io/component: hpa
+    app.kubernetes.io/part-of: soc-platform
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: grr
+  minReplicas: 1
+  maxReplicas: 2
+  metrics:
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: 70
+  - type: Resource
+    resource:
+      name: memory
+      target:
+        type: Utilization
+        averageUtilization: 80
+
+---
+# =============================================================================
+# GRAFANA MONITORING - HPA
+# =============================================================================
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: grafana-hpa
+  namespace: soc-monitoring
+  labels:
+    app.kubernetes.io/name: djezzy-soc
+    app.kubernetes.io/component: hpa
+    app.kubernetes.io/part-of: soc-platform
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: grafana
+  minReplicas: 1
+  maxReplicas: 2
+  metrics:
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: 70
+  - type: Resource
+    resource:
+      name: memory
+      target:
+        type: Utilization
+        averageUtilization: 80
+
+---
+# =============================================================================
+# SS7 MODULE - HPAs
+# =============================================================================
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: ss7-collector-hpa
+  namespace: soc-ss7
+  labels:
+    app.kubernetes.io/name: djezzy-soc
+    app.kubernetes.io/component: hpa
+    anrt.djezzy.soc/classification: restricted
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: ss7-collector
+  minReplicas: 2
+  maxReplicas: 4
+  metrics:
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: 60
+  - type: Resource
+    resource:
+      name: memory
+      target:
+        type: Utilization
+        averageUtilization: 75
+
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: ss7-analyzer-hpa
+  namespace: soc-ss7
+  labels:
+    app.kubernetes.io/name: djezzy-soc
+    app.kubernetes.io/component: hpa
+    anrt.djezzy.soc/classification: restricted
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: ss7-analyzer
+  minReplicas: 2
+  maxReplicas: 6
+  metrics:
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: 65
+  - type: Resource
+    resource:
+      name: memory
+      target:
+        type: Utilization
+        averageUtilization: 80
+  - type: Pods
+    pods:
+      metric:
+        name: kafka_consumer_lag
+      target:
+        type: AverageValue
+        averageValue: "5000"
+
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: diameter-monitor-hpa
+  namespace: soc-ss7
+  labels:
+    app.kubernetes.io/name: djezzy-soc
+    app.kubernetes.io/component: hpa
+    anrt.djezzy.soc/classification: restricted
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: diameter-monitor
+  minReplicas: 2
+  maxReplicas: 4
+  metrics:
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: 60
+  - type: Resource
+    resource:
+      name: memory
+      target:
+        type: Utilization
+        averageUtilization: 75

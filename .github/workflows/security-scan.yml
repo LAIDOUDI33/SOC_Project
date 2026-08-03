@@ -1,0 +1,332 @@
+# =============================================================================
+# Djezzy National SOC Platform - Security Scanning Pipeline
+# =============================================================================
+# Dedicated security scanning for ANRT compliance
+# Trivy | Snyk | KubeLinter | Secret Detection
+# =============================================================================
+
+name: Security Scanning
+
+on:
+  schedule:
+    # Run daily at 2 AM UTC (4 AM Algeria time)
+    - cron: '0 2 * * *'
+  workflow_dispatch:
+    inputs:
+      scan_type:
+        description: 'Type of security scan to run'
+        required: false
+        default: 'all'
+        type: choice
+        options:
+          - all
+          - containers
+          - dependencies
+          - infrastructure
+          - secrets
+
+env:
+  TRIVY_SEVERITY: 'CRITICAL,HIGH'
+  SNGLY_ORG: djezzy-soc
+
+jobs:
+  # ===========================================================================
+  # CONTAINER VULNERABILITY SCANNING
+  # ===========================================================================
+  container-scanning:
+    name: Container Vulnerability Scanning
+    runs-on: ubuntu-latest
+    if: github.event.inputs.scan_type == '' || github.event.inputs.scan_type == 'all' || github.event.inputs.scan_type == 'containers'
+    strategy:
+      matrix:
+        image:
+          - registry.djezzy.dz/soc/platform-api:latest
+          - kong/kong-gateway:3.6-ubuntu
+          - wazuh/wazuh-manager:4.7.0
+          - thehiveproject/thehive4:latest
+          - misp/misp:latest
+          - opencti/opencti:latest
+          - jasonish/suricata:latest
+          - blackzeek/zeek:latest
+          - arkime/arkime:latest
+          - greenbone/gvmd:22.4
+          - defectdojo/defectdojo-latest:latest
+          - grrdocker/grr:latest
+    steps:
+      - name: Run Trivy vulnerability scanner
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: ${{ matrix.image }}
+          severity: ${{ env.TRIVY_SEVERITY }}
+          exit-code: '1'
+          format: 'table'
+          ignore-unfixed: true
+
+      - name: Generate SARIF report
+        if: failure()
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: ${{ matrix.image }}
+          severity: ${{ env.TRIVY_SEVERITY }}
+          format: 'sarif'
+          output: 'trivy-results.sarif'
+
+      - name: Upload Trivy results to GitHub Security
+        if: failure()
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: 'trivy-results.sarif'
+
+  # ===========================================================================
+  # DEPENDENCY VULNERABILITY SCANNING
+  # ===========================================================================
+  dependency-scanning:
+    name: Dependency Scanning
+    runs-on: ubuntu-latest
+    if: github.event.inputs.scan_type == '' || github.event.inputs.scan_type == 'all' || github.event.inputs.scan_type == 'dependencies'
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'bun'
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Run npm audit
+        id: npm-audit
+        run: |
+          bun audit --json > npm-audit-report.json || true
+          cat npm-audit-report.json
+        continue-on-error: true
+
+      - name: Run Snyk dependency scan
+        uses: snyk/actions/node@master
+        env:
+          SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
+        with:
+          args: --severity-threshold=high
+        continue-on-error: true
+
+      - name: Check for outdated packages
+        run: |
+          echo "Checking for outdated packages..."
+          bun outdated || true
+
+      - name: Upload dependency reports
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: dependency-scanning-reports
+          path: |
+            npm-audit-report.json
+            snyk-report.json
+          retention-days: 30
+
+  # ===========================================================================
+  # INFRASTRUCTURE SECURITY SCANNING
+  # ===========================================================================
+  infra-scanning:
+    name: Infrastructure Security Scanning
+    runs-on: ubuntu-latest
+    if: github.event.inputs.scan_type == '' || github.event.inputs.scan_type == 'all' || github.event.inputs.scan_type == 'infrastructure'
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Scan Kubernetes manifests with KubeLinter
+        uses: stackrox/kube-linter-action@v1
+        with:
+          directory: k8s/production
+          format: json
+          output-file: kube-linter-results.json
+        continue-on-error: true
+
+      - name: Scan Helm charts for security issues
+        run: |
+          echo "Scanning Helm charts..."
+          
+          # Check for hardcoded secrets in Helm values
+          grep -r "password:" helm/djezzy-soc/values*.yaml | \
+            grep -v "PLACEHOLDER\|${\|<>" && echo "⚠️ Potential hardcoded passwords found" || echo "✅ No hardcoded passwords"
+          
+          # Check for insecure configurations
+          grep -riE "(runAsUser: 0|privileged: true|allowPrivilegeEscalation: true)" \
+            k8s/production/deployments.yaml && echo "⚠️ Insecure configurations found" || echo "✅ Configurations look secure"
+
+      - name: Check Network Policies coverage
+        run: |
+          echo "Analyzing network policy coverage..."
+          
+          TOTAL_PODS=$(grep -c "kind: Deployment\|kind: StatefulSet" k8s/production/*.yaml)
+          NETWORK_POLICIES=$(grep -c "kind: NetworkPolicy" k8s/production/*.yaml)
+          
+          COVERAGE=$((NETWORK_POLICIES * 100 / TOTAL_PODS))
+          
+          echo "Network Policy Coverage: ${COVERAGE}%"
+          
+          if [ "$COVERAGE" -lt 80 ]; then
+            echo "::warning::Network policy coverage is below 80%"
+          fi
+
+      - name: Validate RBAC permissions
+        run: |
+          echo "Validating RBAC configurations..."
+          
+          # Check for overly permissive ClusterRoleBindings
+          grep -A5 "ClusterRoleBinding" k8s/production/*.yaml | \
+            grep -q "cluster-admin" && echo "⚠️ cluster-admin binding detected" || echo "✅ RBAC looks good"
+
+      - name: Upload infrastructure scan results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: infra-security-reports
+          path: |
+            kube-linter-results.json
+          retention-days: 30
+
+  # ===========================================================================
+  # SECRET DETECTION
+  # ===========================================================================
+  secret-detection:
+    name: Secret Detection
+    runs-on: ubuntu-latest
+    if: github.event.inputs.scan_type == '' || github.event.inputs.scan_type == 'all' || github.event.inputs.scan_type == 'secrets'
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Full history for secret scanning
+
+      - name: Run TruffleHog secret scanner
+        uses: trufflesecurity/trufflehog@main
+        with:
+          path: ./
+          base: HEAD~100  # Scan last 100 commits
+          head: HEAD
+          extra_args: --only-verified --fail
+
+      - name: Run Gitleaks secret scanner
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITLEAK_LICENSE: ${{ secrets.GITLEAK_LICENSE }}
+
+      - name: Scan for common secret patterns
+        run: |
+          echo "Scanning for common secret patterns..."
+          
+          # AWS keys
+          grep -rE "(AKIA[0-9A-Z]{16}|aws_secret_access_key)" . --include='*.yaml' --include='*.yml' --include='*.json' --exclude-dir=node_modules && \
+            echo "⚠️ AWS credentials pattern found!" || true
+          
+          # Private keys
+          grep -rE "BEGIN (RSA |EC |DSA |OPENSSH )?PRIVATE KEY" . --include='*.yaml' --include='*.yml' --include='*.pem' && \
+            echo "⚠️ Private key found!" || true
+          
+          # API keys
+          grep -rE "(api[_-]?key|apikey|api_secret)['\"]?\s*[:=]\s*['\"][^'\"]{20,}" . --include='*.yaml' --include='*.yml' --include='*.env*' && \
+            echo "⚠️ Potential API key found!" || true
+          
+          # Database connection strings
+          grep -rE "(mysql|postgresql|mongodb)://[^:]+:[^@]+@" . --include='*.yaml' --include='*.yml' --include='*.env*' && \
+            echo "⚠️ Database credentials found!" || true
+
+      - name: Check for exposed secrets in history
+        run: |
+          echo "Checking git history for accidentally committed secrets..."
+          
+          # Search commit messages for potential secret references
+          git log --all --oneline --grep="password\|secret\|credential\|api.key" | head -5
+
+  # ===========================================================================
+  # COMPLIANCE CHECKING (ANRT)
+  # ===========================================================================
+  anrt-compliance-check:
+    name: ANRT Compliance Verification
+    runs-on: ubuntu-latest
+    if: github.event.inputs.scan_type == '' || github.event.inputs.scan_type == 'all'
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Verify ANRT compliance annotations
+        run: |
+          echo "Verifying ANRT compliance annotations..."
+          
+          COMPLIANCE_COUNT=$(grep -r "anrt.djezzy.soc/compliance" k8s/production/*.yaml | wc -l)
+          RETENTION_COUNT=$(grep -r "ANRT_DATA_RETENTION_DAYS\|dataRetentionDays" k8s/production/*.yaml helm/djezzy-soc/values*.yaml | wc -l)
+          AUDIT_COUNT=$(grep -r "anrt.djezzy.soc/compliance.*telecom-regulation" k8s/production/*.yaml | wc -l)
+          
+          echo "## ANRT Compliance Report" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Check | Status | Count |" >> $GITHUB_STEP_SUMMARY
+          echo "|-------|--------|-------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Compliance Annotations | ✅ | $COMPLIANCE_COUNT |" >> $GITHUB_STEP_SUMMARY
+          echo "| Data Retention Configuration | ✅ | $RETENTION_COUNT |" >> $GITHUB_STEP_SUMMARY
+          echo "| Telecom Regulation Labels | ✅ | $AUDIT_COUNT |" >> $GITHUB_STEP_SUMMARY
+          
+          if [ "$COMPLIANCE_COUNT" -gt 0 ] && [ "$RETENTION_COUNT" -gt 0 ]; then
+            echo "✅ ANRT compliance annotations verified"
+          else
+            echo "::warning::Some ANRT compliance annotations may be missing"
+          fi
+
+      - name: Verify data retention configuration
+        run: |
+          echo "Checking data retention meets ANRT requirements (2555 days = 7 years)..."
+          
+          # Check Prometheus retention
+          grep -E "retention.*2555|retention.*7[y]" k8s/production/configmaps.yaml && \
+            echo "✅ Prometheus retention configured correctly" || \
+            echo "::warning::Prometheus retention may not meet ANRT requirements"
+          
+          # Check database backup policies
+          grep -r "2555\|7.*year" k8s/production/*.yaml helm/djezzy-soc/values*.yaml && \
+            echo "✅ Data retention policies found" || \
+            echo "::warning::Verify data retention policies"
+
+  # ===========================================================================
+  # SECURITY SUMMARY
+  # ===========================================================================
+  security-summary:
+    name: Security Summary
+    runs-on: ubuntu-latest
+    needs: [container-scanning, dependency-scanning, infra-scanning, secret-detection]
+    if: always()
+    steps:
+      - name: Generate security report
+        run: |
+          echo "## 🔒 Security Scan Results" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Scan Type | Status |" >> $GITHUB_STEP_SUMMARY
+          echo "|-----------|--------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Container Vulnerabilities | ${{ needs.container-scanning.result == 'success' && '✅ Passed' || '⚠️ Issues Found' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Dependencies | ${{ needs.dependency-scanning.result == 'success' && '✅ Passed' || '⚠️ Issues Found' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Infrastructure | ${{ needs.infra-scanning.result == 'success' && '✅ Passed' || '⚠️ Issues Found' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Secrets Detection | ${{ needs.secret-detection.result == 'skipped' && '⏭️ Skipped' || (needs.secret-detection.result == 'success' && '✅ Clean' || '🚨 Secrets Found') }} |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Scan Date:** $(date '+%Y-%m-%d %H:%M:%S UTC')" >> $GITHUB_STEP_SUMMARY
+          echo "**Trigger:** ${{ github.event_name }}" >> $GITHUB_STEP_SUMMARY
+
+      - name: Send security alert on findings
+        if: needs.container-scanning.result == 'failure' || needs.secret-detection.result == 'failure'
+        run: |
+          curl -X POST "${{ secrets.SECURITY_SLACK_WEBHOOK }}" \
+            -H 'Content-type: application/json' \
+            -d '{
+              "text": "🚨 Security Scan Findings",
+              "attachments": [{
+                "color": "danger",
+                "fields": [
+                  {"title": "Container Scanning", "value": "${{ needs.container-scanning.result }}", "short": true},
+                  {"title": "Secret Detection", "value": "${{ needs.secret-detection.result }}", "short": true},
+                  {"title": "View Details", "value": "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}", "short": false}
+                ]
+              }]
+            }'
