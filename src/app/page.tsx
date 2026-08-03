@@ -466,7 +466,7 @@ export default function SOCDashboard() {
                           className="flex items-center justify-between p-2.5 rounded-lg hover:bg-slate-700/50 transition-colors group/sub"
                         >
                           <div className="flex items-center gap-2.5 min-w-0">
-                            <sub.icon className="w-4 h-4 text-slate-400 group-hover/sub:text-cyan-400 flex-shrink-0" />
+                            <span className="w-4 h-4 text-slate-400 group-hover/sub:text-cyan-400 flex-shrink-0 inline-flex items-center justify-center">{sub.icon}</span>
                             <div className="min-w-0">
                               <div className="text-sm font-medium truncate group-hover/sub:text-cyan-400">
                                 {sub.name}
