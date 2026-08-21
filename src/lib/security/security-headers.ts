@@ -171,49 +171,49 @@ export function buildCSPHeader(
   const directives: CSPDirectives = {
     // Default: Deny everything by default
     'default-src': "'none'",
-    
+
     // Scripts: Self, nonce, strict-dynamic for modern browsers
     'script-src': `'self' 'nonce-${nonce}' 'strict-dynamic' https:`,
-    
+
     // Styles: Self and inline (required for Tailwind/CSS-in-JS)
-    'style-src': `'self` 'unsafe-inline'`,
-    
+    'style-src': "'self' 'unsafe-inline'",
+
     // Images: Self, data URIs, blob URLs, Djezzy domains
-    'img-src': `'self` data: blob: https://*.djezzy.dz https://*.corporate.djezzy.dz`,
-    
+    'img-src': "'self' data: blob: https://*.djezzy.dz https://*.corporate.djezzy.dz",
+
     // Fonts: Self-hosted only
-    'font-src': `'self` data:`,
-    
+    'font-src': "'self' data:",
+
     // Connect: Self, WebSocket, SOC APIs
-    'connect-src': `'self` wss: https://api.djezzy-soc.dz https://siem-backend.djezzy-soc.svc.cluster.local`,
-    
+    'connect-src': "'self' wss: https://api.djezzy-soc.dz https://siem-backend.djezzy-soc.svc.cluster.local",
+
     // Media: Self, blob, data (for alert sounds, visualizations)
-    'media-src': `'self` blob: data:`,
-    
+    'media-src': "'self' blob: data:",
+
     // Objects: None (no Flash, Java, etc.)
-    'object-src': `'none'`,
-    
+    'object-src': "'none'",
+
     // Frames: Same origin only
-    'frame-src': `'self``,
-    
+    'frame-src': "'self'",
+
     // Frame Ancestors: None (prevent clickjacking)
-    'frame-ancestors': `'none'`,
-    
+    'frame-ancestors': "'none'",
+
     // Base URI: Self only
-    'base-uri': `'self'`,
-    
+    'base-uri': "'self'",
+
     // Form Action: Self only
-    'form-action': `'self'`,
-    
+    'form-action': "'self'",
+
     // Manifest: Self only
-    'manifest-src': `'self'`,
-    
+    'manifest-src': "'self'",
+
     // Workers: Self and blob
-    'worker-src': `'self` blob:`,
-    
+    'worker-src': "'self' blob:",
+
     // Upgrade insecure requests
     'upgrade-insecure-requests': true,
-    
+
     // Merge any additional directives
     ...additionalDirectives,
   };
