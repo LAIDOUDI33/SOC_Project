@@ -16,15 +16,49 @@ import { SignJWT, jwtVerify } from 'jose';
 // CONFIGURATION
 // ============================================================
 
+// ============================================================
+// SECURITY CRITICAL: Validate secrets at startup
+// ============================================================
+const getJWTSecret = (): Uint8Array => {
+  const secret = process.env.JWT_SECRET;
+  if (!secret || secret.length < 32) {
+    if (process.env.NODE_ENV === 'production') {
+      throw new Error(
+        'FATAL: JWT_SECRET must be set and be at least 32 characters.\n' +
+        'Set it in your .env file: JWT_SECRET=<your-random-secret-min-32-chars>'
+      );
+    }
+    // Development only fallback with clear warning
+    console.warn('\x1b[33m%s\x1b[0m', '⚠️  WARNING: Using development JWT secret. Set JWT_SECRET for production!');
+    return new TextEncoder().encode('dev-secret-key-must-be-32-chars!!');
+  }
+  return new TextEncoder().encode(secret);
+};
+
+const getRefreshSecret = (): Uint8Array => {
+  const secret = process.env.REFRESH_SECRET;
+  if (!secret || secret.length < 32) {
+    if (process.env.NODE_ENV === 'production') {
+      throw new Error(
+        'FATAL: REFRESH_SECRET must be set and be at least 32 characters.\n' +
+        'Set it in your .env file: REFRESH_SECRET=<your-different-random-secret>'
+      );
+    }
+    console.warn('\x1b[33m%s\x1b[0m', '⚠️  WARNING: Using development refresh secret. Set REFRESH_SECRET for production!');
+    return new TextEncoder().encode('dev-refresh-secret-32-chars!!!!');
+  }
+  return new TextEncoder().encode(secret);
+};
+
 const AUTH_CONFIG = {
   // JWT Configuration
   accessToken: {
-    secret: new TextEncoder().encode(process.env.JWT_SECRET || 'soc-platform-secret-key-min-32-chars'),
+    secret: getJWTSecret(),
     expiresIn: '15m', // 15 minutes for access token
     algorithm: 'HS256' as const
   },
   refreshToken: {
-    secret: new TextEncoder().encode(process.env.REFRESH_SECRET || 'soc-refresh-secret-key-min-32-chars'),
+    secret: getRefreshSecret(),
     expiresIn: '7d', // 7 days for refresh token
     algorithm: 'HS256' as const
   },
@@ -387,21 +421,100 @@ export function generateMFASecret(): { secret: string; qrUrl: string } {
 }
 
 /**
- * Verify TOTP code (simplified - use otpauth library in production)
+ * Verify TOTP code
+ * SECURITY: MFA bypass removed - always validate codes properly
  */
 export function verifyTOTPCode(secret: string, code: string): boolean {
-  // Simplified TOTP verification
-  // In production, use libraries like 'otplib' or '@peculiar/otp'
-  const timeStep = Math.floor(Date.now() / 1000 / AUTH_CONFIG.mfa.step);
-  
-  // For demo purposes, accept any 6-digit code during development
-  // REMOVE THIS IN PRODUCTION!
-  if (process.env.NODE_ENV === 'development') {
-    return /^\d{6}$/.test(code);
+  // Validate code format first
+  if (!/^\d{6}$/.test(code)) {
+    return false;
   }
 
-  // Production implementation would go here
-  return false;
+  // SECURITY: Only allow MFA bypass when explicitly enabled via environment variable
+  // This should NEVER be enabled in production
+  const allowMfaBypass = process.env.ALLOW_MFA_BYPASS === 'true';
+  if (allowMfaBypass && process.env.NODE_ENV !== 'production') {
+    console.warn('\x1b[31m%s\x1b[0m', '🔴 SECURITY WARNING: MFA bypass is ENABLED! Disable before production!');
+    return true; // Bypass only when explicitly allowed
+  }
+
+  // Production TOTP verification implementation
+  // Use time-based HMAC-SHA1 as per RFC 6238
+  try {
+    const timeStep = Math.floor(Date.now() / 1000 / AUTH_CONFIG.mfa.step);
+    
+    // Check current and adjacent time windows (for clock drift)
+    for (let offset = -AUTH_CONFIG.mfa.window; offset <= AUTH_CONFIG.mfa.window; offset++) {
+      const computedCode = computeTOTP(secret, timeStep + offset);
+      if (computedCode === code) {
+        return true;
+      }
+    }
+    
+    return false;
+  } catch (error) {
+    console.error('TOTP verification error:', error);
+    return false;
+  }
+}
+
+/**
+ * Compute TOTP value for a given time step
+ */
+function computeTOTP(secret: string, timeStep: number): string {
+  // Decode base32 secret
+  const decodedSecret = base32Decode(secret);
+  
+  // Convert time step to bytes (big-endian)
+  const timeBuffer = Buffer.alloc(8);
+  timeBuffer.writeUInt32BE(Math.floor(timeStep / 0x100000000), 0);
+  timeBuffer.writeUInt32BE(timeStep & 0xffffffff, 4);
+  
+  // HMAC-SHA1
+  const hmac = crypto.createHmac('sha1', decodedSecret);
+  hmac.update(timeBuffer);
+  const hmacResult = hmac.digest();
+  
+  // Dynamic truncation
+  const offset = hmacResult[hmacResult.length - 1] & 0x0f;
+  const code = (
+    ((hmacResult[offset] & 0x7f) << 24) |
+    ((hmacResult[offset + 1] & 0xff) << 16) |
+    ((hmacResult[offset + 2] & 0xff) << 8) |
+    (hmacResult[offset + 3] & 0xff)
+  ) % Math.pow(10, AUTH_CONFIG.mfa.digits);
+  
+  return code.toString().padStart(AUTH_CONFIG.mfa.digits, '0');
+}
+
+/**
+ * Decode a base32-encoded string
+ */
+function base32Decode(encoded: string): Buffer {
+  const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
+  const bits: number[] = [];
+  
+  for (const char of encoded.toUpperCase()) {
+    const val = alphabet.indexOf(char);
+    if (val === -1) continue;
+    
+    for (let i = 4; i >= 0; i--) {
+      bits.push((val >> i) & 1);
+    }
+  }
+  
+  const bytes: number[] = [];
+  for (let i = 0; i < bits.length; i += 8) {
+    let byte = 0;
+    for (let j = 0; j < 8; j++) {
+      if (i + j < bits.length) {
+        byte = (byte << 1) | bits[i + j];
+      }
+    }
+    bytes.push(byte);
+  }
+  
+  return Buffer.from(bytes);
 }
 
 // ============================================================

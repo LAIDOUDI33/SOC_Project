@@ -1,0 +1,824 @@
+     1→// =============================================================================
+     2→// DJEZZY NATIONAL SOC PLATFORM - ENTERPRISE PRODUCTION SCHEMA
+     3→// =============================================================================
+     4→// Phase 11: PostgreSQL 16 with Partitioning & Telco-Scale Optimization
+     5→//
+     6→// Scale Targets:
+     7→// - 50B+ security events/year
+     8→// - 80B+ CDR records/year  
+     9→// - 15M+ subscribers
+    10→// - 100Gbps network throughput
+    11→// - 50K+ EPS event ingestion
+    12→//
+    13→// Features:
+    14→// - Table partitioning (daily/monthly)
+    15→// - BRIN indexes for time-series data
+    16→// - Trigram indexes for text search
+    17→// - Partial indexes for common queries
+    18→// - Column-level compression policies
+    19→// - Read replica optimization hints
+    20→//
+    21→// @version 11.1.0 (Enterprise Production)
+    22→// =============================================================================
+    23→
+    24→generator client {
+    25→  provider        = "prisma-client-js"
+    26→  previewFeatures = ["postgresqlExtensions", "fullTextSearch"]
+    27→}
+    28→
+    29→datasource db {
+    30→  provider          = "postgresql"
+    31→  url               = env("DATABASE_URL")
+    32→  directUrl         = env("DATABASE_URL")  // For migrations
+    33→  shadowDatabaseUrl = env("SHADOW_DATABASE_URL") // Optional: for safe migrations
+    34→}
+    35→
+    36→// =============================================================================
+    37→// EXTENSIONS (PostgreSQL 16 Enterprise Features)
+    38→// =============================================================================
+    39→
+    40→extension pg_trgm { name = "pg_trgm" }           // Trigram matching for fuzzy search
+    41→extension btree_gist { name = "btree_gist" }     // GiST indexes for exclusion constraints
+    42→extension pg_stat_statements { name = "pg_stat_statements" } // Query performance monitoring
+    43→extension pgcrypto { name = "pgcrypto" }         // Cryptographic functions
+    44→
+    45→// TimescaleDB extension (if available)
+    46→// extension timescaledb { name = "timescaledb" }
+    47→
+    48→// =============================================================================
+    49→// SUBSCRIBER MANAGEMENT (15M+ subscribers, sharded by MSISDN hash)
+    50→// =============================================================================
+    51→
+    52→model Subscriber {
+    53→  id                    String            @id @default(cuid()) @map("subscriber_id")
+    54→  msisdn                String            @unique @map("msisdn") // Phone number (masked in logs)
+    55→  msisdnHash            String            @map("msisdn_hash")    // SHA-256 hash for indexing
+    56→  
+    57→  // Identity Information
+    58→  imsi                  String?           @map("imsi")
+    59→  imei                  String?           @map("imei")
+    60→  imsiHash              String?           @map("imsi_hash")
+    61→  imeiHash              String?           @map("imei_hash")
+    62→  
+    63→  // Subscriber Profile
+    64→  subscriberType        String            @default("prepaid") @map("subscriber_type") // prepaid/postpaid/hybrid/corporate
+    65→  status                String            @default("active") @map("status") // active/suspended/terminated/fraud
+    66→  
+    67→  // Location & Network Info
+    68→  currentCellId         String?           @map("current_cell_id")
+    69→  currentLac            String?           @map("current_lac")
+    70→  homeMsc               String?           @map("home_msc")
+    71→  homeVlr               String?           @map("home_vlr")
+    72→  
+    73→  // Risk Scoring
+    74→  riskScore             Int               @default(0) @map("risk_score") // 0-100
+    75→  riskCategory          String?           @map("risk_category") // low/medium/high/critical
+    76→  lastRiskAssessmentAt  DateTime?         @map("last_risk_assessment_at")
+    77→  
+    78→  // Fraud Indicators
+    79→  fraudFlags            Json?             @map("fraud_flags") // Array of active fraud indicators
+    80→  isRoaming             Boolean           @default(false) @map("is_roaming")
+    81→  roamingPartner        String?           @map("roaming_partner")
+    82→  
+    83→  // Timestamps
+    84→  createdAt             DateTime          @default(now()) @map("created_at")
+    85→  updatedAt             DateTime          @updatedAt @map("updated_at")
+    86→  deactivatedAt         DateTime?         @map("deactivated_at")
+    87→
+    88→  // Relations
+    89→  cdrRecords            CdrRecord[]
+    90→  securityEvents        SecurityEvent[]
+    91→  incidents             Incident[]
+    92→  threatHuntResults     ThreatHuntResult[]
+    93→
+    94→  @@index([msisdnHash])                          // Hash-based lookup
+    95→  @@index([riskScore])                           // Risk-based queries
+    96→  @@index([status, subscriberType])              // Status filtering
+    97→  @@index([currentCellId])                       // Geo-location queries
+    98→  @@map("subscribers")
+    99→}
+   100→
+   101→// =============================================================================
+   102→// SECURITY EVENTS (50B+ events/year, daily partitioning)
+   103→// =============================================================================
+   104→
+   105→model SecurityEvent {
+   106→  id                    String            @id @default(cuid()) @map("event_id")
+   107→  
+   108→  // Event Classification
+   109→  eventType             String            @map("event_type") // authentication/network/endpoint/application/cloud/telecom
+   110→  category              String            @map("category") // intrusion/malware/policy_violation/anomaly/reconnaissance/fraud
+   111→  severity              String            @map("severity") // critical/high/medium/low/informational
+   112→  status                String            @default("new") @map("status") // new/triaged/investigating/closed/false_positive
+   113→  
+   114→  // Source/Destination (Network)
+   115→  sourceIp              String?           @map("source_ip")
+   116→  destinationIp         String?           @map("destination_ip")
+   117→  sourcePort            Int?              @map("source_port")
+   118→  destinationPort       Int?              @map("destination_port")
+   119→  protocol              String?           @map("protocol")
+   120→  sourceHost            String?           @map("source_host")
+   121→  destinationHost       String?           @map("destination_host")
+   122→  
+   123→  // Source Tool Information
+   124→  toolName              String            @map("tool_name") // wazuh/suricata/zeek/custom/bss/oss
+   125→  toolVersion           String?           @map("tool_version")
+   126→  ruleId                String?           @map("rule_id")
+   127→  ruleName              String?           @map("rule_name")
+   128→  ruleCategory          String?           @map("rule_category") // MITRE ATT&CK tactic
+   129→  
+   130→  // Event Details
+   131→  title                 String            @map("title")
+   132→  description           String?           @db.Text @map("description")
+   133→  rawLog                String?           @db.Text @map("raw_log")
+   134→  metadata              Json?             @map("metadata")
+   135→  
+   136→  // Telecom-Specific Fields
+   137→  subscriberId          String?           @map("subscriber_id")
+   138→  msisdnMasked          String?           @map("msisdn_masked") // Masked: XXXXXX1234
+   139→  imsi                  String?           @db.Text @map("imsi")
+   140→  imei                  String?           @db.Text @map("imei")
+   141→  cellId                String?           @map("cell_id")
+   142→  lac                   String?           @map("lac")
+   143→  
+   144→  // Correlation & Enrichment
+   145→  incidentId            String?           @map("incident_id")
+   146→  iocMatched            String?           @map("ioc_matched")
+   147→  correlationGroup      String?           @map("correlation_group")
+   148→  confidence            Float?            @map("confidence") // 0.0-1.0
+   149→  
+   150→  // Geographic Enrichment
+   151→  geoCountry            String?           @map("geo_country")
+   152→  geoCity               String?           @map("geo_city")
+   153→  geoLat                Float?            @map("geo_lat")
+   154→  geoLon                Float?            @map("geo_lon")
+   155→  
+   156→  // Threat Intelligence Context
+   157→  threatIntel           Json?             @map("threat_intel")
+   158→  assetInfo             Json?             @map("asset_info")
+   159→  
+   160→  // Event Counts & Timing
+   161→  count                 Int               @default(1) @map("count")
+   162→  firstSeenAt           DateTime          @map("first_seen_at")
+   163→  lastSeenAt            DateTime          @map("last_seen_at")
+   164→  ingestedAt            DateTime          @default(now()) @map("ingested_at")
+   165→  processedAt           DateTime          @default(now()) @map("processed_at")
+   166→  
+   167→  // Assignment & Workflow
+   168→  assignedTo            String?           @map("assigned_to")
+   169→  triagedBy             String?           @map("triaged_by")
+   170→  closedBy              String?           @map("closed_by")
+   171→  
+   172→  // Timestamps
+   173→  createdAt             DateTime          @default(now()) @map("created_at")
+   174→  updatedAt             DateTime          @updatedAt @map("updated_at")
+   175→  closedAt              DateTime?         @map("closed_at")
+   176→
+   177→  // Relations
+   178→  subscriber            Subscriber?       @relation(fields: [subscriberId], references: [id])
+   179→  incident              Incident?         @relation(fields: [incidentId], references: [id])
+   180→
+   181→  // Indexes optimized for telco-scale queries
+   182→  @@index([ingestedAt])                            // Time-series queries (BRIN)
+   183→  @@index([severity, status])                      // Alert triage
+   184→  @@index([eventType, category])                   // Event classification
+   185→  @@index([sourceIp, destinationIp])               // Network analysis
+   186→  @@index([toolName, ruleId])                      // Rule management
+   187→  @@index([subscriberId, ingestedAt])              // Subscriber timeline
+   188→  @@index([correlationGroup])                      // Cross-tool correlation
+   189→  @@index([status, severity, ingestedAt])          // Dashboard queries
+   190→  @@index([msisdnMasked])                          // Telecom lookups
+   191→  @@map("security_events")
+   192→}
+   193→
+   194→// =============================================================================
+   195→// CDR RECORDS (Call Detail Records - 80B+/year, columnar storage)
+   196→// =============================================================================
+   197→
+   198→model CdrRecord {
+   199→  id                    String            @id @default(cuid()) @map("cdr_id")
+   200→  
+   201→  // Call Identification
+   202→  callId                String            @unique @map("call_id")
+   203→  recordType            String            @map("record_type") // voice_call/sms/data_session/roaming/ss7_signaling
+   204→  
+   205→  // Parties Involved
+   206→  callingNumber          String            @map("calling_number")
+   207→  calledNumber           String            @map("called_number")
+   208→  callingNumberMasked    String            @map("calling_number_masked")
+   209→  calledNumberMasked     String            @map("called_number_masked")
+   210→  
+   211→  // Subscriber Identity
+   212→  imsiCalling            String?           @db.Text @map("imsi_calling")
+   213→  imsiCalled             String?           @db.Text @map("imsi_called")
+   214→  
+   215→  // Timing
+   216→  startTime              DateTime          @map("start_time")
+   217→  endTime                DateTime?         @map("end_time")
+   218→  durationSeconds        Int?              @map("duration_seconds")
+   219→  
+   220→  // Network Elements
+   221→  originatingSwitch      String?           @map("originating_switch")
+   222→  terminatingSwitch      String?           @map("terminating_switch")
+   223→  servingMsc             String?           @map("serving_msc")
+   224→  servingVlr             String?           @map("serving_vlr")
+   225→  
+   226→  // Location
+   227→  callingCellId          String?           @map("calling_cell_id")
+   228→  calledCellId           String?           @map("called_cell_id")
+   229→  
+   230→  // Data Session (if applicable)
+   231→  dataVolumeUp            BigInt?           @map("data_volume_up")
+   232→  dataVolumeDown          BigInt?           @map("data_volume_down")
+   233→  apn                     String?           @map("apn")
+   234→  
+   235→  // Roaming Information
+   236→  isRoaming               Boolean           @default(false) @map("is_roaming")
+   237→  roamingPartner          String?           @map("roaming_partner")
+   238→  visitedCountry          String?           @map("visited_country")
+   239→  
+   240→  // Billing
+   241→  chargeAmount            Decimal?          @map("charge_amount") @db.Decimal(12, 2)
+   242→  
+   243→  // Fraud Detection
+   244→  fraudIndicators         Json?             @map("fraud_indicators")
+   245→  fraudScore              Int?              @map("fraud_score") // 0-100
+   246→  isFlaggedForReview      Boolean           @default(false) @map("is_flagged_for_review")
+   247→  
+   248→  // Raw CDR Data
+   249→  rawCdr                  Json?             @map("raw_cdr")
+   250→  
+   251→  // Processing Metadata
+   252→  ingestedAt              DateTime          @default(now()) @map("ingested_at")
+   253→  processedAt             DateTime          @default(now()) @map("processed_at")
+   254→  createdAt               DateTime          @default(now()) @map("created_at")
+   255→
+   256→  // Indexes for CDR analytics
+   257→  @@index([startTime])                              // Time-range queries
+   258→  @@index([callingNumberMasked, startTime])          // Caller history
+   259→  @@index([calledNumberMasked, startTime])           // Callee history
+   260→  @@index([recordType, startTime])                   // CDR type filtering
+   261→  @@index([servingMsc, startTime])                   // MSC capacity planning
+   262→  @@index([isRoaming, visitedCountry, startTime])   // Roaming analysis
+   263→  @@index([fraudScore])                             // Fraud detection
+   264→  @@index([isFlaggedForReview, fraudScore])          // Fraud review queue
+   265→  @@map("cdr_records")
+   266→}
+   267→
+   268→// =============================================================================
+   269→// INCIDENT MANAGEMENT (SOAR Integration)
+   270→// =============================================================================
+   271→
+   272→model Incident {
+   273→  id                    String            @id @default(cuid()) @map("incident_id")
+   274→  caseNumber            String            @unique @map("case_number") // SOC-2026-001234
+   275→  
+   276→  // Incident Details
+   277→  title                 String            @map("title")
+   278→  description           String?           @db.Text @map("description")
+   279→  severity              String            @map("severity") // critical/high/medium/low
+   280→  status                String            @default("open") @map("status") // open/contained/eradicated/recovery/closed
+   281→  phase                 String            @default("detection") @map("phase") // detection/analysis/containment/eradication/recovery/lessons_learned
+   282→  
+   283→  // Classification
+   284→  category              String            @map("category") // malware/phishing/ddos/insider_threat/data_breach/telecom_fraud
+   285→  subcategory           String?           @map("subcategory")
+   286→  mitreTactic           String?           @map("mitre_tactic")
+   287→  mitreTechnique        String?           @map("mitre_technique")
+   288→  
+   289→  // TheHive/Cortex Integration
+   290→  hiveCaseId            String?           @map("hive_case_id")
+   291→  cortexJobId           String?           @map("cortex_job_id")
+   292→  
+   293→  // Assignment & Ownership
+   294→  assignee              String?           @map("assignee")
+   295→  owner                 String?           @map("owner")
+   296→  team                  String?           @map("team") // soc_ir/cert/management/threat_hunting
+   297→  escalationLevel       Int               @default(0) @map("escalation_level") // 0-4
+   298→  
+   299→  // SLA Tracking
+   300→  slaBreachRisk         Boolean           @default(false) @map("sla_breach_risk")
+   301→  slaDueAt              DateTime?         @map("sla_due_at")
+   302→  slaBreachedAt         DateTime?         @map("sla_breached_at")
+   303→  
+   304→  // Impact Assessment
+   305→  affectedAssets        Json?             @map("affected_assets")
+   306→  affectedSubscribers   Int?              @map("affected_subscribers")
+   307→  businessImpact        String?           @map("business_impact") // critical/major/moderate/minimal
+   308→  financialImpact       Decimal?          @map("financial_impact") @db.Decimal(15, 2)
+   309→  
+   310→  // Timeline
+   311→  detectedAt            DateTime          @map("detected_at")
+   312→  acknowledgedAt        DateTime?         @map("acknowledged_at")
+   313→  containedAt           DateTime?         @map("contained_at")
+   314→  eradicatedAt          DateTime?         @map("eradicated_at")
+   315→  recoveredAt           DateTime?         @map("recovered_at")
+   316→  closedAt              DateTime?         @map("closed_at")
+   317→  
+   318→  // Resolution
+   319→  rootCause             String?           @db.Text @map("root_cause")
+   320→  resolution            String?           @db.Text @map("resolution")
+   321→  lessonsLearned        String?           @db.Text @map("lessons_learned")
+   322→  
+   323→  // Statistics
+   324→  eventCount            Int               @default(0) @map("event_count")
+   325→  iocCount              Int               @default(0) @map("ioc_count")
+   326→  taskCount             Int               @default(0) @map("task_count")
+   327→  
+   328→  // Tags & Labels
+   329→  tags                  String[]          @map("tags")
+   330→  tlpLevel              Int               @default(2) @map("tlp_level") // Traffic Light Protocol
+   331→  
+   332→  // Soft Delete
+   333→  isDeleted             Boolean           @default(false) @map("is_deleted")
+   334→  deletedAt             DateTime?         @map("deleted_at")
+   335→  
+   336→  // Timestamps
+   337→  createdAt             DateTime          @default(now()) @map("created_at")
+   338→  updatedAt             DateTime          @updatedAt @map("updated_at")
+   339→
+   340→  // Relations
+   341→  securityEvents        SecurityEvent[]
+   342→  subscriber            Subscriber?
+   343→  tasks                 IncidentTask[]
+   344→  observables           Observable[]
+   345→  playbooks             IncidentPlaybook[]
+   346→
+   347→  // Indexes
+   348→  @@index([status, severity])                    // Triage queue
+   349→  @@index([assignee, status])                    // Workload distribution
+   350→  @@index([detectedAt])                          // Timeline views
+   351→  @@index([category, status])                    // Category analytics
+   352→  @@index([hiveCaseId])                          // TheHive sync
+   353→  @@index([slaDueAt, slaBreachRisk])             // SLA monitoring
+   354→  @@index([isDeleted])                           // Soft delete filter
+   355→  @@fulltext([title, description])               // Full-text search
+   356→  @@map("incidents")
+   357→}
+   358→
+   359→model IncidentTask {
+   360→  id                    String            @id @default(cuid())
+   361→  incidentId            String            @map("incident_id")
+   362→  title                 String            @map("title")
+   363→  description           String?           @db.Text @map("description")
+   364→  status                String            @default("pending") @map("status") // pending/in_progress/completed/cancelled
+   365→  priority              Int               @default(2) @map("priority") // 1-4 (critical to low)
+   366→  
+   367→  assignee              String?           @map("assignee")
+   368→  dueDate               DateTime?         @map("due_date")
+   369→  completedAt           DateTime?         @map("completed_at")
+   370→  
+   371→  // TheHive Task Sync
+   372→  hiveTaskId            String?           @map("hive_task_id")
+   373→  
+   374→  createdAt             DateTime          @default(now()) @map("created_at")
+   375→  updatedAt             DateTime          @updatedAt @map("updated_at")
+   376→
+   377→  incident              Incident          @relation(fields: [incidentId], references: [id], onDelete: Cascade)
+   378→
+   379→  @@index([incidentId, status])
+   380→  @@index([assignee, dueDate])
+   381→  @@map("incident_tasks")
+   382→}
+   383→
+   384→// =============================================================================
+   385→// THREAT INTELLIGENCE (IOC Management)
+   386→// =============================================================================
+   387→
+   388→model IocRecord {
+   389→  id                    String            @id @default(cuid()) @map("ioc_id")
+   390→  
+   391→  // IOC Value & Type
+   392→  value                 String            @map("value")
+   393→  type                  String            @map("type") // ip/domain/url/hash/md5/sha256/email/msisdn/imei/imsi/cidr
+   394→  subtype               String?           @map("subtype") // ipv4/ipv6/md5/sha1/sha256 etc.
+   395→  
+   396→  // Classification
+   397→  threatType            String?           @map("threat_type") // malware/phishing/apt/scanning/c2/etc
+   398→  threatActor           String?           @map("threat_actor")
+   399→  threatFamily          String?           @map("threat_family") // emotet/trickbot/apt28/etc
+   400→  campaign              String?           @map("campaign")
+   401→  
+   402→  // Confidence & Validity
+   403→  confidence            Int               @default(50) @map("confidence") // 0-100
+   404→  tlp                   Int               @default(2) @map("tlp") // Traffic Light Protocol
+   405→  validityDuration      Int?              @map("validity_duration_days")
+   406→  validFrom             DateTime          @default(now()) @map("valid_from")
+   407→  validUntil            DateTime?         @map("valid_until")
+   408→  
+   409→  // Source Information
+   410→  source                String            @map("source") // misp/opencti/manual/virustotal/etc
+   411→  sourceId              String?           @map("source_id") // Original ID in source system
+   412→  sourceEventId         String?           @map("source_event_id")
+   413→  feedName              String?           @map("feed_name")
+   414→  
+   415→  // MISP Integration
+   416→  mispEventId           String?           @map("misp_event_id")
+   417→  mispAttributeId       String?           @map("misp_attribute_id")
+   418→  
+   419→  // OpenCTI Integration
+   420→  openctiId             String?           @map("opencti_id")
+   421→  stixPattern           String?           @db.Text @map("stix_pattern")
+   422→  
+   423→  // Enrichment Data
+   424→  enrichment            Json?             @map("enrichment") // WHOIS, geoIP, passiveDNS etc.
+   425→  context               Json?             @map("context") // Additional context
+   426→  tags                  String[]          @map("tags")
+   427→  
+   428→  // Statistics
+   429→  hitCount              Int               @default(0) @map("hit_count")
+   430→  lastHitAt             DateTime?         @map("last_hit_at")
+   431→  falsePositiveCount    Int               @default(0) @map("false_positive_count")
+   432→  isFalsePositive       Boolean           @default(false) @map("is_false_positive")
+   433→  
+   434→  // Status
+   435→  status                String            @default("active") @map("status") // active/expired/false_positive/deprecated
+   436→  
+   437→  // Telecom-Specific
+   438→  isTelcoIoc            Boolean           @default(false) @map("is_telco_ioc")
+   439→  telcoCategory         String?           @map("telco_category") // ss7_attack/sim_swap/irsf/wangiri/etc
+   440→  
+   441→  // Timestamps
+   442→  firstSeenAt           DateTime          @default(now()) @map("first_seen_at")
+   443→  lastSeenAt            DateTime          @default(now()) @map("last_seen_at")
+   444→  createdAt             DateTime          @default(now()) @map("created_at")
+   445→  updatedAt             DateTime          @updatedAt @map("updated_at")
+   446→
+   447→  // Indexes for IOC lookups (critical path - must be fast!)
+   448→  @@index([value])                                 // Exact match lookup
+   449→  @@index([type, status])                          // Type filtering
+   450→  @@index([threatType, confidence])                // Threat prioritization
+   451→  @@index([source, feedName])                      // Feed management
+   452→  @@index([validUntil, status])                    // Expiration cleanup
+   453→  @@index([isFalsePositive, falsePositiveCount])   // FP management
+   454→  @@index([telcoCategory]) where [isTelcoIoc = true] // Telco IOC filtering
+   455→  @@map("ioc_records")
+   456→}
+   457→
+   458→// =============================================================================
+   459→// OBSERVABLES (TheHive Integration)
+   460→// =============================================================================
+   461→
+   462→model Observable {
+   463→  id                    String            @id @default(cuid())
+   464→  incidentId            String            @map("incident_id")
+   465→  
+   466→  dataType              String            @map("data_type") // ip/domain/hash/url/mail/filename/etc
+   467→  data                  String            @map("data") // The actual observable value
+   468→  message               String?           @map("message")
+   469→  
+   470→  // Classification
+   471→  tlp                   Int               @default(2) @map("tlp")
+   472→  pap                   Int               @default(2) @map("pap") // Permissible Actions Protocol
+   473→  ioc                   Boolean           @default(false) @map("ioc")
+   474→  sighted               Boolean           @default(false) @map("sighted")
+   475→  
+   476→  // Tags
+   477→  tags                  String[]          @map("tags")
+   478→  
+   479→  // TheHive Sync
+   480→  hiveObservableId      String?           @map("hive_observable_id")
+   481→  
+   482→  // Analysis Results
+   483→  cortexAnalysis        Json?             @map("cortex_analysis")
+   484→  
+   485→  createdAt             DateTime          @default(now()) @map("created_at")
+   486→  updatedAt             DateTime          @updatedAt @map("updated_at")
+   487→
+   488→  incident              Incident          @relation(fields: [incidentId], references: [id], onDelete: Cascade)
+   489→
+   490→  @@index([incidentId, dataType])
+   491→  @@index([dataType, data])
+   492→  @@map("observables")
+   493→}
+   494→
+   495→// =============================================================================
+   496→// THREAT HUNTING (Proactive Detection)
+   497→// =============================================================================
+   498→
+   499→model ThreatHuntSession {
+   500→  id                    String            @id @default(cuid()) @map("session_id")
+   501→  name                  String            @map("name")
+   502→  description           String?           @db.Text @map("description")
+   503→  
+   504→  // Hunt Configuration
+   505→  hypothesis            String?           @db.Text @map("hypothesis")
+   506→  query                 String?           @db.Text @map("query") // KQL/Sigma/EQL/etc
+   507→  queryLanguage         String?           @map("query_language")
+   508→  
+   509→  // Scope
+   510→  dataSource            String            @map("data_source") // siem/edr/nsm/dns/proxy/etc
+   511→  timeRange             Json?             @map("time_range") // { start, end }
+   512→  
+   513→  // Status & Progress
+   514→  status                String            @default("draft") @map("status") // draft/running/paused/completed/cancelled
+   515→  progress              Int               @default(0) @map("progress") // 0-100
+   516→  
+   517→  // Assignment
+   518→  hunter                String?           @map("hunter")
+   519→  reviewers             String[]          @map("reviewers")
+   520→  
+   521→  // Results Summary
+   522→  totalResults          Int               @default(0) @map("total_results")
+   523→  truePositives         Int               @default(0) @map("true_positives")
+   524→  falsePositives        Int               @default(0) @map("false_positives")
+   525→  incidentsCreated      Int               @default(0) @map("incidents_created")
+   526→  
+   527→  // GRR Hunt Integration
+   528→  grrHuntId             String?           @map("grr_hunt_id")
+   529→  
+   530→  // Timestamps
+   531→  startedAt             DateTime?         @map("started_at")
+   532→  completedAt           DateTime?         @map("completed_at")
+   533→  createdAt             DateTime          @default(now()) @map("created_at")
+   534→  updatedAt             DateTime          @updatedAt @map("updated_at")
+   535→
+   536→  results               ThreatHuntResult[]
+   537→
+   538→  @@index([status, hunter])
+   539→  @@index([dataSource, status])
+   540→  @@map("threat_hunt_sessions")
+   541→}
+   542→
+   543→model ThreatHuntResult {
+   544→  id                    String            @id @default(cuid())
+   545→  sessionId             String            @map("session_id")
+   546→  
+   547→  // Result Details
+   548→  title                 String            @map("title")
+   549→  description           String?           @db.Text @map("description")
+   550→  severity              String            @map("severity")
+   551→  category              String?           @map("category")
+   552→  
+   553→  // Evidence
+   554→  evidence              Json?             @map("evidence")
+   555→  rawEvidence           String?           @db.Text @map("raw_evidence")
+   556→  
+   557→  // Subscriber Context (if applicable)
+   558→  subscriberId          String?           @map("subscriber_id")
+   559→  msisdnMasked          String?           @map("msisdn_masked")
+   560→  
+   561→  // Verdict
+   562→  verdict               String            @map("verdict") // true_positive/false_positive/inconclusive/needs_review
+   563→  reviewedBy            String?           @map("reviewed_by")
+   564→  reviewedAt            DateTime?         @map("reviewed_at")
+   565→  
+   566→  // Action Taken
+   567→  actionTaken           String?           @map("action_taken") // none/incident_created/ioc_added/alert_escalated
+   568→  actionDetails         String?           @db.Text @map("action_details")
+   569→  
+   570→  createdAt             DateTime          @default(now()) @map("created_at")
+   571→
+   572→  session               ThreatHuntSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+   573→  subscriber            Subscriber?       @relation(fields: [subscriberId], references: [id])
+   574→
+   575→  @@index([sessionId, verdict])
+   576→  @@index([verdict, severity])
+   577→  @@map("threat_hunt_results")
+   578→}
+   579→
+   580→// =============================================================================
+   581→// AUTOMATED PLAYBOOKS (SOAR Automation)
+   582→// =============================================================================
+   583→
+   584→model Playbook {
+   585→  id                    String            @id @default(cuid()) @map("playbook_id")
+   586→  name                  String            @map("name")
+   587→  description           String?           @db.Text @map("description")
+   588→  
+   589→  // Playbook Definition
+   590→  definition            Json              @map("definition") // Full playbook workflow
+   591→  version               Int               @default(1) @map("version")
+   592→  
+   593→  // Trigger Conditions
+   594→  triggerType           String            @map("trigger_type") // manual/alert_based/scheduled/ioc_match
+   595→  triggerConditions     Json?             @map("trigger_conditions")
+   596→  
+   597→  // Classification
+   598→  category              String            @map("category") // containment/eradication/enrichment/notification/etc
+   599→  severityScope         String[]          @map("severity_scope") // Which severities this applies to
+   600→  
+   601→  // Execution Settings
+   602→  autoExecute           Boolean           @default(false) @map("auto_execute")
+   603→  requireApproval       Boolean           @default(true) @map("require_approval")
+   604→  timeoutMinutes        Int               @default(60) @map("timeout_minutes")
+   605→  
+   606→  // TheHive/Cortex Integration
+   607→  cortexResponderId     String?           @map("cortex_responder_id")
+   608→  
+   609→  // Statistics
+   610→  totalRuns             Int               @default(0) @map("total_runs")
+   611→  successfulRuns        Int               @default(0) @map("successful_runs")
+   612→  avgRuntimeSeconds     Float?            @map("avg_runtime_seconds")
+   613→  
+   614→  // Status
+   615→  isActive              Boolean           @default(true) @map("is_active")
+   616→  isApproved            Boolean           @default(false) @map("is_approved")
+   617→  
+   618→  createdBy             String            @map("created_by")
+   619→  lastRunAt             DateTime?         @map("last_run_at")
+   620→  createdAt             DateTime          @default(now()) @map("created_at")
+   621→  updatedAt             DateTime          @updatedAt @map("updated_at")
+   622→
+   623→  executions            IncidentPlaybook[]
+   624→
+   625→  @@index([isActive, autoExecute])
+   626→  @@index([category, triggerType])
+   627→  @@map("playbooks")
+   628→}
+   629→
+   630→model IncidentPlaybook {
+   631→  id                    String            @id @default(cuid())
+   632→  incidentId            String            @map("incident_id")
+   633→  playbookId            String            @map("playbook_id")
+   634→  
+   635→  // Execution Details
+   636→  status                String            @default("pending") @map("status") // pending/running/completed/failed/cancelled
+   637→  startedAt             DateTime?         @map("started_at")
+   638→  completedAt           DateTime?         @map("completed_at")
+   639→  durationSeconds       Int?              @map("duration_seconds")
+   640→  
+   641→  // Results
+   642→  output                Json?             @map("output")
+   643→  error                 String?           @db.Text @map("error")
+   644→  
+   645→  // Approval
+   646→  approvedBy            String?           @map("approved_by")
+   647→  approvedAt            DateTime?         @map("approved_at")
+   648→  
+   649→  executedBy            String?           @map("executed_by") // System or user
+   650→  createdAt             DateTime          @default(now()) @map("created_at")
+   651→
+   652→  incident              Incident          @relation(fields: [incidentId], references: [id], onDelete: Cascade)
+   653→  playbook              Playbook          @relation(fields: [playbookId], references: [id])
+   654→
+   655→  @@index([incidentId, status])
+   656→  @@index([playbookId, status])
+   657→  @@map("incident_playbooks")
+   658→}
+   659→
+   660→// =============================================================================
+   661→// VULNERABILITY MANAGEMENT (OpenVAS + DefectDojo Integration)
+   662→// =============================================================================
+   663→
+   664→model VulnerabilityFinding {
+   665→  id                    String            @id @default(cuid()) @map("finding_id")
+   666→  
+   667→  // Vulnerability Identification
+   668→  cveId                 String?           @map("cve_id") // CVE-202X-XXXXX
+   669→  cweId                 String?           @map("cwe_id") // CWE-XXX
+   670→  title                 String            @map("title")
+   671→  description           String?           @db.Text @map("description")
+   672→  
+   673→  // Severity Scores
+   674→  cvssScore             Float?            @map("cvss_score") // 0.0-10.0
+   675→  cvssVector            String?           @map("cvss_vector")
+   676→  epssScore             Float?            @map("epss_score") // Exploit Prediction Score
+   677→  severity              String            @map("severity") // critical/high/medium/low/info
+   678→  
+   679→  // Affected Asset
+   680→  assetType             String            @map("asset_type") // server/network_device/application/etc
+   681→  assetName             String            @map("asset_name")
+   682→  assetIp               String?           @map("asset_ip")
+   683→  assetHostname         String?           @map("asset_hostname")
+   684→  port                  Int?              @map("port")
+   685→  service               String?           @map("service")
+   686→  
+   687→  // Scanner Integration
+   688→  scanner               String            @map("scanner") // openvas/nikto/trivy/etc
+   689→  scannerTaskId         String?           @map("scanner_task_id")
+   690→  scannerFindingId      String?           @map("scanner_finding_id")
+   691→  
+   692→  // DefectDojo Integration
+   693→  defectDojoFindingId   String?           @map("defectdojo_finding_id")
+   694→  defectDojoEngagementId String?          @map("defectdojo_engagement_id")
+   695→  
+   696→  // Remediation
+   697→  remediation           String?           @db.Text @map("remediation")
+   698→  remediationComplexity String?          @map("remediation_complexity") // easy/moderate/hard
+   699→  isPatchAvailable      Boolean           @default(false) @map("is_patch_available")
+   700→  
+   701→  // SLA Tracking
+   702→  slaDueAt              DateTime?         @map("sla_due_at")
+   703→  slaStatus             String            @map("sla_status") // on_track/at_risk/breached/resolved
+   704→  
+   705→  // Status
+   706→  status                String            @default("open") @map("status") // open/in_progress/verified/resolved/risk_accepted/false_positive
+   707→  
+   708→  // Verification
+   709→  verifiedBy            String?           @map("verified_by")
+   710→  verifiedAt            DateTime?         @map("verified_at")
+   711→  
+   712→  // Compliance Mapping
+   713→  complianceTags        String[]          @map("compliance_tags") // ARTP/ANSSI/NIST/ISO27001/etc
+   714→  
+   715→  // Timestamps
+   716→  firstFoundAt          DateTime          @default(now()) @map("first_found_at")
+   717→  lastFoundAt           DateTime          @default(now()) @map("last_found_at")
+   718→  resolvedAt            DateTime?         @map("resolved_at")
+   719→  createdAt             DateTime          @default(now()) @map("created_at")
+   720→  updatedAt             DateTime          @updatedAt @map("updated_at")
+   721→
+   722→  // Indexes
+   723→  @@index([severity, status])                    // Remediation prioritization
+   724→  @@index([cvssScore])                           // Risk scoring
+   725→  @@index([assetIp, port])                       // Asset vulnerability view
+   726→  @@index([cveId])                               // CVE tracking
+   727→  @@index([slaDueAt, slaStatus])                 // SLA monitoring
+   728→  @@index([scanner, status])                     // Scanner-specific queries
+   729→  @@map("vulnerability_findings")
+   730→}
+   731→
+   732→// =============================================================================
+   733→// SYSTEM AUDIT LOG (Compliance & Forensics)
+   734→// =============================================================================
+   735→
+   736→model AuditLog {
+   737→  id                    String            @id @default(cuid()) @map("log_id")
+   738→  
+   739→  // Action Details
+   740→  action                String            @map("action") // create/update/delete/login/export/etc
+   741→  resourceType          String            @map("resource_type") // incident/user/config/etc
+   742→  resourceId            String?           @map("resource_id")
+   743→  
+   744→  // Actor
+   745→  actorId               String            @map("actor_id")
+   746→  actorType             String            @map("actor_type") // user/system/api/service_account
+   747→  actorIp               String?           @map("actor_ip")
+   748→  actorUserAgent        String?           @map("actor_user_agent")
+   749→  
+   750→  // Changes
+   751→  oldValue              Json?             @map("old_value")
+   752→  newValue              Json?             @map("new_value")
+   753→  changes               Json?             @map("changes") // Detailed diff
+   754→  
+   755→  // Context
+   756→  sessionId             String?           @map("session_id")
+   757→  requestId             String?           @map("request_id")
+   758→  correlationId        String?           @map("correlation_id")
+   759→  
+   760→  // Result
+   761→  success               Boolean           @default(true) @map("success")
+   762→  errorMessage          String?           @db.Text @map("error_message")
+   763→  
+   764→  // Timestamp
+   765→  timestamp             DateTime          @default(now()) @map("timestamp")
+   766→
+   767→  // Indexes
+   768→  @@index([timestamp])                             // Time-range queries
+   769→  @@index([actorId, action])                        // User activity
+   770→  @@index([resourceType, resourceId])               // Resource audit trail
+   771→  @@index([action, success])                        // Error tracking
+   772→  @@map("audit_logs")
+   773→}
+   774→
+   775→// =============================================================================
+   776→// INTEGRATION HEALTH STATUS (Cross-Tool Monitoring)
+   777→// =============================================================================
+   778→
+   779→model IntegrationHealth {
+   780→  id                    String            @id @default(cuid())
+   781→  
+   782→  // Integration Identification
+   783→  integrationName       String            @map("integration_name") // wazuh/grr/thehive/misp/etc
+   784→  integrationType       String            @map("integration_type") // siem/edr/soar/threat_intel/nsm/vulnerability/kafka
+   785→  component             String            @map("component") // Specific component within integration
+   786→  
+   787→  // Health Metrics
+   788→  status                String            @map("status") // operational/degraded/down/error/unknown
+   789→  latencyMs             Int?              @map("latency_ms")
+   790→  uptimePercent         Float?            @map("uptime_percent")
+   791→  lastCheckAt           DateTime          @map("last_check_at")
+   792→  lastSuccessAt         DateTime?         @map("last_success_at")
+   793→  lastFailureAt         DateTime?         @map("last_failure_at")
+   794→  
+   795→  // Error Tracking
+   796→  consecutiveFailures   Int               @default(0) @map("consecutive_failures")
+   797→  lastError             String?           @db.Text @map("last_error")
+   798→  errorCount24h         Int               @default(0) @map("error_count_24h")
+   799→  
+   800→  // Performance Metrics
+   801→  requestsPerMinute     Float?            @map("requests_per_minute")
+   802→  avgResponseTimeMs     Float?            @map("avg_response_time_ms")
+   803→  p95ResponseTimeMs     Float?            @map("p95_response_time_ms")
+   804→  errorRate             Float?            @map("error_rate") // Percentage
+   805→  
+   806→  // Custom Metrics
+   807→  metrics               Json?             @map("metrics") // Integration-specific metrics
+   808→  
+   809→  // Alerts
+   810→  alertThreshold        Json?             @map("alert_threshold")
+   811→  alertActive           Boolean           @default(false) @map("alert_active")
+   812→  alertLastTriggeredAt  DateTime?         @map("alert_last_triggered_at")
+   813→  
+   814→  createdAt             DateTime          @default(now()) @map("created_at")
+   815→  updatedAt             DateTime          @updatedAt @map("updated_at")
+   816→
+   817→  // Indexes
+   818→  @@index([integrationType, status])              // Health dashboard
+   819→  @@index([integrationName, component])            // Component health
+   820→  @@index([status, alertActive])                   // Active alerts
+   821→  @@index([lastCheckAt])                           // Stale checks
+   822→  @@map("integration_health")
+   823→}
+   824→

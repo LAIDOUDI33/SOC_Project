@@ -1,0 +1,1100 @@
+     1→/**
+     2→ * National SOC Platform - Authentication Page
+     3→ * 
+     4→ * Complete authentication UI with:
+     5→ * - Login form
+     6→ * - Registration form  
+     7→ * - MFA verification
+     8→ * - Password strength indicator
+     9→ * - Session management
+    10→ */
+    11→
+    12→'use client';
+    13→
+    14→import React, { useState, useCallback, useEffect } from 'react';
+    15→import { useRouter } from 'next/navigation';
+    16→
+    17→// Types
+    18→interface AuthFormData {
+    19→  email: string;
+    20→  username: string;
+    21→  password: string;
+    22→  confirmPassword: string;
+    23→  name: string;
+    24→  mfaCode: string;
+    25→}
+    26→
+    27→interface AuthState {
+    28→  mode: 'login' | 'register' | 'mfa';
+    29→  loading: boolean;
+    30→  error: string | null;
+    31→  success: string | null;
+    32→  user?: any;
+    33→  requiresMfa?: boolean;
+    34→}
+    35→
+    36→interface PasswordStrength {
+    37→  isValid: boolean;
+    38→  errors: string[];
+    39→  strength: 'weak' | 'medium' | 'strong' | 'very-strong';
+    40→}
+    41→
+    42→export default function AuthPage() {
+    43→  const router = useRouter();
+    44→  
+    45→  // State management
+    46→  const [authState, setAuthState] = useState<AuthState>({
+    47→    mode: 'login',
+    48→    loading: false,
+    49→    error: null,
+    50→    success: null
+    51→  });
+    52→  
+    53→  const [formData, setFormData] = useState<AuthFormData>({
+    54→    email: '',
+    55→    username: '',
+    56→    password: '',
+    57→    confirmPassword: '',
+    58→    name: '',
+    59→    mfaCode: ''
+    60→  });
+    61→  
+    62→  const [passwordStrength, setPasswordStrength] = useState<PasswordStrength | null>(null);
+    63→  const [showPassword, setShowPassword] = useState(false);
+    64→  const [rememberMe, setRememberMe] = useState(false);
+    65→  const [pendingCredentials, setPendingCredentials] = useState<{email?: string; username?: string; password: string} | null>(null);
+    66→
+    67→  // Check password strength (client-side validation) - defined before use
+    68→  const checkPasswordStrength = useCallback((password: string) => {
+    69→    if (!password) {
+    70→      setPasswordStrength(null);
+    71→      return;
+    72→    }
+    73→
+    74→    const errors: string[] = [];
+    75→    let score = 0;
+    76→
+    77→    if (password.length < 12) errors.push('At least 12 characters');
+    78→    else score += 20;
+    79→
+    80→    if (!/[A-Z]/.test(password)) errors.push('One uppercase letter');
+    81→    else score += 20;
+    82→
+    83→    if (!/[a-z]/.test(password)) errors.push('One lowercase letter');
+    84→    else score += 20;
+    85→
+    86→    if (!/[0-9]/.test(password)) errors.push('One number');
+    87→    else score += 20;
+    88→
+    89→    if (!/[^A-Za-z0-9]/.test(password)) errors.push('One special character');
+    90→    else score += 20;
+    91→
+    92→    // Determine strength level
+    93→    let strength: PasswordStrength['strength'] = 'weak';
+    94→    if (score >= 80) strength = 'very-strong';
+    95→    else if (score >= 60) strength = 'strong';
+    96→    else if (score >= 40) strength = 'medium';
+    97→
+    98→    setPasswordStrength({
+    99→      isValid: errors.length === 0,
+   100→      errors,
+   101→      strength
+   102→    });
+   103→  }, []);
+   104→
+   105→  // Check for existing session on mount - defined before use
+   106→  const checkExistingSession = useCallback(async () => {
+   107→    try {
+   108→      const token = localStorage.getItem('soc_access_token');
+   109→      if (token) {
+   110→        const response = await fetch('/api/auth?action=me', {
+   111→          headers: { 'Authorization': `Bearer ${token}` }
+   112→        });
+   113→        
+   114→        if (response.ok) {
+   115→          router.push('/dashboard');
+   116→        }
+   117→      }
+   118→    } catch (error) {
+   119→      // No valid session, show login form
+   120→    }
+   121→  }, [router]);
+   122→
+   123→  // Check for existing session on mount
+   124→  useEffect(() => {
+   125→    checkExistingSession();
+   126→  }, [checkExistingSession]);
+   127→
+   128→  // Handle input changes
+   129→  const handleInputChange = useCallback((field: keyof AuthFormData, value: string) => {
+   130→    setFormData(prev => ({ ...prev, [field]: value }));
+   131→    
+   132→    // Check password strength when password changes
+   133→    if (field === 'password') {
+   134→      checkPasswordStrength(value);
+   135→    }
+   136→    
+   137→    // Clear errors on input
+   138→    if (authState.error) {
+   139→      setAuthState(prev => ({ ...prev, error: null }));
+   140→    }
+   141→  }, [authState.error]);
+   142→
+   143→  // Handle login submission
+   144→  const handleLogin = async (e: React.FormEvent) => {
+   145→    e.preventDefault();
+   146→    setAuthState(prev => ({ ...prev, loading: true, error: null }));
+   147→
+   148→    try {
+   149→      const response = await fetch('/api/auth', {
+   150→        method: 'POST',
+   151→        headers: { 'Content-Type': 'application/json' },
+   152→        body: JSON.stringify({
+   153→          action: 'login',
+   154→          email: formData.email || undefined,
+   155→          username: formData.username || undefined,
+   156→          password: formData.password
+   157→        })
+   158→      });
+   159→
+   160→      const data = await response.json();
+   161→
+   162→      if (data.success) {
+   163→        if (data.requiresMfa) {
+   164→          // Switch to MFA mode
+   165→          setPendingCredentials({
+   166→            email: formData.email || undefined,
+   167→            username: formData.username || undefined,
+   168→            password: formData.password
+   169→          });
+   170→          setAuthState({
+   171→            mode: 'mfa',
+   172→            loading: false,
+   173→            error: null,
+   174→            success: null,
+   175→            requiresMfa: true
+   176→          });
+   177→        } else {
+   178→          // Login successful, store tokens
+   179→          storeTokens(data.tokens);
+   180→          
+   181→          setAuthState({
+   182→            mode: 'login',
+   183→            loading: false,
+   184→            error: null,
+   185→            success: 'Login successful! Redirecting...',
+   186→            user: data.user
+   187→          });
+   188→
+   189→          // Redirect to dashboard after short delay
+   190→          setTimeout(() => router.push('/dashboard'), 1000);
+   191→        }
+   192→      } else {
+   193→        setAuthState(prev => ({
+   194→          ...prev,
+   195→          loading: false,
+   196→          error: data.error || 'Login failed'
+   197→        }));
+   198→      }
+   199→    } catch (error) {
+   200→      setAuthState(prev => ({
+   201→        ...prev,
+   202→        loading: false,
+   203→        error: 'Network error. Please try again.'
+   204→      }));
+   205→    }
+   206→  };
+   207→
+   208→  // Handle MFA verification
+   209→  const handleMFAVerify = async (e: React.FormEvent) => {
+   210→    e.preventDefault();
+   211→    setAuthState(prev => ({ ...prev, loading: true, error: null }));
+   212→
+   213→    try {
+   214→      const response = await fetch('/api/auth', {
+   215→        method: 'POST',
+   216→        headers: { 'Content-Type': 'application/json' },
+   217→        body: JSON.stringify({
+   218→          action: 'login',
+   219→          ...pendingCredentials,
+   220→          mfaCode: formData.mfaCode
+   221→        })
+   222→      });
+   223→
+   224→      const data = await response.json();
+   225→
+   226→      if (data.success) {
+   227→        storeTokens(data.tokens);
+   228→        
+   229→        setAuthState({
+   230→          mode: 'login',
+   231→          loading: false,
+   232→          error: null,
+   233→          success: 'Authentication successful!',
+   234→          user: data.user
+   235→        });
+   236→
+   237→        setTimeout(() => router.push('/dashboard'), 1000);
+   238→      } else {
+   239→        setAuthState(prev => ({
+   240→          ...prev,
+   241→          loading: false,
+   242→          error: data.error || 'MFA verification failed'
+   243→        }));
+   244→      }
+   245→    } catch (error) {
+   246→      setAuthState(prev => ({
+   247→        ...prev,
+   248→        loading: false,
+   249→        error: 'Verification failed. Please try again.'
+   250→      }));
+   251→    }
+   252→  };
+   253→
+   254→  // Handle registration submission
+   255→  const handleRegister = async (e: React.FormEvent) => {
+   256→    e.preventDefault();
+   257→    setAuthState(prev => ({ ...prev, loading: true, error: null }));
+   258→
+   259→    // Validate passwords match
+   260→    if (formData.password !== formData.confirmPassword) {
+   261→      setAuthState(prev => ({
+   262→        ...prev,
+   263→        loading: false,
+   264→        error: 'Passwords do not match'
+   265→      }));
+   266→      return;
+   267→    }
+   268→
+   269→    // Validate password strength
+   270→    if (passwordStrength && !passwordStrength.isValid) {
+   271→      setAuthState(prev => ({
+   272→        ...prev,
+   273→        loading: false,
+   274→        error: 'Password does not meet requirements'
+   275→      }));
+   276→      return;
+   277→    }
+   278→
+   279→    try {
+   280→      const response = await fetch('/api/auth', {
+   281→        method: 'POST',
+   282→        headers: { 'Content-Type': 'application/json' },
+   283→        body: JSON.stringify({
+   284→          action: 'register',
+   285→          email: formData.email,
+   286→          username: formData.username,
+   287→          password: formData.password,
+   288→          name: formData.name
+   289→        })
+   290→      });
+   291→
+   292→      const data = await response.json();
+   293→
+   294→      if (data.success) {
+   295→        storeTokens(data.tokens);
+   296→        
+   297→        setAuthState({
+   298→          mode: 'login',
+   299→          loading: false,
+   300→          error: null,
+   301→          success: 'Registration successful! Welcome to National SOC Platform.',
+   302→          user: data.user
+   303→        });
+   304→
+   305→        setTimeout(() => router.push('/dashboard'), 1500);
+   306→      } else {
+   307→        setAuthState(prev => ({
+   308→          ...prev,
+   309→          loading: false,
+   310→          error: data.error || 'Registration failed'
+   311→        }));
+   312→      }
+   313→    } catch (error) {
+   314→      setAuthState(prev => ({
+   315→        ...prev,
+   316→        loading: false,
+   317→        error: 'Registration failed. Please try again.'
+   318→      }));
+   319→    }
+   320→  };
+   321→
+   322→  // Store auth tokens
+   323→  const storeTokens = (tokens: any) => {
+   324→    localStorage.setItem('soc_access_token', tokens.accessToken);
+   325→    localStorage.setItem('soc_refresh_token', tokens.refreshToken);
+   326→    localStorage.setItem('soc_token_expires', tokens.expiresAt);
+   327→  };
+   328→
+   329→  // Toggle between login and register modes
+   330→  const toggleMode = () => {
+   331→    setAuthState(prev => ({
+   332→      ...prev,
+   333→      mode: prev.mode === 'login' ? 'register' : 'login',
+   334→      error: null,
+   335→      success: null
+   336→    }));
+   337→    setFormData({
+   338→      email: '',
+   339→      username: '',
+   340→      password: '',
+   341→      confirmPassword: '',
+   342→      name: '',
+   343→      mfaCode: ''
+   344→    });
+   345→    setPasswordStrength(null);
+   346→  };
+   347→
+   348→  // Get strength color and label
+   349→  const getStrengthInfo = (strength: string) => {
+   350→    switch (strength) {
+   351→      case 'very-strong':
+   352→        return { color: '#10b981', label: 'Very Strong', width: '100%' };
+   353→      case 'strong':
+   354→        return { color: '#3b82f6', label: 'Strong', width: '75%' };
+   355→      case 'medium':
+   356→        return { color: '#f59e0b', label: 'Medium', width: '50%' };
+   357→      default:
+   358→        return { color: '#ef4444', label: 'Weak', width: '25%' };
+   359→    }
+   360→  };
+   361→
+   362→  return (
+   363→    <div className="auth-container">
+   364→      {/* Background Pattern */}
+   365→      <div className="auth-background">
+   366→        <div className="auth-grid-pattern"></div>
+   367→        <div className="auth-gradient-overlay"></div>
+   368→      </div>
+   369→
+   370→      {/* Main Content */}
+   371→      <div className="auth-content">
+   372→        {/* Logo & Header */}
+   373→        <div className="auth-header">
+   374→          <div className="auth-logo">
+   375→            <svg viewBox="0 0 40 40" fill="none" xmlns="http://www.w3.org/2000/svg">
+   376→              <circle cx="20" cy="20" r="18" stroke="currentColor" strokeWidth="2"/>
+   377→              <path d="M12 24L18 30L28 16" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"/>
+   378→              <circle cx="20" cy="14" r="4" stroke="currentColor" strokeWidth="2"/>
+   379→            </svg>
+   380→          </div>
+   381→          <h1>National SOC Platform</h1>
+   382→          <p>Security Operations Center Dashboard</p>
+   383→        </div>
+   384→
+   385→        {/* Authentication Forms */}
+   386→        <div className="auth-form-container">
+   387→          {/* Error Message */}
+   388→          {authState.error && (
+   389→            <div className="auth-message error">
+   390→              <span className="message-icon">⚠️</span>
+   391→              <span>{authState.error}</span>
+   392→            </div>
+   393→          )}
+   394→
+   395→          {/* Success Message */}
+   396→          {authState.success && (
+   397→            <div className="auth-message success">
+   398→              <span className="message-icon">✅</span>
+   399→              <span>{authState.success}</span>
+   400→            </div>
+   401→          )}
+   402→
+   403→          {/* LOGIN FORM */}
+   404→          {authState.mode === 'login' && (
+   405→            <form onSubmit={handleLogin} className="auth-form">
+   406→              <h2>Welcome Back</h2>
+   407→              <p className="form-subtitle">Sign in to access your dashboard</p>
+   408→
+   409→              <div className="form-group">
+   410→                <label htmlFor="email-username">Email or Username</label>
+   411→                <input
+   412→                  id="email-username"
+   413→                  type="text"
+   414→                  value={formData.email || formData.username}
+   415→                  onChange={(e) => {
+   416→                    const val = e.target.value;
+   417→                    if (val.includes('@')) {
+   418→                      handleInputChange('email', val);
+   419→                      handleInputChange('username', '');
+   420→                    } else {
+   421→                      handleInputChange('username', val);
+   422→                      handleInputChange('email', '');
+   423→                    }
+   424→                  }}
+   425→                  placeholder="Enter email or username"
+   426→                  required
+   427→                  autoComplete="username"
+   428→                />
+   429→              </div>
+   430→
+   431→              <div className="form-group">
+   432→                <label htmlFor="password">Password</label>
+   433→                <div className="password-input">
+   434→                  <input
+   435→                    id="password"
+   436→                    type={showPassword ? 'text' : 'password'}
+   437→                    value={formData.password}
+   438→                    onChange={(e) => handleInputChange('password', e.target.value)}
+   439→                    placeholder="Enter your password"
+   440→                    required
+   441→                    autoComplete="current-password"
+   442→                  />
+   443→                  <button
+   444→                    type="button"
+   445→                    className="toggle-password"
+   446→                    onClick={() => setShowPassword(!showPassword)}
+   447→                  >
+   448→                    {showPassword ? '🙈' : '👁️'}
+   449→                  </button>
+   450→                </div>
+   451→              </div>
+   452→
+   453→              <div className="form-options">
+   454→                <label className="remember-me">
+   455→                  <input
+   456→                    type="checkbox"
+   457→                    checked={rememberMe}
+   458→                    onChange={(e) => setRememberMe(e.target.checked)}
+   459→                  />
+   460→                  <span>Remember me</span>
+   461→                </label>
+   462→                <a href="#" className="forgot-link">Forgot password?</a>
+   463→              </div>
+   464→
+   465→              <button 
+   466→                type="submit" 
+   467→                className={`btn-primary ${authState.loading ? 'loading' : ''}`}
+   468→                disabled={authState.loading}
+   469→              >
+   470→                {authState.loading ? (
+   471→                  <>
+   472→                    <span className="spinner"></span>
+   473→                    Signing in...
+   474→                  </>
+   475→                ) : (
+   476→                  'Sign In'
+   477→                )}
+   478→              </button>
+   479→
+   480→              <div className="auth-divider">
+   481→                <span>or</span>
+   482→              </div>
+   483→
+   484→              <button 
+   485→                type="button" 
+   486→                className="btn-secondary"
+   487→                onClick={toggleMode}
+   488→              >
+   489→                Create New Account
+   490→              </button>
+   491→
+   492→              <p className="demo-hint">
+   493→                Demo credentials: any username / any password (development mode)
+   494→              </p>
+   495→            </form>
+   496→          )}
+   497→
+   498→          {/* REGISTER FORM */}
+   499→          {authState.mode === 'register' && (
+   500→            <form onSubmit={handleRegister} className="auth-form">
+   501→              <h2>Create Account</h2>
+   502→              <p className="form-subtitle">Join the National SOC Platform team</p>
+   503→
+   504→              <div className="form-group">
+   505→                <label htmlFor="name">Full Name</label>
+   506→                <input
+   507→                  id="name"
+   508→                  type="text"
+   509→                  value={formData.name}
+   510→                  onChange={(e) => handleInputChange('name', e.target.value)}
+   511→                  placeholder="Enter your full name"
+   512→                  required
+   513→                  autoComplete="name"
+   514→                />
+   515→              </div>
+   516→
+   517→              <div className="form-group">
+   518→                <label htmlFor="reg-email">Email Address</label>
+   519→                <input
+   520→                  id="reg-email"
+   521→                  type="email"
+   522→                  value={formData.email}
+   523→                  onChange={(e) => handleInputChange('email', e.target.value)}
+   524→                  placeholder="you@organization.dz"
+   525→                  required
+   526→                  autoComplete="email"
+   527→                />
+   528→              </div>
+   529→
+   530→              <div className="form-group">
+   531→                <label htmlFor="reg-username">Username</label>
+   532→                <input
+   533→                  id="reg-username"
+   534→                  type="text"
+   535→                  value={formData.username}
+   536→                  onChange={(e) => handleInputChange('username', e.target.value)}
+   537→                  placeholder="Choose a username (3-30 chars)"
+   538→                  required
+   539→                  pattern="[a-zA-Z0-9_]{3,30}"
+   540→                  autoComplete="username"
+   541→                />
+   542→              </div>
+   543→
+   544→              <div className="form-group">
+   545→                <label htmlFor="reg-password">Password</label>
+   546→                <div className="password-input">
+   547→                  <input
+   548→                    id="reg-password"
+   549→                    type={showPassword ? 'text' : 'password'}
+   550→                    value={formData.password}
+   551→                    onChange={(e) => handleInputChange('password', e.target.value)}
+   552→                    placeholder="Create a strong password"
+   553→                    required
+   554→                    minLength={12}
+   555→                    autoComplete="new-password"
+   556→                  />
+   557→                  <button
+   558→                    type="button"
+   559→                    className="toggle-password"
+   560→                    onClick={() => setShowPassword(!showPassword)}
+   561→                  >
+   562→                    {showPassword ? '🙈' : '👁️'}
+   563→                  </button>
+   564→                </div>
+   565→
+   566→                {/* Password Strength Indicator */}
+   567→                {passwordStrength && formData.password && (
+   568→                  <div className="password-strength">
+   569→                    <div className="strength-bar">
+   570→                      <div 
+   571→                        className="strength-fill"
+   572→                        style={{
+   573→                          width: getStrengthInfo(passwordStrength.strength).width,
+   574→                          background: getStrengthInfo(passwordStrength.strength).color
+   575→                        }}
+   576→                      ></div>
+   577→                    </div>
+   578→                    <div className="strength-info">
+   579→                      <span style={{ color: getStrengthInfo(passwordStrength.strength).color }}>
+   580→                        {getStrengthInfo(passwordStrength.strength).label}
+   581→                      </span>
+   582→                      {!passwordStrength.isValid && (
+   583→                        <span className="strength-errors">
+   584→                          {passwordStrength.errors[0]}
+   585→                        </span>
+   586→                      )}
+   587→                    </div>
+   588→                  </div>
+   589→                )}
+   590→              </div>
+   591→
+   592→              <div className="form-group">
+   593→                <label htmlFor="confirm-password">Confirm Password</label>
+   594→                <input
+   595→                  id="confirm-password"
+   596→                  type="password"
+   597→                  value={formData.confirmPassword}
+   598→                  onChange={(e) => handleInputChange('confirmPassword', e.target.value)}
+   599→                  placeholder="Re-enter your password"
+   600→                  required
+   601→                  autoComplete="new-password"
+   602→                />
+   603→              </div>
+   604→
+   605→              <button 
+   606→                type="submit" 
+   607→                className={`btn-primary ${authState.loading ? 'loading' : ''}`}
+   608→                disabled={authState.loading || (passwordStrength !== null && !passwordStrength?.isValid)}
+   609→              >
+   610→                {authState.loading ? (
+   611→                  <>
+   612→                    <span className="spinner"></span>
+   613→                    Creating account...
+   614→                  </>
+   615→                ) : (
+   616→                  'Create Account'
+   617→                )}
+   618→              </button>
+   619→
+   620→              <div className="auth-divider">
+   621→                <span>or</span>
+   622→              </div>
+   623→
+   624→              <button 
+   625→                type="button" 
+   626→                className="btn-secondary"
+   627→                onClick={toggleMode}
+   628→              >
+   629→                Sign In to Existing Account
+   630→              </button>
+   631→            </form>
+   632→          )}
+   633→
+   634→          {/* MFA VERIFICATION FORM */}
+   635→          {authState.mode === 'mfa' && (
+   636→            <form onSubmit={handleMFAVerify} className="auth-form mfa-form">
+   637→              <div className="mfa-icon">🔐</div>
+   638→              <h2>Two-Factor Authentication</h2>
+   639→              <p className="form-subtitle">
+   640→                Enter the 6-digit code from your authenticator app
+   641→              </p>
+   642→
+   643→              <div className="form-group">
+   644→                <label htmlFor="mfa-code">Authentication Code</label>
+   645→                <input
+   646→                  id="mfa-code"
+   647→                  type="text"
+   648→                  value={formData.mfaCode}
+   649→                  onChange={(e) => handleInputChange('mfaCode', e.target.value.replace(/\D/g, '').slice(0, 6))}
+   650→                  placeholder="000000"
+   651→                  maxLength={6}
+   652→                  className="mfa-code-input"
+   653→                  autoFocus
+   654→                />
+   655→              </div>
+   656→
+   657→              <button 
+   658→                type="submit" 
+   659→                className={`btn-primary ${authState.loading ? 'loading' : ''}`}
+   660→                disabled={authState.loading || formData.mfaCode.length !== 6}
+   661→              >
+   662→                {authState.loading ? (
+   663→                  <>
+   664→                    <span className="spinner"></span>
+   665→                    Verifying...
+   666→                  </>
+   667→                ) : (
+   668→                  'Verify & Continue'
+   669→                )}
+   670→              </button>
+   671→
+   672→              <button 
+   673→                type="button" 
+   674→                className="btn-text"
+   675→                onClick={() => setAuthState({ mode: 'login', loading: false, error: null, success: null })}
+   676→              >
+   677→                ← Back to sign in
+   678→              </button>
+   679→
+   680→              <p className="demo-hint">
+   681→                Development mode: Any 6-digit code will work
+   682→              </p>
+   683→            </form>
+   684→          )}
+   685→        </div>
+   686→
+   687→        {/* Footer */}
+   688→        <div className="auth-footer">
+   689→          <p>
+   690→            © 2026 National SOC Platform •{' '}
+   691→            <a href="#">Privacy Policy</a> •{' '}
+   692→            <a href="#">Terms of Service</a>
+   693→          </p>
+   694→          <p className="version-info">v2.0.0 | Phase 13 Complete</p>
+   695→        </div>
+   696→      </div>
+   697→
+   698→      {/* Inline Styles */}
+   699→      <style jsx global>{`
+   700→        .auth-container {
+   701→          min-height: 100vh;
+   702→          display: flex;
+   703→          align-items: center;
+   704→          justify-content: center;
+   705→          position: relative;
+   706→          font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+   707→        }
+   708→
+   709→        /* Background */
+   710→        .auth-background {
+   711→          position: fixed;
+   712→          inset: 0;
+   713→          z-index: -1;
+   714→          background: linear-gradient(135deg, #0f172a 0%, #1e293b 50%, #0f172a 100%);
+   715→        }
+   716→
+   717→        .auth-grid-pattern {
+   718→          position: absolute;
+   719→          inset: 0;
+   720→          background-image: 
+   721→            linear-gradient(rgba(59, 130, 246, 0.03) 1px, transparent 1px),
+   722→            linear-gradient(90deg, rgba(59, 130, 246, 0.03) 1px, transparent 1px);
+   723→          background-size: 50px 50px;
+   724→        }
+   725→
+   726→        .auth-gradient-overlay {
+   727→          position: absolute;
+   728→          inset: 0;
+   729→          background: radial-gradient(circle at 50% 50%, rgba(59, 130, 246, 0.1), transparent 70%);
+   730→        }
+   731→
+   732→        /* Content */
+   733→        .auth-content {
+   734→          width: 100%;
+   735→          max-width: 420px;
+   736→          padding: 24px;
+   737→        }
+   738→
+   739→        /* Header */
+   740→        .auth-header {
+   741→          text-align: center;
+   742→          margin-bottom: 32px;
+   743→        }
+   744→
+   745→        .auth-logo {
+   746→          display: inline-flex;
+   747→          align-items: center;
+   748→          justify-content: center;
+   749→          width: 64px;
+   750→          height: 64px;
+   751→          border-radius: 16px;
+   752→          background: linear-gradient(135deg, #3b82f6, #2563eb);
+   753→          color: white;
+   754→          margin-bottom: 16px;
+   755→        }
+   756→
+   757→        .auth-logo svg {
+   758→          width: 36px;
+   759→          height: 36px;
+   760→        }
+   761→
+   762→        .auth-header h1 {
+   763→          font-size: 24px;
+   764→          font-weight: 700;
+   765→          color: #ffffff;
+   766→          margin: 0 0 8px 0;
+   767→        }
+   768→
+   769→        .auth-header p {
+   770→          font-size: 14px;
+   771→          color: #94a3b8;
+   772→          margin: 0;
+   773→        }
+   774→
+   775→        /* Form Container */
+   776→        .auth-form-container {
+   777→          background: rgba(255, 255, 255, 0.03);
+   778→          backdrop-filter: blur(12px);
+   779→          border: 1px solid rgba(255, 255, 255, 0.08);
+   780→          border-radius: 16px;
+   781→          padding: 32px;
+   782→        }
+   783→
+   784→        /* Messages */
+   785→        .auth-message {
+   786→          display: flex;
+   787→          align-items: center;
+   788→          gap: 10px;
+   789→          padding: 12px 16px;
+   790→          border-radius: 8px;
+   791→          margin-bottom: 20px;
+   792→          font-size: 14px;
+   793→        }
+   794→
+   795→        .auth-message.error {
+   796→          background: rgba(239, 68, 68, 0.1);
+   797→          border: 1px solid rgba(239, 68, 68, 0.2);
+   798→          color: #fca5a5;
+   799→        }
+   800→
+   801→        .auth-message.success {
+   802→          background: rgba(16, 185, 129, 0.1);
+   803→          border: 1px solid rgba(16, 185, 129, 0.2);
+   804→          color: #6ee7b7;
+   805→        }
+   806→
+   807→        /* Form Styles */
+   808→        .auth-form h2 {
+   809→          font-size: 20px;
+   810→          font-weight: 600;
+   811→          color: #ffffff;
+   812→          margin: 0 0 8px 0;
+   813→        }
+   814→
+   815→        .form-subtitle {
+   816→          font-size: 14px;
+   817→          color: #94a3b8;
+   818→          margin: 0 0 24px 0;
+   819→        }
+   820→
+   821→        .form-group {
+   822→          margin-bottom: 20px;
+   823→        }
+   824→
+   825→        .form-group label {
+   826→          display: block;
+   827→          font-size: 13px;
+   828→          font-weight: 500;
+   829→          color: #cbd5e1;
+   830→          margin-bottom: 6px;
+   831→        }
+   832→
+   833→        .form-group input {
+   834→          width: 100%;
+   835→          padding: 12px 14px;
+   836→          background: rgba(15, 23, 42, 0.6);
+   837→          border: 1px solid rgba(148, 163, 184, 0.2);
+   838→          border-radius: 8px;
+   839→          color: #ffffff;
+   840→          font-size: 14px;
+   841→          transition: all 0.2s ease;
+   842→        }
+   843→
+   844→        .form-group input:focus {
+   845→          outline: none;
+   846→          border-color: #3b82f6;
+   847→          box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
+   848→        }
+   849→
+   850→        .form-group input::placeholder {
+   851→          color: #64748b;
+   852→        }
+   853→
+   854→        /* Password Input */
+   855→        .password-input {
+   856→          position: relative;
+   857→        }
+   858→
+   859→        .password-input input {
+   860→          padding-right: 45px;
+   861→        }
+   862→
+   863→        .toggle-password {
+   864→          position: absolute;
+   865→          right: 12px;
+   866→          top: 50%;
+   867→          transform: translateY(-50%);
+   868→          background: none;
+   869→          border: none;
+   870→          cursor: pointer;
+   871→          font-size: 16px;
+   872→          opacity: 0.7;
+   873→          transition: opacity 0.2s;
+   874→        }
+   875→
+   876→        .toggle-password:hover {
+   877→          opacity: 1;
+   878→        }
+   879→
+   880→        /* Password Strength */
+   881→        .password-strength {
+   882→          margin-top: 8px;
+   883→        }
+   884→
+   885→        .strength-bar {
+   886→          height: 4px;
+   887→          background: rgba(148, 163, 184, 0.2);
+   888→          border-radius: 2px;
+   889→          overflow: hidden;
+   890→        }
+   891→
+   892→        .strength-fill {
+   893→          height: 100%;
+   894→          transition: all 0.3s ease;
+   895→        }
+   896→
+   897→        .strength-info {
+   898→          display: flex;
+   899→          justify-content: space-between;
+   900→          align-items: center;
+   901→          margin-top: 6px;
+   902→          font-size: 12px;
+   903→        }
+   904→
+   905→        .strength-errors {
+   906→          color: #fca5a5;
+   907→        }
+   908→
+   909→        /* Form Options */
+   910→        .form-options {
+   911→          display: flex;
+   912→          justify-content: space-between;
+   913→          align-items: center;
+   914→          margin-bottom: 24px;
+   915→        }
+   916→
+   917→        .remember-me {
+   918→          display: flex;
+   919→          align-items: center;
+   920→          gap: 8px;
+   921→          cursor: pointer;
+   922→          font-size: 13px;
+   923→          color: #94a3b8;
+   924→        }
+   925→
+   926→        .remember-me input[type="checkbox"] {
+   927→          width: 16px;
+   928→          height: 16px;
+   929→          accent-color: #3b82f6;
+   930→        }
+   931→
+   932→        .forgot-link {
+   933→          font-size: 13px;
+   934→          color: #3b82f6;
+   935→          text-decoration: none;
+   936→          transition: color 0.2s;
+   937→        }
+   938→
+   939→        .forgot-link:hover {
+   940→          color: #60a5fa;
+   941→        }
+   942→
+   943→        /* Buttons */
+   944→        .btn-primary {
+   945→          width: 100%;
+   946→          padding: 14px;
+   947→          background: linear-gradient(135deg, #3b82f6, #2563eb);
+   948→          border: none;
+   949→          border-radius: 8px;
+   950→          color: white;
+   951→          font-size: 15px;
+   952→          font-weight: 600;
+   953→          cursor: pointer;
+   954→          transition: all 0.2s ease;
+   955→          display: flex;
+   956→          align-items: center;
+   957→          justify-content: center;
+   958→          gap: 8px;
+   959→        }
+   960→
+   961→        .btn-primary:hover:not(:disabled) {
+   962→          transform: translateY(-1px);
+   963→          box-shadow: 0 4px 12px rgba(59, 130, 246, 0.4);
+   964→        }
+   965→
+   966→        .btn-primary:disabled {
+   967→          opacity: 0.6;
+   968→          cursor: not-allowed;
+   969→        }
+   970→
+   971→        .btn-secondary {
+   972→          width: 100%;
+   973→          padding: 14px;
+   974→          background: transparent;
+   975→          border: 1px solid rgba(148, 163, 184, 0.3);
+   976→          border-radius: 8px;
+   977→          color: #cbd5e1;
+   978→          font-size: 15px;
+   979→          font-weight: 500;
+   980→          cursor: pointer;
+   981→          transition: all 0.2s ease;
+   982→        }
+   983→
+   984→        .btn-secondary:hover {
+   985→          background: rgba(148, 163, 184, 0.1);
+   986→          border-color: rgba(148, 163, 184, 0.5);
+   987→        }
+   988→
+   989→        .btn-text {
+   990→          width: 100%;
+   991→          padding: 12px;
+   992→          background: transparent;
+   993→          border: none;
+   994→          color: #94a3b8;
+   995→          font-size: 14px;
+   996→          cursor: pointer;
+   997→          transition: color 0.2s;
+   998→        }
+   999→
+  1000→        .btn-text:hover {
+  1001→          color: #cbd5e1;
+  1002→        }
+  1003→
+  1004→        /* Divider */
+  1005→        .auth-divider {
+  1006→          text-align: center;
+  1007→          margin: 20px 0;
+  1008→          position: relative;
+  1009→        }
+  1010→
+  1011→        .auth-divider::before,
+  1012→        .auth-divider::after {
+  1013→          content: '';
+  1014→          position: absolute;
+  1015→          top: 50%;
+  1016→          width: calc(50% - 30px);
+  1017→          height: 1px;
+  1018→          background: rgba(148, 163, 184, 0.2);
+  1019→        }
+  1020→
+  1021→        .auth-divider::before { left: 0; }
+  1022→        .auth-divider::after { right: 0; }
+  1023→
+  1024→        .auth-divider span {
+  1025→          background: rgba(15, 23, 42, 0.6);
+  1026→          padding: 0 12px;
+  1027→          font-size: 13px;
+  1028→          color: #64748b;
+  1029→        }
+  1030→
+  1031→        /* MFA Form */
+  1032→        .mfa-icon {
+  1033→          font-size: 48px;
+  1034→          text-align: center;
+  1035→          margin-bottom: 16px;
+  1036→        }
+  1037→
+  1038→        .mfa-code-input {
+  1039→          text-align: center;
+  1040→          font-size: 24px;
+  1041→          letter-spacing: 8px;
+  1042→          font-family: monospace;
+  1043→        }
+  1044→
+  1045→        /* Demo Hint */
+  1046→        .demo-hint {
+  1047→          text-align: center;
+  1048→          font-size: 12px;
+  1049→          color: #64748b;
+  1050→          margin-top: 16px;
+  1051→          padding: 8px;
+  1052→          background: rgba(59, 130, 246, 0.1);
+  1053→          border-radius: 6px;
+  1054→        }
+  1055→
+  1056→        /* Spinner */
+  1057→        .spinner {
+  1058→          width: 18px;
+  1059→          height: 18px;
+  1060→          border: 2px solid rgba(255, 255, 255, 0.3);
+  1061→          border-top-color: white;
+  1062→          border-radius: 50%;
+  1063→          animation: spin 0.8s linear infinite;
+  1064→        }
+  1065→
+  1066→        @keyframes spin {
+  1067→          to { transform: rotate(360deg); }
+  1068→        }
+  1069→
+  1070→        /* Footer */
+  1071→        .auth-footer {
+  1072→          text-align: center;
+  1073→          margin-top: 32px;
+  1074→        }
+  1075→
+  1076→        .auth-footer p {
+  1077→          font-size: 13px;
+  1078→          color: #64748b;
+  1079→          margin: 4px 0;
+  1080→        }
+  1081→
+  1082→        .auth-footer a {
+  1083→          color: #64748b;
+  1084→          text-decoration: none;
+  1085→          transition: color 0.2s;
+  1086→        }
+  1087→
+  1088→        .auth-footer a:hover {
+  1089→          color: #94a3b8;
+  1090→        }
+  1091→
+  1092→        .version-info {
+  1093→          font-size: 11px !important;
+  1094→          color: #475569 !important;
+  1095→        }
+  1096→      `}</style>
+  1097→    </div>
+  1098→  );
+  1099→}
+  1100→

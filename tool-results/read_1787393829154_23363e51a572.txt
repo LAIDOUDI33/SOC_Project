@@ -1,0 +1,743 @@
+     1→/**
+     2→ * National SOC Platform - Enhanced CEO Demo Data Seed
+     3→ * 
+     4→ * Comprehensive demo data for Djezzy CEO presentation including:
+     5→ * - 90 days of realistic security events
+     6→ * - Threat hunting sessions with findings
+     7→ * - Automated response executions
+     8→ * - SOAR cases with full investigation trails
+     9→ * - Detection rules with performance metrics
+    10→ * - Compliance data across all frameworks
+    11→ * - KPI metrics demonstrating SOC effectiveness
+    12→ */
+    13→
+    14→import { PrismaClient } from '@prisma/client';
+    15→
+    16→const prisma = new PrismaClient();
+    17→
+    18→// Helper to generate random dates within range
+    19→function randomDate(start: Date, end: Date): Date {
+    20→  return new Date(start.getTime() + Math.random() * (end.getTime() - start.getTime()));
+    21→}
+    22→
+    23→// Helper for random selection
+    24→function randomItem<T>(arr: T[]): T {
+    25→  return arr[Math.floor(Math.random() * arr.length)];
+    26→}
+    27→
+    28→// Helper for random number in range
+    29→function randomInRange(min: number, max: number): number {
+    30→  return Math.floor(Math.random() * (max - min + 1)) + min;
+    31→}
+    32→
+    33→async function main() {
+    34→  console.log('🌱 Starting enhanced CEO demo data seeding...\n');
+    35→  const startDate = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000); // 90 days ago
+    36→  const endDate = new Date();
+    37→
+    38→  // ============================================================
+    39→  // 1. ENHANCED USER DATA (Djezzy Staff)
+    40→  // ============================================================
+    41→  console.log('👥 Creating Djezzy SOC team users...');
+    42→  
+    43→  const roles = await Promise.all([
+    44→    prisma.role.upsert({ where: { name: 'soc_manager' }, update: {}, create: { name: 'soc_manager', description: 'SOC Operations Manager' } }),
+    45→    prisma.role.upsert({ where: { name: 'senior_analyst' }, update: {}, create: { name: 'senior_analyst', description: 'Senior Security Analyst' } }),
+    46→    prisma.role.upsert({ where: { name: 'analyst_l1' }, update: {}, create: { name: 'analyst_l1', description: 'L1 Security Analyst' } }),
+    47→    prisma.role.upsert({ where: { name: 'threat_hunter' }, update: {}, create: { name: 'threat_hunter', description: 'Threat Hunter' } }),
+    48→    prisma.role.upsert({ where: { name: 'compliance_officer' }, update: {}, create: { name: 'compliance_officer', description: 'Compliance Officer' } }),
+    49→    prisma.role.upsert({ where: { name: 'incident_responder' }, update: {}, create: { name: 'incident_responder', description: 'Incident Responder' } })
+    50→  ]);
+    51→
+    52→  const djezzyUsers = await Promise.all([
+    53→    prisma.user.upsert({
+    54→      where: { email: 'ahmed.bensalem@djezzy.dz' },
+    55→      update: {},
+    56→      create: {
+    57→        email: 'ahmed.bensalem@djezzy.dz',
+    58→        username: 'ahmed_bensalem',
+    59→        passwordHash: '$2b$10$hashed_password_demo',
+    60→        name: 'Ahmed Bensalem',
+    61→        roleId: roles[0].id,
+    62→        department: 'SOC Operations',
+    63→        employeeId: 'DJZ-001',
+    64→        isActive: true,
+    65→        isMfaEnabled: true
+    66→      }
+    67→    }),
+    68→    prisma.user.upsert({
+    69→      where: { email: 'fatima.zerhouni@djezzy.dz' },
+    70→      update: {},
+    71→      create: {
+    72→        email: 'fatima.zerhouni@djezzy.dz',
+    73→        username: 'fatima_z',
+    74→        passwordHash: '$2b$10$hashed_password_demo',
+    75→        name: 'Fatima Zerhouni',
+    76→        roleId: roles[1].id,
+    77→        department: 'Threat Intelligence',
+    78→        employeeId: 'DJZ-002',
+    79→        isActive: true,
+    80→        isMfaEnabled: true
+    81→      }
+    82→    }),
+    83→    prisma.user.upsert({
+    84→      where: { email: 'karim.boudjema@djezzy.dz' },
+    85→      update: {},
+    86→      create: {
+    87→        email: 'karim.boudjema@djezzy.dz',
+    88→        username: 'karim_b',
+    89→        passwordHash: '$2b$10$hashed_password_demo',
+    90→        name: 'Karim Boudjema',
+    91→        roleId: roles[3].id,
+    92→        department: 'Threat Hunting',
+    93→        employeeId: 'DJZ-003',
+    94→        isActive: true,
+    95→        isMfaEnabled: true
+    96→      }
+    97→    }),
+    98→    prisma.user.upsert({
+    99→      where: { email: 'amina.bellaabed@djezzy.dz' },
+   100→      update: {},
+   101→      create: {
+   102→        email: 'amina.bellaabed@djezzy.dz',
+   103→        username: 'amina_b',
+   104→        passwordHash: '$2b$10$hashed_password_demo',
+   105→        name: 'Amina Bellaâbed',
+   106→        roleId: roles[4].id,
+   107→        department: 'Compliance & Governance',
+   108→        employeeId: 'DJZ-004',
+   109→        isActive: true,
+   110→        isMfaEnabled: false
+   111→      }
+   112→    }),
+   113→    prisma.user.upsert({
+   114→      where: { email: 'yacine.berber@djezzy.dz' },
+   115→      update: {},
+   116→      create: {
+   117→        email: 'yacine.berber@djezzy.dz',
+   118→        username: 'yacine_b',
+   119→        passwordHash: '$2b$10$hashed_password_demo',
+   120→        name: 'Yacine Berber',
+   121→        roleId: roles[5].id,
+   122→        department: 'Incident Response',
+   123→        employeeId: 'DJZ-005',
+   124→        isActive: true,
+   125→        isMfaEnabled: true
+   126→      }
+   127→    }),
+   128→    prisma.user.upsert({
+   129→      where: { email: 'sara.mansouri@djezzy.dz' },
+   130→      update: {},
+   131→      create: {
+   132→        email: 'sara.mansouri@djezzy.dz',
+   133→        username: 'sara_m',
+   134→        passwordHash: '$2b$10$hashed_password_demo',
+   135→        name: 'Sara Mansouri',
+   136→        roleId: roles[2].id,
+   137→        department: 'SOC Operations',
+   138→        employeeId: 'DJZ-006',
+   139→        isActive: true,
+   140→        isMfaEnabled: false
+   141→      }
+   142→    })
+   143→  ]);
+   144→  console.log(`   ✅ Created ${djezzyUsers.length} Djezzy team members`);
+   145→
+   146→  // ============================================================
+   147→  // 2. COMPREHENSIVE ALERT DATA (500+ alerts over 90 days)
+   148→  // ============================================================
+   149→  console.log('🚨 Generating 90 days of security alerts...');
+   150→  
+   151→  const alertTemplates = [
+   152→    // SS7/Telecom Alerts (30%)
+   153→    { title: 'SS7 Location Tracking Attempt - Unauthorized SRI Request', severity: 'HIGH', type: 'DETECTION', source: 'SS7_Firewall', protocol: 'SS7', category: 'TELECOM' },
+   154→    { title: 'SS7 Send Routing Info Anomaly Detected', severity: 'CRITICAL', type: 'DETECTION', source: 'SS7_Monitor', protocol: 'SS7', category: 'TELECOM' },
+   155→    { title: 'GTP Tunnel Anomaly - Unusual Data Volume', severity: 'HIGH', type: 'ANOMALY', source: 'GTP_Inspector', protocol: 'GTP', category: 'TELECOM' },
+   156→    { title: 'Diameter Attack Pattern - CCR Flood Detected', severity: 'CRITICAL', type: 'DETECTION', source: 'Diameter_Analyzer', protocol: 'DIAMETER', category: 'TELECOM' },
+   157→    { title: 'SIP Registration Flood from Single Source', severity: 'HIGH', type: 'DETECTION', source: 'SIPSentry', protocol: 'SIP', category: 'TELECOM' },
+   158→    { title: 'SIM Swap Fraud Indicator - High Velocity Requests', severity: 'CRITICAL', type: 'CORRELATION', source: 'FraudEngine', category: 'FRAUD' },
+   159→    { title: 'IMS Catcher Suspected - Cell Tower Anomaly', severity: 'CRITICAL', type: 'ANOMALY', source: 'RF_Monitor', category: 'NETWORK' },
+   160→    { title: 'Roaming Partner Anomaly - Unusual Signaling Traffic', severity: 'MEDIUM', type: 'ANOMALY', source: 'RoamingAnalyzer', category: 'TELECOM' },
+   161→    
+   162→    // Network Security Alerts (25%)
+   163→    { title: 'Port Scan Activity Detected - Multiple Ports Targeted', severity: 'MEDIUM', type: 'DETECTION', source: 'IDS_Suricata', protocol: 'TCP', category: 'NETWORK' },
+   164→    { title: 'DDoS Attack Pattern Identified - SYN Flood', severity: 'CRITICAL', type: 'DETECTION', source: 'DDoS_Protection', protocol: 'TCP', category: 'NETWORK' },
+   165→    { title: 'Malware Communication Detected - C2 Beacon', severity: 'HIGH', type: 'DETECTION', source: 'EDR_CrowdStrike', category: 'ENDPOINT' },
+   166→    { title: 'Unauthorized Access Attempt - Brute Force Login', severity: 'HIGH', type: 'DETECTION', source: 'SIEM_Elastic', category: 'AUTH' },
+   167→    { title: 'Data Exfiltration Attempt - Large Upload Detected', severity: 'CRITICAL', type: 'ANOMALY', source: 'DLP_Agent', category: 'DATA' },
+   168→    { title: 'DNS Tunneling Activity Detected', severity: 'HIGH', type: 'ANOMALY', source: 'DNS_Monitor', protocol: 'DNS', category: 'NETWORK' },
+   169→    { title: 'Lateral Movement Detected - SMB Enumeration', severity: 'HIGH', type: 'CORRELATION', source: 'SIEM_Elastic', protocol: 'SMB', category: 'NETWORK' },
+   170→    
+   171→    // Application Security (20%)
+   172→    { title: 'SQL Injection Attempt Blocked by WAF', severity: 'HIGH', type: 'DETECTION', source: 'WAF_ModSecurity', category: 'APPLICATION' },
+   173→    { title: 'XSS Attack Attempt on Customer Portal', severity: 'MEDIUM', type: 'DETECTION', source: 'WAF_ModSecurity', category: 'APPLICATION' },
+   174→    { title: 'API Abuse Detected - Rate Limit Exceeded', severity: 'LOW', type: 'ANOMALY', source: 'API_Gateway', category: 'APPLICATION' },
+   175→    { title: 'Authentication Bypass Attempt Detected', severity: 'CRITICAL', type: 'DETECTION', source: 'IAM_System', category: 'AUTH' },
+   176→    
+   177→    // Insider Threat / Behavioral (15%)
+   178→    { title: 'Unusual After-Hours Access to Sensitive Systems', severity: 'MEDIUM', type: 'ANOMALY', source: 'UBA_Splunk', category: 'INSIDER' },
+   179→    { title: 'Mass Data Download by Privileged User', severity: 'HIGH', type: 'ANOMALY', source: 'DLP_Agent', category: 'INSIDER' },
+   180→    { title: 'Privilege Escalation Attempt Detected', severity: 'CRITICAL', type: 'DETECTION', source: 'PAM_BeyondTrust', category: 'AUTH' },
+   181→    { title: 'Unauthorized Configuration Change', severity: 'HIGH', type: 'ANOMALY', source: 'SIEM_Elastic', category: 'CONFIG' },
+   182→    
+   183→    // Threat Intelligence (10%)
+   184→    { title: 'IOC Match - Known Malicious IP Address', severity: 'HIGH', type: 'INTEL', source: 'TI_Feed', category: 'THREAT_INTEL' },
+   185→    { title: 'Dark Web Credential Leak Alert - Djezzy Domain', severity: 'CRITICAL', type: 'INTEL', source: 'DarkWeb_Monitor', category: 'THREAT_INTEL' },
+   186→    { title: 'Vulnerability Exploitation Attempt - CVE-2024-XXXX', severity: 'CRITICAL', type: 'DETECTION', source: 'VulnScanner', category: 'VULNERABILITY' }
+   187→  ];
+   188→
+   189→  const alertStatuses = ['NEW', 'ACKNOWLEDGED', 'IN_PROGRESS', 'ESCALATED', 'CLOSED_FALSE_POSITIVE', 'CLOSED_RESOLVED'];
+   190→  const sourceIPs = [
+   191→    '41.105.0.', '196.202.', '197.112.', '213.3.', '105.104.', '105.107.',
+   192→    '203.0.113.', '198.51.100.', '192.168.1.', '10.0.0.', '172.16.0.'
+   193→  ];
+   194→  
+   195→  const generatedAlerts = [];
+   196→  for (let i = 0; i < 547; i++) { // ~6 alerts/day for 90 days
+   197→    const template = randomItem(alertTemplates);
+   198→    const status = randomItem(alertStatuses);
+   199→    const ipPrefix = randomItem(sourceIPs);
+   200→    
+   201→    generatedAlerts.push({
+   202→      title: template.title,
+   203→      severity: template.severity as any,
+   204→      status: status as any,
+   205→      alertType: template.type as any,
+   206→      source: template.source,
+   207→      description: `${template.title} - Auto-detected by ${template.source} monitoring system`,
+   208→      sourceIp: `${ipPrefix}${randomInRange(1, 254)}`,
+   209→      destIp: `10.${randomInRange(0,255)}.${randomInRange(0,255)}.${randomInRange(1,254)}`,
+   210→      protocol: template.protocol || null,
+   211→      createdAt: randomDate(startDate, endDate),
+   212→      category: template.category
+   213→    });
+   214→  }
+   215→
+   216→  // Batch insert alerts
+   217→  const batchSize = 50;
+   218→  const allAlerts = [];
+   219→  for (let i = 0; i < generatedAlerts.length; i += batchSize) {
+   220→    const batch = generatedAlerts.slice(i, i + batchSize);
+   221→    const inserted = await Promise.all(
+   222→      batch.map(alert => prisma.alert.create({ data: alert }))
+   223→    );
+   224→    allAlerts.push(...inserted);
+   225→  }
+   226→  console.log(`   ✅ Generated ${allAlerts.length} security alerts over 90 days`);
+   227→
+   228→  // ============================================================
+   229→  // 3. INCIDENT DATA WITH FULL LIFECYCLES
+   230→  // ============================================================
+   231→  console.log('🔥 Creating detailed incident records...');
+   232→  
+   233→  const incidents = [
+   234→    {
+   235→      title: 'Operation SilentStorm - Coordinated SS7 Attack Campaign',
+   236→      description: 'Advanced persistent threat group APT-GhostShell exploiting SS7 vulnerabilities to track high-value subscribers and intercept communications. Attack originated from multiple international roaming partners with sophisticated routing manipulation.',
+   237→      incidentType: 'APT_ATTACK',
+   238→      severity: 'CRITICAL',
+   239→      status: 'OPEN',
+   240→      phase: 'ERADICATION',
+   241→      tatcCode: 'TATC-2026-00042',
+   242→      impactScore: 9.2,
+   243→      confidenceScore: 88.0,
+   244→      assignedToId: djezzyUsers[1].id, // Fatima
+   245→      affectedAssets: JSON.stringify(['HLR-Algiers-Primary', 'STP-Oran', 'SS7-Firewall-Cluster']),
+   246→      blastRadius: 'Potential access to 15M subscriber location data, communication interception capability',
+   247→      rootCauseAnalysis: 'SS7 firewall rules insufficiently restrictive; roaming partner security posture inadequate',
+   248→      lessonsLearned: 'Need for real-time SS7 anomaly detection; enhanced partner security requirements',
+   249→      financialImpact: 2500000,
+   250→      slaBreach: false,
+   251→      createdAt: new Date(Date.now() - 14 * 24 * 60 * 60 * 1000)
+   252→    },
+   253→    {
+   254→      title: 'TelecomHeist Wave - Large-Scale SIM Swap Fraud Ring',
+   255→      description: 'Organized crime group FIN11-Africa performing unauthorized SIM swaps targeting banking customers. Used social engineering at retail outlets combined with insider assistance. Estimated 847 subscribers affected before detection.',
+   256→      incidentType: 'TELECOM_FRAUD',
+   257→      severity: 'CRITICAL',
+   258→      status: 'IN_PROGRESS',
+   259→      phase: 'RECOVERY',
+   260→      tatcCode: 'TATC-2026-00038',
+   261→      impactScore: 8.7,
+   262→      confidenceScore: 92.0,
+   263→      assignedToId: djezzyUsers[4].id, // Yacine
+   264→      affectedServices: JSON.stringify(['Mobile_Banking_OTP', 'Customer_Care_Portal', 'Retail_POS_System']),
+   265→      blastRadius: 'Financial losses estimated at $1.2M; reputational damage; regulatory scrutiny',
+   266→      rootCauseAnalysis: 'Weak SIM swap authentication; inadequate velocity checks; retail staff social engineering',
+   267→      lessonsLearned: 'Implement biometric verification; enhance fraud detection ML models; retail staff training',
+   268→      financialImpact: 5200000,
+   269→      slaBreach: true,
+   270→      createdAt: new Date(Date.now() - 21 * 24 * 60 * 60 * 1000)
+   271→    },
+   272→    {
+   273→      title: 'IMS Catcher Operation - Surveillance Equipment Detected',
+   274→      description: 'Fake base station equipment detected near government buildings and corporate headquarters in Algiers. Equipment capable of intercepting calls, SMS, and tracking subscriber locations. Potential state-sponsored or corporate espionage activity.',
+   275→      incidentType: 'PHYSICAL_SECURITY',
+   276→      severity: 'CRITICAL',
+   277→      status: 'OPEN',
+   278→      phase: 'CONTAINMENT',
+   279→      tatcCode: 'TATC-2026-00045',
+   280→      impactScore: 9.5,
+   281→      confidenceScore: 95.0,
+   282→      assignedToId: djezzyUsers[0].id, // Ahmed
+   283→      affectedAssets: JSON.stringify(['RNC-Central-Algiers', 'BTS-Cluster-Downtown', 'Core-Network-Gateway']),
+   284→      blastRadius: 'Potential compromise of 50K+ subscribers in coverage area; sensitive communications exposed',
+   285→      rootCauseAnalysis: 'RF spectrum monitoring gaps; lack of automated IMS catcher detection',
+   286→      lessonsLearned: 'Deploy dedicated RF monitoring; implement network-side detection algorithms',
+   287→      financialImpact: 1800000,
+   288→      slaBreach: false,
+   289→      createdAt: new Date(Date.now() - 3 * 24 * 60 * 60 * 1000)
+   290→    },
+   291→    {
+   292→      title: 'Ransomware Attack on IT Support Systems',
+   293→      description: 'LockBit variant ransomware infected IT support systems via phishing email. Rapid containment prevented spread to telecom core systems. 12 workstations encrypted before isolation.',
+   294→      incidentType: 'MALWARE',
+   295→      severity: 'HIGH',
+   296→      status: 'CLOSED_RESOLVED',
+   297→      phase: 'LESSONS_LEARNED',
+   298→      tatcCode: 'TATC-2026-00029',
+   299→      impactScore: 6.8,
+   300→      confidenceScore: 98.0,
+   301→      assignedToId: djezzyUsers[4].id, // Yacine
+   302→      affectedAssets: JSON.stringify(['IT-Support-VLAN', 'Helpdesk-Terminals', 'Backup-Server-02']),
+   303→      blastRadius: 'Contained to IT support segment; no customer-facing systems affected',
+   304→      rootCauseAnalysis: 'Phishing email bypassed spam filter; insufficient network segmentation',
+   305→      lessonsLearned: 'Enhance email filtering; implement zero-trust network architecture; improve backup strategy',
+   306→      financialImpact: 150000,
+   307→      slaBreach: false,
+   308→      resolution: 'Systems restored from clean backups; enhanced monitoring implemented',
+   309→      closedAt: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000),
+   310→      createdAt: new Date(Date.now() - 45 * 24 * 60 * 60 * 1000)
+   311→    },
+   312→    {
+   313→      title: 'Data Center HVAC Control System Compromise',
+   314→      description: 'Unauthorized access detected in building management system controlling data center environmental controls. Attacker attempted to raise temperatures to cause equipment failure. Caught before any physical damage occurred.',
+   315→      incidentType: 'IOT_SECURITY',
+   316→      severity: 'HIGH',
+   317→      status: 'CLOSED_RESOLVED',
+   318→      phase: 'LESSONS_LEARNED',
+   319→      tatcCode: 'TATC-2026-00033',
+   320→      impactScore: 7.5,
+   321→      confidenceScore: 82.0,
+   322→      assignedToId: djezzyUsers[1].id, // Fatima
+   323→      affectedAssets: JSON.stringify(['BMS-Controller-DC1', 'HVAC-Zone-A', 'Environmental-Monitoring']),
+   324→      blastRadius: 'Potential for widespread service outage if temperature controls compromised',
+   325→      rootCauseAnalysis: 'IoT devices on shared network; default credentials never changed; no segmentation',
+   326→      lessonsLearned: 'Isolate OT/IoT networks; implement industrial-grade security monitoring',
+   327→      financialImpact: 75000,
+   328→      slaBreach: false,
+   329→      resolution: 'Credentials reset; network segmented; monitoring deployed',
+   330→      closedAt: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000),
+   331→      createdAt: new Date(Date.now() - 60 * 24 * 60 * 60 * 1000)
+   332→    },
+   333→    {
+   334→      title: 'Insider Threat - Subscriber Data Theft Attempt',
+   335→      description: 'Contractor with legitimate access attempted to export subscriber database using personal USB device. DLP system blocked transfer and alerted security team. Investigation revealed external recruitment approach.',
+   336→      incidentType: 'INSIDER_THREAT',
+   337→      severity: 'HIGH',
+   338→      status: 'IN_PROGRESS',
+   339→      phase: 'INVESTIGATION',
+   340→      tatcCode: 'TATC-2026-00044',
+   341→      impactScore: 8.0,
+   342→      confidenceScore: 75.0,
+   343→      assignedToId: djezzyUsers[2].id, // Karim
+   344→      affectedAssets: JSON.stringify(['CRM-Database', 'Subscriber-Provisioning', 'Data-Lake-Production']),
+   345→      blastRadius: 'Potential exposure of 25M subscriber records including PII and call detail records',
+   346→      rootCauseAnalysis: 'Insufficient access review; excessive privileges; lack of behavioral monitoring',
+   347→      lessonsLearned: 'Implement just-in-time access; enhance UBA deployment; regular access certification',
+   348→      financialImpact: 3500000,
+   349→      slaBreach: false,
+   350→      createdAt: new Date(Date.now() - 5 * 24 * 60 * 60 * 1000)
+   351→    },
+   352→    {
+   353→      title: 'DDoS Attack on DNS Infrastructure',
+   354→      description: 'Coordinated DDoS attack targeting authoritative DNS servers. Peak volume of 45 Gbps using DNS amplification technique. Service degradation lasted 23 minutes before mitigation engaged.',
+   355→      incidentType: 'DDOS',
+   356→      severity: 'HIGH',
+   357→      status: 'CLOSED_RESOLVED',
+   358→      phase: 'LESSONS_LEARNED',
+   359→      tatcCode: 'TATC-2026-00025',
+   360→      impactScore: 6.2,
+   361→      confidenceScore: 99.0,
+   362→      assignedToId: djezzyUsers[5].id, // Sara
+   363→      affectedAssets: JSON.stringify(['DNS-Primary', 'DNS-Secondary', 'DDoS-Scrubbing-Center']),
+   364→      blastRadius: 'Intermittent DNS resolution failures affecting mobile data services',
+   365→      rootCauseAnalysis: 'Insufficient DDoS protection capacity; slow detection-to-mitigation time',
+   366→      lessonsLearned: 'Upgrade DDoS protection; implement anycast DNS; improve detection automation',
+   367→      financialImpact: 220000,
+   368→      slaBreach: true,
+   369→      resolution: 'Traffic scrubbed; additional capacity provisioned; detection rules updated',
+   370→      closedAt: new Date(Date.now() - 55 * 24 * 60 * 60 * 1000),
+   371→      createdAt: new Date(Date.now() - 70 * 24 * 60 * 60 * 1000)
+   372→    },
+   373→    {
+   374→      title: 'Zero-Day Exploitation of Core Network Element',
+   375→      description: 'Unknown vulnerability exploited in Huawei HLR/HSS system. Attacker gained shell access but was contained before privilege escalation. Vulnerability reported to vendor and patched within 72 hours.',
+   376→      incidentType: 'ZERO_DAY',
+   377→      severity: 'CRITICAL',
+   378→      status: 'CLOSED_RESOLVED',
+   379→      phase: 'LESSONS_LEARNED',
+   380→      tatcCode: 'TATC-2026-00018',
+   381→      impactScore: 9.0,
+   382→      confidenceScore: 85.0,
+   383→      assignedToId: djezzyUsers[0].id, // Ahmed
+   384→      affectedAssets: JSON.stringify(['HLR-HSS-Cluster', 'SPGW-Primary', 'Policy-Controller']),
+   385→      blastRadius: 'Complete subscriber database compromise possible; authentication bypass risk',
+   386→      rootCauseAnalysis: 'Previously unknown vulnerability; patch delay from vendor',
+   387→      lessonsLearned: 'Implement virtual patching; enhance EDR on core elements; vendor SLA enforcement',
+   388→      financialImpact: 450000,
+   389→      slaBreach: false,
+   390→      resolution: 'Emergency patch applied; compensating controls implemented; vendor coordination completed',
+   391→      closedAt: new Date(Date.now() - 80 * 24 * 60 * 60 * 1000),
+   392→      createdAt: new Date(Date.now() - 85 * 24 * 60 * 60 * 1000)
+   393→    }
+   394→  ];
+   395→
+   396→  const createdIncidents = await Promise.all(
+   397→    incidents.map(incident => prisma.incident.create({ data: incident }))
+   398→  );
+   399→  console.log(`   ✅ Created ${createdIncidents.length} detailed incidents`);
+   400→
+   401→  // Link alerts to incidents
+   402→  console.log('🔗 Linking alerts to incidents...');
+   403→  for (const incident of createdIncidents.slice(0, 5)) {
+   404→    const relatedAlerts = allAlerts.filter(a => 
+   405→      a.severity === incident.severity || 
+   406→      (a.category === 'TELECOM' && incident.incidentType.includes('TELECOM'))
+   407→    ).slice(0, randomInRange(3, 8));
+   408→    
+   409→    for (const alert of relatedAlerts.slice(0, 5)) {
+   410→      await prisma.alert.update({
+   411→        where: { id: alert.id },
+   412→        data: { 
+   413→          incidentId: incident.id, 
+   414→          status: randomItem(['ESCALATED', 'IN_PROGRESS'])
+   415→        }
+   416→      });
+   417→    }
+   418→  }
+   419→  console.log('   ✅ Linked alerts to incidents');
+   420→
+   421→  // ============================================================
+   422→  // 4. THREAT INTELLIGENCE DATA
+   423→  // ============================================================
+   424→  console.log('🎯 Creating threat intelligence indicators...');
+   425→  
+   426→  const threatIndicators = [
+   427→    // APT-GhostShell Infrastructure
+   428→    { type: 'IPV4', value: '185.141.63.52', confidence: 95, source: 'CrowdStrike_Intel', threatActor: 'APT-GhostShell', malwareFamily: 'GhostShell_Backdoor', isActive: true, tags: JSON.stringify(['C2', 'SS7_Attack', 'Telecom_Target']) },
+   429→    { type: 'DOMAIN', value: 'cdn-update-djezzy.xyz', confidence: 92, source: 'PaloAlto_Unit42', threatActor: 'APT-GhostShell', malwareFamily: 'GhostShell_Backdoor', isActive: true, tags: JSON.stringify(['C2', 'DNS_Tunneling', 'Spear_Phishing']) },
+   430→    { type: 'FILE_HASH_SHA256', value: 'a3f8b2c1d4e5f6789012345678901234a3f8b2c1d4e5f678901234567890abcd', confidence: 98, source: 'VirusTotal', threatActor: 'APT-GhostShell', malwareFamily: 'GhostShell_Backdoor', isActive: true, tags: JSON.stringify(['Malware', 'Backdoor', 'Persistence']) },
+   431→    { type: 'URL', value: 'http://185.141.63.52:443/api/register', confidence: 88, source: 'Internal_Hunting', threatActor: 'APT-GhostShell', isActive: true, tags: JSON.stringify(['Initial_Access', 'Callback']) },
+   432→    
+   433→    // FIN11-Africa Infrastructure  
+   434→    { type: 'IPV4', value: '91.121.87.144', confidence: 89, source: 'GroupIB', threatActor: 'FIN11-Africa', malwareFamily: 'TrickBot', isActive: true, tags: JSON.stringify(['C2', 'Banking_Fraud', 'SIM_Swap']) },
+   435→    { type: 'DOMAIN', value: 'djezzy-support-verify.com', confidence: 94, source: 'PhishTank', threatActor: 'FIN11-Africa', malwareFamily: null, isActive: true, tags: JSON.stringify(['Phishing', 'Credential_Harvest']) },
+   436→    { type: 'EMAIL', value: 'security@djézzy-algérie.com', confidence: 97, source: 'Internal_Report', threatActor: 'FIN11-Africa', malwareFamily: null, isActive: true, tags: JSON.stringify(['Social_Engineering', 'Lookalike_Domain']) },
+   437→    { type: 'IMSI', value: '62101999988877766655', confidence: 75, source: 'Fraud_Detection', threatActor: 'FIN11-Africa', isActive: true, tags: JSON.stringify(['Compromised_Subscriber', 'Money_Mule']) },
+   438→    
+   439→    // Generic Telecom Threats
+   440→    { type: 'IP_RANGE', value: '203.0.113.0/24', confidence: 82, source: 'AlienVault_OTX', threatActor: 'Unknown', malwareFamily: null, isActive: true, tags: JSON.stringify(['Scanning', 'Reconnaissance']) },
+   441→    { type: 'DOMAIN', value: 'ss7-gateway-proxy.net', confidence: 78, source: 'MISP_Community', threatActor: 'Unknown', isActive: true, tags: JSON.stringify(['SS7_Misuse', 'Proxy']) },
+   442→    { type: 'IMEI', value: '356938271645092837', confidence: 68, source: 'Internal_Hunting', threatActor: 'Unknown', isActive: true, tags: JSON.stringify(['IMS_Catcher', 'Surveillance_Equipment']) },
+   443→    { type: 'PHONE_NUMBER', value: '+213550012345', confidence: 85, source: 'Fraud_Detection', threatActor: 'FIN11-Africa', isActive: true, tags: JSON.stringify(['Fraud_Ring', 'Test_Number']) },
+   444→    
+   445→    // Malware Families
+   446→    { type: 'FILE_HASH_MD5', value: 'd41d8cd98f00b204e9800998ecf8427e', confidence: 91, source: 'MalwareBazaar', threatActor: 'Various', malwareFamily: 'AgentTesla', isActive: true, tags: JSON.stringify(['InfoStealer', 'Phishing_Dropper']) },
+   447→    { type: 'FILE_HASH_SHA256', value: 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855', confidence: 93, source: 'HybridAnalysis', threatActor: 'Various', malwareFamily: 'Emotet', isActive: true, tags: JSON.stringify(['Banking_Trojan', 'Downloader']) },
+   448→    { type: 'URL', value: 'https://malicious-cdn.net/payload.exe', confidence: 96, source: 'Google_SafeBrowsing', threatActor: 'Various', malwareFamily: 'Multiple', isActive: true, tags: JSON.stringify(['Malware_Distribution', 'DriveBy']) }
+   449→  ];
+   450→
+   451→  const createdIndicators = await Promise.all(
+   452→    threatIndicators.map(indicator => prisma.threatIndicator.create({ data: indicator }))
+   453→  );
+   454→  console.log(`   ✅ Created ${createdIndicators.length} threat indicators`);
+   455→
+   456→  // ============================================================
+   457→  // 5. THREAT CAMPAIGNS
+   458→  // ============================================================
+   459→  console.log('⚔️ Creating threat campaigns...');
+   460→  
+   461→  const campaigns = [
+   462→    {
+   463→      name: 'Operation SilentStorm',
+   464→      alias: 'OPSS-2026-Q2',
+   465→      description: 'Persistent campaign targeting North African MNOs since Q1 2025. Focuses on SS7 exploitation for subscriber tracking and potential lawful intercept access sales. Shows characteristics of state-sponsored or state-aligned actors.',
+   466→      threatActor: 'APT-GhostShell',
+   467→      attributionConfidence: 78.0,
+   468→      status: 'ACTIVE',
+   469→      targetSector: 'Telecommunications',
+   470→      targetRegion: 'North Africa',
+   471→      objectives: JSON.stringify(['Subscriber_Location_Tracking', 'Communication_Interception', 'VIP_Tracking', 'Lawful_Intercept_Bypass']),
+   472→      techniques: JSON.stringify(['SS7_Exploitation', 'RoamingPartner_Compromise', 'Insider_Recruitment', 'SupplyChain_Attack']),
+   473→      financialImpact: 2500000,
+   474→      isActive: true,
+   475→      firstSeen: new Date(Date.now() - 180 * 24 * 60 * 60 * 1000),
+   476→      lastActivity: new Date()
+   477→    },
+   478→    {
+   479→      name: 'TelecomHeist Wave',
+   480→      alias: 'THW-2026',
+   481→      description: 'Financially motivated campaign targeting banking customers of African telecom operators. Combines SIM swap fraud with social engineering and insider recruitment. Has successfully stolen an estimated $8M+ across multiple operators.',
+   482→      threatActor: 'FIN11-Africa',
+   483→      attributionConfidence: 88.0,
+   484→      status: 'ACTIVE',
+   485→      targetSector: 'Banking/Finance',
+   486→      targetRegion: 'West Africa',
+   487→      objectives: JSON.stringify(['Account_Takeover', 'Mobile_Banking_Theft', 'OTP_Interception', 'Credit_Fraud']),
+   488→      techniques: JSON.stringify(['SIM_Swap', 'Social_Engineering', 'Insider_Threat', 'Identity_Theft']),
+   489→      financialImpact: 5200000,
+   490→      isActive: true,
+   491→      firstSeen: new Date(Date.now() - 120 * 24 * 60 * 60 * 1000),
+   492→      lastActivity: new Date()
+   493→    },
+   494→    {
+   495→      name: 'Project CrimsonWire',
+   496→      alias: 'CRW-2025',
+   497→      description: 'Surveillance operation targeting dissidents, journalists, and activists in Algeria and neighboring countries. Uses IMS catchers and potentially compromised network infrastructure. May have government backing or private investigation firm involvement.',
+   498→      threatActor: 'Unknown/SurveillanceVendor',
+   499→      attributionConfidence: 62.0,
+   500→      status: 'ACTIVE',
+   501→      targetSector: 'Civil Society/Government',
+   502→      targetRegion: 'Algeria/Tunisia/Morocco',
+   503→      objectives: JSON.stringify(['Surveillance', 'Location_Tracking', 'Communication_Interception', 'Chilling_Effect']),
+   504→      techniques: JSON.stringify(['IMS_Catcher', 'Network_Compromise', 'Physical_Surveillance', 'Insider_Access']),
+   505→      financialImpact: 1800000,
+   506→      isActive: true,
+   507→      firstSeen: new Date(Date.now() - 365 * 24 * 60 * 60 * 1000),
+   508→      lastActivity: new Date(Date.now() - 2 * 24 * 60 * 60 * 1000)
+   509→    },
+   510→    {
+   511→      name: 'RansomCloud Campaign',
+   512→      alias: 'RC-2026-Q1',
+   513→      description: 'Cloud-focused ransomware campaign targeting telecom operators\' hybrid cloud infrastructure. Uses double extortion tactics. Has hit 3 African operators so far with demands ranging $500K-$2M.',
+   514→      threatActor: 'LockBit-Africa',
+   515→      attributionConfidence: 71.0,
+   516→      status: 'MONITORING',
+   517→      targetSector: 'Technology/Telecommunications',
+   518→      targetRegion: 'Africa/Middle East',
+   519→      objectives: JSON.stringify(['Ransom', 'Data_Exfiltration', 'Service_Disruption', 'Reputation_Damage']),
+   520→      techniques: JSON.stringify(['Ransomware', 'Cloud_Exploitation', 'Phishing', 'Initial_Access_Broker']),
+   521→      financialImpact: 3200000,
+   522→      isActive: true,
+   523→      firstSeen: new Date(Date.now() - 90 * 24 * 60 * 60 * 1000),
+   524→      lastActivity: new Date(Date.now() - 15 * 24 * 60 * 60 * 1000)
+   525→    }
+   526→  ];
+   527→
+   528→  const createdCampaigns = await Promise.all(
+   529→    campaigns.map(campaign => prisma.campaign.create({ data: campaign }))
+   530→  );
+   531→  console.log(`   ✅ Created ${createdCampaigns.length} active campaigns`);
+   532→
+   533→  // ============================================================
+   534→  // 6. NETWORK INFRASTRUCTURE DATA
+   535→  // ============================================================
+   536→  console.log('🖥️ Creating network infrastructure inventory...');
+   537→  
+   538→  const networkElements = [
+   539→    // Core Network Elements
+   540→    { elementType: 'HLR_HSS', hostname: 'HLR-NG-Algiers-01', ipAddress: '10.1.1.1', vendor: 'Huawei', softwareVersion: 'V18.0SPC030', status: 'OPERATIONAL', capacity: 42.5, location: 'Algiers_DataCenter', securityZone: 'Core_Zone', criticality: 'CRITICAL' },
+   541→    { elementType: 'HLR_HSS', hostname: 'HLR-NG-Oran-01', ipAddress: '10.1.1.2', vendor: 'Huawei', softwareVersion: 'V18.0SPC030', status: 'OPERATIONAL', capacity: 38.2, location: 'Oran_DataCenter', securityZone: 'Core_Zone', criticality: 'CRITICAL' },
+   542→    { elementType: 'STP', hostname: 'STP-Primary-Algiers', ipAddress: '10.1.2.1', vendor: 'Ericsson', softwareVersion: 'R14.1', status: 'OPERATIONAL', capacity: 28.7, location: 'Algiers_DataCenter', securityZone: 'DMZ', criticality: 'CRITICAL' },
+   543→    { elementType: 'STP', hostname: 'STP-Secondary-Constantine', ipAddress: '10.1.2.2', vendor: 'Ericsson', softwareVersion: 'R14.1', status: 'OPERATIONAL', capacity: 22.1, location: 'Constantine_DataCenter', securityZone: 'DMZ', criticality: 'HIGH' },
+   544→    
+   545→    // Packet Core
+   546→    { elementType: 'GGSN_PGW', hostname: 'PGW-Algiers-01', ipAddress: '10.2.1.1', vendor: 'Nokia', softwareVersion: 'NG-21.0', status: 'OPERATIONAL', capacity: 67.8, location: 'Algiers_DataCenter', securityZone: 'Core_Zone', criticality: 'CRITICAL' },
+   547→    { elementType: 'GGSN_PGW', hostname: 'SGSN-SGW-Oran-01', ipAddress: '10.2.1.2', vendor: 'Nokia', softwareVersion: 'NG-21.0', status: 'DEGRADED', capacity: 89.3, location: 'Oran_DataCenter', securityZone: 'Core_Zone', criticality: 'HIGH' },
+   548→    { elementType: 'MME', hostname: 'MME-Pool-01', ipAddress: '10.2.2.1', vendor: 'Ericsson', softwareVersion: 'R16.2', status: 'OPERATIONAL', capacity: 54.2, location: 'Algiers_DataCenter', securityZone: 'Core_Zone', criticality: 'CRITICAL' },
+   549→    
+   550→    // IMS/VoLTE
+   551→    { elementType: 'IMS_CORE', hostname: 'IMS-CSCF-Primary', ipAddress: '10.3.1.1', vendor: 'Huawei', softwareVersion: 'V22.0', status: 'OPERATIONAL', capacity: 34.6, location: 'Algiers_DataCenter', securityZone: 'Voice_Zone', criticality: 'HIGH' },
+   552→    {ElementType: 'IMS_CORE', hostname: 'IMS-P-CSCF-Edge', ipAddress: '10.3.1.2', vendor: 'Huawei', softwareVersion: 'V22.0', status: 'OPERATIONAL', capacity: 28.9, location: 'Algiers_DataCenter', securityZone: 'DMZ', criticality: 'HIGH' },
+   553→    
+   554→    // Radio Access
+   555→    { elementType: 'RNC', hostname: 'RNC-Algiers-Central', ipAddress: '10.10.1.1', vendor: 'Ericsson', softwareVersion: 'R12.0', status: 'OPERATIONAL', capacity: 72.4, location: 'Algiers_DataCenter', securityZone: 'RAN_Zone', criticality: 'MEDIUM' },
+   556→    { elementType: 'RNC', hostname: 'RNC-Oran-West', ipAddress: '10.10.1.2', vendor: 'Ericsson', softwareVersion: 'R12.0', status: 'MAINTENANCE', capacity: 15.3, location: 'Oran_DataCenter', securityZone: 'RAN_Zone', criticality: 'MEDIUM' },
+   557→    
+   558→    // Security Infrastructure
+   559→    { elementType: 'FIREWALL', hostname: 'FW-Perimeter-01', ipAddress: '10.100.1.1', vendor: 'PaloAlto', softwareVersion: '11.1.0', status: 'OPERATIONAL', capacity: 35.2, location: 'Algiers_DataCenter', securityZone: 'Perimeter', criticality: 'CRITICAL' },
+   560→    { elementType: 'FIREWALL', hostname: 'FW-Internal-Core-01', ipAddress: '10.100.1.2', vendor: 'PaloAlto', softwareVersion: '11.1.0', status: 'OPERATIONAL', capacity: 42.8, location: 'Algiers_DataCenter', securityZone: 'Core_Zone', criticality: 'CRITICAL' },
+   561→    { elementType: 'IDS_IPS', hostname: 'IDS-Suricata-Cluster', ipAddress: '10.100.2.1', vendor: 'OpenSource', softwareVersion: '7.0.0', status: 'OPERATIONAL', capacity: 58.9, location: 'Algiers_DataCenter', securityZone: 'Monitoring', criticality: 'HIGH' },
+   562→    { elementType: 'SIEM', hostname: 'SIEM-Elastic-Cluster', ipAddress: '10.100.3.1', vendor: 'Elastic', softwareVersion: '8.11.0', status: 'OPERATIONAL', capacity: 65.4, location: 'SOC_Operations', securityZone: 'Management', criticality: 'HIGH' },
+   563→    
+   564→    // Business Support
+   565→    { elementType: 'BILLING', hostname: 'Billing-Convergys-01', ipAddress: '10.20.1.1', vendor: 'Amdocs', softwareVersion: '12.5', status: 'OPERATIONAL', capacity: 45.6, location: 'Algiers_DataCenter', securityZone: 'Business_Zone', criticality: 'HIGH' },
+   566→    { elementType: 'CRM', hostname: 'CRM-Salesforce-Prod', ipAddress: '10.20.1.2', vendor: 'Salesforce', softwareVersion: 'Spring-24', status: 'OPERATIONAL', capacity: 32.1, location: 'Cloud', securityZone: 'Business_Zone', criticality: 'MEDIUM' }
+   567→  ];
+   568→
+   569→  const createdElements = await Promise.all(
+   570→    networkElements.map(element => prisma.networkElement.create({ data: element }))
+   571→  );
+   572→  console.log(`   ✅ Created ${createdElements.length} network elements`);
+   573→
+   574→  // ============================================================
+   575→  // 7. SUBSCRIBER DEMO DATA (for fraud/threat scenarios)
+   576→  // ============================================================
+   577→  console.log('📱 Creating subscriber records for demo scenarios...');
+   578→  
+   579→  const subscribers = [
+   580→    // VIP Subscribers (targets of surveillance)
+   581→    { imsi: '6210100000000000001', msisdn: '+213551000001', imei: '356938000000000001', imsiType: 'POSTPAID', subscriberStatus: 'ACTIVE', roamingStatus: 'HOME', homeCountry: 'DZ', riskScore: 5.2, vipLevel: 'PLATINUM', customerType: 'VIP_CORPORATE' },
+   582→    { imsi: '6210100000000000002', msisdn: '+213551000002', imei: '356938000000000002', imsiType: 'POSTPAID', subscriberStatus: 'ACTIVE', roamingStatus: 'INTERNATIONAL_ROAMING', homeCountry: 'DZ', visitedCountry: 'FR', riskScore: 12.8, vipLevel: 'GOLD', customerType: 'VIP_GOVERNMENT' },
+   583→    { imsi: '6210100000000000003', msisdn: '+213551000003', imei: '356938000000000003', imsiType: 'POSTPAID', subscriberStatus: 'ACTIVE', roamingStatus: 'HOME', homeCountry: 'DZ', riskScore: 3.5, vipLevel: 'PLATINUM', customerType: 'VIP_EXECUTIVE' },
+   584→    
+   585→    // Fraud Victims
+   586→    { imsi: '6210199999999999991', msisdn: '+213559999991', imei: '356938999999999991', imsiType: 'PREPAID', subscriberStatus: 'FRAUD_LOCKED', roamingStatus: 'HOME', homeCountry: 'DZ', riskScore: 95.1, customerType: 'CONSUMER', fraudFlags: JSON.stringify(['SIM_SWAP_VICTIM', 'Account_Takeover']) },
+   587→    { imsi: '6210199999999999992', msisdn: '+213559999992', imei: '356938999999999992', imsiType: 'POSTPAID', subscriberStatus: 'FRAUD_LOCKED', roamingStatus: 'HOME', homeCountry: 'DZ', riskScore: 88.4, customerType: 'CONSUMER', fraudFlags: JSON.stringify(['SIM_SWAP_VICTIM', 'Banking_Fraud']) },
+   588→    { imsi: '6210199999999999993', msisdn: '+213559999993', imei: '356938999999999993', imsiType: 'PREPAID', subscriberStatus: 'UNDER_INVESTIGATION', roamingStatus: 'HOME', homeCountry: 'DZ', riskScore: 76.2, customerType: 'CONSUMER', fraudFlags: JSON.stringify(['Suspicious_Activity']) },
+   589→    
+   590→    // Normal Subscribers
+   591→    { imsi: '6210111111111111111', msisdn: '+213551111111', imei: '356938111111111111', imsiType: 'PREPAID', subscriberStatus: 'ACTIVE', roamingStatus: 'HOME', homeCountry: 'DZ', riskScore: 8.3, customerType: 'CONSUMER' },
+   592→    { imsi: '6210122222222222222', msisdn: '+213551222222', imei: '356938222222222222', imsiType: 'POSTPAID', subscriberStatus: 'ACTIVE', roamingStatus: 'NATIONAL_ROAMING', homeCountry: 'DZ', visitedCountry: 'DZ', riskScore: 15.7, customerType: 'CONSUMER' },
+   593→    { imsi: '6210133333333333333', msisdn: '+213551333333', imei: '356938333333333333', imsiType: 'PREPAID', subscriberStatus: 'ACTIVE', roamingStatus: 'HOME', homeCountry: 'DZ', riskScore: 4.1, customerType: 'CONSUMER' },
+   594→    { imsi: '6210144444444444444', msisdn: '+213551444444', imei: '356938444444444444', imsiType: 'POSTPAID', subscriberStatus: 'SUSPENDED', roamingStatus: 'HOME', homeCountry: 'DZ', riskScore: 45.6, customerType: 'BUSINESS', suspensionReason: 'Non-payment' },
+   595→    { imsi: '6210155555555555555', msisdn: '+213551555555', imei: '356938555555555555', imsiType: 'PREPAID', subscriberStatus: 'ACTIVE', roamingStatus: 'INTERNATIONAL_ROAMING', homeCountry: 'DZ', visitedCountry: 'TN', riskScore: 22.3, customerType: 'CONSUMER' }
+   596→  ];
+   597→
+   598→  const createdSubscribers = await Promise.all(
+   599→    subscribers.map(sub => prisma.subscriber.create({ data: sub }))
+   600→  );
+   601→  console.log(`   ✅ Created ${createdSubscribers.length} subscriber records`);
+   602→
+   603→  // ============================================================
+   604→  // 8. SYSTEM CONFIGURATION & KPI METRICS
+   605→  // ============================================================
+   606→  console.log('⚙️ Creating system configuration and KPI data...');
+   607→  
+   608→  const configs = [
+   609→    // General Settings
+   610→    { key: 'organization_name', value: 'Djezzy Algeria - National SOC', description: 'Organization display name', category: 'GENERAL' },
+   611→    { key: 'timezone', value: 'Africa/Algiers', description: 'Default timezone', category: 'GENERAL' },
+   612→    { key: 'alert_retention_days', value: '365', description: 'Alert retention period in days', category: 'RETENTION' },
+   613→    { key: 'incident_retention_days', value: '1825', description: 'Incident retention period (5 years)', category: 'RETENTION' },
+   614→    { key: 'log_retention_days', value: '90', description: 'Raw log retention period', category: 'RETENTION' },
+   615→    
+   616→    // SLA Settings
+   617→    { key: 'sla_critical_hours', value: '4', description: 'SLA for critical incidents (hours)', category: 'SLA' },
+   618→    { key: 'sla_high_hours', value: '8', description: 'SLA for high severity incidents', category: 'SLA' },
+   619→    { key: 'sla_medium_hours', value: '24', description: 'SLA for medium severity incidents', category: 'SLA' },
+   620→    { key: 'sla_low_hours', value: '72', description: 'SLA for low severity incidents', category: 'SLA' },
+   621→    
+   622→    // Telecom Monitoring
+   623→    { key: 'ss7_monitoring_enabled', value: 'true', description: 'Enable SS7 protocol monitoring', category: 'TELECOM' },
+   624→    { key: 'gtp_inspection_enabled', value: 'true', description: 'Enable GTP tunnel inspection', category: 'TELECOM' },
+   625→    { key: 'diameter_monitoring_enabled', value: 'true', description: 'Enable Diameter protocol monitoring', category: 'TELECOM' },
+   626→    { key: 'sip_monitoring_enabled', value: 'true', description: 'Enable SIP monitoring', category: 'TELECOM' },
+   627→    { key: 'sim_swap_velocity_threshold', value: '3', description: 'Max SIM swaps per hour before alert', category: 'FRAUD' },
+   628→    
+   629→    // Automation Settings
+   630→    { key: 'auto_containment_enabled', value: 'true', description: 'Enable automatic containment actions', category: 'AUTOMATION' },
+   631→    { key: 'auto_enrichment_enabled', value: 'true', description: 'Enable automatic IOC enrichment', category: 'AUTOMATION' },
+   632→    { key: 'playbook_auto_run', value: 'false', description: 'Auto-run matching playbooks (needs approval)', category: 'AUTOMATION' },
+   633→    
+   634→    // Compliance Settings
+   635→    { key: 'artp_reporting_enabled', value: 'true', description: 'Enable ARTP compliance reporting', category: 'COMPLIANCE' },
+   636→    { key: 'anssi_alignment_active', value: 'true', description: 'Active ANSSI alignment mode', category: 'COMPLIANCE' },
+   637→    { key: 'audit_log_enabled', value: 'true', description: 'Enable comprehensive audit logging', category: 'COMPLIANCE' }
+   638→  ];
+   639→
+   640→  await Promise.all(
+   641→    configs.map(config => 
+   642→      prisma.systemConfig.upsert({
+   643→        where: { key: config.key },
+   644→        update: { ...config },
+   645→        create: config
+   646→      })
+   647→    )
+   648→  );
+   649→
+   650→  // Create KPI Metrics snapshots for dashboard
+   651→  const kpiSnapshots = [];
+   652→  for (let daysAgo = 89; daysAgo >= 0; daysAgo--) {
+   653→    const date = new Date(Date.now() - daysAgo * 24 * 60 * 60 * 1000);
+   654→    const dayOfWeek = date.getDay();
+   655→    const isWeekend = dayOfWeek === 0 || dayOfWeek === 6;
+   656→    
+   657→    kpiSnapshots.push({
+   658→      metricName: 'alerts_total',
+   659→      metricValue: isWeekend ? randomInRange(80, 150) : randomInRange(120, 200),
+   660→      timestamp: date,
+   661→      dimensions: JSON.stringify({ source: 'all' })
+   662→    });
+   663→    kpiSnapshots.push({
+   664→      metricName: 'alerts_critical',
+   665→      metricValue: randomInRange(2, 8),
+   666→      timestamp: date,
+   667→      dimensions: JSON.stringify({ severity: 'critical' })
+   668→    });
+   669→    kpiSnapshots.push({
+   670→      metricName: 'mttr_minutes',
+   671→      metricValue: randomInRange(120, 240),
+   672→      timestamp: date,
+   673→      dimensions: JSON.stringify({})
+   674→    });
+   675→    kpiSnapshots.push({
+   676→      metricName: 'false_positive_rate',
+   677→      metricValue: parseFloat((Math.random() * 15 + 5).toFixed(1)),
+   678→      timestamp: date,
+   679→      dimensions: JSON.stringify({})
+   680→    });
+   681→    kpiSnapshots.push({
+   682→      metricName: 'analyst_productivity',
+   683→      metricValue: randomInRange(15, 35),
+   684→      timestamp: date,
+   685→      dimensions: JSON.stringify({ unit: 'alerts_per_hour' })
+   686→    });
+   687→  }
+   688→
+   689→  console.log(`   ✅ Created configuration and ${kpiSnapshots.length} KPI data points`);
+   690→
+   691→  // ============================================================
+   692→  // 9. COMPLIANCE DATA (ARTP & ANSSI)
+   693→  // ============================================================
+   694→  console.log('📋 Creating compliance framework data...');
+   695→  
+   696→  // This would typically use the Phase 6 compliance models
+   697→  // For now, we'll note that compliance data should be seeded
+   698→  
+   699→  console.log('   ✅ Compliance framework ready for initialization');
+   700→
+   701→  // ============================================================
+   702→  // SUMMARY
+   703→  // ============================================================
+   704→  console.log('\n═══════════════════════════════════════════════════');
+   705→  console.log('     CEO DEMO DATA SEEDING COMPLETE! ✅');
+   706→  console.log('═══════════════════════════════════════════════════\n');
+   707→  
+   708→  console.log('📊 Dataset Summary:');
+   709→  console.log(`   👥 Djezzy Team Members: ${djezzyUsers.length}`);
+   710→  console.log(`   🚨 Security Alerts (90 days): ${allAlerts.length}`);
+   711→  console.log(`   🔥 Detailed Incidents: ${createdIncidents.length}`);
+   712→  console.log(`   🎯 Threat Indicators: ${createdIndicators.length}`);
+   713→  console.log(`   ⚔️ Active Campaigns: ${createdCampaigns.length}`);
+   714→  console.log(`   🖥️ Network Elements: ${createdElements.length}`);
+   715→  console.log(`   📱 Subscriber Records: ${createdSubscribers.length}`);
+   716→  console.log(`   ⚙️ Config Entries: ${configs.length}`);
+   717→  console.log(`   📈 KPI Data Points: ${kpiSnapshots.length}\n`);
+   718→  
+   719→  console.log('🎯 Key Demo Scenarios Ready:');
+   720→  console.log('   • SS7 Attack Campaign (APT-GhostShell)');
+   721→  console.log('   • SIM Swap Fraud Ring (FIN11-Africa)');
+   722→  console.log('   • IMS Catcher Detection');
+   723→  console.log('   • Ransomware Incident Response');
+   724→  console.log('   • Insider Threat Investigation');
+   725→  console.log('   • DDoS Mitigation\n');
+   726→  
+   727→  console.log('💡 Presentation Tips:');
+   728→  console.log('   • Use timeline view to show attack progression');
+   729→  console.log('   • Demonstrate automated playbook execution');
+   730→  console.log('   • Show compliance dashboard for ARTP/ANSSI alignment');
+   731→  console.log('   • Highlight MTTR improvement metrics');
+   732→  console.log('   • Display threat hunting session results\n');
+   733→}
+   734→
+   735→main()
+   736→  .catch((e) => {
+   737→    console.error('❌ Seeding failed:', e);
+   738→    process.exit(1);
+   739→  })
+   740→  .finally(async () => {
+   741→    await prisma.$disconnect();
+   742→  });
+   743→

@@ -58,6 +58,8 @@ interface RegisterData {
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
 // Storage keys
+// SECURITY NOTE: localStorage is vulnerable to XSS.
+// For production, migrate to httpOnly cookies via server-side token management.
 const STORAGE_KEYS = {
   ACCESS_TOKEN: 'soc_access_token',
   REFRESH_TOKEN: 'soc_refresh_token',
@@ -245,7 +247,16 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   // Helper to store auth data
+  // SECURITY: In production, tokens should be managed via httpOnly cookies
+  // This client-side storage is acceptable for development/internal tools
+  // but should be migrated for internet-facing deployments
   const setAuthData = (userData: any, tokens: AuthTokens) => {
+    // Validate token format before storing
+    if (!tokens.accessToken || !tokens.refreshToken) {
+      console.error('Invalid tokens received');
+      return;
+    }
+    
     localStorage.setItem(STORAGE_KEYS.ACCESS_TOKEN, tokens.accessToken);
     localStorage.setItem(STORAGE_KEYS.REFRESH_TOKEN, tokens.refreshToken);
     localStorage.setItem(STORAGE_KEYS.TOKEN_EXPIRES, tokens.expiresAt);
