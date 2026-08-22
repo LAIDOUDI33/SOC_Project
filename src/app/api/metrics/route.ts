@@ -3,6 +3,8 @@
  * 
  * Returns comprehensive dashboard metrics and KPIs
  * for the Djezzy SOC platform
+ * 
+ * AUTHENTICATION REQUIRED for sensitive data
  */
 
 import { NextRequest, NextResponse } from 'next/server';
@@ -19,9 +21,11 @@ import {
   analystStats,
   getDashboardSummary
 } from '@/lib/demo-data';
+// Import authentication
+import { withAuth } from '@/lib/auth/api-auth';
 
-// GET /api/metrics - Fetch all dashboard metrics
-export async function GET(request: NextRequest) {
+// GET /api/metrics - Fetch all dashboard metrics (AUTH REQUIRED)
+export const GET = withAuth(async (request: NextRequest, user) => {
   try {
     const { searchParams } = new URL(request.url);
     const category = searchParams.get('category') || 'all';
@@ -104,8 +108,9 @@ export async function GET(request: NextRequest) {
   } catch (error) {
     console.error('Failed to fetch metrics:', error);
     return NextResponse.json({
+      success: false,
       error: 'Failed to fetch metrics',
       message: error instanceof Error ? error.message : 'Unknown error'
     }, { status: 500 });
   }
-}
+});

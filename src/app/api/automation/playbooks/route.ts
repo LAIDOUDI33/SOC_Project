@@ -201,16 +201,22 @@ export async function GET(request: NextRequest) {
   }
 }
 
-// POST /api/automation/playbooks/:id/run - Execute a playbook
+// POST /api/automation/playbooks - Execute a playbook
 export async function POST(
-  request: NextRequest,
-  { params }: { params: { id: string } }
+  request: NextRequest
 ) {
   try {
     const body = await request.json();
-    const { userId, eventId, variables } = body;
+    const { id, userId, eventId, variables } = body;
     
-    const playbook = demoPlaybooks.find(p => p.id === params.id);
+    if (!id) {
+      return NextResponse.json(
+        { success: false, error: 'Playbook ID is required' },
+        { status: 400 }
+      );
+    }
+    
+    const playbook = demoPlaybooks.find(p => p.id === id);
     
     if (!playbook) {
       return NextResponse.json(

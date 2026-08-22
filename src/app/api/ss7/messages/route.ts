@@ -2,6 +2,9 @@
  * SS7 Messages Inspection API
  * Djezzy National SOC Platform - SS7 Tools Suite
  * 
+ * SECURITY: AUTHENTICATION REQUIRED for all endpoints
+ * SS7 signaling data is highly sensitive and regulated by ANRT
+ * 
  * Endpoints:
  * GET /api/ss7/messages - Recent messages list
  * GET /api/ss7/messages/:id - Full message detail (decoded)
@@ -11,6 +14,8 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 import { decodeSS7Message, SS7ProtocolLayer } from '@/lib/ss7/ss7-decoder';
+import { withAuth } from '@/lib/auth/api-auth';
+import { requireAnalyst } from '@/lib/auth/middleware';
 
 // Sample messages database (in production, this would query a real DB)
 const sampleMessages = [
@@ -205,12 +210,12 @@ function generatePCAPData(messages: any[]): string {
   return pcapHeader.toString('base64');
 }
 
-// GET handler
-export async function GET(request: NextRequest, { params }: { params: { id?: string[] } }) {
+// GET handler (AUTH REQUIRED - Analyst or higher)
+export const GET = withAuth(async (request: NextRequest, user) => {
   try {
     const { searchParams } = new URL(request.url);
     const action = searchParams.get('action');
-    const messageId = params?.id?.[0];
+    const messageId = searchParams.get('id'); // Get from query params instead
     
     if (messageId) {
       // Get specific message detail
@@ -246,8 +251,8 @@ export async function GET(request: NextRequest, { params }: { params: { id?: str
   }
 }
 
-// POST handler
-export async function POST(request: NextRequest) {
+// POST handler (AUTH REQUIRED - Analyst or higher)
+export const POST = withAuth(async (request: NextRequest, user) => {
   try {
     const body = await request.json();
     const { searchParams } = new URL(request.url);

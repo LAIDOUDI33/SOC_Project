@@ -100,16 +100,25 @@ export function createSSEConnection(channels: string[] = ['all']): Response {
     }
   });
 
-  return new Response(stream, {
-    headers: {
-      'Content-Type': 'text/event-stream',
-      'Cache-Control': 'no-cache, no-transform',
-      'Connection': 'keep-alive',
-      'X-Accel-Buffering': 'no', // Disable nginx buffering
-      'Access-Control-Allow-Origin': '*',
-      'Access-Control-Allow-Headers': 'Cache-Control'
-    }
-  });
+  // SECURITY: Restrict CORS to configured origins only
+  const allowedOrigins = (process.env.ALLOWED_ORIGINS || 'http://localhost:3000').split(',');
+  const origin = typeof window !== 'undefined' ? window.location.origin : null;
+  
+  const headers: Record<string, string> = {
+    'Content-Type': 'text/event-stream',
+    'Cache-Control': 'no-cache, no-transform',
+    'Connection': 'keep-alive',
+    'X-Accel-Buffering': 'no', // Disable nginx buffering
+  };
+  
+  // Only set CORS headers for valid origins
+  if (origin && allowedOrigins.some(allowed => origin.includes(allowed.trim()))) {
+    headers['Access-Control-Allow-Origin'] = origin;
+    headers['Access-Control-Allow-Headers'] = 'Cache-Control, Authorization';
+    headers['Access-Control-Allow-Credentials'] = 'true';
+  }
+
+  return new Response(stream, { headers });
 }
 
 /**

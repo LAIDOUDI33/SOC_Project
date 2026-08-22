@@ -1,0 +1,935 @@
+     1→/**
+     2→ * Djezzy National SOC Platform - Security Event Audit Logger
+     3→ * 
+     4→ * Comprehensive audit logging for security events with ANRT compliance:
+     5→ * - 5-year minimum log retention
+     6→ * - Immutable/tamper-proof logs (WORM storage)
+     7→ * - AES-256 encryption at rest
+     8→ * - TLS 1.3 in transit
+     9→ * - Data localization (within Algeria)
+    10→ * 
+    11→ * Event Categories:
+    12→ * - Authentication events
+    13→ * - Authorization events
+    14→ * - Data access events
+    15→ * - Administrative actions
+    16→ * - Security policy violations
+    17→ * - System events
+    18→ * 
+    19→ * @module security/audit-logger
+    20→ * @version 1.0.0
+    21→ */
+    22→
+    23→import { createHash, randomUUID, createHmac } from 'crypto';
+    24→
+    25→// ============================================================================
+    26→// Types and Interfaces
+    27→// ============================================================================
+    28→
+    29→export type AuditEventType =
+    30→  | 'AUTH_SUCCESS'
+    31→  | 'AUTH_FAILURE'
+    32→  | 'AUTH_LOGOUT'
+    33→  | 'AUTH_SESSION_EXPIRED'
+    34→  | 'AUTH_MFA_ENABLED'
+    35→  | 'AUTH_MFA_DISABLED'
+    36→  | 'AUTH_MFA_VERIFY_SUCCESS'
+    37→  | 'AUTH_MFA_VERIFY_FAILURE'
+    38→  | 'AUTH_PASSWORD_CHANGE'
+    39→  | 'AUTH_PASSWORD_RESET_REQUEST'
+    40→  | 'AUTH_TOKEN_REFRESH'
+    41→  | 'AUTH_ACCOUNT_LOCKED'
+    42→  | 'AUTH_ACCOUNT_UNLOCKED'
+    43→  | 'AUTHZ_GRANT'
+    44→  | 'AUTHZ_DENY'
+    45→  | 'AUTHZ_PRIVILEGE_ESCALATION'
+    46→  | 'AUTHZ_ROLE_CHANGE'
+    47→  | 'DATA_ACCESS'
+    48→  | 'DATA_EXPORT'
+    49→  | 'DATA_MASKING_APPLIED'
+    50→  | 'DATA_QUERY'
+    51→  | 'ADMIN_USER_CREATE'
+    52→  | 'ADMIN_USER_UPDATE'
+    53→  | 'ADMIN_USER_DELETE'
+    54→  | 'ADMIN_ROLE_ASSIGN'
+    55→  | 'ADMIN_ROLE_REVOKE'
+    56→  | 'ADMIN_CONFIG_CHANGE'
+    57→  | 'ADMIN_SYSTEM_STARTUP'
+    58→  | 'ADMIN_SYSTEM_SHUTDOWN'
+    59→  | 'SECURITY_POLICY_VIOLATION'
+    60→  | 'SECURITY_RATE_LIMIT_EXCEEDED'
+    61→  | 'SECURITY_WAF_BLOCK'
+    62→  | 'SECURITY_INTRUSION_ATTEMPT'
+    63→  | 'SECURITY_VULNERABILITY_SCAN'
+    64→  | 'SYSTEM_ERROR'
+    65→  | 'SYSTEM_WARNING'
+    66→  | 'SYSTEM_API_CALL'
+    67→  | 'COMPLIANCE_DATA_LOCALIZATION_CHECK'
+    68→  | 'COMPLIANCE_ENCRYPTION_VERIFICATION';
+    69→
+    70→export type AuditEventSeverity = 'CRITICAL' | 'HIGH' | 'MEDIUM' | 'LOW' | 'INFO';
+    71→
+    72→export type DataClassification = 'PUBLIC' | 'INTERNAL' | 'CONFIDENTIAL' | 'RESTRICTED';
+    73→
+    74→export interface AuditEvent {
+    75→  /** Unique event identifier */
+    76→  eventId: string;
+    77→  /** Timestamp in ISO 8601 format (UTC+1 Algeria timezone) */
+    78→  timestamp: string;
+    79→  /** Event type classification */
+    80→  eventType: AuditEventType;
+    81→  /** Event severity level */
+    82→  severity: AuditEventSeverity;
+    83→  /** Category grouping */
+    84→  category: AuditCategory;
+    85→  /** User who triggered the event (if applicable) */
+    86→  userId?: string;
+    87→  /** Username (for human readability) */
+    88→  username?: string;
+    89→  /** User's role at time of event */
+    90→  userRole?: string;
+    91→  /** Source IP address (may be masked for privacy) */
+    92→  sourceIp: string;
+    93→  /** User agent string */
+    94→  userAgent?: string;
+    95→  /** Resource/action being accessed */
+    96→  resource: string;
+    97→  /** HTTP method if applicable */
+    98→  httpMethod?: string;
+    99→  /** Request URL/path */
+   100→  requestPath?: string;
+   101→  /** HTTP status code if applicable */
+   102→  statusCode?: number;
+   103→  /** Action performed */
+   104→  action: string;
+   105→  /** Outcome of action */
+   106→  outcome: 'SUCCESS' | 'FAILURE' | 'PARTIAL' | 'BLOCKED';
+   107→  /** Detailed description of event */
+   108→  message: string;
+   109→  /** Additional context data (structured) */
+   110→  metadata?: Record<string, unknown>;
+   111→  /** Data classification of affected resources */
+   112→  dataClassification: DataClassification;
+   113→  /** Session ID for correlation */
+   114→  sessionId?: string;
+   115→  /** Correlation ID for distributed tracing */
+   116→  correlationId?: string;
+   117→  /** Risk score (0-100) for prioritization */
+   118→  riskScore: number;
+   119→  /** Whether event requires immediate review */
+   120→  requiresReview: boolean;
+   121→  /** Retention period in days (per ANRT: 1825 days = 5 years) */
+   122→  retentionDays: number;
+   123→  /** Hash chain link for integrity verification */
+   124→  integrityHash?: string;
+   125→  /** Previous event hash for chain */
+   126→  previousEventHash?: string;
+   127→}
+   128→
+   129→export type AuditCategory =
+   130→  | 'AUTHENTICATION'
+   131→  | 'AUTHORIZATION'
+   132→  | 'DATA_ACCESS'
+   133→  | 'ADMINISTRATION'
+   134→  | 'SECURITY'
+   135→  | 'SYSTEM'
+   136→  | 'COMPLIANCE';
+   137→
+   138→export interface AuditLoggerConfig {
+   139→  /** Application identifier */
+   140→  applicationId: string;
+   141→  /** Environment name */
+   142→  environment: 'production' | 'staging' | 'development';
+   143→  /** Minimum severity level to log */
+   144→  minSeverity: AuditEventSeverity;
+   145→  /** Enable console logging */
+   146→  enableConsoleLog: boolean;
+   147→  /** Enable file/database persistence */
+   148→  enablePersistence: boolean;
+   149→  /** Storage backend configuration */
+   150→  storage: {
+   151→    type: 'console' | 'file' | 'database' | 'siem';
+   152→    connectionString?: string;
+   153→    tableName?: string;
+   154→    indexName?: string;
+   155→  };
+   156→  /** Retention policies per classification */
+   157→  retentionPolicies: {
+   158→    public: number;       // days
+   159→    internal: number;     // days
+   160→    confidential: number; // days
+   161→    restricted: number;   // days (minimum 1825 per ANRT)
+   162→  };
+   163→  /** PII masking configuration */
+   164→  piiMasking: {
+   165→    enabled: boolean;
+   166→    maskIMSIMSISDN: boolean;
+   167→    maskEmail: boolean;
+   168→    maskIP: boolean;
+   169→  };
+   170→  /** HMAC key for integrity verification */
+   171→  integrityKey: string;
+   172→  /** SIEM forwarding configuration */
+   173→  siemForwarding?: {
+   174→    enabled: boolean;
+   175→    endpoint: string;
+   176→    batchSize: number;
+   177→    flushIntervalMs: number;
+   178→  };
+   179→}
+   180→
+   181→// ============================================================================
+   182→// Severity Mappings
+   183→// ============================================================================
+   184→
+   185→/** Map event types to default severity levels */
+   186→const EVENT_SEVERITY_MAP: Record<AuditEventType, AuditEventSeverity> = {
+   187→  // Authentication events
+   188→  AUTH_SUCCESS: 'INFO',
+   189→  AUTH_FAILURE: 'MEDIUM',
+   190→  AUTH_LOGOUT: 'INFO',
+   191→  AUTH_SESSION_EXPIRED: 'LOW',
+   192→  AUTH_MFA_ENABLED: 'INFO',
+   193→  AUTH_MFA_DISABLED: 'HIGH',
+   194→  AUTH_MFA_VERIFY_SUCCESS: 'INFO',
+   195→  AUTH_MFA_VERIFY_FAILURE: 'MEDIUM',
+   196→  AUTH_PASSWORD_CHANGE: 'INFO',
+   197→  AUTH_PASSWORD_RESET_REQUEST: 'MEDIUM',
+   198→  AUTH_TOKEN_REFRESH: 'LOW',
+   199→  AUTH_ACCOUNT_LOCKED: 'HIGH',
+   200→  AUTH_ACCOUNT_UNLOCKED: 'HIGH',
+   201→  // Authorization events
+   202→  AUTHZ_GRANT: 'LOW',
+   203→  AUTHZ_DENY: 'MEDIUM',
+   204→  AUTHZ_PRIVILEGE_ESCALATION: 'HIGH',
+   205→  AUTHZ_ROLE_CHANGE: 'HIGH',
+   206→  // Data access events
+   207→  DATA_ACCESS: 'LOW',
+   208→  DATA_EXPORT: 'MEDIUM',
+   209→  DATA_MASKING_APPLIED: 'INFO',
+   210→  DATA_QUERY: 'LOW',
+   211→  // Administration events
+   212→  ADMIN_USER_CREATE: 'HIGH',
+   213→  ADMIN_USER_UPDATE: 'HIGH',
+   214→  ADMIN_USER_DELETE: 'CRITICAL',
+   215→  ADMIN_ROLE_ASSIGN: 'HIGH',
+   216→  ADMIN_ROLE_REVOKE: 'HIGH',
+   217→  ADMIN_CONFIG_CHANGE: 'HIGH',
+   218→  ADMIN_SYSTEM_STARTUP: 'INFO',
+   219→  ADMIN_SYSTEM_SHUTDOWN: 'HIGH',
+   220→  // Security events
+   221→  SECURITY_POLICY_VIOLATION: 'HIGH',
+   222→  SECURITY_RATE_LIMIT_EXCEEDED: 'MEDIUM',
+   223→  SECURITY_WAF_BLOCK: 'HIGH',
+   224→  SECURITY_INTRUSION_ATTEMPT: 'CRITICAL',
+   225→  SECURITY_VULNERABILITY_SCAN: 'MEDIUM',
+   226→  // System events
+   227→  SYSTEM_ERROR: 'HIGH',
+   228→  SYSTEM_WARNING: 'MEDIUM',
+   229→  SYSTEM_API_CALL: 'LOW',
+   230→  // Compliance events
+   231→  COMPLIANCE_DATA_LOCALIZATION_CHECK: 'INFO',
+   232→  COMPLIANCE_ENCRYPTION_VERIFICATION: 'INFO',
+   233→};
+   234→
+   235→/** Map event types to categories */
+   236→const EVENT_CATEGORY_MAP: Record<AuditEventType, AuditCategory> = {
+   237→  AUTH_SUCCESS: 'AUTHENTICATION',
+   238→  AUTH_FAILURE: 'AUTHENTICATION',
+   239→  AUTH_LOGOUT: 'AUTHENTICATION',
+   240→  AUTH_SESSION_EXPIRED: 'AUTHENTICATION',
+   241→  AUTH_MFA_ENABLED: 'AUTHENTICATION',
+   242→  AUTH_MFA_DISABLED: 'AUTHENTICATION',
+   243→  AUTH_MFA_VERIFY_SUCCESS: 'AUTHENTICATION',
+   244→  AUTH_MFA_VERIFY_FAILURE: 'AUTHENTICATION',
+   245→  AUTH_PASSWORD_CHANGE: 'AUTHENTICATION',
+   246→  AUTH_PASSWORD_RESET_REQUEST: 'AUTHENTICATION',
+   247→  AUTH_TOKEN_REFRESH: 'AUTHENTICATION',
+   248→  AUTH_ACCOUNT_LOCKED: 'AUTHENTICATION',
+   249→  AUTH_ACCOUNT_UNLOCKED: 'AUTHENTICATION',
+   250→  AUTHZ_GRANT: 'AUTHORIZATION',
+   251→  AUTHZ_DENY: 'AUTHORIZATION',
+   252→  AUTHZ_PRIVILEGE_ESCALATION: 'AUTHORIZATION',
+   253→  AUTHZ_ROLE_CHANGE: 'AUTHORIZATION',
+   254→  DATA_ACCESS: 'DATA_ACCESS',
+   255→  DATA_EXPORT: 'DATA_ACCESS',
+   256→  DATA_MASKING_APPLIED: 'DATA_ACCESS',
+   257→  DATA_QUERY: 'DATA_ACCESS',
+   258→  ADMIN_USER_CREATE: 'ADMINISTRATION',
+   259→  ADMIN_USER_UPDATE: 'ADMINISTRATION',
+   260→  ADMIN_USER_DELETE: 'ADMINISTRATION',
+   261→  ADMIN_ROLE_ASSIGN: 'ADMINISTRATION',
+   262→  ADMIN_ROLE_REVOKE: 'ADMINISTRATION',
+   263→  ADMIN_CONFIG_CHANGE: 'ADMINISTRATION',
+   264→  ADMIN_SYSTEM_STARTUP: 'ADMINISTRATION',
+   265→  ADMIN_SYSTEM_SHUTDOWN: 'ADMINISTRATION',
+   266→  SECURITY_POLICY_VIOLATION: 'SECURITY',
+   267→  SECURITY_RATE_LIMIT_EXCEEDED: 'SECURITY',
+   268→  SECURITY_WAF_BLOCK: 'SECURITY',
+   269→  SECURITY_INTRUSION_ATTEMPT: 'SECURITY',
+   270→  SECURITY_VULNERABILITY_SCAN: 'SECURITY',
+   271→  SYSTEM_ERROR: 'SYSTEM',
+   272→  SYSTEM_WARNING: 'SYSTEM',
+   273→  SYSTEM_API_CALL: 'SYSTEM',
+   274→  COMPLIANCE_DATA_LOCALIZATION_CHECK: 'COMPLIANCE',
+   275→  COMPLIANCE_ENCRYPTION_VERIFICATION: 'COMPLIANCE',
+   276→};
+   277→
+   278→/** Base risk scores for event types */
+   279→const EVENT_RISK_SCORE_MAP: Record<AuditEventType, number> = {
+   280→  AUTH_SUCCESS: 0,
+   281→  AUTH_FAILURE: 25,
+   282→  AUTH_LOGOUT: 0,
+   283→  AUTH_SESSION_EXPIRED: 5,
+   284→  AUTH_MFA_ENABLED: 0,
+   285→  AUTH_MFA_DISABLED: 40,
+   286→  AUTH_MFA_VERIFY_SUCCESS: 0,
+   287→  AUTH_MFA_VERIFY_FAILURE: 30,
+   288→  AUTH_PASSWORD_CHANGE: 5,
+   289→  AUTH_PASSWORD_RESET_REQUEST: 35,
+   290→  AUTH_TOKEN_REFRESH: 5,
+   291→  AUTH_ACCOUNT_LOCKED: 50,
+   292→  AUTH_ACCOUNT_UNLOCKED: 45,
+   293→  AUTHZ_GRANT: 5,
+   294→  AUTHZ_DENY: 30,
+   295→  AUTHZ_PRIVILEGE_ESCALATION: 75,
+   296→  AUTHZ_ROLE_CHANGE: 40,
+   297→  DATA_ACCESS: 10,
+   298→  DATA_EXPORT: 35,
+   299→  DATA_MASKING_APPLIED: 5,
+   300→  DATA_QUERY: 10,
+   301→  ADMIN_USER_CREATE: 40,
+   302→  ADMIN_USER_UPDATE: 35,
+   303→  ADMIN_USER_DELETE: 65,
+   304→  ADMIN_ROLE_ASSIGN: 55,
+   305→  ADMIN_ROLE_REVOKE: 55,
+   306→  ADMIN_CONFIG_CHANGE: 50,
+   307→  ADMIN_SYSTEM_STARTUP: 10,
+   308→  ADMIN_SYSTEM_SHUTDOWN: 45,
+   309→  SECURITY_POLICY_VIOLATION: 70,
+   310→  SECURITY_RATE_LIMIT_EXCEEDED: 40,
+   311→  SECURITY_WAF_BLOCK: 55,
+   312→  SECURITY_INTRUSION_ATTEMPT: 95,
+   313→  SECURITY_VULNERABILITY_SCAN: 30,
+   314→  SYSTEM_ERROR: 45,
+   315→  SYSTEM_WARNING: 25,
+   316→  SYSTEM_API_CALL: 5,
+   317→  COMPLIANCE_DATA_LOCALIZATION_CHECK: 5,
+   318→  COMPLIANCE_ENCRYPTION_VERIFICATION: 5,
+   319→};
+   320→
+   321→// ============================================================================
+   322→// Default Configuration
+   323→// ============================================================================
+   324→
+   325→/** Default audit logger configuration */
+   326→export const DEFAULT_AUDIT_CONFIG: AuditLoggerConfig = {
+   327→  applicationId: 'djezzy-soc-platform',
+   328→  environment: process.env.NODE_ENV === 'production' ? 'production' : 'development',
+   329→  minSeverity: 'LOW',
+   330→  enableConsoleLog: true,
+   331→  enablePersistence: true,
+   332→  storage: {
+   333→    type: process.env.AUDIT_STORAGE_TYPE as AuditLoggerConfig['storage']['type'] || 'console',
+   334→    connectionString: process.env.AUDIT_STORAGE_CONNECTION,
+   335→    tableName: 'audit_events',
+   336→    indexName: 'audit-events-index',
+   337→  },
+   338→  retentionPolicies: {
+   339→    public: 365,         // 1 year
+   340→    internal: 1095,      // 3 years
+   341→    confidential: 1825,  // 5 years (ANRT minimum)
+   342→    restricted: 2555,    // 7 years (extra caution for RESTRICTED)
+   343→  },
+   344→  piiMasking: {
+   345→    enabled: true,
+   346→    maskIMSIMSISDN: true,
+   347→    maskEmail: true,
+   348→    maskIP: true,
+   349→  },
+   350→  integrityKey: process.env.AUDIT_INTEGRITY_KEY || 'default-change-in-production',
+   351→  siemForwarding: {
+   352→    enabled: process.env.SIEM_FORWARDING_ENABLED === 'true',
+   353→    endpoint: process.env.SIEM_AUDIT_ENDPOINT || 'https://siem-backend.djezzy-soc.svc.cluster.local/api/audit',
+   354→    batchSize: 100,
+   355→    flushIntervalMs: 5000,
+   356→  },
+   357→};
+   358→
+   359→// ============================================================================
+   360→// AuditLogger Class
+   361→// ============================================================================
+   362→
+   363→/**
+   364→ * Security Event Audit Logger
+   365→ * 
+   366→ * Provides comprehensive audit logging with:
+   367→ * - Structured event capture
+   368→ * - Integrity verification via hash chains
+   369→ * - PII masking for privacy
+   370→ * - Multiple output backends
+   371→ * - SIEM forwarding
+   372→ * 
+   373→ * @example
+   374→ * ```typescript
+   375→ * const auditLogger = new AuditLogger(DEFAULT_AUDIT_CONFIG);
+   376→ * 
+   377→ * // Log authentication failure
+   378→ * await auditLogger.log({
+   379→ *   eventType: 'AUTH_FAILURE',
+   380→ *   sourceIp: clientIp,
+   381→ *   resource: '/api/auth/login',
+   382→ *   action: 'LOGIN_ATTEMPT',
+   383→ *   outcome: 'FAILURE',
+   384→ *   message: 'Invalid credentials for user john.doe',
+   385→ *   userId: 'user-123',
+   386→ *   username: 'john.doe',
+   387→ *   metadata: { reason: 'invalid_password' },
+   388→ * });
+   389→ * ```
+   390→ */
+   391→export class AuditLogger {
+   392→  private config: AuditLoggerConfig;
+   393→  private previousEventHash: string = '';
+   394→  private eventBuffer: AuditEvent[] = [];
+   395→  private flushTimer: ReturnType<typeof setInterval> | null = null;
+   396→
+   397→  constructor(config: Partial<AuditLoggerConfig> = {}) {
+   398→    this.config = { ...DEFAULT_AUDIT_CONFIG, ...config };
+   399→    
+   400→    // Start auto-flush timer if SIEM forwarding enabled
+   401→    if (this.config.siemForwarding?.enabled) {
+   402→      this.flushTimer = setInterval(
+   403→        () => this.flush(),
+   404→        this.config.siemForwarding.flushIntervalMs
+   405→      );
+   406→    }
+   407→  }
+   408→
+   409→  /**
+   410→   * Main logging method - creates and persists an audit event
+   411→   */
+   412→  async log(eventInput: Omit<AuditEvent, keyof AuditEventBase>): Promise<AuditEvent> {
+   413→    const event = await this.createEvent(eventInput);
+   414→    
+   415→    // Write to configured outputs
+   416→    await this.writeEvent(event);
+   417→    
+   418→    // Buffer for batch forwarding
+   419→    if (this.config.siemForwarding?.enabled) {
+   420→      this.eventBuffer.push(event);
+   421→      if (this.eventBuffer.length >= this.config.siemForwarding.batchSize) {
+   422→        await this.flush();
+   423→      }
+   424→    }
+   425→    
+   426→    return event;
+   427→  }
+   428→
+   429→  /**
+   430→   * Convenience methods for common event types
+   431→   */
+   432→
+   433→  /** Log successful authentication */
+   434→  async logAuthSuccess(params: {
+   435→    userId: string;
+   436→    username: string;
+   437→    userRole: string;
+   438→    sourceIp: string;
+   439→    userAgent?: string;
+   440→    sessionId: string;
+   441→    authMethod: 'password' | 'sso' | 'mfa' | 'token';
+   442→    metadata?: Record<string, unknown>;
+   443→  }): Promise<AuditEvent> {
+   444→    return this.log({
+   445→      eventType: 'AUTH_SUCCESS',
+   446→      userId: params.userId,
+   447→      username: params.username,
+   448→      userRole: params.userRole,
+   449→      sourceIp: params.sourceIp,
+   450→      userAgent: params.userAgent,
+   451→      sessionId: params.sessionId,
+   452→      resource: '/api/auth/login',
+   453→      action: `AUTH_${params.authMethod.toUpperCase()}`,
+   454→      outcome: 'SUCCESS',
+   455→      message: `Successful authentication for user ${params.username} via ${params.authMethod}`,
+   456→      metadata: { ...params.metadata, authMethod: params.authMethod },
+   457→      dataClassification: 'CONFIDENTIAL',
+   458→      requiresReview: false,
+   459→    });
+   460→  }
+   461→
+   462→  /** Log failed authentication attempt */
+   463→  async logAuthFailure(params: {
+   464→    userId?: string;
+   465→    username?: string;
+   466→    sourceIp: string;
+   467→    userAgent?: string;
+   468→    resource: string;
+   469→    reason: 'invalid_credentials' | 'account_locked' | 'mfa_failed' | 'session_expired' | 'other';
+   470→    metadata?: Record<string, unknown>;
+   471→  }): Promise<AuditEvent> {
+   472→    return this.log({
+   473→      eventType: 'AUTH_FAILURE',
+   474→      userId: params.userId,
+   475→      username: params.username,
+   476→      sourceIp: params.sourceIp,
+   477→      userAgent: params.userAgent,
+   478→      resource: params.resource,
+   479→      action: 'LOGIN_ATTEMPT',
+   480→      outcome: 'FAILURE',
+   481→      message: `Failed authentication${params.username ? ` for user ${params.username}` : ''}: ${params.reason}`,
+   482→      metadata: { ...params.metadata, failureReason: params.reason },
+   483→      dataClassification: 'CONFIDENTIAL',
+   484→      requiresReview: params.reason === 'account_locked',
+   485→    });
+   486→  }
+   487→
+   488→  /** Log authorization denial */
+   489→  async logAuthzDeny(params: {
+   490→    userId: string;
+   491→    username: string;
+   492→    userRole: string;
+   493→    sourceIp: string;
+   494→    resource: string;
+   495→    action: string;
+   496→    reason: string;
+   497→    httpMethod?: string;
+   498→    requestPath?: string;
+   499→    metadata?: Record<string, unknown>;
+   500→  }): Promise<AuditEvent> {
+   501→    return this.log({
+   502→      eventType: 'AUTHZ_DENY',
+   503→      userId: params.userId,
+   504→      username: params.username,
+   505→      userRole: params.userRole,
+   506→      sourceIp: params.sourceIp,
+   507→      resource: params.resource,
+   508→      httpMethod: params.httpMethod,
+   509→      requestPath: params.requestPath,
+   510→      action: params.action,
+   511→      outcome: 'BLOCKED',
+   512→      message: `Authorization denied for ${params.username} (${params.userRole}): ${params.reason}`,
+   513→      metadata: { ...params.metadata, denyReason: params.reason },
+   514→      dataClassification: 'INTERNAL',
+   515→      requiresReview: true,
+   516→    });
+   517→  }
+   518→
+   519→  /** Log data access event */
+   520→  async logDataAccess(params: {
+   521→    userId: string;
+   522→    username: string;
+   523→    userRole: string;
+   524→    sourceIp: string;
+   525→    resource: string;
+   526→    action: 'READ' | 'EXPORT' | 'QUERY' | 'DOWNLOAD';
+   527→    dataType: string;
+   528→    recordCount?: number;
+   529→    dataClassification: DataClassification;
+   530→    maskingApplied?: boolean;
+   531→    metadata?: Record<string, unknown>;
+   532→  }): Promise<AuditEvent> {
+   533→    const eventType = params.action === 'EXPORT' ? 'DATA_EXPORT' :
+   534→                      params.action === 'QUERY' ? 'DATA_QUERY' : 'DATA_ACCESS';
+   535→    
+   536→    return this.log({
+   537→      eventType,
+   538→      userId: params.userId,
+   539→      username: params.username,
+   540→      userRole: params.userRole,
+   541→      sourceIp: params.sourceIp,
+   542→      resource: params.resource,
+   543→      action: `DATA_${params.action}`,
+   544→      outcome: 'SUCCESS',
+   545→      message: `Data ${params.action.toLowerCase()} on ${params.dataType}${params.recordCount ? ` (${params.recordCount} records)` : ''} by ${params.username}`,
+   546→      metadata: {
+   547→        ...params.metadata,
+   548→        dataType: params.dataType,
+   549→        recordCount: params.recordCount,
+   550→        maskingApplied: params.maskingApplied,
+   551→      },
+   552→      dataClassification: params.dataClassification,
+   553→      requiresReview: params.dataClassification === 'RESTRICTED',
+   554→    });
+   555→  }
+   556→
+   557→  /** Log administrative action */
+   558→  async logAdminAction(params: {
+   559→    userId: string;
+   560→    username: string;
+   561→    userRole: string;
+   562→    sourceIp: string;
+   563→    action: string;
+   564→    targetResource: string;
+   565→    targetType: 'user' | 'role' | 'config' | 'system';
+   566→    outcome: 'SUCCESS' | 'FAILURE';
+   567→    details: string;
+   568→    metadata?: Record<string, unknown>;
+   569→  }): Promise<AuditEvent> {
+   570→    const eventTypeMap: Record<string, AuditEventType> = {
+   571→      user: params.outcome === 'SUCCESS' ? 'ADMIN_USER_CREATE' : 'ADMIN_USER_UPDATE',
+   572→      role: 'ADMIN_ROLE_ASSIGN',
+   573→      config: 'ADMIN_CONFIG_CHANGE',
+   574→      system: params.action.toUpperCase().includes('SHUTDOWN') ? 'ADMIN_SYSTEM_SHUTDOWN' : 'ADMIN_SYSTEM_STARTUP',
+   575→    };
+   576→
+   577→    return this.log({
+   578→      eventType: eventTypeMap[params.targetType] || 'ADMIN_CONFIG_CHANGE',
+   579→      userId: params.userId,
+   580→      username: params.username,
+   581→      userRole: params.userRole,
+   582→      sourceIp: params.sourceIp,
+   583→      resource: params.targetResource,
+   584→      action: params.action,
+   585→      outcome: params.outcome,
+   586→      message: `Admin action: ${params.details}`,
+   587→      metadata: { ...params.metadata, targetType: params.targetType },
+   588→      dataClassification: 'CONFIDENTIAL',
+   589→      requiresReview: params.targetType === 'user' && params.action.includes('DELETE'),
+   590→    });
+   591→  }
+   592→
+   593→  /** Log security incident/violation */
+   594→  async logSecurityEvent(params: {
+   595→    eventType: 'SECURITY_POLICY_VIOLATION' | 'SECURITY_RATE_LIMIT_EXCEEDED' | 'SECURITY_WAF_BLOCK' | 'SECURITY_INTRUSION_ATTEMPT';
+   596→    sourceIp: string;
+   597→    resource: string;
+   598→    severity?: AuditEventSeverity;
+   599→    details: string;
+   600→    metadata?: Record<string, unknown>;
+   601→  }): Promise<AuditEvent> {
+   602→    return this.log({
+   603→      eventType: params.eventType,
+   604→      sourceIp: params.sourceIp,
+   605→      resource: params.resource,
+   606→      action: 'SECURITY_EVENT',
+   607→      outcome: 'BLOCKED',
+   608→      message: `Security event: ${params.details}`,
+   609→      metadata: params.metadata,
+   610→      dataClassification: 'INTERNAL',
+   611→      requiresReview: true,
+   612→      severity: params.severity || EVENT_SEVERITY_MAP[params.eventType],
+   613→    });
+   614→  }
+   615→
+   616→  /**
+   617→   * Flush buffered events to SIEM
+   618→   */
+   619→  async flush(): Promise<void> {
+   620→    if (!this.config.siemForwarding?.enabled || this.eventBuffer.length === 0) {
+   621→      return;
+   622→    }
+   623→
+   624→    const eventsToSend = [...this.eventBuffer];
+   625→    this.eventBuffer = [];
+   626→
+   627→    try {
+   628→      const response = await fetch(this.config.siemForwarding.endpoint, {
+   629→        method: 'POST',
+   630→        headers: {
+   631→          'Content-Type': 'application/json',
+   632→          'X-Audit-Source': this.config.applicationId,
+   633→          'X-Event-Count': eventsToSend.length.toString(),
+   634→        },
+   635→        body: JSON.stringify({
+   636→          source: this.config.applicationId,
+   637→          environment: this.config.environment,
+   638→          timestamp: new Date().toISOString(),
+   639→          eventCount: eventsToSend.length,
+   640→          events: eventsToSend.map(this.sanitizeForSIEM),
+   641→        }),
+   642→      });
+   643→
+   644→      if (!response.ok) {
+   645→        console.error(`Failed to send audit events to SIEM: ${response.status}`);
+   646→        // Re-add failed events to buffer
+   647→        this.eventBuffer.unshift(...eventsToSend);
+   648→      }
+   649→    } catch (error) {
+   650→      console.error('Error flushing audit events to SIEM:', error);
+   651→      this.eventBuffer.unshift(...eventsToSend);
+   652→    }
+   653→  }
+   654→
+   655→  /**
+   656→   * Shutdown logger gracefully
+   657→   */
+   658→  async shutdown(): Promise<void> {
+   659→    if (this.flushTimer) {
+   660→      clearInterval(this.flushTimer);
+   661→    }
+   662→    await this.flush();
+   663→  }
+   664→
+   665→  // ============================================================================
+   666→  // Private Methods
+   667→  // ============================================================================
+   668→
+   669→  /**
+   670→   * Create a complete audit event from input
+   671→   */
+   672→  private async createEvent(eventInput: Omit<AuditEvent, keyof AuditEventBase>): Promise<AuditEvent> {
+   673→    const now = new Date();
+   674→    const eventType = eventInput.eventType;
+   675→    
+   676→    // Determine retention period based on data classification
+   677→    const classification = eventInput.dataClassification || 'INTERNAL';
+   678→    const retentionDays = this.config.retentionPolicies[classification];
+   679→
+   680→    // Calculate integrity hash
+   681→    const eventData = {
+   682→      timestamp: now.toISOString(),
+   683→      eventType,
+   684→      ...eventInput,
+   685→    };
+   686→    
+   687→    const integrityHash = this.calculateIntegrityHash(eventData);
+   688→
+   689→    const event: AuditEvent = {
+   690→      eventId: randomUUID(),
+   691→      timestamp: this.formatTimestamp(now),
+   692→      eventType,
+   693→      severity: eventInput.severity || EVENT_SEVERITY_MAP[eventType],
+   694→      category: EVENT_CATEGORY_MAP[eventType],
+   695→      sourceIp: this.maskPII('ip', eventInput.sourceIp),
+   696→      riskScore: EVENT_RISK_SCORE_MAP[eventType],
+   697→      retentionDays,
+   698→      requiresReview: eventInput.requiresReview ?? (EVENT_RISK_SCORE_MAP[eventType] >= 50),
+   699→      integrityHash,
+   700→      previousEventHash: this.previousEventHash || undefined,
+   701→      ...eventInput,
+   702→    };
+   703→
+   704→    // Update hash chain
+   705→    this.previousEventHash = integrityHash;
+   706→
+   707→    return event;
+   708→  }
+   709→
+   710→  /**
+   711→   * Write event to configured outputs
+   712→   */
+   713→  private async writeEvent(event: AuditEvent): Promise<void> {
+   714→    // Console output
+   715→    if (this.config.enableConsoleLog) {
+   716→      this.writeToConsole(event);
+   717→    }
+   718→
+   719→    // Persistence (file/database)
+   720→    if (this.config.enablePersistence) {
+   721→      switch (this.config.storage.type) {
+   722→        case 'file':
+   723→          await this.writeToFile(event);
+   724→          break;
+   725→        case 'database':
+   726→          await this.writeToDatabase(event);
+   727→          break;
+   728→        case 'siem':
+   729→          // Handled by flush mechanism
+   730→          break;
+   731→      }
+   732→    }
+   733→  }
+   734→
+   735→  /**
+   736→   * Write to console (structured JSON)
+   737→   */
+   738→  private writeToConsole(event: AuditEvent): void {
+   739→    const logFn = this.getLogFunction(event.severity);
+   740→    logFn(JSON.stringify({
+   741→      '@timestamp': event.timestamp,
+   742→      '@level': event.severity.toLowerCase(),
+   743→      application: this.config.applicationId,
+   744→      environment: this.config.environment,
+   745→      ...event,
+   746→    }));
+   747→  }
+   748→
+   749→  /**
+   750→   * Get appropriate console.log function for severity
+   751→   */
+   752→  private getLogFunction(severity: AuditEventSeverity): (...args: unknown[]) => void {
+   753→    switch (severity) {
+   754→      case 'CRITICAL':
+   755→      case 'HIGH':
+   756→        return console.error;
+   757→      case 'MEDIUM':
+   758→        return console.warn;
+   759→      default:
+   760→        return console.info;
+   761→    }
+   762→  }
+   763→
+   764→  /**
+   765→   * Write event to file (placeholder for implementation)
+   766→   */
+   767→  private async writeToFile(_event: AuditEvent): Promise<void> {
+   768→    // Implementation depends on file system access
+   769→    // Would typically write to append-only log file
+   770→    // File should be on WORM storage for compliance
+   771→  }
+   772→
+   773→  /**
+   774→   * Write event to database (placeholder for implementation)
+   775→   */
+   776→  private async writeToDatabase(_event: AuditEvent): Promise<void> {
+   777→    // Implementation depends on database driver
+   778→    // Would insert into audit_events table
+   779→    // Table should have immutability constraints
+   780→  }
+   781→
+   782→  /**
+   783→   * Calculate HMAC-SHA256 integrity hash for event
+   784→   */
+   785→  private calculateIntegrityHash(eventData: Record<string, unknown>): string {
+   786→    const eventString = JSON.stringify({
+   787→      ...eventData,
+   788→      previousHash: this.previousEventHash,
+   789→    });
+   790→    
+   791→    return createHmac('sha256', this.config.integrityKey)
+   792→      .update(eventString)
+   793→      .digest('hex');
+   794→  }
+   795→
+   796→  /**
+   797→   * Mask PII in event data
+   798→   */
+   799→  private maskPII(type: 'ip' | 'email' | 'imsi' | 'msisdn', value: string): string {
+   800→    if (!this.config.piiMasking.enabled) {
+   801→      return value;
+   802→    }
+   803→
+   804→    switch (type) {
+   805→      case 'ip':
+   806→        if (this.config.piiMasking.maskIP) {
+   807→          // Mask last octet
+   808→          return value.replace(/\.\d+$/, '.***');
+   809→        }
+   810→        return value;
+   811→      case 'email':
+   812→        if (this.config.piiMasking.maskEmail) {
+   813→          // Mask local part
+   814→          const [local, domain] = value.split('@');
+   815→          if (local && domain) {
+   816→            return `${local[0]}***@${domain}`;
+   817→          }
+   818→        }
+   819→        return value;
+   820→      case 'imsi':
+   821→      case 'msisdn':
+   822→        if (this.config.piiMasking.maskIMSIMSISDN) {
+   823→          return `***${value.slice(-4)}`;
+   824→        }
+   825→        return value;
+   826→      default:
+   827→        return value;
+   828→    }
+   829→  }
+   830→
+   831→  /**
+   832→   * Format timestamp for Algeria timezone (UTC+1)
+   833→   */
+   834→  private formatTimestamp(date: Date): string {
+   835→    return date.toISOString(); // UTC, can be converted to local for display
+   836→  }
+   837→
+   838→  /**
+   839→   * Sanitize event for SIEM forwarding
+   840→   */
+   841→  private sanitizeForSIEM(event: AuditEvent): Record<string, unknown> {
+   842→    return {
+   843→      event_id: event.eventId,
+   844→      timestamp: event.timestamp,
+   845→      event_type: event.eventType,
+   846→      severity: event.severity,
+   847→      category: event.category,
+   848→      user_id: event.userId,
+   849→      username: event.username,
+   850→      user_role: event.userRole,
+   851→      source_ip: event.sourceIp,
+   852→      resource: event.resource,
+   853→      action: event.action,
+   854→      outcome: event.outcome,
+   855→      message: event.message,
+   856→      risk_score: event.riskScore,
+   857→      metadata: event.metadata,
+   858→      correlation_id: event.correlationId,
+   859→    };
+   860→  }
+   861→}
+   862→
+   863→// ============================================================================
+   864→// Base Event Fields Interface
+   865→// ============================================================================
+   866→
+   867→interface AuditEventBase {
+   868→  eventId: string;
+   869→  timestamp: string;
+   870→  severity: AuditEventSeverity;
+   871→  category: AuditCategory;
+   872→  riskScore: number;
+   873→  retentionDays: number;
+   874→  requiresReview: boolean;
+   875→  integrityHash: string;
+   876→  previousEventHash?: string;
+   877→}
+   878→
+   879→// ============================================================================
+   880→// Singleton Instance
+   881→// ============================================================================
+   882→
+   883→let defaultAuditLogger: AuditLogger | null = null;
+   884→
+   885→/**
+   886→ * Get or create the default audit logger instance
+   887→ */
+   888→export function getAuditLogger(config?: Partial<AuditLoggerConfig>): AuditLogger {
+   889→  if (!defaultAuditLogger) {
+   890→    defaultAuditLogger = new AuditLogger(config);
+   891→  }
+   892→  return defaultAuditLogger;
+   893→}
+   894→
+   895→/**
+   896→ * Quick log function using default logger
+   897→ */
+   898→export async function auditLog(
+   899→  eventInput: Omit<AuditEvent, keyof AuditEventBase>
+   900→): Promise<AuditEvent> {
+   901→  const logger = getAuditLogger();
+   902→  return logger.log(eventInput);
+   903→}
+   904→
+   905→// ============================================================================
+   906→// Middleware Helpers
+   907→// ============================================================================
+   908→
+   909→/**
+   910→ * Create audit logging middleware data extractor
+   911→ */
+   912→export function extractAuditContextFromRequest(request: Request): {
+   913→  sourceIp: string;
+   914→  userAgent?: string;
+   915→  requestPath: string;
+   916→  httpMethod: string;
+   917→  correlationId: string;
+   918→} {
+   919→  return {
+   920→    sourceIp: request.headers.get('x-forwarded-for')?.split(',')[0]?.trim() ||
+   921→              request.headers.get('x-real-ip') ||
+   922→              'unknown',
+   923→    userAgent: request.headers.get('user-agent') || undefined,
+   924→    requestPath: new URL(request.url).pathname,
+   925→    httpMethod: request.method,
+   926→    correlationId: request.headers.get('x-correlation-id') || randomUUID(),
+   927→  };
+   928→}
+   929→
+   930→// ============================================================================
+   931→// Exports
+   932→// ============================================================================
+   933→
+   934→export default AuditLogger;
+   935→

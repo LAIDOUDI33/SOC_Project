@@ -15,6 +15,57 @@ import { generateMFASecret, verifyTOTPCode, generateSecureToken, verifyAccessTok
 import crypto from 'crypto';
 
 // ============================================================
+// ENCRYPTION UTILITIES FOR MFA SECRETS
+// ============================================================
+
+/**
+ * Encrypt sensitive data (MFA secrets) using AES-256-GCM
+ * SECURITY: Never store plaintext secrets in database
+ */
+async function encryptSensitiveData(plaintext: string): Promise<string> {
+  const encryptionKey = process.env.ENCRYPTION_KEY;
+  if (!encryptionKey || encryptionKey.length < 32) {
+    throw new Error('ENCRYPTION_KEY must be set and be at least 32 characters');
+  }
+  
+  const key = crypto.scryptSync(encryptionKey, 'salt', 32);
+  const iv = crypto.randomBytes(16);
+  const cipher = crypto.createCipheriv('aes-256-gcm', key, iv);
+  
+  let encrypted = cipher.update(plaintext, 'utf8', 'hex');
+  encrypted += cipher.final('hex');
+  
+  const authTag = cipher.getAuthTag();
+  
+  // Format: iv:authTag:encrypted
+  return `${iv.toString('hex')}:${authTag.toString('hex')}:${encrypted}`;
+}
+
+/**
+ * Decrypt sensitive data
+ */
+async function decryptSensitiveData(encrypted: string): Promise<string> {
+  const encryptionKey = process.env.ENCRYPTION_KEY;
+  if (!encryptionKey) {
+    throw new Error('ENCRYPTION_KEY must be set');
+  }
+  
+  const key = crypto.scryptSync(encryptionKey, 'salt', 32);
+  const [ivHex, authTagHex, encryptedData] = encrypted.split(':');
+  
+  const iv = Buffer.from(ivHex, 'hex');
+  const authTag = Buffer.from(authTagHex, 'hex');
+  
+  const decipher = crypto.createDecipheriv('aes-256-gcm', key, iv);
+  decipher.setAuthTag(authTag);
+  
+  let decrypted = decipher.update(encryptedData, 'hex', 'utf8');
+  decrypted += decipher.final('utf8');
+  
+  return decrypted;
+}
+
+// ============================================================
 // TYPES
 // ============================================================
 
@@ -238,12 +289,14 @@ async function handleEnableMFA(body: Partial<MFASetupRequest>): Promise<NextResp
   }
 
   try {
-    // Enable MFA for user
+    // Enable MFA for user - ENCRYPT the secret before storing!
+    const encryptedSecret = await encryptSensitiveData(session.tempSecret);
+    
     await db.user.update({
       where: { id: session.userId },
       data: {
         isMfaEnabled: true,
-        mfaSecret: session.tempSecret, // Store encrypted in production!
+        mfaSecret: encryptedSecret, // Now properly encrypted with AES-256-GCM
       }
     });
 

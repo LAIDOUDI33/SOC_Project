@@ -319,7 +319,9 @@ function updatePatternStats(
     // Evict oldest entry if at capacity
     if (QUERY_PATTERN_STATS.size >= MAX_PATTERN_STATS) {
       const firstKey = QUERY_PATTERN_STATS.keys().next().value;
-      QUERY_PATTERN_STATS.delete(firstKey);
+      if (firstKey !== undefined) {
+        QUERY_PATTERN_STATS.delete(firstKey);
+      }
     }
     
     stats = {
@@ -393,14 +395,14 @@ export async function invalidateTableCache(table: string): Promise<number> {
     const redis = initCacheRedis();
     
     // Find all keys matching this table
-    const keys = [];
+    const keys: string[] = [];
     const stream = redis.scanStream({
       match: `${QUERY_CACHE_PREFIX}${table}:*`,
       count: 100,
     });
     
     for await (const key of stream) {
-      keys.push(key);
+      keys.push(key as string);
     }
     
     if (keys.length > 0) {

@@ -7,15 +7,17 @@
  * - Real-time alert statistics
  * - Incident correlation
  * 
- * Now returns demo data for Djezzy SOC platform
+ * AUTHENTICATION REQUIRED for all endpoints
  */
 
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 // Import demo data for realistic Djezzy SOC data
 import { recentAlerts, getDashboardSummary } from "@/lib/demo-data";
+// Import authentication
+import { withAuth, optionalAuth } from '@/lib/auth/api-auth';
 
-// GET /api/alerts - Fetch alerts with filtering and pagination
-export async function GET(request: Request) {
+// GET /api/alerts - Fetch alerts with filtering and pagination (AUTH REQUIRED)
+export const GET = withAuth(async (request: NextRequest, user) => {
   try {
     const { searchParams } = new URL(request.url);
     const severity = searchParams.get("severity");
@@ -93,10 +95,10 @@ export async function GET(request: Request) {
       { status: 500 }
     );
   }
-}
+});
 
-// POST /api/alerts - Create or update alerts
-export async function POST(request: Request) {
+// POST /api/alerts - Create or update alerts (AUTH REQUIRED)
+export const POST = withAuth(async (request: NextRequest, user) => {
   try {
     const body = await request.json();
     const { action, id, ...alertData } = body;
@@ -130,11 +132,13 @@ export async function POST(request: Request) {
     }
 
     if (action === "create") {
+      // Use crypto.randomUUID() instead of predictable timestamp-based ID
       const newAlert = {
-        id: `ALT-${Date.now()}`,
+        id: `ALT-${crypto.randomUUID().slice(0, 8).toUpperCase()}`,
         ...alertData,
         timestamp: new Date().toISOString(),
-        status: 'open'
+        status: 'open',
+        createdBy: user.userId
       };
 
       return NextResponse.json({
@@ -160,10 +164,10 @@ export async function POST(request: Request) {
       { status: 500 }
     );
   }
-}
+}, { permissions: ['alerts:create', 'alerts:update'] });
 
-// DELETE /api/alerts - Delete an alert (admin only)
-export async function DELETE(request: Request) {
+// DELETE /api/alerts - Delete an alert (admin only, AUTH REQUIRED)
+export const DELETE = withAuth(async (request: NextRequest, user) => {
   try {
     const { searchParams } = new URL(request.url);
     const id = searchParams.get("id");
@@ -172,6 +176,14 @@ export async function DELETE(request: Request) {
       return NextResponse.json(
         { success: false, error: "Alert ID parameter required" },
         { status: 400 }
+      );
+    }
+
+    // Only admins can delete alerts
+    if (user.roleName !== 'soc_admin') {
+      return NextResponse.json(
+        { success: false, error: "Only administrators can delete alerts", errorCode: 'FORBIDDEN' },
+        { status: 403 }
       );
     }
 
@@ -187,4 +199,4 @@ export async function DELETE(request: Request) {
       { status: 500 }
     );
   }
-}
+}, { roles: ['soc_admin'] });

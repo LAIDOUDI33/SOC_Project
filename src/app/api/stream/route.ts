@@ -61,31 +61,52 @@ export async function GET(request: NextRequest) {
   }
 
   // Create SSE connection with channels
-  const response = createSSEConnection(validChannels);
+  const { response, sessionId } = createSSEConnection(validChannels);
 
-  // Start data polling for each channel (non-blocking)
+  // Start data polling for each channel with cleanup on disconnect
+  const connectionIntervals = new Map<string, NodeJS.Timeout>();
+  
   for (const channel of validChannels) {
     if (channel === 'all') {
-      // Start all channels
-      startAllChannels();
+      // Start all channels for this connection
+      for (const ch of Object.keys(CHANNEL_CONFIG)) {
+        const interval = startChannelPollingForConnection(ch);
+        connectionIntervals.set(ch, interval);
+      }
       break;
     } else {
-      startChannelPolling(channel);
+      const interval = startChannelPollingForConnection(channel);
+      connectionIntervals.set(channel, interval);
     }
+  }
+
+  // CRITICAL FIX: Clean up intervals when client disconnects to prevent memory leak
+  // The AbortController signal fires when the client disconnects
+  if (request.signal) {
+    request.signal.addEventListener('abort', () => {
+      console.log(`[SSE] Client disconnected, cleaning up ${connectionIntervals.size} polling intervals`);
+      for (const [channel, interval] of connectionIntervals) {
+        clearInterval(interval);
+      }
+      connectionIntervals.clear();
+    }, { once: true });
   }
 
   return response;
 }
 
-// Track active intervals for cleanup
-const activeIntervals = new Map<string, NodeJS.Timeout>();
+// Track active intervals per connection for proper cleanup
+// Format: Map<sessionId, Map<channelName, interval>>
+const connectionsIntervals = new Map<string, Map<string, NodeJS.Timeout>>();
 
 /**
- * Start polling for a specific channel
+ * Start polling for a specific channel (returns interval for cleanup)
  */
-function startChannelPolling(channel: string): void {
+function startChannelPollingForConnection(channel: string): NodeJS.Timeout {
   const config = CHANNEL_CONFIG[channel as keyof typeof CHANNEL_CONFIG];
-  if (!config) return;
+  if (!config) {
+    throw new Error(`Invalid channel: ${channel}`);
+  }
 
   const interval = setInterval(async () => {
     try {
@@ -95,16 +116,55 @@ function startChannelPolling(channel: string): void {
     }
   }, config.pollInterval);
 
-  activeIntervals.set(channel, interval);
+  return interval;
 }
 
 /**
- * Start all channel polls
+ * @deprecated Use startChannelPollingForConnection instead for proper cleanup
+ * Start polling for a specific channel (global - no cleanup)
+ */
+function startChannelPolling(channel: string): void {
+  console.warn('[SSE DEPRECATED] startChannelPolling called without connection tracking');
+  // This is kept for backward compatibility but should not be used
+  const interval = startChannelPollingForConnection(channel);
+  
+  // Store in a global map (will leak - migrate away from this)
+  if (!connectionsIntervals.has('global')) {
+    connectionsIntervals.set('global', new Map());
+  }
+  connectionsIntervals.get('global')!.set(channel, interval);
+}
+
+/**
+ * @deprecated Use connection-specific polling instead
+ * Start all channel polls globally
  */
 function startAllChannels(): void {
+  console.warn('[SDE DEPRECATED] startAllChannels called without connection tracking');
   for (const channel of Object.keys(CHANNEL_CONFIG)) {
     startChannelPolling(channel);
   }
+}
+
+/**
+ * Clean up all intervals for a specific connection
+ */
+function cleanupConnection(sessionId: string): void {
+  const connectionData = connectionsIntervals.get(sessionId);
+  if (connectionData) {
+    for (const [channel, interval] of connectionData) {
+      clearInterval(interval);
+    }
+    connectionData.clear();
+    connectionsIntervals.delete(sessionId);
+  }
+}
+
+/**
+ * Get count of active connections (for monitoring)
+ */
+export function getActiveConnectionsCount(): number {
+  return connectionsIntervals.size;
 }
 
 /**

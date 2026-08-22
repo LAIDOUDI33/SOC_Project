@@ -22,15 +22,12 @@ import { SignJWT, jwtVerify } from 'jose';
 const getJWTSecret = (): Uint8Array => {
   const secret = process.env.JWT_SECRET;
   if (!secret || secret.length < 32) {
-    if (process.env.NODE_ENV === 'production') {
-      throw new Error(
-        'FATAL: JWT_SECRET must be set and be at least 32 characters.\n' +
-        'Set it in your .env file: JWT_SECRET=<your-random-secret-min-32-chars>'
-      );
-    }
-    // Development only fallback with clear warning
-    console.warn('\x1b[33m%s\x1b[0m', '⚠️  WARNING: Using development JWT secret. Set JWT_SECRET for production!');
-    return new TextEncoder().encode('dev-secret-key-must-be-32-chars!!');
+    // SECURITY: No fallback secrets - fail fast in all environments
+    throw new Error(
+      'FATAL: JWT_SECRET must be set and be at least 32 characters.\n' +
+      'Set it in your .env file: JWT_SECRET=<your-random-secret-min-32-chars>\n' +
+      'Generate with: openssl rand -base64 48'
+    );
   }
   return new TextEncoder().encode(secret);
 };
@@ -38,14 +35,12 @@ const getJWTSecret = (): Uint8Array => {
 const getRefreshSecret = (): Uint8Array => {
   const secret = process.env.REFRESH_SECRET;
   if (!secret || secret.length < 32) {
-    if (process.env.NODE_ENV === 'production') {
-      throw new Error(
-        'FATAL: REFRESH_SECRET must be set and be at least 32 characters.\n' +
-        'Set it in your .env file: REFRESH_SECRET=<your-different-random-secret>'
-      );
-    }
-    console.warn('\x1b[33m%s\x1b[0m', '⚠️  WARNING: Using development refresh secret. Set REFRESH_SECRET for production!');
-    return new TextEncoder().encode('dev-refresh-secret-32-chars!!!!');
+    // SECURITY: No fallback secrets - fail fast in all environments
+    throw new Error(
+      'FATAL: REFRESH_SECRET must be set and be at least 32 characters.\n' +
+      'Set it in your .env file: REFRESH_SECRET=<your-different-random-secret>\n' +
+      'Generate with: openssl rand -base64 48'
+    );
   }
   return new TextEncoder().encode(secret);
 };
@@ -422,7 +417,7 @@ export function generateMFASecret(): { secret: string; qrUrl: string } {
 
 /**
  * Verify TOTP code
- * SECURITY: MFA bypass removed - always validate codes properly
+ * SECURITY: Always validates codes - no bypass allowed
  */
 export function verifyTOTPCode(secret: string, code: string): boolean {
   // Validate code format first
@@ -430,13 +425,8 @@ export function verifyTOTPCode(secret: string, code: string): boolean {
     return false;
   }
 
-  // SECURITY: Only allow MFA bypass when explicitly enabled via environment variable
-  // This should NEVER be enabled in production
-  const allowMfaBypass = process.env.ALLOW_MFA_BYPASS === 'true';
-  if (allowMfaBypass && process.env.NODE_ENV !== 'production') {
-    console.warn('\x1b[31m%s\x1b[0m', '🔴 SECURITY WARNING: MFA bypass is ENABLED! Disable before production!');
-    return true; // Bypass only when explicitly allowed
-  }
+  // SECURITY CRITICAL: MFA bypass completely removed
+  // There is NO way to skip MFA verification - this is intentional for security
 
   // Production TOTP verification implementation
   // Use time-based HMAC-SHA1 as per RFC 6238

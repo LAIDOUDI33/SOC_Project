@@ -67,10 +67,10 @@ export function initCacheRedis(): Redis {
 
   const redisUrl = process.env.REDIS_URL || 'redis://localhost:6379';
   
-  redisClient = new Redis(redisUrl, {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const redisOptions: any = {
     maxRetriesPerRequest: 3,
     enableReadyCheck: true,
-    retryDelayOnFailover: 100,
     maxLoadingRetryTime: 5000,
     lazyConnect: true,
     keepAlive: 10000,
@@ -82,7 +82,9 @@ export function initCacheRedis(): Redis {
       enableAutoPipelining: true,
       autoPipelineSelector: () => true,
     } : {}),
-  });
+  };
+  
+  redisClient = new Redis(redisUrl, redisOptions);
 
   redisClient.on('error', (err) => {
     console.error('[Cache] Redis connection error:', err.message);
@@ -466,7 +468,7 @@ async function triggerBackgroundRefresh(
   cacheKey: string,
   handler: () => Promise<NextResponse>,
   options: CacheOptions
-): void {
+): Promise<void> {
   // Don't wait for the result - fire and forget
   handler().then(async (response) => {
     if (response.status >= 200 && response.status < 300) {

@@ -7,14 +7,18 @@
  * - Evidence management
  * - Task tracking
  * - SLA monitoring
+ * 
+ * AUTHENTICATION REQUIRED for all endpoints
  */
 
 import { NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { IncidentSeverity, IncidentStatus, IncidentPhase, IncidentType, TaskStatus } from "@prisma/client";
+import { withAuth } from '@/lib/auth/api-auth';
+import { requireAnalyst } from '@/lib/auth/middleware';
 
-// GET /api/incidents - Fetch incidents with filtering
-export async function GET(request: Request) {
+// GET /api/incidents - Fetch incidents with filtering (AUTH REQUIRED)
+export const GET = withAuth(async (request: Request, user) => {
   try {
     const { searchParams } = new URL(request.url);
     const severity = searchParams.get("severity") as IncidentSeverity | null;
@@ -170,14 +174,25 @@ export async function GET(request: Request) {
   }
 }
 
-// POST /api/incidents - Create or update incidents
-export async function POST(request: Request) {
+// POST /api/incidents - Create or update incidents (AUTH REQUIRED)
+export const POST = withAuth(async (request: Request, user) => {
   try {
     const body = await request.json();
     const { action, id, ...incidentData } = body;
+    
+    // Log who is creating/modifying incidents
+    console.log(`[INCIDENTS] User ${user.userId} (${user.roleName}) performing action: ${action}`);
 
     // Create new incident
     if (action === "create") {
+      // SECURITY: Use crypto.randomUUID() for unpredictable, unique identifiers
+      // Previous implementation used Math.random() which is predictable
+      const generateTATCCode = () => {
+        const year = new Date().getFullYear();
+        const uniqueId = crypto.randomUUID().replace(/-/g, '').substring(0, 8).toUpperCase();
+        return `TATC-${year}-${uniqueId}`;
+      };
+
       const incident = await db.incident.create({
         data: {
           title: incidentData.title,
@@ -187,7 +202,7 @@ export async function POST(request: Request) {
           status: IncidentStatus.OPEN,
           phase: IncidentPhase.DETECTION,
           priority: incidentData.priority || 2,
-          tatcCode: `TATC-${new Date().getFullYear()}-${Math.random().toString(36).substr(2, 6).toUpperCase()}`,
+          tatcCode: generateTATCCode(),
           reportedBy: incidentData.reportedBy,
           assignedToId: incidentData.assigneeId,
           affectedAssets: incidentData.affectedAssets ? JSON.stringify(incidentData.affectedAssets) : null,

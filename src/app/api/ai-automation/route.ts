@@ -66,7 +66,9 @@ export async function GET(request: NextRequest) {
           confidence: 0,
           dependencies: [],
           estimatedDuration: 15,
-          config: {
+          status: 'pending',
+          // Store model config in result metadata instead
+          result: {
             modelId: 'threat-classifier-v3',
             input: {
               protocol_type: 'SS7',
@@ -74,7 +76,8 @@ export async function GET(request: NextRequest) {
               destination_pattern: 'premium_rate',
               frequency: 150,
               subscriber_risk_score: 0.85
-            }
+            },
+            prediction: 'High probability of SS7-based fraud attempt detected'
           }
         })
 
@@ -99,7 +102,8 @@ export async function GET(request: NextRequest) {
           confidence: 0,
           dependencies: [],
           estimatedDuration: 30,
-          config: {
+          status: 'pending',
+          result: {
             dataSource: 'network_flow',
             maxSeverity: 'critical',
             timeWindow: '1h'
@@ -271,7 +275,8 @@ export async function POST(request: NextRequest) {
           confidence: 0,
           dependencies: [],
           estimatedDuration: 20,
-          config: { modelId, input }
+          status: 'pending',
+          result: { modelId, input }
         })
 
         return NextResponse.json({
@@ -301,7 +306,8 @@ export async function POST(request: NextRequest) {
           confidence: 0,
           dependencies: [],
           estimatedDuration: 300,
-          config: { playbookId, ...config }
+          status: 'pending',
+          result: { playbookId, ...config }
         })
 
         return NextResponse.json({
@@ -324,7 +330,8 @@ export async function POST(request: NextRequest) {
           confidence: 0,
           dependencies: [],
           estimatedDuration: 45,
-          config: { dataSource, maxSeverity }
+          status: 'pending',
+          result: { dataSource, maxSeverity }
         })
 
         return NextResponse.json({

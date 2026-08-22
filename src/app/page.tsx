@@ -41,6 +41,7 @@ const moduleRoutes: Record<string, string> = {
   'threat-hunting': '/dashboards/threat-hunting',
   'soar': '/dashboards/threat-hunting',
   'incidents': '/dashboards/analyst',
+  'identity-access': '/dashboards/analyst',
 }
 
 // Sub-module ID to Route Mapping
@@ -99,11 +100,25 @@ const subModuleRoutes: Record<string, string> = {
   'automation-rules': '/dashboards/threat-hunting',
   'task-automation': '/dashboards/threat-hunting',
   'integration-hub': '/dashboards/analyst',
+  // Identity & Access sub-modules
+  'ldap-sync': '/dashboards/analyst',
+  'pam': '/dashboards/analyst',
+  'mfa': '/dashboards/analyst',
+  'sso': '/dashboards/analyst',
 }
 
-// Import SS7 Components
-import SS7TrafficMonitor from '@/components/ss7/SS7TrafficMonitor'
-import FraudDetectionPanel from '@/components/ss7/FraudDetectionPanel'
+// Import SS7 Components with dynamic imports for better performance
+import dynamic from 'next/dynamic'
+
+const SS7TrafficMonitor = dynamic(
+  () => import('@/components/ss7/SS7TrafficMonitor').then(mod => ({ default: mod.SS7TrafficMonitor })),
+  { ssr: false, loading: () => <div className="p-4 animate-pulse bg-slate-800 rounded-lg">Loading SS7 Monitor...</div> }
+)
+
+const FraudDetectionPanel = dynamic(
+  () => import('@/components/ss7/FraudDetectionPanel').then(mod => ({ default: mod.FraudDetectionPanel })),
+  { ssr: false, loading: () => <div className="p-4 animate-pulse bg-slate-800 rounded-lg">Loading Fraud Detection...</div> }
+)
 import { Badge } from '@/components/ui/badge'
 
 // ============================================================
@@ -378,8 +393,8 @@ const socModules: Module[] = [
     ]
   },
   {
-    id: 'identity',
-    identity: 'Identity & Access',
+    id: 'identity-access',
+    name: 'Identity & Access',
     icon: <Key className="w-5 h-5" />,
     description: 'IAM & Privileged Access Management',
     status: 'active',
@@ -440,9 +455,20 @@ export default function SOCDashboard() {
     }
   }
 
+  // Debounced search state for performance (PER-010 fix)
+  const [debouncedSearch, setDebouncedSearch] = useState('')
+  
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setDebouncedSearch(searchQuery)
+    }, 300) // 300ms debounce
+    
+    return () => clearTimeout(timer)
+  }, [searchQuery])
+
   const filteredModules = socModules.filter(module =>
-    (module.name && module.name.toLowerCase().includes(searchQuery.toLowerCase())) ||
-    (module.description && module.description.toLowerCase().includes(searchQuery.toLowerCase()))
+    (module.name && module.name.toLowerCase().includes(debouncedSearch.toLowerCase())) ||
+    (module.description && module.description.toLowerCase().includes(debouncedSearch.toLowerCase()))
   )
 
   return (

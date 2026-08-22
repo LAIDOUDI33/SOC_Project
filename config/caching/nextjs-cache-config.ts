@@ -107,164 +107,164 @@ export const CacheConfig = {
     CDN_ONLY: 'public, s-maxage=300, proxy-revalidate',
   },
   
-  // ============================================================
-  // ROUTE-SPECIFIC CACHE CONFIGURATIONS
-  // ============================================================
-  ROUTES: {
-    // Main dashboard routes
-    '/': {
-      cache: 'ISR',
-      revalidate: CacheConfig.TTL.ISR_REVALIDATION.DASHBOARD,
-      swr: CacheConfig.TTL.SWR.REALTIME_DATA,
-      description: 'Main SOC Dashboard',
-    },
-    '/dashboard': {
-      cache: 'ISR',
-      revalidate: CacheConfig.TTL.ISR_REVALIDATION.DASHBOARD,
-      swr: CacheConfig.TTL.SWR.REALTIME_DATA,
-      description: 'Dashboard Home',
-    },
-    
-    // Security operations routes
-    '/alerts': {
-      cache: 'SSR',                           // Always fresh - critical security data
-      headers: CacheConfig.HEADERS.API_PRIVATE,
-      description: 'Active Alerts Feed',
-    },
-    '/alerts/[id]': {
-      cache: 'ISR',
-      revalidate: CacheConfig.TTL.ISR_REVALIDATIONS.ALERTS_DETAIL,
-      description: 'Alert Detail View',
-    },
-    '/incidents': {
-      cache: 'ISR',
-      revalidate: CacheConfig.TTL.ISR_REVALIDATION.INCIDENTS,
-      swr: CacheConfig.TTL.SWR.NEAR_REALTIME,
-      description: 'Incident Management',
-    },
-    '/incidents/[id]': {
-      cache: 'ISR',
-      revalidate: CacheConfig.TTL.ISR_REVALIDATIONS.INCIDENTS_DETAIL,
-      description: 'Incident Detail View',
-    },
-    '/threat-hunting': {
-      cache: 'SSR',                           // Interactive hunting workspace
-      headers: CacheConfig.HEADERS.API_PRIVATE,
-      description: 'Threat Hunting Workspace',
-    },
-    
-    // Intelligence routes
-    '/threats': {
-      cache: 'ISR',
-      revalidate: CacheConfig.TTL.ISR_REVALIDATION.THREATS,
-      description: 'Threat Intelligence Feed',
-    },
-    '/threats/[id]': {
-      cache: 'ISR',
-      revalidate: CacheConfig.TTL.ISR_REVALIDATIONS.THREATS_DETAIL,
-      description: 'Threat Detail View',
-    },
-    
-    // Analytics & Reporting
-    '/dashboards/analytics': {
-      cache: 'ISR',
-      revalidate: CacheConfig.TTL.ISR_REVALIDATION.DASHBOARD,
-      description: 'Analytics Dashboard',
-    },
-    '/reports': {
-      cache: 'ISR',
-      revalidate: CacheConfig.TTL.ISR_REVALIDATION.KPI_REPORTS,
-      description: 'Reports Library',
-    },
-    
-    // Compliance
-    '/dashboards/compliance': {
-      cache: 'ISR',
-      revalidate: CacheConfig.TTL.ISR_REVALIDATION.COMPLIANCE,
-      description: 'Compliance Dashboard',
-    },
-    
-    // Telecom-specific
-    '/dashboards/telecom': {
-      cache: 'ISR',
-      revalidate: CacheConfig.TTL.ISR_REVALIDATION.DASHBOARD,
-      description: 'Telecom Monitoring Dashboard',
-    },
-    
-    // Settings (user-specific, but rarely changes)
-    '/settings': {
-      cache: 'SSR',                           // User-specific settings
-      headers: CacheConfig.HEADERS.API_PRIVATE,
-      description: 'User Settings',
-    },
-    
-    // Authentication (never cached)
-    '/auth/login': {
-      cache: 'NO_STORE',
-      headers: 'private, no-cache, no-store, must-revalidate, max-age=0',
-      description: 'Login Page',
-    },
-    
-    // ============================================================
-    // API ROUTE CACHING
-    // ============================================================
-    '/api/health': {
-      cache: 'EDGE',
-      ttl: CacheConfig.TTL.HEALTH_API,
-      description: 'Health Check Endpoint',
-    },
-    '/api/metrics': {
-      cache: 'EDGE',
-      ttl: CacheConfig.TTL.METRICS_API,
-      swr: CacheConfig.TTL.SWR.CRITICAL_DATA,
-      description: 'Metrics Aggregation API',
-    },
-    '/api/alerts': {
-      cache: 'NONE',                          // Real-time alerts, no caching
-      description: 'Alerts API',
-    },
-    '/api/incidents': {
-      cache: 'EDGE',
-      ttl: CacheConfig.TTL.INCIDENTS_API,
-      description: 'Incidents API',
-    },
-    '/api/threats': {
-      cache: 'EDGE',
-      ttl: CacheConfig.TTL.THREATS_API,
-      description: 'Threat Intelligence API',
-    },
-    '/api/dashboard': {
-      cache: 'EDGE',
-      ttl: CacheConfig.TTL.METRICS_API,
-      description: 'Dashboard Data API',
-    },
-    '/api/compliance': {
-      cache: 'EDGE',
-      ttl: CacheConfig.TTL.COMPLIANCE_PAGE,
-      description: 'Compliance Status API',
-    },
-    '/api/system': {
-      cache: 'EDGE',
-      ttl: CacheConfig.TTL.HEALTH_API,
-      description: 'System Status API',
-    },
-    '/api/stream/*': {
-      cache: 'NONE',                          // Streaming endpoints never cached
-      description: 'SSE/Streaming Endpoints',
-    },
-    '/api/v1/events': {
-      cache: 'NONE',                          // Ingestion endpoint, write-heavy
-      description: 'Event Ingestion API',
-    },
-    '/api/auth/*': {
-      cache: 'NONE',                          // Auth endpoints never cached
-      description: 'Authentication APIs',
-    },
-  },
+  // Note: ROUTES configuration moved to end of file to avoid circular reference
 };
 
-// Fix the reference to use correct property name
-CacheConfig.TTL.ISR_REVALIDATIONS = CacheConfig.TTL.ISR_REVALIDATION;
+// ============================================================
+// ROUTE-SPECIFIC CACHE CONFIGURATIONS (defined after CacheConfig)
+// ============================================================
+
+export const RouteCacheConfig = {
+  // Main dashboard routes
+  '/': {
+    cache: 'ISR',
+    revalidate: CacheConfig.TTL.ISR_REVALIDATION.DASHBOARD,
+    swr: CacheConfig.TTL.SWR.REALTIME_DATA,
+    description: 'Main SOC Dashboard',
+  },
+  '/dashboard': {
+    cache: 'ISR',
+    revalidate: CacheConfig.TTL.ISR_REVALIDATION.DASHBOARD,
+    swr: CacheConfig.TTL.SWR.REALTIME_DATA,
+    description: 'Dashboard Home',
+  },
+  
+  // Security operations routes
+  '/alerts': {
+    cache: 'SSR',                           // Always fresh - critical security data
+    headers: CacheConfig.HEADERS.API_PRIVATE,
+    description: 'Active Alerts Feed',
+  },
+  '/alerts/[id]': {
+    cache: 'ISR',
+    revalidate: CacheConfig.TTL.ISR_REVALIDATION.ALERTS_DETAIL,
+    description: 'Alert Detail View',
+  },
+  '/incidents': {
+    cache: 'ISR',
+    revalidate: CacheConfig.TTL.ISR_REVALIDATION.INCIDENTS,
+    swr: CacheConfig.TTL.SWR.NEAR_REALTIME,
+    description: 'Incident Management',
+  },
+  '/incidents/[id]': {
+    cache: 'ISR',
+    revalidate: CacheConfig.TTL.ISR_REVALIDATION.INCIDENTS_DETAIL,
+    description: 'Incident Detail View',
+  },
+  '/threat-hunting': {
+    cache: 'SSR',                           // Interactive hunting workspace
+    headers: CacheConfig.HEADERS.API_PRIVATE,
+    description: 'Threat Hunting Workspace',
+  },
+  
+  // Intelligence routes
+  '/threats': {
+    cache: 'ISR',
+    revalidate: CacheConfig.TTL.ISR_REVALIDATION.THREATS,
+    description: 'Threat Intelligence Feed',
+  },
+  '/threats/[id]': {
+    cache: 'ISR',
+    revalidate: CacheConfig.TTL.ISR_REVALIDATION.THREATS_DETAIL,
+    description: 'Threat Detail View',
+  },
+  
+  // Analytics & Reporting
+  '/dashboards/analytics': {
+    cache: 'ISR',
+    revalidate: CacheConfig.TTL.ISR_REVALIDATION.DASHBOARD,
+    description: 'Analytics Dashboard',
+  },
+  '/reports': {
+    cache: 'ISR',
+    revalidate: CacheConfig.TTL.ISR_REVALIDATION.KPI_REPORTS,
+    description: 'Reports Library',
+  },
+  
+  // Compliance
+  '/dashboards/compliance': {
+    cache: 'ISR',
+    revalidate: CacheConfig.TTL.ISR_REVALIDATION.COMPLIANCE,
+    description: 'Compliance Dashboard',
+  },
+  
+  // Telecom-specific
+  '/dashboards/telecom': {
+    cache: 'ISR',
+    revalidate: CacheConfig.TTL.ISR_REVALIDATION.DASHBOARD,
+    description: 'Telecom Monitoring Dashboard',
+  },
+  
+  // Settings (user-specific, but rarely changes)
+  '/settings': {
+    cache: 'SSR',                           // User-specific settings
+    headers: CacheConfig.HEADERS.API_PRIVATE,
+    description: 'User Settings',
+  },
+  
+  // Authentication (never cached)
+  '/auth/login': {
+    cache: 'NO_STORE',
+    headers: 'private, no-cache, no-store, must-revalidate, max-age=0',
+    description: 'Login Page',
+  },
+  
+  // ============================================================
+  // API ROUTE CACHING
+  // ============================================================
+  '/api/health': {
+    cache: 'EDGE',
+    ttl: CacheConfig.TTL.HEALTH_API,
+    description: 'Health Check Endpoint',
+  },
+  '/api/metrics': {
+    cache: 'EDGE',
+    ttl: CacheConfig.TTL.METRICS_API,
+    swr: CacheConfig.TTL.SWR.CRITICAL_DATA,
+    description: 'Metrics Aggregation API',
+  },
+  '/api/alerts': {
+    cache: 'NONE',                          // Real-time alerts, no caching
+    description: 'Alerts API',
+  },
+  '/api/incidents': {
+    cache: 'EDGE',
+    ttl: CacheConfig.TTL.INCIDENTS_API,
+    description: 'Incidents API',
+  },
+  '/api/threats': {
+    cache: 'EDGE',
+    ttl: CacheConfig.TTL.THREATS_API,
+    description: 'Threat Intelligence API',
+  },
+  '/api/dashboard': {
+    cache: 'EDGE',
+    ttl: CacheConfig.TTL.METRICS_API,
+    description: 'Dashboard Data API',
+  },
+  '/api/compliance': {
+    cache: 'EDGE',
+    ttl: CacheConfig.TTL.COMPLIANCE_PAGE,
+    description: 'Compliance Status API',
+  },
+  '/api/system': {
+    cache: 'EDGE',
+    ttl: CacheConfig.TTL.HEALTH_API,
+    description: 'System Status API',
+  },
+  '/api/stream/*': {
+    cache: 'NONE',                          // Streaming endpoints never cached
+    description: 'SSE/Streaming Endpoints',
+  },
+  '/api/v1/events': {
+    cache: 'NONE',                          // Ingestion endpoint, write-heavy
+    description: 'Event Ingestion API',
+  },
+  '/api/auth/*': {
+    cache: 'NONE',                          // Auth endpoints never cached
+    description: 'Authentication APIs',
+  },
+};
 
 // ============================================================
 // NEXT.JS CONFIGURATION WITH PERFORMANCE OPTIMIZATIONS
@@ -326,9 +326,6 @@ const nextConfig: NextConfig = {
       'zustand',
     ],
     
-    // CSS chunking optimization
-    cssChunking: 'loose',
-    
     // Server components external packages
     serverComponentsExternalPackages: [
       '@prisma/client',
@@ -336,17 +333,6 @@ const nextConfig: NextConfig = {
       'ioredis',
       'kafkajs',
     ],
-    
-    // Bundle analysis (enabled via env var)
-    bundleAnalyzer: {
-      enabled: process.env.ANALYZE === 'true',
-    },
-    
-    // Parallel routes for dashboard segments
-    parallelRoutes: true,
-    
-    // Incremental cache handler for Redis-backed caching
-    incrementalCacheHandlerPath: './src/lib/cache/incremental-cache-handler.ts',
     
     // Server actions optimization
     serverActions: {
@@ -476,7 +462,7 @@ const nextConfig: NextConfig = {
   },
   
   // Webpack configuration for optimal bundle performance
-  webpack: (config, { isServer, isDev }) => {
+  webpack: (config, { isServer }) => {
     // ============================================================
     // BUNDLE OPTIMIZATION
     // ============================================================
@@ -484,7 +470,7 @@ const nextConfig: NextConfig = {
       ...config.optimization,
       splitChunks: {
         chunks: 'all',
-        maxSize: isDev ? undefined : 244000, // ~244KB per chunk for caching
+        maxSize: 244000, // ~244KB per chunk for caching
         cacheGroups: {
           // React core - stable, rarely changes
           react: {
@@ -533,7 +519,7 @@ const nextConfig: NextConfig = {
       },
       
       // Runtime chunk for long-term caching
-      runtimeChunk: isDev ? false : 'single',
+      runtimeChunk: 'single',
     };
     
     // ============================================================
@@ -569,12 +555,8 @@ const nextConfig: NextConfig = {
     // Ignore locale files for smaller bundles
     // Note: IgnorePlugin is configured via next.config.js plugins array if needed
     
-    return config;
-    
-    // Source maps in production for debugging (disable for perf if needed)
-    if (!isDev) {
-      config.devtool = 'hidden-source-map';
-    }
+    // Source maps in production for debugging
+    config.devtool = 'hidden-source-map';
     
     return config;
   },
@@ -598,14 +580,14 @@ export default nextConfig;
  * Generate complete cache control headers based on route configuration
  */
 export function getCacheHeaders(route: string): Record<string, string> {
-  const routeConfig = CacheConfig.ROUTES[route as keyof typeof CacheConfig.ROUTES];
+  const routeConfig = RouteCacheConfig[route as keyof typeof RouteCacheConfig];
   
   if (!routeConfig) {
     return { 'Cache-Control': CacheConfig.HEADERS.API_PRIVATE };
   }
   
   // Explicitly set headers
-  if (routeConfig.headers) {
+  if ('headers' in routeConfig && routeConfig.headers) {
     const headers: Record<string, string> = { 'Cache-Control': routeConfig.headers };
     
     // Add CDN headers for cacheable routes
@@ -618,9 +600,9 @@ export function getCacheHeaders(route: string): Record<string, string> {
   }
   
   // ISR routes
-  if (routeConfig.cache === 'ISR') {
-    const revalidate = routeConfig.revalidate || CacheConfig.TTL.ISR_REVALIDATION.DASHBOARD;
-    const swr = routeConfig.swr || CacheConfig.TTL.SWR.DEFAULT;
+  if (routeConfig.cache === 'ISR' && 'revalidate' in routeConfig) {
+    const revalidate = (routeConfig as any).revalidate || CacheConfig.TTL.ISR_REVALIDATION.DASHBOARD;
+    const swr = 'swr' in routeConfig ? (routeConfig as any).swr : CacheConfig.TTL.SWR.DEFAULT;
     
     return {
       'Cache-Control': `s-maxage=${revalidate}, stale-while-revalidate=${swr}`,
@@ -630,8 +612,8 @@ export function getCacheHeaders(route: string): Record<string, string> {
   }
   
   // EDGE cache routes
-  if (routeConfig.cache === 'EDGE') {
-    const ttl = routeConfig.ttl || 60;
+  if (routeConfig.cache === 'EDGE' && 'ttl' in routeConfig) {
+    const ttl = (routeConfig as any).ttl || 60;
     return {
       'Cache-Control': `public, s-maxage=${ttl}, stale-while-revalidate=${ttl * 2}`,
       'CDN-Cache-Control': `public, s-maxage=${ttl}, stale-while-revalidate=${ttl * 2}`,
@@ -655,7 +637,7 @@ function getCDNCacheControl(routeConfig: any): string {
  * Check if a route should use ISR caching
  */
 export function shouldUseISR(route: string): boolean {
-  const routeConfig = CacheConfig.ROUTES[route as keyof typeof CacheConfig.ROUTES];
+  const routeConfig = RouteCacheConfig[route as keyof typeof RouteCacheConfig];
   return routeConfig?.cache === 'ISR';
 }
 
@@ -663,7 +645,7 @@ export function shouldUseISR(route: string): boolean {
  * Check if a route should be served from edge cache
  */
 export function shouldUseEdgeCache(route: string): boolean {
-  const routeConfig = CacheConfig.ROUTES[route as keyof typeof CacheConfig.ROUTES];
+  const routeConfig = RouteCacheConfig[route as keyof typeof RouteCacheConfig];
   return routeConfig?.cache === 'EDGE';
 }
 
@@ -671,16 +653,16 @@ export function shouldUseEdgeCache(route: string): boolean {
  * Get revalidation time for a route
  */
 export function getRevalidationTime(route: string): number | false {
-  const routeConfig = CacheConfig.ROUTES[route as keyof typeof CacheConfig.ROUTES];
-  return routeConfig?.revalidate ?? false;
+  const routeConfig = RouteCacheConfig[route as keyof typeof RouteCacheConfig];
+  return (routeConfig as any)?.revalidate ?? false;
 }
 
 /**
  * Get TTL for a specific route
  */
 export function getRouteTTL(route: string): number {
-  const routeConfig = CacheConfig.ROUTES[route as keyof typeof CacheConfig.ROUTES];
-  return routeConfig?.revalidate || routeConfig?.ttl || 0;
+  const routeConfig = RouteCacheConfig[route as keyof typeof RouteCacheConfig];
+  return (routeConfig as any)?.revalidate || (routeConfig as any)?.ttl || 0;
 }
 
 // ============================================================
@@ -724,12 +706,12 @@ export const SW_CACHE_STRATEGIES = {
 export function getCacheStrategy(url: string): string {
   // Static assets - cache first
   if (url.match(/\.(js|css|woff2?|ttf|otf|eot)$/)) {
-    return SW_CACHE_STRATEGIES.CACHE_FIRST;
+    return SW_CACHE_STRATEGIES.STRATEGIES.CACHE_FIRST;
   }
   
   // Images - cache first
   if (url.match(/\.(png|jpg|jpeg|gif|svg|webp|avif|ico)$/)) {
-    return SW_CACHE_STRATEGIES.CACHE_FIRST;
+    return SW_CACHE_STRATEGIES.STRATEGIES.CACHE_FIRST;
   }
   
   // Metrics and dashboard data - stale while revalidate
@@ -738,31 +720,31 @@ export function getCacheStrategy(url: string): string {
     url.startsWith('/api/dashboard') ||
     url.startsWith('/api/kpi')
   ) {
-    return SW_CACHE_STRATEGIES.STALE_WHILE_REVALIDATE;
+    return SW_CACHE_STRATEGIES.STRATEGIES.STALE_WHILE_REVALIDATE;
   }
   
   // Alerts - short SWR for near-realtime
   if (url.startsWith('/api/alerts')) {
-    return SW_CACHE_STRATEGIES.STALE_WHILE_REVALIDATE;
+    return SW_CACHE_STRATEGIES.STRATEGIES.STALE_WHILE_REVALIDATE;
   }
   
   // Authentication - never cache
   if (url.startsWith('/api/auth') || url.includes('/login')) {
-    return SW_CACHE_STRATEGIES.NETWORK_ONLY;
+    return SW_CACHE_STRATEGIES.STRATEGIES.NETWORK_ONLY;
   }
   
   // Event ingestion - network only
   if (url.includes('/events') && !url.includes('stream')) {
-    return SW_CACHE_STRATEGIES.NETWORK_ONLY;
+    return SW_CACHE_STRATEGIES.STRATEGIES.NETWORK_ONLY;
   }
   
   // Other API endpoints - network first with cache fallback
   if (url.startsWith('/api/')) {
-    return SW_CACHE_STRATEGIES.NETWORK_FIRST;
+    return SW_CACHE_STRATEGIES.STRATEGIES.NETWORK_FIRST;
   }
   
   // Pages - network first
-  return SW_CACHE_STRATEGIES.NETWORK_FIRST;
+  return SW_CACHE_STRATEGIES.STRATEGIES.NETWORK_FIRST;
 }
 
 /**
@@ -783,5 +765,3 @@ export function getCacheName(url: string): string {
   }
   return SW_CACHE_STRATEGIES.CACHE_NAMES.DYNAMIC;
 }
-
-export default CacheConfig;
