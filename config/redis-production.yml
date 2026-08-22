@@ -1,0 +1,292 @@
+# ============================================================
+# Djezzy National SOC Platform - Redis Production Configuration
+# ============================================================
+# 
+# This configuration file contains production-ready Redis settings
+# optimized for the National SOC Platform's requirements:
+# - High availability for rate limiting
+# - Session storage for multi-instance deployments
+# - Caching layer for API responses
+# - SS7/Telecom data caching
+#
+# ANRT Compliance Notes:
+# - All data must remain within Algeria borders
+# - Encryption at rest and in transit required
+# - Audit logging enabled
+#
+# Version: 2.0.0
+# Last Updated: 2026-01
+# ============================================================
+
+# ============================================================
+# NETWORK CONFIGURATION
+# ============================================================
+
+# Bind to specific interfaces (security: don't bind to 0.0.0.0)
+bind 127.0.0.1 10.0.0.1
+# Protected mode - only allow connections from bound interfaces
+protected-mode yes
+
+# Port configuration
+port 6379
+tcp-backlog 511
+timeout 0
+tcp-keepalive 300
+
+# ============================================================
+# GENERAL CONFIGURATION
+# ============================================================
+
+# Daemonize (use 'no' when running via systemd/docker)
+daemonize no
+supervised no
+loglevel notice
+logfile /var/log/redis/redis-soc.log
+syslog-enabled yes
+syslog-ident redis-soc
+
+# Number of databases (we use different prefixes instead of multiple DBs)
+databases 16
+
+# ============================================================
+# SECURITY CONFIGURATION (CRITICAL FOR PRODUCTION)
+# ============================================================
+
+# REQUIRE AUTHENTICATION - Set a strong password
+# Generate with: openssl rand -base64 48
+requirepass ${REDIS_PASSWORD}
+
+# Rename dangerous commands (security hardening)
+rename-command FLUSHDB ""
+rename-command FLUSHALL ""
+rename-command DEBUG ""
+rename-command CONFIG "SOC_CONFIG_8f3kL2mN"
+rename-command SHUTDOWN "SOC_SHUTDOWN_9x4pQ7rM"
+
+# TLS Configuration (REQUIRED for production per ANRT)
+tls-port 6380
+tls-cert-file /etc/ssl/redis/soc-platform.crt
+tls-key-file /etc/ssl/redis/soc-platform.key
+tls-ca-file /etc/ssl/redis/ca-bundle.crt
+tls-auth-clients optional
+tls-replication yes
+tls-cluster yes
+tls-session-caching yes
+tls-session-cache-size 50000
+tls-session-timeout 300
+
+# ============================================================
+# MEMORY MANAGEMENT
+# ============================================================
+
+# Maximum memory allocation (adjust based on server RAM)
+# For dedicated Redis server with 32GB RAM, use ~24GB
+maxmemory 24gb
+
+# Eviction policy for SOC Platform:
+# allkeys-lru - Least Recently Used across all keys
+# This is ideal for our use case:
+# - Rate limit data should expire naturally (TTL)
+# - Session data has TTL
+# - Cache data can be evicted when memory pressure occurs
+maxmemory-policy allkeys-lru
+
+# Memory optimization settings
+hash-max-listpack-entries 512
+hash-max-listpack-value 64
+list-max-listpack-size -2
+set-max-intset-entries 512
+zset-max-listpack-entries 128
+zset-max-listpack-value 64
+hll-sparse-max-bytes 3000
+stream-node-max-bytes 4096
+stream-node-max-entries 100
+activerehashing yes
+client-output-buffer-limit normal 0 0 0
+client-output-buffer-limit replica 256mb 64mb 60
+client-output-buffer-limit pubsub 32mb 8mb 60
+
+# ============================================================
+# PERSISTENCE CONFIGURATION
+# ============================================================
+
+# RDB Snapshots (Point-in-time backups)
+# Save every 15 minutes if at least 1000 keys changed
+save 900 1
+save 300 10
+save 60 10000
+
+# RDB file settings
+dir /var/lib/redis
+dump.rdb
+rdbcompression yes
+rdbchecksum yes
+rdb-del-sync-files no
+
+# AOF (Append Only File) - Better durability
+appendonly yes
+appendfilename "appendonly.aof"
+appendfsync everysec
+no-appendfsync-on-rewrite no
+auto-aof-rewrite-percentage 100
+auto-aof-rewrite-min-size 64mb
+aof-load-truncated yes
+aof-use-rdb-preamble yes
+
+# ============================================================
+# REPLICATION CONFIGURATION (FOR HIGH AVAILABILITY)
+# ============================================================
+
+replicaof <MASTER_IP> <MASTER_PORT>
+masterauth ${REDIS_REPLICA_PASSWORD}
+masteruser default
+replica-serve-stale-data yes
+replica-read-only yes
+replica-diskless-sync yes
+replica-diskless-sync-delay 5
+repl-diskless-sync-max-replicas 0
+repl-priority 100
+replication-ip <REPLICA_IP>
+replication-port 6379
+min-replicas-to-write 1
+min-replicas-max-lag 10
+repl-disable-tcp-nodelay no
+repl-backlog-size 256mb
+repl-backlog-ttl 3600
+repl-timeout 60
+repl-ping-replica-period 10
+
+# ============================================================
+# SENTINEL CONFIGURATION (FOR FAILOVER)
+# ============================================================
+# Run sentinel on separate port
+# sentinel monitor mymaster <MASTER_IP> 6379 2
+# sentinel down-after-milliseconds mymaster 5000
+# sentinel failover-timeout mymaster 60000
+# sentinel parallel-syncs mymaster 1
+# sentinel auth-pass mymaster ${REDIS_SENTINEL_PASSWORD}
+
+# ============================================================
+# CLUSTER CONFIGURATION (IF USING CLUSTER MODE)
+# ============================================================
+# cluster-enabled yes
+# cluster-config-file nodes.conf
+# cluster-node-timeout 15000
+# cluster-replica-validity-factor 10
+# cluster-migration-barrier 1
+# cluster-require-full-coverage yes
+# cluster-replica-no-failover no
+# cluster-allow-reads-when-down no
+
+# ============================================================
+# PERFORMANCE TUNING FOR SOC PLATFORM
+# ============================================================
+
+# Slow query log (for performance monitoring)
+slowlog-log-slower-than 10000  # 10ms
+slowlog-max-length 128
+
+# Latency monitoring
+latency-monitor-threshold 100  # 100ms threshold
+
+# Client limits
+maxclients 10000
+
+# TCP settings for high throughput
+tcp-backlog 511
+
+# ============================================================
+# ADVANCED CONFIGURATION FOR RATE LIMITING & SESSIONS
+# ============================================================
+
+# Lua script time limit (for atomic rate limiting operations)
+lua-time-limit 5000
+
+# Notify keyspace events (for session expiration handling)
+notify-keyspace-events Ex
+
+# ============================================================
+# MONITORING METRICS EXPORT
+# ============================================================
+
+# Enable INFO command for metrics collection
+# Prometheus-compatible stats can be extracted using redis_exporter
+
+# Key metrics to monitor:
+# - connected_clients: Active connections
+# - used_memory_rss: Actual memory usage
+# - instantaneous_ops_per_sec: Current throughput
+# - expired_keys: Keys that expired (session/rate limit cleanup)
+# - evicted_keys: Keys evicted due to memory pressure
+# - rejected_connections: Connections rejected (hit maxclients)
+# - sync_full: Replication syncs completed
+# - keyspace_hits/misses: Cache hit ratio
+
+# ============================================================
+# LOGGING AND AUDITING (ANRT COMPLIANCE)
+# ============================================================
+
+# Audit log format includes:
+# - Timestamp
+# - Client IP
+# - Command executed
+# - Key accessed (sanitized if sensitive)
+
+# Custom log prefix for SOC platform identification
+log-prefix "soc-redis"
+
+# ============================================================
+# DOCKER/KUBERNETES DEPLOYMENT NOTES
+# ============================================================
+#
+# When deploying in Kubernetes:
+# 1. Use StatefulSet for persistent storage
+# 2. Configure proper resource limits:
+#    resources:
+#      requests:
+#        memory: "4Gi"
+#        cpu: "2000m"
+#      limits:
+#        memory: "16Gi"
+#        cpu: "8000m"
+# 3. Use PersistentVolume for RDB/AOF files
+# 4. Deploy Sentinel as separate pods
+# 5. Use NetworkPolicy to restrict access
+#
+# Example docker-compose override:
+# services:
+#   redis:
+#     image: redis:7.2-alpine
+#     command: >
+#       redis-server
+#       --requirepass ${REDIS_PASSWORD}
+#       --maxmemory 2gb
+#       --maxmemory-policy allkeys-lru
+#       --appendonly yes
+#       --save "900 1" "300 10" "60 10000"
+#     volumes:
+#       - redis_data:/data
+#     ports:
+#       - "6379:6379"
+#     environment:
+#       - REDIS_PASSWORD=${REDIS_PASSWORD}
+#
+# ============================================================
+# ENVIRONMENT VARIABLES TO SET
+# ============================================================
+#
+# Required:
+# REDIS_PASSWORD=<strong-password>           # Authentication password
+# REDIS_URL=redis://:<password>@host:6379/0   # Connection URL
+#
+# Optional (for replication):
+# REDIS_REPLICA_PASSWORD=<password>          # Replica auth password
+# REDIS_SENTINEL_PASSWORD=<password>         # Sentinel auth password
+#
+# Application-specific:
+# NODE_ENV=production                        # Environment
+# REDIS_CLUSTER=false                        # Cluster mode toggle
+# REDIS_DEBUG=false                          # Debug logging
+# REDIS_MAX_RECONNECT_ATTEMPTS=10            # Reconnection attempts
+#
+# ============================================================

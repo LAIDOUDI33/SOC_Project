@@ -1,0 +1,502 @@
+     1→     1→     1→'use client'
+     2→     2→     2→
+     3→     3→     3→import React, { useState, useEffect } from 'react'
+     4→     4→     4→import Link from 'next/link'
+     5→     5→     5→import { useRouter } from 'next/navigation'
+     6→     6→     6→import {
+     7→     7→     7→  Shield, AlertTriangle, Activity, Clock, Users, Server,
+     8→     8→     8→  Globe, Lock, Eye, TrendingUp, Bell, Search, Filter,
+     9→     9→     9→  CheckCircle, XCircle, AlertCircle, ChevronRight, ChevronDown,
+    10→    10→    10→  RefreshCw, Wifi, Database, Cpu, HardDrive, Network, Zap,
+    11→    11→    11→  Scale, Target, Radar, Crosshair, Bot, FileSearch, Play,
+    12→    12→    12→  Settings, BarChart3, Brain, ShieldCheck, Fingerprint, Key,
+    13→    13→    13→  Radio, Phone, Signal, Router, Cloud, DatabaseBackup,
+    14→    14→    14→  BookOpen, ClipboardCheck, Award, FileText, Bug, UserCheck,
+    15→    15→    15→  LayoutDashboard, LineChart, PieChart, Monitor, Terminal,
+    16→    16→    16→  ArrowRight, Menu, X, Home, Grid3X3, Layers, Workflow,
+    17→    17→    17→  CreditCard, FolderOpen, List
+    18→    18→    18→} from 'lucide-react'
+    19→    19→    19→
+    20→    20→    20→// Import demo data for dashboard stats
+    21→    21→    21→import { 
+    22→    22→    22→  getDashboardSummary, 
+    23→    23→    23→  recentAlerts, 
+    24→    24→    24→  executiveKPIs,
+    25→    25→    25→  ss7TrafficData,
+    26→    26→    26→  anrtComplianceData,
+    27→    27→    27→  systemComponents
+    28→    28→    28→} from '@/lib/demo-data'
+    29→    29→    29→
+    30→    30→    30→// Module ID to Route Mapping for navigation
+    31→    31→    31→const moduleRoutes: Record<string, string> = {
+    32→    32→    32→  'siem': '/dashboards/analyst',
+    33→    33→    33→  'edr': '/dashboards/analyst',
+    34→    34→    34→  'network-security': '/dashboards/analyst',
+    35→    35→    35→  'ss7-tools': '/dashboards/telecom',
+    36→    36→    36→  'telecom-security': '/dashboards/telecom',
+    37→    37→    37→  'fraud-detection': '/dashboards/telecom',
+    38→    38→    38→  'analytics': '/dashboards/analyst',
+    39→    39→    39→  'compliance': '/dashboards/compliance',
+    40→    40→    40→  'ml-platform': '/dashboards/executive',
+    41→    41→    41→  'threat-hunting': '/dashboards/threat-hunting',
+    42→    42→    42→  'soar': '/dashboards/threat-hunting',
+    43→    43→    43→  'incidents': '/dashboards/analyst',
+    44→    44→    44→  'identity-access': '/dashboards/analyst',
+    45→    45→    45→}
+    46→    46→    46→
+    47→    47→    47→// Sub-module ID to Route Mapping
+    48→    48→    48→const subModuleRoutes: Record<string, string> = {
+    49→    49→    49→  'siem-dashboard': '/dashboards/analyst',
+    50→    50→    50→  'log-management': '/dashboards/analyst',
+    51→    51→    51→  'correlation-engine': '/dashboards/analyst',
+    52→    52→    52→  'rule-management': '/dashboards/analyst',
+    53→    53→    53→  'log-analytics': '/dashboards/analyst',
+    54→    54→    54→  'endpoint-monitoring': '/dashboards/analyst',
+    55→    55→    55→  'threat-hunting-edr': '/dashboards/threat-hunting',
+    56→    56→    56→  'incident-response': '/dashboards/analyst',
+    57→    57→    57→  'forensics': '/dashboards/analyst',
+    58→    58→    58→  'ids-ips': '/dashboards/analyst',
+    59→    59→    59→  'traffic-analysis': '/dashboards/analyst',
+    60→    60→    60→  'vulnerability-scanner': '/dashboards/analyst',
+    61→    61→    61→  'firewall-mgmt': '/dashboards/analyst',
+    62→    62→    62→  'ss7-decoder': '/dashboards/telecom',
+    63→    63→    63→  'traffic-monitor': '/dashboards/telecom',
+    64→    64→    64→  'fraud-detector': '/dashboards/telecom',
+    65→    65→    65→  'signaling-analyzer': '/dashboards/telecom',
+    66→    66→    66→  'message-inspector': '/dashboards/telecom',
+    67→    67→    67→  'ss7-firewall': '/dashboards/telecom',
+    68→    68→    68→  'gtp-inspector': '/dashboards/telecom',
+    69→    69→    69→  'diameter-analyzer': '/dashboards/telecom',
+    70→    70→    70→  'sip-sentry': '/dashboards/telecom',
+    71→    71→    71→  'ims-protection': '/dashboards/telecom',
+    72→    72→    72→  'sim-swap-detector': '/dashboards/telecom',
+    73→    73→    73→  'fraud-dashboard': '/dashboards/telecom',
+    74→    74→    74→  'subscription-fraud': '/dashboards/telecom',
+    75→    75→    75→  'billing-fraud': '/dashboards/telecom',
+    76→    76→    76→  'roaming-fraud': '/dashboards/telecom',
+    77→    77→    77→  'threat-intel': '/dashboards/analyst',
+    78→    78→    78→  'behavioral-analytics': '/dashboards/executive',
+    79→    79→    79→  'threat-scoring': '/dashboards/executive',
+    80→    80→    80→  'ml-predictions': '/dashboards/executive',
+    81→    81→    81→  'reporting': '/dashboards/executive',
+    82→    82→    82→  'artp-reporting': '/dashboards/compliance',
+    83→    83→    83→  'anssi-alignment': '/dashboards/compliance',
+    84→    84→    84→  'iso27001': '/dashboards/compliance',
+    85→    85→    85→  'nist-framework': '/dashboards/compliance',
+    86→    86→    86→  'evidence-vault': '/dashboards/compliance',
+    87→    87→    87→  'gap-analysis': '/dashboards/compliance',
+    88→    88→    88→  'anomaly-detection': '/dashboards/executive',
+    89→    89→    89→  'predictive-analytics': '/dashboards/executive',
+    90→    90→    90→  'uba-engine': '/dashboards/executive',
+    91→    91→    91→  'model-management': '/dashboards/executive',
+    92→    92→    92→  'automated-response-ai': '/dashboards/threat-hunting',
+    93→    93→    93→  'hunt-sessions': '/dashboards/threat-hunting',
+    94→    94→    94→  'hypothesis-builder': '/dashboards/threat-hunting',
+    95→    95→    95→  'query-workbench': '/dashboards/threat-hunting',
+    96→    96→    96→  'ioc-extraction': '/dashboards/threat-hunting',
+    97→    97→    97→  'timeline-analysis': '/dashboards/threat-hunting',
+    98→    98→    98→  'playbooks': '/dashboards/threat-hunting',
+    99→    99→    99→  'case-management': '/dashboards/analyst',
+   100→   100→   100→  'automation-rules': '/dashboards/threat-hunting',
+   101→   101→   101→  'task-automation': '/dashboards/threat-hunting',
+   102→   102→   102→  'integration-hub': '/dashboards/analyst',
+   103→   103→   103→  // Identity & Access sub-modules
+   104→   104→   104→  'ldap-sync': '/dashboards/analyst',
+   105→   105→   105→  'pam': '/dashboards/analyst',
+   106→   106→   106→  'mfa': '/dashboards/analyst',
+   107→   107→   107→  'sso': '/dashboards/analyst',
+   108→   108→   108→}
+   109→   109→   109→
+   110→   110→   110→// Import SS7 Components with dynamic imports for better performance
+   111→   111→   111→import dynamic from 'next/dynamic'
+   112→   112→   112→
+   113→   113→   113→const SS7TrafficMonitor = dynamic(
+   114→   114→   114→  () => import('@/components/ss7/SS7TrafficMonitor').then(mod => ({ default: mod.SS7TrafficMonitor })),
+   115→   115→   115→  { ssr: false, loading: () => <div className="p-4 animate-pulse bg-slate-800 rounded-lg">Loading SS7 Monitor...</div> }
+   116→   116→   116→)
+   117→   117→   117→
+   118→   118→   118→const FraudDetectionPanel = dynamic(
+   119→   119→   119→  () => import('@/components/ss7/FraudDetectionPanel').then(mod => ({ default: mod.FraudDetectionPanel })),
+   120→   120→   120→  { ssr: false, loading: () => <div className="p-4 animate-pulse bg-slate-800 rounded-lg">Loading Fraud Detection...</div> }
+   121→   121→   121→)
+   122→   122→   122→import { Badge } from '@/components/ui/badge'
+   123→   123→   123→
+   124→   124→   124→// ============================================================
+   125→   125→   125→// COMPLETE MODULE STRUCTURE FOR DJEZZY NATIONAL SOC PLATFORM
+   126→   126→   126→// All 8 Phases with Sub-modules
+   127→   127→   127→// ============================================================
+   128→   128→   128→
+   129→   129→   129→interface Module {
+   130→   130→   130→  id: string
+   131→   131→   131→  name: string
+   132→   132→   132→  icon: React.ReactNode
+   133→   133→   133→  description: string
+   134→   134→   134→  status: 'active' | 'coming-soon' | 'beta'
+   135→   135→   135→  phase: number
+   136→   136→   136→  subModules?: SubModule[]
+   137→   137→   137→  path?: string
+   138→   138→   138→}
+   139→   139→   139→
+   140→   140→   140→interface SubModule {
+   141→   141→   141→  id: string
+   142→   142→   142→  name: string
+   143→   143→   143→  icon: React.ReactNode
+   144→   144→   144→  description: string
+   145→   145→   145→  itemCount?: number
+   146→   146→   146→  badge?: string
+   147→   147→   147→}
+   148→   148→   148→
+   149→   149→   149→// ============================================================
+   150→   150→   150→// CLIENT-SAFE CLOCK COMPONENT - Prevents Hydration Mismatch
+   151→   151→   151→// Only renders time on client-side after mount
+   152→   152→   152→// ============================================================
+   153→   153→   153→function ClockDisplay() {
+   154→   154→   154→  const [time, setTime] = useState<string>('')
+   155→   155→   155→  const [mounted, setMounted] = useState(false)
+   156→   156→   156→
+   157→   157→   157→  useEffect(() => {
+   158→   158→   158→    setMounted(true)
+   159→   159→   159→    setTime(new Date().toLocaleTimeString())
+   160→   160→   160→    
+   161→   161→   161→    const timer = setInterval(() => {
+   162→   162→   162→      setTime(new Date().toLocaleTimeString())
+   163→   163→   163→    }, 1000)
+   164→   164→   164→
+   165→   165→   165→    return () => clearInterval(timer)
+   166→   166→   166→  }, [])
+   167→   167→   167→
+   168→   168→   168→  if (!mounted) {
+   169→   169→   169→    return <div className="text-cyan-400 font-mono w-20">&nbsp;</div>
+   170→   170→   170→  }
+   171→   171→   171→
+   172→   172→   172→  return <div className="text-cyan-400 font-mono">{time}</div>
+   173→   173→   173→}
+   174→   174→   174→
+   175→   175→   175→// Complete Module Definition
+   176→   176→   176→const socModules: Module[] = [
+   177→   177→   177→  // ══════════════════════════════════════════════════════
+   178→   178→   178→  // PHASE 1-4: FOUNDATION & CORE INFRASTRUCTURE
+   179→   179→   179→  // ══════════════════════════════════════════════════════
+   180→   180→   180→  {
+   181→   181→   181→    id: 'siem',
+   182→   182→   182→    name: 'SIEM Platform',
+   183→   183→   183→    icon: <LayoutDashboard className="w-5 h-5" />,
+   184→   184→   184→    description: 'Security Information & Event Management',
+   185→   185→   185→    status: 'active',
+   186→   186→   186→    phase: 1,
+   187→   187→   187→    subModules: [
+   188→   188→   188→      { id: 'siem-dashboard', name: 'SIEM Dashboard', icon: <Monitor className="w-4 h-4" />, description: 'Real-time security monitoring', itemCount: 847 },
+   189→   189→   189→      { id: 'log-management', name: 'Log Management', icon: <FileText className="w-4 h-4" />, description: 'Centralized log collection & storage', itemCount: 2847 },
+   190→   190→   190→      { id: 'correlation-engine', name: 'Correlation Engine', icon: <Brain className="w-4 h-4" />, description: 'Multi-source event correlation', badge: 'AI-Powered' },
+   191→   191→   191→      { id: 'rule-management', name: 'Rule Management', icon: <Settings className="w-4 h-4" />, description: 'Detection rules & policies', itemCount: 1247 },
+   192→   192→   192→      { id: 'log-analytics', name: 'Log Analytics', icon: <LineChart className="w-4 h-4" />, description: 'Advanced log search & analysis' }
+   193→   193→   193→    ]
+   194→   194→   194→  },
+   195→   195→   195→  {
+   196→   196→   196→    id: 'edr',
+   197→   197→   197→    name: 'EDR/XDR',
+   198→   198→   198→    icon: <ShieldCheck className="w-5 h-5" />,
+   199→   199→   199→    description: 'Endpoint Detection & Response',
+   200→   200→   200→    status: 'active',
+   201→   201→   201→    phase: 2,
+   202→   202→   202→    subModules: [
+   203→   203→   203→      { id: 'endpoint-monitoring', name: 'Endpoint Monitoring', icon: <Monitor className="w-4 h-4" />, description: 'Real-time endpoint visibility', itemCount: 2847 },
+   204→   204→   204→      { id: 'threat-hunting-edr', name: 'Threat Hunting', icon: <Crosshair className="w-4 h-4" />, description: 'Proactive threat detection' },
+   205→   205→   205→      { id: 'incident-response', name: 'Incident Response', icon: <Target className="w-4 h-4" />, description: 'Automated response actions', badge: 'SOAR' },
+   206→   206→   206→      { id: 'forensics', name: 'Digital Forensics', icon: <Search className="w-4 h-4" />, description: 'Endpoint forensics & analysis' }
+   207→   207→   207→    ]
+   208→   208→   208→  },
+   209→   209→   209→  {
+   210→   210→   210→    id: 'network-security',
+   211→   211→   211→    name: 'Network Security',
+   212→   212→   212→    icon: <Router className="w-5 h-5" />,
+   213→   213→   213→    description: 'Network Detection & Response (NDR)',
+   214→   214→   214→    status: 'active',
+   215→   215→   215→    phase: 3,
+   216→   216→   216→    subModules: [
+   217→   217→   217→      { id: 'ids-ips', name: 'IDS/IPS', icon: <Shield className="w-4 h-4" />, description: 'Intrusion detection & prevention', itemCount: 156 },
+   218→   218→   218→      { id: 'traffic-analysis', name: 'Traffic Analysis', icon: <Activity className="w-4 h-4" />, description: 'Network traffic monitoring', itemCount: 4521 },
+   219→   219→   219→      { id: 'vulnerability-scanner', name: 'Vulnerability Scanner', icon: <Bug className="w-4 h-4" />, description: 'Network vulnerability assessment', badge: 'Auto' },
+   220→   220→   220→      { id: 'firewall-mgmt', name: 'Firewall Management', icon: <Lock className="w-4 h-4" />, description: 'Firewall rule management' }
+   221→   221→   221→    ]
+   222→   222→   222→  },
+   223→   223→   223→
+   224→   224→   224→  // ══════════════════════════════════════════════════════
+   225→   225→   225→  // TELECOM-SPECIFIC MODULES (Djezzy Special) - SS7 TOOLS
+   226→   226→   226→  // ══════════════════════════════════════════════════════
+   227→   227→   227→  {
+   228→   228→   228→    id: 'ss7-tools',
+   229→   229→   229→    name: 'SS7 Security Tools',
+   230→   230→   230→    icon: <Radio className="w-5 h-5" />,
+   231→   231→   231→    description: 'SS7 Protocol Analysis, Fraud Detection & Signaling Security',
+   232→   232→   232→    status: 'active',
+   233→   233→   233→    phase: 4,
+   234→   234→   234→    subModules: [
+   235→   235→   235→      { id: 'ss7-decoder', name: 'SS7 Decoder', icon: <Terminal className="w-4 h-4" />, description: 'MAP/CAP/ISUP message decoding', badge: 'Core' },
+   236→   236→   236→      { id: 'traffic-monitor', name: 'Traffic Monitor', icon: <Activity className="w-4 h-4" />, description: 'Real-time signaling traffic analysis', itemCount: 1250 },
+   237→   237→   237→      { id: 'fraud-detector', name: 'Fraud Detector', icon: <AlertTriangle className="w-4 h-4" />, description: 'IRSF/SIM Swap/Wangiri detection', badge: 'AI' },
+   238→   238→   238→      { id: 'signaling-analyzer', name: 'Signaling Analyzer', icon: <BarChart3 className="w-4 h-4" />, description: 'OPC/DPC traffic analysis' },
+   239→   239→   239→      { id: 'message-inspector', name: 'Message Inspector', icon: <Search className="w-4 h-4" />, description: 'Deep packet inspection' }
+   240→   240→   240→    ]
+   241→   241→   241→  },
+   242→   242→   242→  {
+   243→   243→   243→    id: 'telecom-security',
+   244→   244→   244→    name: 'Telecom Security',
+   245→   245→   245→    icon: <Phone className="w-5 h-5" />,
+   246→   246→   246→    description: 'Telecom Protocol Security (SS7/Diameter/SIP/GTP)',
+   247→   247→   247→    status: 'active',
+   248→   248→   248→    phase: 4,
+   249→   249→   249→    subModules: [
+   250→   250→   250→      { id: 'ss7-firewall', name: 'SS7 Firewall', icon: <Radio className="w-4 h-4" />, description: 'SS7 signaling protection', itemCount: 23, badge: 'Critical' },
+   251→   251→   251→      { id: 'gtp-inspector', name: 'GTP Inspector', icon: <Signal className="w-4 h-4" />, description: 'GTP tunnel inspection', itemCount: 12 },
+   252→   252→   252→      { id: 'diameter-analyzer', name: 'Diameter Analyzer', icon: <Wifi className="w-4 h-4" />, description: 'Diameter protocol analysis', itemCount: 8 },
+   253→   253→   253→      { id: 'sip-sentry', name: 'SIP Sentry', icon: <Phone className="w-4 h-4" />, description: 'VoIP/SIP fraud prevention', itemCount: 34 },
+   254→   254→   254→      { id: 'ims-protection', name: 'IMS Protection', icon: <Cloud className="w-4 h-4" />, description: 'IMS network security' },
+   255→   255→   255→      { id: 'sim-swap-detector', name: 'SIM Swap Detection', icon: <Fingerprint className="w-4 h-4" />, description: 'Fraud detection system', badge: 'AI' }
+   256→   256→   256→    ]
+   257→   257→   257→  },
+   258→   258→   258→  {
+   259→   259→   259→    id: 'fraud-detection',
+   260→   260→   260→    name: 'Fraud Prevention',
+   261→   261→   261→    icon: <UserCheck className="w-5 h-5" />,
+   262→   262→   262→    description: 'Telecom Fraud Detection & Prevention',
+   263→   263→   263→    status: 'active',
+   264→   264→   264→    phase: 4,
+   265→   265→   265→    subModules: [
+   266→   266→   266→      { id: 'fraud-dashboard', name: 'Fraud Dashboard', icon: <BarChart3 className="w-4 h-4" />, description: 'Fraud analytics overview', itemCount: 89 },
+   267→   267→   267→      { id: 'subscription-fraud', name: 'Subscription Fraud', icon: <UserCheck className="w-4 h-4" />, description: 'Subscription fraud detection' },
+   268→   268→   268→      { id: 'billing-fraud', name: 'Billing Fraud', icon: <CreditCard className="w-4 h-4" />, description: 'Billing bypass detection' },
+   269→   269→   269→      { id: 'roaming-fraud', name: 'Roaming Fraud', icon: <Globe className="w-4 h-4" />, description: 'IRSF & roaming fraud' }
+   270→   270→   270→    ]
+   271→   271→   271→  },
+   272→   272→   272→
+   273→   273→   273→  // ══════════════════════════════════════════════════════
+   274→   274→   274→  // PHASE 5: ANALYTICS ENGINE
+   275→   275→   275→  // ══════════════════════════════════════════════════════
+   276→   276→   276→  {
+   277→   277→   277→    id: 'analytics',
+   278→   278→   278→    name: 'Analytics Engine',
+   279→   279→   279→    icon: <BarChart3 className="w-5 h-5" />,
+   280→   280→   280→    description: 'Advanced Security Analytics & Intelligence',
+   281→   281→   281→    status: 'active',
+   282→   282→   282→    phase: 5,
+   283→   283→   283→    subModules: [
+   284→   284→   284→      { id: 'threat-intel', name: 'Threat Intelligence', icon: <Radar className="w-4 h-4" />, description: 'Threat feeds & IOC management', itemCount: 14, badge: 'Live' },
+   285→   285→   285→      { id: 'behavioral-analytics', name: 'Behavioral Analytics', icon: <Brain className="w-4 h-4" />, description: 'UBA & entity behavior', badge: 'ML' },
+   286→   286→   286→      { id: 'threat-scoring', name: 'Threat Scoring', icon: <Target className="w-4 h-4" />, description: 'Risk scoring engine' },
+   287→   287→   287→      { id: 'ml-predictions', name: 'ML Predictions', icon: <TrendingUp className="w-4 h-4" />, description: 'Predictive threat analysis', badge: 'Beta' },
+   288→   288→   288→      { id: 'reporting', name: 'Reporting', icon: <FileText className="w-4 h-4" />, description: 'Custom reports & dashboards', itemCount: 24 }
+   289→   289→   289→    ]
+   290→   290→   290→  },
+   291→   291→   291→
+   292→   292→   292→  // ══════════════════════════════════════════════════════
+   293→   293→   293→  // PHASE 6: COMPLIANCE AUTOMATION
+   294→   294→   294→  // ══════════════════════════════════════════════════════
+   295→   295→   295→  {
+   296→   296→   296→    id: 'compliance',
+   297→   297→   297→    name: 'Compliance Center',
+   298→   298→   298→    icon: <Scale className="w-5 h-5" />,
+   299→   299→   299→    description: 'Regulatory Compliance & Audit Management',
+   300→   300→   300→    status: 'active',
+   301→   301→   301→    phase: 6,
+   302→   302→   302→    subModules: [
+   303→   303→   303→      { id: 'artp-reporting', name: 'ARTP Reporting', icon: <ClipboardCheck className="w-4 h-4" />, description: 'Algerian telecom regulator reports', itemCount: 12, badge: 'Auto' },
+   304→   304→   304→      { id: 'anssi-alignment', name: 'ANSSI Alignment', icon: <Award className="w-4 h-4" />, description: 'French security framework alignment', score: '87%' },
+   305→   305→   305→      { id: 'iso27001', name: 'ISO 27001', icon: <BookOpen className="w-4 h-4" />, description: 'Information security management', score: '94%' },
+   306→   306→   306→      { id: 'nist-framework', name: 'NIST CSF', icon: <Shield className="w-4 h-4" />, description: 'NIST Cybersecurity Framework', score: '82%' },
+   307→   307→   307→      { id: 'evidence-vault', name: 'Evidence Vault', icon: <DatabaseBackup className="w-4 h-4" />, description: 'Audit evidence management', itemCount: 342 },
+   308→   308→   308→      { id: 'gap-analysis', name: 'Gap Analysis', icon: <LineChart className="w-4 h-4" />, description: 'Compliance gap tracking' }
+   309→   309→   309→    ]
+   310→   310→   310→  },
+   311→   311→   311→
+   312→   312→   312→  // ══════════════════════════════════════════════════════
+   313→   313→   313→  // PHASE 7: ML/ANALYTICS INTEGRATION
+   314→   314→   314→  // ══════════════════════════════════════════════════════
+   315→   315→   315→  {
+   316→   316→   316→    id: 'ml-platform',
+   317→   317→   317→    name: 'ML/AI Platform',
+   318→   318→   318→    icon: <Brain className="w-5 h-5" />,
+   319→   319→   319→    description: 'Machine Learning & AI Capabilities',
+   320→   320→   320→    status: 'active',
+   321→   321→   321→    phase: 7,
+   322→   322→   322→    subModules: [
+   323→   323→   323→      { id: 'anomaly-detection', name: 'Anomaly Detection', icon: <Radar className="w-4 h-4" />, description: 'ML-powered anomaly detection', accuracy: '96.1%' },
+   324→   324→   324→      { id: 'predictive-analytics', name: 'Predictive Analytics', icon: <TrendingUp className="w-4 h-4" />, description: 'Threat prediction models', accuracy: '94.2%' },
+   325→   325→   325→      { id: 'uba-engine', name: 'UBA Engine', icon: <Users className="w-4 h-4" />, description: 'User behavior analytics', accuracy: '89.7%' },
+   326→   326→   326→      { id: 'model-management', name: 'Model Management', icon: <Settings className="w-4 h-4" />, description: 'ML model versioning & A/B testing', itemCount: 8 },
+   327→   327→   327→      { id: 'automated-response-ai', name: 'AI Response', icon: <Bot className="w-4 h-4" />, description: 'AI-driven incident response' }
+   328→   328→   328→    ]
+   329→   329→   329→  },
+   330→   330→   330→
+   331→   331→   331→  // ══════════════════════════════════════════════════════
+   332→   332→   332→  // PHASE 8: THREAT HUNTING & SOAR (NEW!)
+   333→   333→   333→  // ══════════════════════════════════════════════════════
+   334→   334→   334→  {
+   335→   335→   335→    id: 'threat-hunting',
+   336→   336→   336→    name: 'Threat Hunting',
+   337→   337→   337→    icon: <Crosshair className="w-5 h-5" />,
+   338→   338→   338→    description: 'Proactive Threat Hunting Operations',
+   339→   339→   339→    status: 'active',
+   340→   340→   340→    phase: 8,
+   341→   341→   341→    subModules: [
+   342→   342→   342→      { id: 'hunt-sessions', name: 'Hunt Sessions', icon: <Play className="w-4 h-4" />, description: 'Active hunting operations', itemCount: 4, badge: 'Active' },
+   343→   343→   343→      { id: 'hypothesis-builder', name: 'Hypothesis Builder', icon: <Target className="w-4 h-4" />, description: 'Create hunting hypotheses', itemCount: 12 },
+   344→   344→   344→      { id: 'query-workbench', name: 'Query Workbench', icon: <Terminal className="w-4 h-4" />, description: 'Advanced threat queries' },
+   345→   345→   345→      { id: 'ioc-extraction', name: 'IOC Extraction', icon: <FileSearch className="w-4 h-4" />, description: 'Automatic IOC extraction', itemCount: 38 },
+   346→   346→   346→      { id: 'timeline-analysis', name: 'Timeline Analysis', icon: <Clock className="w-4 h-4" />, description: 'Attack timeline reconstruction' }
+   347→   347→   347→    ]
+   348→   348→   348→  },
+   349→   349→   349→  {
+   350→   350→   350→    id: 'soar',
+   351→   351→   351→    name: 'SOAR Platform',
+   352→   352→   352→    icon: <Workflow className="w-5 h-5" />,
+   353→   353→   353→    description: 'Security Orchestration, Automation & Response',
+   354→   354→   354→    status: 'active',
+   355→   355→   355→    phase: 8,
+   356→   356→   356→    subModules: [
+   357→   357→   357→      { id: 'playbooks', name: 'Playbooks', icon: <Play className="w-4 h-4" />, description: 'Response playbooks library', itemCount: 6, badge: '561 Runs' },
+   358→   358→   358→      { id: 'case-management', name: 'Case Management', icon: <FolderOpen className="w-4 h-4" />, description: 'Investigation case management', itemCount: 5 },
+   359→   359→   359→      { id: 'automation-rules', name: 'Automation Rules', icon: <Zap className="w-4 h-4" />, description: 'Automation rule engine', itemCount: 47 },
+   360→   360→   360→      { id: 'task-automation', name: 'Task Automation', icon: <Workflow className="w-4 h-4" />, description: 'Automated task workflows' },
+   361→   361→   361→      { id: 'integration-hub', name: 'Integration Hub', icon: <Grid3X3 className="w-4 h-4" />, description: 'Third-party integrations', itemCount: 12 }
+   362→   362→   362→    ]
+   363→   363→   363→  },
+   364→   364→   364→
+   365→   365→   365→  // ══════════════════════════════════════════════════════
+   366→   366→   366→  // OPERATIONAL MODULES
+   367→   367→   367→  // ══════════════════════════════════════════════════════
+   368→   368→   368→  {
+   369→   369→   369→    id: 'incidents',
+   370→   370→   370→    name: 'Incident Management',
+   371→   371→   371→    icon: <AlertTriangle className="w-5 h-5" />,
+   372→   372→   372→    description: 'Incident Lifecycle Management',
+   373→   373→   373→    status: 'active',
+   374→   374→   374→    phase: 1,
+   375→   375→   375→    subModules: [
+   376→   376→   376→      { id: 'incident-queue', name: 'Incident Queue', icon: <List className="w-4 h-4" />, description: 'Active incidents', itemCount: 8, badge: '2 Critical' },
+   377→   377→   377→      { id: 'response-playbooks', name: 'Response Playbooks', icon: <BookOpen className="w-4 h-4" />, description: 'Standard procedures' },
+   378→   378→   378→      { id: 'escalation', name: 'Escalation Matrix', icon: <ArrowRight className="w-4 h-4" />, description: 'Escalation procedures' },
+   379→   379→   379→      { id: 'post-incident', name: 'Post-Incident Review', icon: <FileText className="w-4 h-4" />, description: 'Lessons learned' }
+   380→   380→   380→    ]
+   381→   381→   381→  },
+   382→   382→   382→  {
+   383→   383→   383→    id: 'vulnerability',
+   384→   384→   384→    name: 'Vulnerability Mgmt',
+   385→   385→   385→    icon: <Bug className="w-5 h-5" />,
+   386→   386→   386→    description: 'Vulnerability Assessment & Patching',
+   387→   387→   387→    status: 'beta',
+   388→   388→   388→    phase: 3,
+   389→   389→   389→    subModules: [
+   390→   390→   390→      { id: 'vuln-scanner', name: 'Scanner', icon: <Radar className="w-4 h-4" />, description: 'Vulnerability scanning', itemCount: 234 },
+   391→   391→   391→      { id: 'patch-mgmt', name: 'Patch Management', icon: <Settings className="w-4 h-4" />, description: 'Patch deployment' },
+   392→   392→   392→      { id: 'risk-prioritization', name: 'Risk Prioritization', icon: <Target className="w-4 h-4" />, description: 'CVSS-based prioritization' }
+   393→   393→   393→    ]
+   394→   394→   394→  },
+   395→   395→   395→  {
+   396→   396→   396→    id: 'identity-access',
+   397→   397→   397→    name: 'Identity & Access',
+   398→   398→   398→    icon: <Key className="w-5 h-5" />,
+   399→   399→   399→    description: 'IAM & Privileged Access Management',
+   400→   400→   400→    status: 'active',
+   401→   401→   401→    phase: 2,
+   402→   402→   402→    subModules: [
+   403→   403→   403→      { id: 'ldap-sync', name: 'LDAP Sync', icon: <Users className="w-4 h-4" />, description: 'Directory synchronization', badge: 'Synced' },
+   404→   404→   404→      { id: 'pam', name: 'Privileged Access', icon: <Lock className="w-4 h-4" />, description: 'PAM console access' },
+   405→   405→   405→      { id: 'mfa', name: 'MFA Management', icon: <Fingerprint className="w-4 h-4" />, description: 'Multi-factor authentication' },
+   406→   406→   406→      { id: 'sso', name: 'SSO/SAML', icon: <Key className="w-4 h-4" />, description: 'Single sign-on' }
+   407→   407→   407→    ]
+   408→   408→   408→  }
+   409→   409→   409→]
+   410→   410→   410→
+   411→   411→   411→// Helper Components
+   412→   412→   412→const StatusBadge = ({ status }: { status: Module['status'] }) => {
+   413→   413→   413→  const styles = {
+   414→   414→   414→    active: 'bg-green-500/20 text-green-400 border-green-500/30',
+   415→   415→   415→    'coming-soon': 'bg-gray-500/20 text-gray-400 border-gray-500/30',
+   416→   416→   416→    beta: 'bg-yellow-500/20 text-yellow-400 border-yellow-500/30'
+   417→   417→   417→  }
+   418→   418→   418→  return (
+   419→   419→   419→    <span className={`px-2 py-0.5 rounded text-xs border ${styles[status]}`}>
+   420→   420→   420→      {status === 'active' ? '● Active' : status === 'beta' ? 'β Beta' : '○ Coming Soon'}
+   421→   421→   421→    </span>
+   422→   422→   422→  )
+   423→   423→   423→}
+   424→   424→   424→
+   425→   425→   425→const PhaseBadge = ({ phase }: { phase: number }) => (
+   426→   426→   426→  <span className="px-2 py-0.5 rounded text-xs bg-cyan-500/20 text-cyan-400 border border-cyan-500/30">
+   427→   427→   427→    Phase {phase}
+   428→   428→   428→  </span>
+   429→   429→   429→)
+   430→   430→   430→
+   431→   431→   431→export default function SOCDashboard() {
+   432→   432→   432→  const router = useRouter()
+   433→   433→   433→  const [selectedModule, setSelectedModule] = useState<string>('ss7-tools')
+   434→   434→   434→  const [viewMode, setViewMode] = useState<'grid' | 'list'>('grid')
+   435→   435→   435→  const [searchQuery, setSearchQuery] = useState('')
+   436→   436→   436→  const [showMobileMenu, setShowMobileMenu] = useState(false)
+   437→   437→   437→  const [showSS7Tools, setShowSS7Tools] = useState(true)
+   438→   438→   438→
+   439→   439→   439→  // Handle module card click - navigate to the appropriate dashboard
+   440→   440→   440→  const handleModuleClick = (moduleId: string) => {
+   441→   441→   441→    const route = moduleRoutes[moduleId]
+   442→   442→   442→    if (route) {
+   443→   443→   443→      router.push(route)
+   444→   444→   444→    } else {
+   445→   445→   445→      // Fallback: toggle expansion if no route exists
+   446→   446→   446→      setSelectedModule(selectedModule === moduleId ? null : moduleId)
+   447→   447→   447→    }
+   448→   448→   448→  }
+   449→   449→   449→
+   450→   450→   450→  // Handle sub-module item click - navigate to the appropriate dashboard
+   451→   451→   451→  const handleSubModuleClick = (subModuleId: string) => {
+   452→   452→   452→    const route = subModuleRoutes[subModuleId]
+   453→   453→   453→    if (route) {
+   454→   454→   454→      router.push(route)
+   455→   455→   455→    }
+   456→   456→   456→  }
+   457→   457→   457→
+   458→   458→   458→  // Debounced search state for performance (PER-010 fix)
+   459→   459→   459→  const [debouncedSearch, setDebouncedSearch] = useState('')
+   460→   460→   460→  
+   461→   461→   461→  useEffect(() => {
+   462→   462→   462→    const timer = setTimeout(() => {
+   463→   463→   463→      setDebouncedSearch(searchQuery)
+   464→   464→   464→    }, 300) // 300ms debounce
+   465→   465→   465→    
+   466→   466→   466→    return () => clearTimeout(timer)
+   467→   467→   467→  }, [searchQuery])
+   468→   468→   468→
+   469→   469→   469→  const filteredModules = socModules.filter(module =>
+   470→   470→   470→    (module.name && module.name.toLowerCase().includes(debouncedSearch.toLowerCase())) ||
+   471→   471→   471→    (module.description && module.description.toLowerCase().includes(debouncedSearch.toLowerCase()))
+   472→   472→   472→  )
+   473→   473→   473→
+   474→   474→   474→  return (
+   475→   475→   475→    <div className="min-h-screen bg-slate-950 text-white">
+   476→   476→   476→      {/* Header */}
+   477→   477→   477→      <header className="bg-slate-900 border-b border-slate-800 px-6 py-4 sticky top-0 z-50">
+   478→   478→   478→        <div className="flex items-center justify-between">
+   479→   479→   479→          <div className="flex items-center gap-4">
+   480→   480→   480→            <div className="flex items-center gap-3">
+   481→   481→   481→              <div className="w-10 h-10 bg-gradient-to-br from-cyan-400 to-blue-600 rounded-xl flex items-center justify-center">
+   482→   482→   482→                <Shield className="w-6 h-6 text-white" />
+   483→   483→   483→              </div>
+   484→   484→   484→              <div>
+   485→   485→   485→                <h1 className="text-xl font-bold">National SOC</h1>
+   486→   486→   486→                <p className="text-xs text-slate-400">Djezzy Security Operations Center • Algeria</p>
+   487→   487→   487→              </div>
+   488→   488→   488→            </div>
+   489→   489→   489→          </div>
+   490→   490→   490→
+   491→   491→   491→          <div className="hidden md:flex items-center gap-6">
+   492→   492→   492→            {/* Quick Stats */}
+   493→   493→   493→            <div className="flex items-center gap-4 text-sm">
+   494→   494→   494→              <div className="flex items-center gap-2">
+   495→   495→   495→                <span className="w-2 h-2 bg-green-500 rounded-full animate-pulse"></span>
+   496→   496→   496→                <span className="text-slate-300">All Systems Operational</span>
+   497→   497→   497→              </div>
+   498→   498→   498→              <ClockDisplay />
+   499→   499→   499→            </div>
+   500→   500→   500→
+
+[showing lines 1-500 of 983; use offset=501 with limit to continue reading]
