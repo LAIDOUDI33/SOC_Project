@@ -23,6 +23,15 @@ import StatusIndicator from '@/components/shared/StatusIndicator'
 import MetricTrend from '@/components/shared/MetricTrend'
 import DrillDownCard from '@/components/shared/DrillDownCard'
 import DataExporter from '@/components/shared/DataExporter'
+// Import demo data
+import { 
+  executiveKPIs as demoKPIs, 
+  trendData30Days, 
+  riskHeatMap, 
+  slaData,
+  systemComponents,
+  recentIncidents
+} from '@/lib/demo-data'
 import {
   ChartContainer,
   ChartTooltip,
@@ -81,76 +90,26 @@ interface TrendDataPoint {
   riskScore: number
 }
 
-// Mock data generators
-const generateKPIs = (): KPIData[] => [
-  {
-    title: 'Overall Risk Score',
-    value: 42,
-    change: -5.2,
-    changeLabel: 'vs last month',
-    status: 'good',
-    icon: <Shield className="h-5 w-5" />
-  },
-  {
-    title: 'Mean Time to Respond (MTTR)',
-    value: '2.4h',
-    change: -12.5,
-    changeLabel: 'improvement',
-    status: 'good',
-    icon: <Clock className="h-5 w-5" />
-  },
-  {
-    title: 'Asset Coverage',
-    value: '94.7%',
-    change: 2.1,
-    changeLabel: 'new assets',
-    status: 'excellent',
-    icon: <Target className="h-5 w-5" />
-  },
-  {
-    title: 'Compliance Score',
-    value: '87.3%',
-    change: 4.8,
-    changeLabel: 'vs ANRT requirements',
-    status: 'good',
-    icon: <CheckCircle className="h-5 w-5" />
-  }
-]
+// Mock data generators - Using demo data library for realistic Djezzy SOC data
+const generateKPIs = (): KPIData[] => demoKPIs.map(kpi => ({
+  title: kpi.title,
+  value: kpi.value,
+  change: kpi.change,
+  changeLabel: kpi.changeLabel,
+  status: kpi.status,
+  icon: kpi.icon === 'shield' ? <Shield className="h-5 w-5" /> :
+        kpi.icon === 'clock' ? <Clock className="h-5 w-5" /> :
+        kpi.icon === 'target' ? <Target className="h-5 w-5" /> :
+        <CheckCircle className="h-5 w-5" />
+}))
 
-const generateRiskHeatMap = (): RiskHeatMapData[] => [
-  { businessUnit: 'Core Network', riskScore: 78, trend: 'up', category: 'Infrastructure' },
-  { businessUnit: 'IT Systems', riskScore: 45, trend: 'down', category: 'Technology' },
-  { businessUnit: 'Customer Services', riskScore: 32, trend: 'stable', category: 'Operations' },
-  { businessUnit: 'Billing Systems', riskScore: 56, trend: 'up', category: 'Financial' },
-  { businessUnit: 'Mobile Network', riskScore: 62, trend: 'stable', category: 'Infrastructure' },
-  { businessUnit: 'Data Centers', riskScore: 28, trend: 'down', category: 'Infrastructure' },
-  { businessUnit: 'Partner Integrations', riskScore: 71, trend: 'up', category: 'External' },
-  { businessUnit: 'Development', riskScore: 39, trend: 'stable', category: 'Technology' }
-]
+const generateRiskHeatMap = (): RiskHeatMapData[] => riskHeatMap
 
-const generateSLAData = (): SLAData[] => [
-  { name: 'Critical Incident Response', target: 15, actual: 12, status: 'met' },
-  { name: 'High Severity Detection', target: 95, actual: 97.2, status: 'met' },
-  { name: 'Threat Intel Dissemination', target: 30, actual: 28, status: 'met' },
-  { name: 'Vulnerability Remediation', target: 72, actual: 68, status: 'at-risk' },
-  { name: 'Report Generation', target: 24, actual: 22, status: 'met' }
-]
+const generateSLAData = (): SLAData[] => slaData
 
 const generateTrendData = (days: number): TrendDataPoint[] => {
-  const data: TrendDataPoint[] = []
-  const now = new Date()
-  for (let i = days; i >= 0; i--) {
-    const date = new Date(now)
-    date.setDate(date.getDate() - i)
-    data.push({
-      date: date.toISOString().split('T')[0],
-      alerts: Math.floor(Math.random() * 100) + 50,
-      incidents: Math.floor(Math.random() * 20) + 5,
-      resolved: Math.floor(Math.random() * 80) + 40,
-      riskScore: Math.floor(Math.random() * 20) + 35
-    })
-  }
-  return data
+  // Return data from demo library (already has 30 days)
+  return trendData30Days.slice(-Math.min(days, trendData30Days.length))
 }
 
 // Chart configuration for recharts

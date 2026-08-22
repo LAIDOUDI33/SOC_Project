@@ -23,6 +23,11 @@ import { Separator } from '@/components/ui/separator'
 import StatusIndicator from '@/components/shared/StatusIndicator'
 import MetricTrend from '@/components/shared/MetricTrend'
 import SmartFilter from '@/components/shared/SmartFilter'
+// Import demo data for realistic Djezzy telecom data
+import { 
+  ss7TrafficData, 
+  algeriaWilayaData 
+} from '@/lib/demo-data'
 import {
   ChartContainer,
   ChartTooltip,
@@ -102,23 +107,17 @@ interface GeographicThreat {
 }
 
 // ============================================================
-// ALGERIA WILAYAS DATA (Simplified for visualization)
+// ALGERIA WILAYAS DATA - Using demo data library
 // ============================================================
 
-const ALGERIA_WILAYAS: GeographicThreat[] = [
-  { wilaya: 'Alger', lat: 36.7538, lng: 3.0588, threatLevel: 'medium', eventCount: 234, topEventType: 'SS7 Anomaly' },
-  { wilaya: 'Oran', lat: 35.6911, lng: -0.6158, threatLevel: 'high', eventCount: 189, topEventType: 'SIM Swap Attempt' },
-  { wilaya: 'Constantine', lat: 36.3650, lng: 6.6147, threatLevel: 'medium', eventCount: 156, topEventType: 'Fraud Alert' },
-  { wilaya: 'Annaba', lat: 36.9000, lng: 7.7700, threatLevel: 'low', eventCount: 87, topEventType: 'Normal Traffic' },
-  { wilaya: 'Blida', lat: 36.4700, lng: 2.8300, threatLevel: 'high', eventCount: 145, topEventType: 'Premium Rate Fraud' },
-  { wilaya: 'Batna', lat: 35.5500, lng: 6.1700, threatLevel: 'low', eventCount: 67, topEventType: 'Normal Traffic' },
-  { wilaya: 'Sétif', lat: 36.1900, lng: 5.4100, threatLevel: 'medium', eventCount: 112, topEventType: 'SS7 Anomaly' },
-  { wilaya: 'Tizi Ouzou', lat: 36.7100, lng: 4.0500, threatLevel: 'critical', eventCount: 267, topEventType: 'IRSF Attack' },
-  { wilaya: 'Béjaïa', lat: 36.7200, lng: 5.0700, threatLevel: 'medium', eventCount: 98, topEventType: 'Wangiri Pattern' },
-  { wilaya: 'Tlemcen', lat: 34.8800, lng: -1.3200, threatLevel: 'low', eventCount: 78, topEventType: 'Normal Traffic' },
-  { wilaya: 'Chlef', lat: 36.1600, lng: 1.3300, threatLevel: 'medium', eventCount: 89, topEventType: 'Bypass Fraud' },
-  { wilaya: 'Skikda', lat: 36.8500, lng: 6.9100, threatLevel: 'low', eventCount: 56, topEventType: 'Normal Traffic' }
-]
+const ALGERIA_WILAYAS: GeographicThreat[] = algeriaWilayaData.map(w => ({
+  wilaya: w.name,
+  lat: 36.0 + Math.random() * 5, // Approximate coordinates for demo
+  lng: -1 + Math.random() * 7,
+  threatLevel: w.riskLevel as GeographicThreat['threatLevel'],
+  eventCount: w.alertCount,
+  topEventType: 'Security Event'
+}))
 
 // ============================================================
 // MOCK DATA GENERATORS

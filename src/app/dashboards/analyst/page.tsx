@@ -28,6 +28,11 @@ import StatusIndicator from '@/components/shared/StatusIndicator'
 import TimelineViewer from '@/components/shared/TimelineViewer'
 import NotificationPanel from '@/components/shared/NotificationPanel'
 import KeyboardShortcutsHelp from '@/components/shared/KeyboardShortcutsHelp'
+// Import demo data for realistic Djezzy SOC data
+import { 
+  recentAlerts as demoAlerts, 
+  analystStats 
+} from '@/lib/demo-data'
 
 // Types for Analyst Workspace
 interface Alert {
@@ -61,81 +66,23 @@ interface FilterState {
   searchQuery: string
 }
 
-// Mock data generators
-const generateAlerts = (): Alert[] => [
-  {
-    id: 'ALT-001',
-    title: 'Potential SS7 Signaling Attack Detected',
-    severity: 'critical',
-    status: 'new',
-    source: 'Telecom Probe',
-    timestamp: new Date(Date.now() - 1000 * 60 * 5),
-    description: 'Anomalous signaling patterns detected on HLR lookup requests. Possible location tracking attempt.',
-    iocs: ['192.168.1.100', 'IMSI: 603029000000001'],
-    relatedAssets: ['STP-Algiers', 'HLR-Primary'],
-    isBookmarked: false
-  },
-  {
-    id: 'ALT-002',
-    title: 'Multiple Failed Authentication Attempts',
-    severity: 'high',
-    status: 'acknowledged',
-    source: 'SIEM/Wazuh',
-    timestamp: new Date(Date.now() - 1000 * 60 * 15),
-    description: 'Brute force attack detected on VPN gateway. 500+ failed attempts in 5 minutes.',
-    iocs: ['203.0.113.50'],
-    relatedAssets: ['VPN-Gateway'],
-    isBookmarked: true
-  },
-  {
-    id: 'ALT-003',
-    title: 'Suspicious DNS Query Pattern',
-    severity: 'medium',
-    status: 'investigating',
-    source: 'Network Monitor',
-    timestamp: new Date(Date.now() - 1000 * 60 * 45),
-    description: 'DGA-like domain generation pattern detected from internal workstation.',
-    iocs: ['ws-017.djezzy.dz'],
-    relatedAssets: ['WS-Finance-042'],
-    isBookmarked: false
-  },
-  {
-    id: 'ALT-004',
-    title: 'Vulnerability Scan Detected',
-    severity: 'low',
-    status: 'new',
-    source: 'IDS/Suricata',
-    timestamp: new Date(Date.now() - 1000 * 60 * 60 * 2),
-    description: 'Automated vulnerability scanning activity from external IP range.',
-    iocs: ['198.51.100.0/24'],
-    relatedAssets: ['DMZ-Firewall'],
-    isBookmarked: false
-  },
-  {
-    id: 'ALT-005',
-    title: 'SIM Swap Anomaly Flagged',
-    severity: 'critical',
-    status: 'new',
-    source: 'Fraud Detection',
-    timestamp: new Date(Date.now() - 1000 * 60 * 8),
-    description: 'Unusual SIM swap request pattern. Multiple swaps for same subscriber within 24h.',
-    iocs: ['MSISDN: +213551234567'],
-    relatedAssets: ['HLR-Primary', 'Provisioning-System'],
-    isBookmarked: true
-  },
-  {
-    id: 'ALT-006',
-    title: 'Phishing Email Reported',
-    severity: 'medium',
-    status: 'resolved',
-    source: 'User Report',
-    timestamp: new Date(Date.now() - 1000 * 60 * 60 * 4),
-    description: 'Employee reported phishing email impersonating IT department.',
-    iocs: ['sha256:abc123...'],
-    relatedAssets: ['Email-Gateway'],
-    isBookmarked: false
-  }
-]
+// Mock data generators - Using demo data library for realistic Djezzy SOC alerts
+const generateAlerts = (): Alert[] => demoAlerts.slice(0, 15).map(alert => ({
+  id: alert.id,
+  title: alert.title,
+  severity: alert.severity as Alert['severity'],
+  status: alert.status === 'open' ? 'new' : 
+         alert.status === 'acknowledged' ? 'acknowledged' :
+         alert.status === 'investigating' ? 'investigating' :
+         alert.status === 'resolved' ? 'resolved' : 'closed',
+  source: alert.source,
+  timestamp: new Date(alert.timestamp),
+  assignee: alert.assignee,
+  description: alert.description,
+  iocs: [alert.sourceIp, alert.mitreTechnique].filter(Boolean) as string[],
+  relatedAssets: [],
+  isBookmarked: Math.random() > 0.8
+}))
 
 const generateTimeline = (): InvestigationEvent[] => [
   {

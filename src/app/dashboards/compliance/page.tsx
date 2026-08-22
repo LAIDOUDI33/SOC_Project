@@ -25,6 +25,11 @@ import StatusIndicator from '@/components/shared/StatusIndicator'
 import MetricTrend from '@/components/shared/MetricTrend'
 import SmartFilter from '@/components/shared/SmartFilter'
 import DataExporter from '@/components/shared/DataExporter'
+// Import demo data for realistic ANRT compliance data
+import { 
+  anrtComplianceData, 
+  complianceHistory 
+} from '@/lib/demo-data'
 import {
   ChartContainer,
   ChartTooltip,

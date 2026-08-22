@@ -28,6 +28,11 @@ import {
 } from '@/components/ui/dialog'
 import StatusIndicator from '@/components/shared/StatusIndicator'
 import SmartFilter from '@/components/shared/SmartFilter'
+// Import demo data for realistic Djezzy SOC threat hunting data
+import { 
+  huntSessions as demoHuntSessions, 
+  huntIOCs 
+} from '@/lib/demo-data'
 
 // ============================================================
 // TYPES FOR THREAT HUNTING
