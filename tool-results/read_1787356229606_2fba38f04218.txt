@@ -1,0 +1,869 @@
+     1→'use client'
+     2→
+     3→import React, { useState, useEffect, useMemo } from 'react'
+     4→import {
+     5→  Phone, Radio, Signal, MapPin, AlertTriangle, Shield,
+     6→  Activity, Globe, Clock, TrendingUp, TrendingDown,
+     7→  Users, Server, Database, Lock, Eye, Download,
+     8→  RefreshCw, Filter, Search, ChevronRight, Zap,
+     9→  Wifi, Router, Network, Satellite, Bell,
+    10→  Navigation, PhoneCall, CreditCard, UserX
+    11→} from 'lucide-react'
+    12→import {
+    13→  Card, CardContent, CardDescription, CardHeader, CardTitle
+    14→} from '@/components/ui/card'
+    15→import { Button } from '@/components/ui/button'
+    16→import { Badge } from '@/components/ui/badge'
+    17→import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
+    18→import {
+    19→  Select, SelectContent, SelectItem, SelectTrigger, SelectValue
+    20→} from '@/components/ui/select'
+    21→import { Progress } from '@/components/ui/progress'
+    22→import { Separator } from '@/components/ui/separator'
+    23→import StatusIndicator from '@/components/shared/StatusIndicator'
+    24→import MetricTrend from '@/components/shared/MetricTrend'
+    25→import SmartFilter from '@/components/shared/SmartFilter'
+    26→import {
+    27→  ChartContainer,
+    28→  ChartTooltip,
+    29→  ChartTooltipContent,
+    30→  type ChartConfig
+    31→} from '@/components/ui/chart'
+    32→import {
+    33→  AreaChart,
+    34→  Area,
+    35→  BarChart,
+    36→  Bar,
+    37→  XAxis,
+    38→  YAxis,
+    39→  CartesianGrid,
+    40→  LineChart,
+    41→  Line,
+    42→  ResponsiveContainer
+    43→} from 'recharts'
+    44→
+    45→// ============================================================
+    46→// TYPES FOR TELECOM SECURITY CENTER
+    47→// ============================================================
+    48→
+    49→interface SS7Event {
+    50→  id: string
+    51→  timestamp: Date
+    52→  type: 'sendAuthInfo' | 'provideRoamingNumber' | 'updateLocation' | 'cancelLocation' | 'insertSubscriberData'
+    53→  source: string
+    54→  destination: string
+    55→  imsi?: string
+    56→  msisdn?: string
+    57→  riskScore: number
+    58→  status: 'normal' | 'suspicious' | 'malicious'
+    59→}
+    60→
+    61→interface DiameterMessage {
+    62→  id: string
+    63→  timestamp: Date
+    64→  command: 'CCR' | 'CCA' | 'DWR' | 'DWA' | 'AAR' | 'AAA'
+    65→  applicationId: string
+    66→  originHost: string
+    67→  destinationHost: string
+    68→  resultCode: number
+    69→  riskLevel: 'low' | 'medium' | 'high' | 'critical'
+    70→}
+    71→
+    72→interface FraudAlert {
+    73→  id: string
+    74→  type: 'irsf' | 'sim_swap' | 'premium_rate' | 'bypass_fraud' | 'wangiri'
+    75→  severity: 'critical' | 'high' | 'medium' | 'low'
+    76→  msisdn: string
+    77→  imsi?: string
+    78→  amount?: number
+    79→  location: string
+    80→  detectedAt: Date
+    81→  status: 'investigating' | 'blocked' | 'monitoring' | 'false_positive'
+    82→}
+    83→
+    84→interface SIMSwapEvent {
+    85→  id: string
+    86→  msisdn: string
+    87→  previousCarrier: string
+    88→  newCarrier: string
+    89→  timestamp: Date
+    90→  riskScore: number
+    91→  status: 'legitimate' | 'suspicious' | 'fraudulent'
+    92→  verificationMethod: 'in-person' | 'otp' | 'none'
+    93→}
+    94→
+    95→interface GeographicThreat {
+    96→  wilaya: string
+    97→  lat: number
+    98→  lng: number
+    99→  threatLevel: 'low' | 'medium' | 'high' | 'critical'
+   100→  eventCount: number
+   101→  topEventType: string
+   102→}
+   103→
+   104→// ============================================================
+   105→// ALGERIA WILAYAS DATA (Simplified for visualization)
+   106→// ============================================================
+   107→
+   108→const ALGERIA_WILAYAS: GeographicThreat[] = [
+   109→  { wilaya: 'Alger', lat: 36.7538, lng: 3.0588, threatLevel: 'medium', eventCount: 234, topEventType: 'SS7 Anomaly' },
+   110→  { wilaya: 'Oran', lat: 35.6911, lng: -0.6158, threatLevel: 'high', eventCount: 189, topEventType: 'SIM Swap Attempt' },
+   111→  { wilaya: 'Constantine', lat: 36.3650, lng: 6.6147, threatLevel: 'medium', eventCount: 156, topEventType: 'Fraud Alert' },
+   112→  { wilaya: 'Annaba', lat: 36.9000, lng: 7.7700, threatLevel: 'low', eventCount: 87, topEventType: 'Normal Traffic' },
+   113→  { wilaya: 'Blida', lat: 36.4700, lng: 2.8300, threatLevel: 'high', eventCount: 145, topEventType: 'Premium Rate Fraud' },
+   114→  { wilaya: 'Batna', lat: 35.5500, lng: 6.1700, threatLevel: 'low', eventCount: 67, topEventType: 'Normal Traffic' },
+   115→  { wilaya: 'Sétif', lat: 36.1900, lng: 5.4100, threatLevel: 'medium', eventCount: 112, topEventType: 'SS7 Anomaly' },
+   116→  { wilaya: 'Tizi Ouzou', lat: 36.7100, lng: 4.0500, threatLevel: 'critical', eventCount: 267, topEventType: 'IRSF Attack' },
+   117→  { wilaya: 'Béjaïa', lat: 36.7200, lng: 5.0700, threatLevel: 'medium', eventCount: 98, topEventType: 'Wangiri Pattern' },
+   118→  { wilaya: 'Tlemcen', lat: 34.8800, lng: -1.3200, threatLevel: 'low', eventCount: 78, topEventType: 'Normal Traffic' },
+   119→  { wilaya: 'Chlef', lat: 36.1600, lng: 1.3300, threatLevel: 'medium', eventCount: 89, topEventType: 'Bypass Fraud' },
+   120→  { wilaya: 'Skikda', lat: 36.8500, lng: 6.9100, threatLevel: 'low', eventCount: 56, topEventType: 'Normal Traffic' }
+   121→]
+   122→
+   123→// ============================================================
+   124→// MOCK DATA GENERATORS
+   125→// ============================================================
+   126→
+   127→const generateSS7Events = (): SS7Event[] => Array.from({ length: 50 }, (_, i) => ({
+   128→  id: `ss7-${i + 1}`,
+   129→  timestamp: new Date(Date.now() - Math.random() * 3600000),
+   130→  type: ['sendAuthInfo', 'provideRoamingNumber', 'updateLocation', 'cancelLocation', 'insertSubscriberData'][Math.floor(Math.random() * 5)] as SS7Event['type'],
+   131→  source: `STP-${String.fromCharCode(65 + Math.floor(Math.random() * 3))}`,
+   132→  destination: `HLR-${Math.floor(Math.random() * 5) + 1}`,
+   133→  imsi: `21301${Math.floor(Math.random() * 9000000000 + 1000000000)}`,
+   134→  msisdn: `+213${Math.floor(Math.random() * 900000000 + 500000000)}`,
+   135→  riskScore: Math.floor(Math.random() * 100),
+   136→  status: Math.random() > 0.85 ? (Math.random() > 0.5 ? 'suspicious' : 'malicious') : 'normal'
+   137→}))
+   138→
+   139→const generateDiameterMessages = (): DiameterMessage[] => Array.from({ length: 30 }, (_, i) => ({
+   140→  id: `dia-${i + 1}`,
+   141→  timestamp: new Date(Date.now() - Math.random() * 3600000),
+   142→  command: ['CCR', 'CCA', 'DWR', 'DWA', 'AAR', 'AAA'][Math.floor(Math.random() * 6)] as DiameterMessage['command'],
+   143→  applicationId: `App${['Dx', 'Rx', 'Gx', 'Cx'][Math.floor(Math.random() * 4)]}`,
+   144→  originHost: `diameter-node-${Math.floor(Math.random() * 10) + 1}.djezzy.dz`,
+   145→  destinationHost: `pcrf.djezzy.dz`,
+   146→  resultCode: [2001, 2002, 4010, 5003, 5012][Math.floor(Math.random() * 5)],
+   147→  riskLevel: ['low', 'low', 'low', 'medium', 'medium', 'high', 'critical'][Math.floor(Math.random() * 7)] as DiameterMessage['riskLevel']
+   148→}))
+   149→
+   150→const generateFraudAlerts = (): FraudAlert[] => [
+   151→  {
+   152→    id: 'fraud-001',
+   153→    type: 'irsf',
+   154→    severity: 'critical',
+   155→    msisdn: '+213551234567',
+   156→    amount: 12500,
+   157→    location: 'Tizi Ouzou',
+   158→    detectedAt: new Date(Date.now() - 1800000),
+   159→    status: 'investigating'
+   160→  },
+   161→  {
+   162→    id: 'fraud-002',
+   163→    type: 'sim_swap',
+   164→    severity: 'high',
+   165→    msisdn: '+213669876543',
+   166→    imsi: '213012345678901',
+   167→    location: 'Oran',
+   168→    detectedAt: new Date(Date.now() - 3600000),
+   169→    status: 'blocked'
+   170→  },
+   171→  {
+   172→    id: 'fraud-003',
+   173→    type: 'premium_rate',
+   174→    severity: 'medium',
+   175→    msisdn: '+213771234567',
+   176→    amount: 2500,
+   177→    location: 'Blida',
+   178→    detectedAt: new Date(Date.now() - 7200000),
+   179→    status: 'monitoring'
+   180→  },
+   181→  {
+   182→    id: 'fraud-004',
+   183→    type: 'wangiri',
+   184→    severity: 'low',
+   185→    msisdn: '+213559876543',
+   186→    location: 'Constantine',
+   187→    detectedAt: new Date(Date.now() - 10800000),
+   188→    status: 'monitoring'
+   189→  },
+   190→  {
+   191→    id: 'fraud-005',
+   192→    type: 'bypass_fraud',
+   193→    severity: 'high',
+   194→    msisdn: '+213661234567',
+   195→    location: 'Alger',
+   196→    detectedAt: new Date(Date.now() - 14400000),
+   197→    status: 'investigating'
+   198→  }
+   199→]
+   200→
+   201→const generateSIMSwapEvents = (): SIMSwapEvent[] => Array.from({ length: 15 }, (_, i) => ({
+   202→  id: `simswap-${i + 1}`,
+   203→  msisdn: `+213${Math.floor(Math.random() * 900000000 + 500000000)}`,
+   204→  previousCarrier: ['Djezzy', 'Mobilis', 'Ooredoo'][Math.floor(Math.random() * 3)],
+   205→  newCarrier: 'Djezzy',
+   206→  timestamp: new Date(Date.now() - Math.random() * 86400000 * 7),
+   207→  riskScore: Math.floor(Math.random() * 100),
+   208→  status: Math.random() > 0.7 ? (Math.random() > 0.5 ? 'suspicious' : 'fraudulent') : 'legitimate',
+   209→  verificationMethod: ['in-person', 'otp', 'none'][Math.floor(Math.random() * 3)] as SIMSwapEvent['verificationMethod']
+   210→}))
+   211→
+   212→const generateTrafficMetrics = () => {
+   213→  const now = new Date()
+   214→  return Array.from({ length: 24 }, (_, i) => ({
+   215→    hour: `${String(i).padStart(2, '0')}:00`,
+   216→    ss7Messages: Math.floor(Math.random() * 50000) + 10000,
+   217→    diameterRequests: Math.floor(Math.random() * 30000) + 5000,
+   218→    sipCalls: Math.floor(Math.random() * 10000) + 2000,
+   219→    anomalies: Math.floor(Math.random() * 20)
+   220→  }))
+   221→}
+   222→
+   223→// ============================================================
+   224→// CHART CONFIGURATIONS
+   225→// ============================================================
+   226→
+   227→const trafficChartConfig: ChartConfig = {
+   228→  ss7Messages: { label: 'SS7 Messages', color: '#06b6d4' },
+   229→  diameterRequests: { label: 'Diameter Requests', color: '#f59e0b' },
+   230→  sipCalls: { label: 'SIP Calls', color: '#10b981' },
+   231→  anomalies: { label: 'Anomalies', color: '#ef4444' }
+   232→}
+   233→
+   234→// ============================================================
+   235→// SUB-COMPONENTS
+   236→// ============================================================
+   237→
+   238→function TelecomMetricCard({
+   239→  title,
+   240→  value,
+   241→  icon,
+   242→  trend,
+   243→  color,
+   244→  subtitle
+   245→}: {
+   246→  title: string
+   247→  value: string | number
+   248→  icon: React.ReactNode
+   249→  trend?: number
+   250→  color: string
+   251→  subtitle?: string
+   252→}) {
+   253→  return (
+   254→    <Card className="bg-slate-900 border-slate-700">
+   255→      <CardContent className="pt-6">
+   256→        <div className="flex items-start justify-between">
+   257→          <div className="flex-1">
+   258→            <p className="text-sm text-slate-400 mb-1">{title}</p>
+   259→            <p className="text-2xl font-bold text-white">{value}</p>
+   260→            {trend !== undefined && (
+   261→              <div className="mt-1">
+   262→                <MetricTrend value={trend} showArrow size="sm" />
+   263→              </div>
+   264→            )}
+   265→            {subtitle && (
+   266→              <p className="text-xs text-slate-500 mt-1">{subtitle}</p>
+   267→            )}
+   268→          </div>
+   269→          <div className={`p-3 rounded-lg ${color}`}>
+   270→            {icon}
+   271→          </div>
+   272→        </div>
+   273→      </CardContent>
+   274→    </Card>
+   275→  )
+   276→}
+   277→
+   278→function SS7MonitoringPanel({ events }: { events: SS7Event[] }) {
+   279→  const suspiciousEvents = events.filter(e => e.status === 'suspicious')
+   280→  const maliciousEvents = events.filter(e => e.status === 'malicious')
+   281→
+   282→  return (
+   283→    <Card className="bg-slate-900 border-slate-700">
+   284→      <CardHeader className="pb-3">
+   285→        <div className="flex items-center justify-between">
+   286→          <CardTitle className="text-white text-base flex items-center gap-2">
+   287→            <Radio className="h-4 w-4 text-cyan-400" />
+   288→            SS7/Diameter Signaling Monitor
+   289→          </CardTitle>
+   290→          <Badge variant="outline" className={maliciousEvents.length > 0 ? 'border-red-500/50 text-red-400' : 'border-green-500/50 text-green-400'}>
+   291→            {events.length} Events
+   292→          </Badge>
+   293→        </div>
+   294→      </CardHeader>
+   295→      <CardContent>
+   296→        {/* Summary Stats */}
+   297→        <div className="grid grid-cols-4 gap-3 mb-4">
+   298→          <div className="p-3 rounded-lg bg-slate-800/50 text-center">
+   299→            <p className="text-xl font-bold text-white">{events.length}</p>
+   300→            <p className="text-xs text-slate-400">Total Events</p>
+   301→          </div>
+   302→          <div className="p-3 rounded-lg bg-green-500/10 text-center border border-green-500/20">
+   303→            <p className="text-xl font-bold text-green-400">{events.filter(e => e.status === 'normal').length}</p>
+   304→            <p className="text-xs text-slate-400">Normal</p>
+   305→          </div>
+   306→          <div className="p-3 rounded-lg bg-yellow-500/10 text-center border border-yellow-500/20">
+   307→            <p className="text-xl font-bold text-yellow-400">{suspiciousEvents.length}</p>
+   308→            <p className="text-xs text-slate-400">Suspicious</p>
+   309→          </div>
+   310→          <div className="p-3 rounded-lg bg-red-500/10 text-center border border-red-500/20">
+   311→            <p className="text-xl font-bold text-red-400">{maliciousEvents.length}</p>
+   312→            <p className="text-xs text-slate-400">Malicious</p>
+   313→          </div>
+   314→        </div>
+   315→
+   316→        {/* Recent Events Table */}
+   317→        <div className="space-y-2 max-h-[300px] overflow-y-auto">
+   318→          {events.slice(0, 10).map(event => (
+   319→            <div key={event.id} className={`flex items-center justify-between p-2 rounded-lg ${
+   320→              event.status === 'malicious' ? 'bg-red-500/10 border border-red-500/20' :
+   321→              event.status === 'suspicious' ? 'bg-yellow-500/10 border border-yellow-500/20' :
+   322→              'bg-slate-800/30'
+   323→            }`}>
+   324→              <div className="flex items-center gap-3 flex-1 min-w-0">
+   325→                <StatusIndicator 
+   326→                  status={event.status === 'normal' ? 'good' : event.status === 'suspicious' ? 'warning' : 'critical'} 
+   327→                  size="sm" 
+   328→                />
+   329→                <div className="min-w-0">
+   330→                  <span className="text-sm font-medium text-white truncate block">{event.type.replace(/([A-Z])/g, ' $1').trim()}</span>
+   331→                  <span className="text-xs text-slate-500">{event.source} → {event.destination}</span>
+   332→                </div>
+   333→              </div>
+   334→              <div className="flex items-center gap-3 ml-3">
+   335→                <span className={`font-mono text-sm ${event.riskScore > 70 ? 'text-red-400' : event.riskScore > 40 ? 'text-yellow-400' : 'text-slate-400'}`}>
+   336→                  {event.riskScore}
+   337→                </span>
+   338→                <span className="text-xs text-slate-500 w-[60px] text-right">
+   339→                  {new Date(event.timestamp).toLocaleTimeString()}
+   340→                </span>
+   341→              </div>
+   342→            </div>
+   343→          ))}
+   344→        </div>
+   345→      </CardContent>
+   346→    </Card>
+   347→  )
+   348→}
+   349→
+   350→function FraudDetectionPanel({ alerts }: { alerts: FraudAlert[] }) {
+   351→  const getFraudTypeIcon = (type: FraudAlert['type']) => {
+   352→    switch (type) {
+   353→      case 'irsf': return <PhoneCall className="h-4 w-4" />
+   354→      case 'sim_swap': return <UserX className="h-4 w-4" />
+   355→      case 'premium_rate': return <CreditCard className="h-4 w-4" />
+   356→      case 'bypass_fraud': return <Router className="h-4 w-4" />
+   357→      case 'wangiri': return <Phone className="h-4 w-4" />
+   358→    }
+   359→  }
+   360→
+   361→  const getSeverityColor = (severity: FraudAlert['severity']) => {
+   362→    switch (severity) {
+   363→      case 'critical': return 'border-red-500/50 bg-red-500/10'
+   364→      case 'high': return 'border-orange-500/50 bg-orange-500/10'
+   365→      case 'medium': return 'border-yellow-500/50 bg-yellow-500/10'
+   366→      case 'low': return 'border-blue-500/50 bg-blue-500/10'
+   367→    }
+   368→  }
+   369→
+   370→  return (
+   371→    <Card className="bg-slate-900 border-slate-700">
+   372→      <CardHeader className="pb-3">
+   373→        <div className="flex items-center justify-between">
+   374→          <CardTitle className="text-white text-base flex items-center gap-2">
+   375→            <AlertTriangle className="h-4 w-4 text-orange-400" />
+   376→            Fraud Detection Alerts
+   377→          </CardTitle>
+   378→          <Badge variant="secondary" className="bg-orange-500/20 text-orange-400">
+   379→            {alerts.filter(a => a.status !== 'false_positive').length} Active
+   380→          </Badge>
+   381→        </div>
+   382→      </CardHeader>
+   383→      <CardContent>
+   384→        <div className="space-y-3">
+   385→          {alerts.map(alert => (
+   386→            <div key={alert.id} className={`p-3 rounded-lg border ${getSeverityColor(alert.severity)}`}>
+   387→              <div className="flex items-start justify-between mb-2">
+   388→                <div className="flex items-center gap-2">
+   389→                  {getFraudTypeIcon(alert.type)}
+   390→                  <span className="font-medium text-white capitalize text-sm">
+   391→                    {alert.type.replace('_', ' ')}
+   392→                  </span>
+   393→                  <Badge variant="outline" className={`text-xs ${
+   394→                    alert.severity === 'critical' ? 'border-red-500/50 text-red-400' :
+   395→                    alert.severity === 'high' ? 'border-orange-500/50 text-orange-400' :
+   396→                    alert.severity === 'medium' ? 'border-yellow-500/50 text-yellow-400' :
+   397→                    'border-blue-500/50 text-blue-400'
+   398→                  }`}>
+   399→                    {alert.severity}
+   400→                  </Badge>
+   401→                </div>
+   402→                <StatusIndicator 
+   403→                  status={
+   404→                    alert.status === 'blocked' ? 'excellent' :
+   405→                    alert.status === 'monitoring' ? 'warning' :
+   406→                    alert.status === 'investigating' ? 'good' : 'critical'
+   407→                  } 
+   408→                  size="sm"
+   409→                  showLabel
+   410→                />
+   411→              </div>
+   412→              <div className="flex items-center justify-between text-xs text-slate-400">
+   413→                <div className="flex items-center gap-4">
+   414→                  <span className="font-mono">{alert.msisdn}</span>
+   415→                  <span className="flex items-center gap-1">
+   416→                    <MapPin className="h-3 w-3" />
+   417→                    {alert.location}
+   418→                  </span>
+   419→                </div>
+   420→                <div className="flex items-center gap-3">
+   421→                  {alert.amount && (
+   422→                    <span className="text-orange-400 font-medium">
+   423→                      DZD {alert.amount.toLocaleString()}
+   424→                    </span>
+   425→                  )}
+   426→                  <span>{Math.ceil((Date.now() - alert.detectedAt.getTime()) / 3600000)}h ago</span>
+   427→                </div>
+   428→              </div>
+   429→            </div>
+   430→          ))}
+   431→        </div>
+   432→      </CardContent>
+   433→    </Card>
+   434→  )
+   435→}
+   436→
+   437→function SIMSwapMonitor({ events }: { events: SIMSwapEvent[] }) {
+   438→  const suspiciousSwaps = events.filter(e => e.status !== 'legitimate')
+   439→
+   440→  return (
+   441→    <Card className="bg-slate-900 border-slate-700">
+   442→      <CardHeader className="pb-3">
+   443→        <div className="flex items-center justify-between">
+   444→          <CardTitle className="text-white text-base flex items-center gap-2">
+   445→            <Phone className="h-4 w-4 text-pink-400" />
+   446→            SIM Swap Monitoring
+   447→          </CardTitle>
+   448→          <Badge variant={suspiciousSwaps.length > 0 ? "destructive" : "secondary"} className={
+   449→            suspiciousSwaps.length > 0 ? "bg-red-500/20 text-red-400" : "bg-green-500/20 text-green-400"
+   450→          }>
+   451→            {suspiciousSwaps.length} Suspicious
+   452→          </Badge>
+   453→        </div>
+   454→      </CardHeader>
+   455→      <CardContent>
+   456→        {/* Verification Methods Stats */}
+   457→        <div className="grid grid-cols-3 gap-3 mb-4">
+   458→          <div className="p-3 rounded-lg bg-green-500/10 border border-green-500/20 text-center">
+   459→            <p className="text-lg font-bold text-green-400">
+   460→              {events.filter(e => e.verificationMethod === 'in-person').length}
+   461→            </p>
+   462→            <p className="text-xs text-slate-400">In-Person Verified</p>
+   463→          </div>
+   464→          <div className="p-3 rounded-lg bg-blue-500/10 border border-blue-500/20 text-center">
+   465→            <p className="text-lg font-bold text-blue-400">
+   466→              {events.filter(e => e.verificationMethod === 'otp').length}
+   467→            </p>
+   468→            <p className="text-xs text-slate-400">OTP Verified</p>
+   469→          </div>
+   470→          <div className="p-3 rounded-lg bg-red-500/10 border border-red-500/20 text-center">
+   471→            <p className="text-lg font-bold text-red-400">
+   472→              {events.filter(e => e.verificationMethod === 'none').length}
+   473→            </p>
+   474→            <p className="text-xs text-slate-400">No Verification</p>
+   475→          </div>
+   476→        </div>
+   477→
+   478→        {/* Recent SIM Swaps */}
+   479→        <div className="space-y-2 max-h-[200px] overflow-y-auto">
+   480→          {events.slice(0, 8).map(event => (
+   481→            <div key={event.id} className={`flex items-center justify-between p-2 rounded-lg ${
+   482→              event.status === 'fraudulent' ? 'bg-red-500/10 border border-red-500/20' :
+   483→              event.status === 'suspicious' ? 'bg-yellow-500/10 border border-yellow-500/20' :
+   484→              'bg-slate-800/30'
+   485→            }`}>
+   486→              <div className="flex items-center gap-3">
+   487→                <span className="font-mono text-sm text-white">{event.msisdn}</span>
+   488→                <span className="text-xs text-slate-400">{event.previousCarrier} → Djezzy</span>
+   489→              </div>
+   490→              <div className="flex items-center gap-2">
+   491→                <Badge variant="outline" className={`text-xs ${
+   492→                  event.verificationMethod === 'in-person' ? 'border-green-500/50 text-green-400' :
+   493→                  event.verificationMethod === 'otp' ? 'border-blue-500/50 text-blue-400' :
+   494→                  'border-red-500/50 text-red-400'
+   495→                }`}>
+   496→                  {event.verificationMethod === 'in-person' ? 'In-Person' :
+   497→                   event.verificationMethod === 'otp' ? 'OTP' : 'None'}
+   498→                </Badge>
+   499→                <span className={`font-mono text-xs ${
+   500→                  event.riskScore > 70 ? 'text-red-400' :
+   501→                  event.riskScore > 40 ? 'text-yellow-400' : 'text-slate-400'
+   502→                }`}>{event.riskScore}</span>
+   503→              </div>
+   504→            </div>
+   505→          ))}
+   506→        </div>
+   507→      </CardContent>
+   508→    </Card>
+   509→  )
+   510→}
+   511→
+   512→function AlgeriaThreatMap({ data }: { data: GeographicThreat[] }) {
+   513→  const getThreatColor = (level: GeographicThreat['threatLevel']) => {
+   514→    switch (level) {
+   515→      case 'critical': return 'bg-red-500'
+   516→      case 'high': return 'bg-orange-500'
+   517→      case 'medium': return 'bg-yellow-500'
+   518→      case 'low': return 'bg-green-500'
+   519→    }
+   520→  }
+   521→
+   522→  // Simplified representation of Algeria map with dots
+   523→  return (
+   524→    <Card className="bg-slate-900 border-slate-700">
+   525→      <CardHeader className="pb-3">
+   526→        <CardTitle className="text-white text-base flex items-center gap-2">
+   527→          <MapPin className="h-4 w-4 text-emerald-400" />
+   528→          Geographic Threat Distribution (Algeria)
+   529→        </CardTitle>
+   530→      </CardHeader>
+   531→      <CardContent>
+   532→        <div className="relative h-[350px] bg-slate-800/50 rounded-lg overflow-hidden border border-slate-700">
+   533→          {/* Simplified map background */}
+   534→          <div className="absolute inset-0 opacity-20">
+   535→            <svg viewBox="0 0 400 450" className="w-full h-full">
+   536→              <path
+   537→                d="M120,50 L180,30 L280,45 L340,90 L360,150 L350,220 L320,290 L270,350 L200,420 L130,380 L80,310 L60,240 L70,160 L95,100 Z"
+   538→                fill="#334155"
+   539→                stroke="#475569"
+   540→                strokeWidth="2"
+   541→              />
+   542→            </svg>
+   543→          </div>
+   544→          
+   545→          {/* Threat points */}
+   546→          {data.map((location, index) => {
+   547→            // Convert lat/lng to SVG coordinates (simplified)
+   548→            const x = ((location.lng + 1.32) / 8) * 350 + 25
+   549→            const y = ((36.9 - location.lat) / 7) * 400 + 25
+   550→            
+   551→            return (
+   552→              <div
+   553→                key={index}
+   554→                className="absolute transform -translate-x-1/2 -translate-y-1/2 group cursor-pointer"
+   555→                style={{ left: `${x}px`, top: `${y}px` }}
+   556→              >
+   557→                <div className={`w-3 h-3 rounded-full ${getThreatColor(location.threatLevel)} animate-pulse`} />
+   558→                <div className="absolute bottom-full left-1/2 transform -translate-x-1/2 mb-2 hidden group-hover:block z-10">
+   559→                  <div className="bg-slate-900 border border-slate-600 rounded-lg p-2 shadow-xl whitespace-nowrap">
+   560→                    <p className="text-sm font-medium text-white">{location.wilaya}</p>
+   561→                    <p className="text-xs text-slate-400">{location.eventCount} events</p>
+   562→                    <p className="text-xs text-cyan-400">{location.topEventType}</p>
+   563→                  </div>
+   564→                </div>
+   565→              </div>
+   566→            )
+   567→          })}
+   568→          
+   569→          {/* Legend */}
+   570→          <div className="absolute bottom-3 left-3 bg-slate-900/90 border border-slate-700 rounded-lg p-2 space-y-1">
+   571→            <p className="text-xs font-medium text-slate-300 mb-1">Threat Level</p>
+   572→            {[
+   573→              { level: 'critical', color: 'bg-red-500' },
+   574→              { level: 'high', color: 'bg-orange-500' },
+   575→              { level: 'medium', color: 'bg-yellow-500' },
+   576→              { level: 'low', color: 'bg-green-500' }
+   577→            ].map(item => (
+   578→              <div key={item.level} className="flex items-center gap-2">
+   579→                <div className={`w-2 h-2 rounded-full ${item.color}`} />
+   580→                <span className="text-xs text-slate-400 capitalize">{item.level}</span>
+   581→              </div>
+   582→            ))}
+   583→          </div>
+   584→        </div>
+   585→
+   586→        {/* Top Risk Wilayas */}
+   587→        <div className="mt-4 grid grid-cols-2 md:grid-cols-4 gap-2">
+   588→          {data
+   589→            .sort((a, b) => b.eventCount - a.eventCount)
+   590→            .slice(0, 4)
+   591→            .map((wilaya, index) => (
+   592→              <div key={wilaya.wilaya} className="p-2 rounded bg-slate-800/50 border border-slate-700">
+   593→                <div className="flex items-center justify-between mb-1">
+   594→                  <span className="text-sm font-medium text-white">{wilaya.wilaya}</span>
+   595→                  <div className={`w-2 h-2 rounded-full ${getThreatColor(wilaya.threatLevel)}`} />
+   596→                </div>
+   597→                <p className="text-xs text-slate-400">{wilaya.eventCount} events</p>
+   598→              </div>
+   599→            ))
+   600→          }
+   601→        </div>
+   602→      </CardContent>
+   603→    </Card>
+   604→  )
+   605→}
+   606→
+   607→function TrafficChart({ data }: { data: ReturnType<typeof generateTrafficMetrics> }) {
+   608→  return (
+   609→    <Card className="bg-slate-900 border-slate-700">
+   610→      <CardHeader className="pb-3">
+   611→        <div className="flex items-center justify-between">
+   612→          <CardTitle className="text-white text-base flex items-center gap-2">
+   613→            <Activity className="h-4 w-4 text-emerald-400" />
+   614→            Traffic Metrics (24h)
+   615→          </CardTitle>
+   616→          <Select defaultValue="24h">
+   617→            <SelectTrigger className="w-[100px] h-8 bg-slate-800 border-slate-600 text-xs">
+   618→              <SelectValue />
+   619→            </SelectTrigger>
+   620→            <SelectContent>
+   621→              <SelectItem value="24h">24 Hours</SelectItem>
+   622→              <SelectItem value="7d">7 Days</SelectItem>
+   623→              <SelectItem value="30d">30 Days</SelectItem>
+   624→            </SelectContent>
+   625→          </Select>
+   626→        </div>
+   627→      </CardHeader>
+   628→      <CardContent>
+   629→        <ChartContainer config={trafficChartConfig} className="h-[250px] w-full">
+   630→          <AreaChart data={data}>
+   631→            <CartesianGrid strokeDasharray="3 3" stroke="#334155" />
+   632→            <XAxis dataKey="hour" tick={{ fill: '#94a3b8', fontSize: 11 }} tickFormatter={(v) => v.split(':')[0]} />
+   633→            <YAxis tick={{ fill: '#94a3b8', fontSize: 11 }} />
+   634→            <ChartTooltip content={<ChartTooltipContent />} />
+   635→            <Area type="monotone" dataKey="ss7Messages" stackId="1" stroke="#06b6d4" fill="#06b6d430" strokeWidth={2} />
+   636→            <Area type="monotone" dataKey="diameterRequests" stackId="1" stroke="#f59e0b" fill="#f59e0b30" strokeWidth={2} />
+   637→            <Area type="monotone" dataKey="sipCalls" stackId="1" stroke="#10b981" fill="#10b98130" strokeWidth={2} />
+   638→          </AreaChart>
+   639→        </ChartContainer>
+   640→      </CardContent>
+   641→    </Card>
+   642→  )
+   643→}
+   644→
+   645→function SignalingAnomalyIndicators() {
+   646→  const indicators = [
+   647→    { name: 'SS7 Message Rate', current: 1245, baseline: 1100, unit: '/sec', status: 'warning' as const },
+   648→    { name: 'Diameter CCR Rate', current: 892, baseline: 850, unit: '/min', status: 'good' as const },
+   649→    { name: 'Unusual Roaming Patterns', current: 23, baseline: 15, unit: 'count', status: 'warning' as const },
+   650→    { name: 'Location Update Spikes', current: 342, baseline: 280, unit: '/min', status: 'critical' as const },
+   651→    { name: 'Authentication Failures', current: 4.2, baseline: 2.0, unit: '%', status: 'critical' as const },
+   652→    { name: 'IMEI Changes', current: 12, baseline: 8, unit: '/hour', status: 'warning' as const }
+   653→  ]
+   654→
+   655→  return (
+   656→    <Card className="bg-slate-900 border-slate-700">
+   657→      <CardHeader className="pb-3">
+   658→        <CardTitle className="text-white text-base flex items-center gap-2">
+   659→          <Zap className="h-4 w-4 text-yellow-400" />
+   660→          Signaling Anomaly Indicators
+   661→        </CardTitle>
+   662→      </CardHeader>
+   663→      <CardContent>
+   664→        <div className="space-y-3">
+   665→          {indicators.map(indicator => {
+   666→            const deviation = ((indicator.current - indicator.baseline) / indicator.baseline * 100)
+   667→            
+   668→            return (
+   669→              <div key={indicator.name} className="flex items-center gap-3 p-2 rounded-lg bg-slate-800/30">
+   670→                <div className="flex-1 min-w-0">
+   671→                  <div className="flex items-center justify-between mb-1">
+   672→                    <span className="text-sm text-slate-300 truncate">{indicator.name}</span>
+   673→                    <div className="flex items-center gap-2">
+   674→                      <span className="font-mono text-sm text-white">{indicator.current}{indicator.unit}</span>
+   675→                      <StatusIndicator status={indicator.status} size="sm" />
+   676→                    </div>
+   677→                  </div>
+   678→                  <Progress 
+   679→                    value={Math.min((indicator.current / indicator.baseline) * 100, 200)} 
+   680→                    className={`h-1.5 ${
+   681→                      deviation > 30 ? '[&>div]:bg-red-500' :
+   682→                      deviation > 15 ? '[&>div]:bg-yellow-500' :
+   683→                      '[&>div]:bg-green-500'
+   684→                    }`}
+   685→                  />
+   686→                  <div className="flex justify-between mt-1">
+   687→                    <span className="text-xs text-slate-500">Baseline: {indicator.baseline}{indicator.unit}</span>
+   688→                    <span className={`text-xs font-medium ${
+   689→                      deviation > 30 ? 'text-red-400' :
+   690→                      deviation > 15 ? 'text-yellow-400' :
+   691→                      'text-green-400'
+   692→                    }`}>
+   693→                      {deviation > 0 ? '+' : ''}{deviation.toFixed(1)}%
+   694→                    </span>
+   695→                  </div>
+   696→                </div>
+   697→              </div>
+   698→            )
+   699→          })}
+   700→        </div>
+   701→      </CardContent>
+   702→    </Card>
+   703→  )
+   704→}
+   705→
+   706→// ============================================================
+   707→// MAIN TELECOM SECURITY CENTER COMPONENT
+   708→// ============================================================
+   709→
+   710→export default function TelecomSecurityCenter() {
+   711→  const [ss7Events, setSS7Events] = useState<SS7Event[]>([])
+   712→  const [diameterMessages, setDiameterMessages] = useState<DiameterMessage[]>([])
+   713→  const [fraudAlerts, setFraudAlerts] = useState<FraudAlert[]>([])
+   714→  const [simSwapEvents, setSimSwapEvents] = useState<SIMSwapEvent[]>([])
+   715→  const [trafficData, setTrafficData] = useState<ReturnType<typeof generateTrafficMetrics>>([])
+   716→  const [isLoading, setIsLoading] = useState(true)
+   717→
+   718→  useEffect(() => {
+   719→    setIsLoading(true)
+   720→    setTimeout(() => {
+   721→      setSS7Events(generateSS7Events())
+   722→      setDiameterMessages(generateDiameterMessages())
+   723→      setFraudAlerts(generateFraudAlerts())
+   724→      setSimSwapEvents(generateSIMSwapEvents())
+   725→      setTrafficData(generateTrafficMetrics())
+   726→      setIsLoading(false)
+   727→    }, 600)
+   728→  }, [])
+   729→
+   730→  if (isLoading) {
+   731→    return (
+   732→      <div className="min-h-screen bg-slate-950 p-6 flex items-center justify-center">
+   733→        <div className="text-center space-y-4">
+   734→          <Satellite className="h-12 w-12 animate-spin text-cyan-500 mx-auto" />
+   735→          <p className="text-slate-400">Loading Telecom Security Center...</p>
+   736→        </div>
+   737→      </div>
+   738→    )
+   739→  }
+   740→
+   741→  return (
+   742→    <div className="min-h-screen bg-slate-950">
+   743→      {/* Header */}
+   744→      <header className="border-b border-slate-800 bg-slate-900/50 backdrop-blur-sm sticky top-0 z-40">
+   745→        <div className="px-6 py-4">
+   746→          <div className="flex items-center justify-between">
+   747→            <div>
+   748→              <h1 className="text-2xl font-bold text-white flex items-center gap-3">
+   749→                <Signal className="h-7 w-7 text-cyan-400" />
+   750→                Telecom Security Center
+   751→              </h1>
+   752→              <p className="text-slate-400 text-sm mt-1">
+   753→                SS7/Diameter Monitoring • Fraud Detection • SIM Swap Protection
+   754→              </p>
+   755→            </div>
+   756→            <div className="flex items-center gap-3">
+   757→              <Button variant="outline" className="border-slate-600 text-slate-300 hover:bg-slate-700">
+   758→                <Download className="h-4 w-4 mr-2" />
+   759→                Export Report
+   760→              </Button>
+   761→              <Button 
+   762→                variant="outline" 
+   763→                size="icon" 
+   764→                className="border-slate-600 text-slate-300 hover:bg-slate-700"
+   765→                onClick={() => window.location.reload()}
+   766→              >
+   767→                <RefreshCw className="h-4 w-4" />
+   768→              </Button>
+   769→            </div>
+   770→          </div>
+   771→        </div>
+   772→      </header>
+   773→
+   774→      {/* Main Content */}
+   775→      <main className="p-6 space-y-6">
+   776→        {/* Key Metrics Row */}
+   777→        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+   778→          <TelecomMetricCard
+   779→            title="SS7 Messages/sec"
+   780→            value="1,245"
+   781→            icon={<Radio className="h-5 w-5 text-cyan-400" />}
+   782→            trend={13.2}
+   783→            color="bg-cyan-500/20"
+   784→            subtitle="+13% vs baseline"
+   785→          />
+   786→          <TelecomMetricCard
+   787→            title="Active Fraud Cases"
+   788→            value={fraudAlerts.filter(a => a.status !== 'false_positive').length}
+   789→            icon={<AlertTriangle className="h-5 w-5 text-orange-400" />}
+   790→            trend={-5.3}
+   791→            color="bg-orange-500/20"
+   792→            inverseColors
+   793→            subtitle="2 critical priority"
+   794→          />
+   795→          <TelecomMetricCard
+   796→            title="SIM Swap Attempts (24h)"
+   797→            value={simSwapEvents.length}
+   798→            icon={<Phone className="h-5 w-5 text-pink-400" />}
+   799→            trend={8.7}
+   800→            color="bg-pink-500/20"
+   801→            subtitle={`${simSwapEvents.filter(e => e.status !== 'legitimate').length} flagged`}
+   802→          />
+   803→          <TelecomMetricCard
+   804→            title="Network Nodes Monitored"
+   805→            value="47"
+   806→            icon={<Server className="h-5 w-5 text-emerald-400" />}
+   807→            trend={0}
+   808→            color="bg-emerald-500/20"
+   809→            subtitle="All operational"
+   810→          />
+   811→        </div>
+   812→
+   813→        {/* Main Grid */}
+   814→        <Tabs defaultValue="overview" className="space-y-6">
+   815→          <TabsList className="bg-slate-800 border-slate-700">
+   816→            <TabsTrigger value="overview" className="data-[state=active]:bg-slate-700">
+   817→              <Globe className="h-4 w-4 mr-2" />
+   818→              Overview
+   819→            </TabsTrigger>
+   820→            <TabsTrigger value="signaling" className="data-[state=active]:bg-slate-700">
+   821→              <Radio className="h-4 w-4 mr-2" />
+   822→              Signaling
+   823→            </TabsTrigger>
+   824→            <TabsTrigger value="fraud" className="data-[state=active]:bg-slate-700">
+   825→              <Shield className="h-4 w-4 mr-2" />
+   826→              Fraud
+   827→            </TabsTrigger>
+   828→            <TabsTrigger value="geographic" className="data-[state=active]:bg-slate-700">
+   829→              <Navigation className="h-4 w-4 mr-2" />
+   830→              Geographic
+   831→            </TabsTrigger>
+   832→          </TabsList>
+   833→
+   834→          {/* Overview Tab */}
+   835→          <TabsContent value="overview" className="space-y-6">
+   836→            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+   837→              <SS7MonitoringPanel events={ss7Events} />
+   838→              <FraudDetectionPanel alerts={fraudAlerts} />
+   839→            </div>
+   840→            <TrafficChart data={trafficData} />
+   841→          </TabsContent>
+   842→
+   843→          {/* Signaling Tab */}
+   844→          <TabsContent value="signaling" className="space-y-6">
+   845→            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+   846→              <SS7MonitoringPanel events={ss7Events} />
+   847→              <SignalingAnomalyIndicators />
+   848→            </div>
+   849→            <TrafficChart data={trafficData} />
+   850→          </TabsContent>
+   851→
+   852→          {/* Fraud Tab */}
+   853→          <TabsContent value="fraud" className="space-y-6">
+   854→            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+   855→              <FraudDetectionPanel alerts={fraudAlerts} />
+   856→              <SIMSwapMonitor events={simSwapEvents} />
+   857→            </div>
+   858→          </TabsContent>
+   859→
+   860→          {/* Geographic Tab */}
+   861→          <TabsContent value="geographic" className="space-y-6">
+   862→            <AlgeriaThreatMap data={ALGERIA_WILAYAS} />
+   863→          </TabsContent>
+   864→        </Tabs>
+   865→      </main>
+   866→    </div>
+   867→  )
+   868→}
+   869→

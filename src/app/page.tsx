@@ -15,6 +15,10 @@ import {
   CreditCard, FolderOpen, List
 } from 'lucide-react'
 
+// Import SS7 Components
+import SS7TrafficMonitor from '@/components/ss7/SS7TrafficMonitor'
+import FraudDetectionPanel from '@/components/ss7/FraudDetectionPanel'
+
 // ============================================================
 // COMPLETE MODULE STRUCTURE FOR DJEZZY NATIONAL SOC PLATFORM
 // All 8 Phases with Sub-modules
@@ -116,8 +120,23 @@ const socModules: Module[] = [
   },
 
   // ══════════════════════════════════════════════════════
-  // TELECOM-SPECIFIC MODULES (Djezzy Special)
+  // TELECOM-SPECIFIC MODULES (Djezzy Special) - SS7 TOOLS
   // ══════════════════════════════════════════════════════
+  {
+    id: 'ss7-tools',
+    name: 'SS7 Security Tools',
+    icon: <Radio className="w-5 h-5" />,
+    description: 'SS7 Protocol Analysis, Fraud Detection & Signaling Security',
+    status: 'active',
+    phase: 4,
+    subModules: [
+      { id: 'ss7-decoder', name: 'SS7 Decoder', icon: <Terminal className="w-4 h-4" />, description: 'MAP/CAP/ISUP message decoding', badge: 'Core' },
+      { id: 'traffic-monitor', name: 'Traffic Monitor', icon: <Activity className="w-4 h-4" />, description: 'Real-time signaling traffic analysis', itemCount: 1250 },
+      { id: 'fraud-detector', name: 'Fraud Detector', icon: <AlertTriangle className="w-4 h-4" />, description: 'IRSF/SIM Swap/Wangiri detection', badge: 'AI' },
+      { id: 'signaling-analyzer', name: 'Signaling Analyzer', icon: <BarChart3 className="w-4 h-4" />, description: 'OPC/DPC traffic analysis' },
+      { id: 'message-inspector', name: 'Message Inspector', icon: <Search className="w-4 h-4" />, description: 'Deep packet inspection' }
+    ]
+  },
   {
     id: 'telecom-security',
     name: 'Telecom Security',
@@ -307,13 +326,12 @@ const PhaseBadge = ({ phase }: { phase: number }) => (
   </span>
 )
 
-// Note: CreditCard, FolderOpen, and List are already imported from lucide-react
-
 export default function SOCDashboard() {
-  const [selectedModule, setSelectedModule] = useState<string | null>(null)
+  const [selectedModule, setSelectedModule] = useState<string>('ss7-tools')
   const [viewMode, setViewMode] = useState<'grid' | 'list'>('grid')
   const [searchQuery, setSearchQuery] = useState('')
   const [showMobileMenu, setShowMobileMenu] = useState(false)
+  const [showSS7Tools, setShowSS7Tools] = useState(true)
 
   const filteredModules = socModules.filter(module =>
     (module.name && module.name.toLowerCase().includes(searchQuery.toLowerCase())) ||
@@ -454,6 +472,11 @@ export default function SOCDashboard() {
                     <div className="flex items-center gap-2 flex-wrap">
                       <PhaseBadge phase={module.phase} />
                       <StatusBadge status={module.status} />
+                      {module.id === 'ss7-tools' && (
+                        <span className="px-2 py-0.5 rounded text-xs bg-purple-500/20 text-purple-400 border border-purple-500/30">
+                          ★ Featured
+                        </span>
+                      )}
                     </div>
                   </div>
 
@@ -509,13 +532,97 @@ export default function SOCDashboard() {
 
         {/* Main Content Area */}
         <main className="flex-1 p-6 overflow-y-auto">
+          {/* SS7 Security Tools - Featured Section */}
+          {(selectedModule === 'ss7-tools' || selectedModule === null) && showSS7Tools && (
+            <section className="mb-8">
+              {/* Section Header */}
+              <div className="flex items-center justify-between mb-6">
+                <div className="flex items-center gap-3">
+                  <div className="p-3 rounded-xl bg-gradient-to-br from-purple-500/20 to-cyan-500/20 border border-purple-500/30">
+                    <Radio className="w-6 h-6 text-purple-400" />
+                  </div>
+                  <div>
+                    <h2 className="text-2xl font-bold">SS7 Security Tools</h2>
+                    <p className="text-slate-400 text-sm">Real-time signaling analysis, fraud detection & message decoding</p>
+                  </div>
+                </div>
+                <div className="flex items-center gap-2">
+                  <span className="px-3 py-1 rounded-full text-xs bg-green-500/20 text-green-400 border border-green-500/30">
+                    ● Live Monitoring
+                  </span>
+                  <button 
+                    onClick={() => setShowSS7Tools(false)}
+                    className="p-2 hover:bg-slate-800 rounded-lg transition-colors"
+                  >
+                    <X className="w-4 h-4" />
+                  </button>
+                </div>
+              </div>
+
+              {/* SS7 Tools Grid */}
+              <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
+                {/* SS7 Traffic Monitor */}
+                <div className="bg-slate-900 rounded-2xl border border-slate-800 overflow-hidden">
+                  <div className="px-6 py-4 border-b border-slate-800 flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <Activity className="w-5 h-5 text-cyan-400" />
+                      <h3 className="font-semibold">Traffic Monitor</h3>
+                    </div>
+                    <div className="flex items-center gap-2 text-xs text-slate-400">
+                      <span className="w-2 h-2 bg-green-500 rounded-full animate-pulse"></span>
+                      Real-time
+                    </div>
+                  </div>
+                  <div className="p-4 max-h-[600px] overflow-hidden">
+                    <SS7TrafficMonitor />
+                  </div>
+                </div>
+
+                {/* Fraud Detection Panel */}
+                <div className="bg-slate-900 rounded-2xl border border-slate-800 overflow-hidden">
+                  <div className="px-6 py-4 border-b border-slate-800 flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <ShieldAlertIcon className="w-5 h-5 text-orange-400" />
+                      <h3 className="font-semibold">Fraud Detection</h3>
+                    </div>
+                    <div className="flex items-center gap-2 text-xs text-slate-400">
+                      <AlertTriangle className="w-3.5 h-3.5 text-yellow-400" />
+                      Active Alerts
+                    </div>
+                  </div>
+                  <div className="p-4 max-h-[600px] overflow-hidden">
+                    <FraudDetectionPanel />
+                  </div>
+                </div>
+              </div>
+
+              {/* Quick Stats Row */}
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mt-6">
+                {[
+                  { label: 'Messages/sec', value: '1,247', icon: <Zap className="w-4 h-4" />, color: 'text-cyan-400', bg: 'bg-cyan-500/10' },
+                  { label: 'Active Alerts', value: '23', icon: <AlertTriangle className="w-4 h-4" />, color: 'text-orange-400', bg: 'bg-orange-500/10' },
+                  { label: 'Blocked Today', value: '8', icon: <Shield className="w-4 h-4" />, color: 'text-red-400', bg: 'bg-red-500/10' },
+                  { label: 'Est. Loss (DZD)', value: '125K', icon: <TrendingUp className="w-4 h-4" />, color: 'text-green-400', bg: 'bg-green-500/10' },
+                ].map((stat, idx) => (
+                  <div key={idx} className="bg-slate-900 rounded-xl border border-slate-800 p-4">
+                    <div className="flex items-center justify-between mb-2">
+                      <span className="text-slate-400 text-sm">{stat.label}</span>
+                      <div className={`p-1.5 rounded-lg ${stat.bg} ${stat.color}`}>{stat.icon}</div>
+                    </div>
+                    <div className="text-2xl font-bold">{stat.value}</div>
+                  </div>
+                ))}
+              </div>
+            </section>
+          )}
+
           {/* Welcome Banner */}
           <div className="bg-gradient-to-r from-cyan-600/20 to-blue-600/20 rounded-2xl border border-cyan-500/30 p-6 mb-6">
             <div className="flex items-start justify-between">
               <div>
                 <h2 className="text-2xl font-bold mb-2">Welcome to Djezzy National SOC</h2>
                 <p className="text-slate-300 max-w-2xl">
-                  Complete Security Operations Center platform with <strong>13 major modules</strong> and <strong>60+ sub-modules</strong>. 
+                  Complete Security Operations Center platform with <strong>14 major modules</strong> and <strong>65+ sub-modules</strong>. 
                   Select a module from the sidebar to explore its features.
                 </p>
                 <div className="flex items-center gap-4 mt-4 text-sm">
@@ -542,10 +649,10 @@ export default function SOCDashboard() {
           {/* Quick Stats Grid */}
           <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4 mb-6">
             {[
-              { label: 'Total Modules', value: '13', icon: <Grid3X3 className="w-5 h-5" />, color: 'text-cyan-400' },
-              { label: 'Sub-Modules', value: '60+', icon: <Layers className="w-5 h-5" />, color: 'text-purple-400' },
-              { label: 'API Endpoints', value: '21', icon: <Terminal className="w-5 h-5" />, color: 'text-green-400' },
-              { label: 'Integration Points', value: '12', icon: <Zap className="w-5 h-5" />, color: 'text-yellow-400' }
+              { label: 'Total Modules', value: '14', icon: <Grid3X3 className="w-5 h-5" />, color: 'text-cyan-400' },
+              { label: 'Sub-Modules', value: '65+', icon: <Layers className="w-5 h-5" />, color: 'text-purple-400' },
+              { label: 'API Endpoints', value: '25+', icon: <Terminal className="w-5 h-5" />, color: 'text-green-400' },
+              { label: 'Integration Points', value: '15', icon: <Zap className="w-5 h-5" />, color: 'text-yellow-400' }
             ].map((stat, idx) => (
               <div key={idx} className="bg-slate-900 rounded-xl border border-slate-800 p-4">
                 <div className="flex items-center justify-between mb-2">
@@ -565,16 +672,17 @@ export default function SOCDashboard() {
             </h3>
             <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
               {[
+                socModules.find(m => m.id === 'ss7-tools'),
                 socModules.find(m => m.id === 'telecom-security'),
                 socModules.find(m => m.id === 'compliance'),
                 socModules.find(m => m.id === 'soar'),
                 socModules.find(m => m.id === 'threat-hunting'),
-                socModules.find(m => m.id === 'ml-platform'),
-                socModules.find(m => m.id === 'fraud-detection')
+                socModules.find(m => m.id === 'ml-platform')
               ].map((module, idx) => module && (
                 <div
                   key={idx}
                   className="bg-gradient-to-br from-slate-900 to-slate-800 rounded-xl border border-slate-700 p-5 hover:border-cyan-500/50 transition-all cursor-pointer group"
+                  onClick={() => setSelectedModule(module.id)}
                 >
                   <div className="flex items-center gap-3 mb-3">
                     <div className="p-2.5 rounded-xl bg-cyan-500/20 text-cyan-400 group-hover:bg-cyan-500/30 transition-colors">
@@ -606,6 +714,8 @@ export default function SOCDashboard() {
                 { name: 'Database', status: 'operational', uptime: '99.99%' },
                 { name: 'ML Engine', status: 'operational', uptime: '99.95%' },
                 { name: 'SS7 Firewall', status: 'operational', uptime: '100%' },
+                { name: 'SS7 Decoder', status: 'operational', uptime: '100%' },
+                { name: 'Fraud Detector', status: 'operational', uptime: '99.98%' },
                 { name: 'Threat Intel', status: 'degraded', uptime: '98.5%' },
                 { name: 'SOAR Engine', status: 'operational', uptime: '99.98%' }
               ].map((system, idx) => (
@@ -629,5 +739,13 @@ export default function SOCDashboard() {
 const Star = ({ className }: { className?: string }) => (
   <svg className={className} fill="currentColor" viewBox="0 0 24 24">
     <path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z" />
+  </svg>
+)
+
+const ShieldAlertIcon = ({ className }: { className?: string }) => (
+  <svg className={className} width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
+    <line x1="12" y1="8" x2="12" y2="12"/>
+    <line x1="12" y1="16" x2="12.01" y2="16"/>
   </svg>
 )

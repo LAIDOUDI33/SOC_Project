@@ -1,0 +1,641 @@
+# Algerian SS7 Network Topology Definition
+# Djezzy National SOC Platform
+#
+# This configuration defines the SS7 signaling network topology
+# for Djezzy Algeria, including point code allocation, node definitions,
+# and interconnection points.
+#
+# Version: 1.0.0
+# Classification: CONFIDENTIAL - Network Architecture
+
+# =============================================================================
+# NETWORK OVERVIEW
+# =============================================================================
+network:
+  operator: "Djezzy Algeria"
+  operator_code: "DZ-DJEZZY"
+  country: "Algeria"
+  country_code: "+213"
+  itu_region: "Europe (Region 1)"
+  
+  # ITU-T Signaling Area Code for Algeria
+  signaling_area_code: 213
+  
+  # Network identification
+  network_id:
+    mcc: "603"      # Mobile Country Code (Algeria)
+    mncs:           # Mobile Network Codes
+      djezzy: "01"
+      mobilis: "02" 
+      ooredoo: "03"
+
+# =============================================================================
+# POINT CODE CONFIGURATION
+# =============================================================================
+point_codes:
+  format: "ITU-T"     # 14-bit standard (ITU-T Q.704)
+  encoding: "BCD"     # Binary Coded Decimal representation
+  
+  # Point code structure for Djezzy network
+  # Using ITU-T 14-bit format: SLS (2 bits) + Zone (4 bits) + Cluster (8 bits)
+  structure:
+    bits: 14
+    range_min: 0
+    range_max: 16383
+    
+  # Reserved ranges within Djezzy network
+  ranges:
+    # Signaling Transfer Points (STP)
+    stp_primary:
+      start: 1
+      end: 5
+      description: "Primary STP infrastructure"
+      
+    stp_secondary:
+      start: 6
+      end: 10
+      description: "Secondary/backup STP infrastructure"
+    
+    # Home Location Registers (HLR)
+    hlr_pool:
+      start: 20
+      end: 50
+      description: "HLR pool for subscriber data"
+      notes: "HLR 20-35 primary, 36-50 backup/mirror"
+    
+    # Mobile Switching Centers (MSC)
+    msc_pool:
+      start: 51
+      end: 150
+      description: "MSC/VLR combined nodes by region"
+      regional_allocation:
+        north: [51, 80]       # Algiers, Blida, Tizi Ouzou
+        west: [81, 100]       # Oran, Tlemcen, Sidi Bel Abbes
+        east: [101, 120]      # Constantine, Annaba, Skikda
+        south: [121, 140]     # Ouargla, Tamanrasset, Bechar
+        central: [141, 150]   # M'Sila, Djelfa, Medea
+    
+    # Visitor Location Registers (standalone VLR)
+    vlr_pool:
+      start: 151
+      end: 200
+      description: "Standalone VLR nodes"
+      
+    # GPRS Support Nodes
+    sgsn_pool:
+      start: 201
+      end: 220
+      description: "Serving GPRS Support Nodes"
+      
+    ggsn_pool:
+      start: 221
+      end: 230
+      description: "Gateway GPRS Support Nodes"
+    
+    # Intelligent Network / Service Control Points
+    scp_pool:
+      start: 240
+      end: 255
+      description: "Service Control Points (IN platform)"
+      
+    # SMS Centers
+    smsc_pool:
+      start: 256
+      end: 270
+      description: "SMS Service Centers"
+      
+    # International Gateway MSCs
+    igmsc_pool:
+      start: 280
+      end: 290
+      description: "International Gateway MSCs"
+      
+    # Border STPs (for international connectivity)
+    border_stp:
+      start: 295
+      end: 300
+      description: "Border STPs for international links"
+
+# =============================================================================
+# GLOBAL TITLE CONFIGURATION
+# =============================================================================
+global_titles:
+  # GT format used in SCCP routing
+  format: "E.214"          # E.212 encoded in GTT (Global Title Translation)
+  
+  translation_type: 0      # TT value for mobile networks
+  
+  numbering_plan:
+    name: "E.212 (IMSI)"
+    value: 1               # NP = 1 for E.212 IMSI
+    
+  nature_of_address:
+    name: "Subscriber Number"
+    value: 4               # NoA = 4 for international subscriber
+  
+  # GT address structures
+  address_structure:
+    imsi_gt:
+      encoding: "BCD"
+      length: 8            # Max 15 digits in BCD
+      example: "603010123456789"
+      
+    msisdn_gt:
+      encoding: "BCD"
+      variable_length: true
+      max_length: 15
+      example: "213550123456"
+      
+    gt_prefixes:
+      hlr: "60301"         # MCC+MNC for HLR lookup
+      msc: "2136"          # MSISDN-based MSC routing
+      vlr: "2137"          # VLR-specific prefix
+      smsc: "2136004"      # SMSC GT prefix
+
+# =============================================================================
+# NETWORK NODES DEFINITION
+# =============================================================================
+nodes:
+
+  # ===========================================================================
+  # SIGNALLING TRANSFER POINTS (STP)
+  # ===========================================================================
+  stp_1:
+    name: "STP-Algiers-Primary"
+    point_code: 1
+    location: "Algiers (16)"
+    coordinates:
+      lat: 36.7538
+      lng: 3.0588
+    type: "STP"
+    vendor: "Huawei"
+    model: "SE9200"
+    status: "active"
+    redundancy_pair: "stp_2"
+    links:
+      - node: "stp_2"
+        type: "quadruplex"
+        capacity: "10Gbps"
+      - node: "msc_algiers"
+        type: "duplex"
+        capacity: "2.5Gbps"
+      - node: "hlr_main"
+        type: "duplex"
+        capacity: "2.5Gbps"
+      - node: "border_stp_mediterranean"
+        type: "duplex"
+        capacity: "10Gbps"
+    capabilities:
+      - "M3UA gateway"
+      - "SIGTRAN termination"
+      - "SCCP global title translation"
+      - "TCAP relay"
+    monitoring:
+      snmp_enabled: true
+      netflow_export: true
+
+  stp_2:
+    name: "STP-Algiers-Secondary"
+    point_code: 2
+    location: "Algiers (16) - DR Site"
+    type: "STP"
+    vendor: "Huawei"
+    model: "SE9200"
+    status: "standby"
+    redundancy_pair: "stp_1"
+    links:
+      - node: "stp_1"
+        type: "quadruplex"
+        
+  stp_oran:
+    name: "STP-Oran-West"
+    point_code: 7
+    location: "Oran (31)"
+    coordinates:
+      lat: 35.6911
+      lng: -0.6417
+    type: "STP"
+    vendor: "Huawei"
+    model: "SE9200"
+    status: "active"
+    links:
+      - node: "stp_1"
+        type: "duplex"
+        capacity: "10Gbps"
+      - node: "msc_oran"
+        type: "duplex"
+        capacity: "2.5Gbps"
+        
+  stp_constantine:
+    name: "STP-Constantine-East"
+    point_code: 8
+    location: "Constantine (23)"
+    coordinates:
+      lat: 36.3650
+      lng: 6.6147
+    type: "STP"
+    vendor: "Huawei"
+    model: "SE9200"
+    status: "active"
+    links:
+      - node: "stp_1"
+        type: "duplex"
+        capacity: "10Gbps"
+      - node: "msc_constantine"
+        type: "duplex"
+        capacity: "2.5Gbps"
+
+  # ===========================================================================
+  # HOME LOCATION REGISTERS (HLR)
+  # ===========================================================================
+  hlr_main:
+    name: "HLR-Algiers-Main"
+    point_code: 20
+    location: "Algiers Data Center 1"
+    type: "HLR/HSS"
+    vendor: "Ericsson"
+    model: "Dual Home Location Register"
+    status: "active"
+    subscriber_capacity: 15000000
+    current_subscribers: 16500000
+    backup_node: "hlr_backup"
+    links:
+      - node: "stp_1"
+        type: "quad"
+        priority: "primary"
+      - node: "stp_2"
+        type: "quad"
+        priority: "secondary"
+    capabilities:
+      - "MAPv2"
+      - "MAPv3"
+      - "CAMEL phase 3"
+      - "LCS (Location Services)"
+      - "IMS integration"
+    database:
+      replication: "real-time"
+      geo_redundancy: true
+      dr_site: "hlr_backup"
+
+  hlr_backup:
+    name: "HLR-Algiers-Backup"
+    point_code: 36
+    location: "Algiers Data Center 2 (DR)"
+    type: "HLR/HSS"
+    vendor: "Ericsson"
+    model: "Dual Home Location Register"
+    status: "hot_standby"
+    sync_source: "hlr_main"
+    links:
+      - node: "stp_2"
+        type: "quad"
+
+  # ===========================================================================
+  # MOBILE SWITCHING CENTERS (MSC/VLR)
+  # ===========================================================================
+  msc_algiers:
+    name: "MSC/VLR-Algiers-Central"
+    point_code: 51
+    location: "Algiers (16)"
+    type: "MSC/VLR"
+    vendor: "Ericsson"
+    model: "MSC Server Pool"
+    status: "active"
+    serving_region: "North Algeria"
+    registered_subscribers: ~3500000
+    mgw_nodes:
+      - "MGW-Algiers-1"
+      - "MGW-Algiers-2"
+      - "MGW-Algiers-3"
+    links:
+      - node: "stp_1"
+        type: "quad"
+      - node: "hlr_main"
+        type: "quad"
+    interfaces:
+      a_interface: true   # To BSS (2G/3G)
+      iwcs: true          # IWF for CS domain
+      cs_domain: true
+      ims_access: true
+
+  msc_oran:
+    name: "MSC/VLR-Oran-West"
+    point_code: 85
+    location: "Oran (31)"
+    type: "MSC/VLR"
+    vendor: "Ericsson"
+    model: "MSC Server Pool"
+    status: "active"
+    serving_region: "Western Algeria"
+    registered_subscribers: ~2200000
+    links:
+      - node: "stp_oran"
+        type: "quad"
+      - node: "hlr_main"
+        type: "quad"
+
+  msc_constantine:
+    name: "MSC/VLR-Constantine-East"
+    point_code: 105
+    location: "Constantine (23)"
+    type: "MSC/VLR"
+    vendor: "Ericsson"
+    model: "MSC Server Pool"
+    status: "active"
+    serving_region: "Eastern Algeria"
+    registered_subscribers: ~1800000
+    links:
+      - node: "stp_constantine"
+        type: "quad"
+      - node: "hlr_main"
+        type: "quad"
+
+  # ===========================================================================
+  # SERVICE CONTROL POINTS (SCP/IN)
+  # ===========================================================================
+  scp_main:
+    name: "SCP-Algeries-IN"
+    point_code: 240
+    location: "Algiers IN Platform DC"
+    type: "SCP"
+    vendor: "Huawei"
+    model: "IN Platform"
+    status: "active"
+    services:
+      - "Prepaid (CAMEL Phase 2)"
+      - "VPN (Virtual Private Network)"
+      - "Freephone (800 service)"
+      - "Premium Rate"
+      - "Number Portability"
+      - "Call Completion"
+    camel_version: "phase3"
+    ss7_stack:
+      - "TCAP"
+      - "CAP (ETSI CS-1/CS-2)"
+    links:
+      - node: "stp_1"
+        type: "quad"
+        priority: "primary"
+      - node: "stp_2"
+        type: "quad"
+        priority: "secondary"
+
+  # ===========================================================================
+  # SMS SERVICE CENTER
+  # ===========================================================================
+  smsc_djezzy:
+    name: "SMSC-Djezzy-Main"
+    point_code: 256
+    location: "Algiers SMSC Cluster"
+    type: "SMSC"
+    vendor: "SAGEMCOM"
+    model: "SMSC Carrier Grade"
+    status: "active"
+    throughput_capacity: 5000  # messages per second
+    current_load: 2200
+    features:
+      - "MO-SMS"
+      - "MT-SMS"
+      - "SMS Interworking (E.164/E.163)"
+      - "Concatenated SMS"
+      - "Binary SMS"
+      - "Flash SMS"
+    links:
+      - node: "stp_1"
+        type: "quad"
+      - node: "hlr_main"
+        type: "quad"
+    external_connections:
+      - type: "SS7"
+        destination: "Other operators (Mobilis, Ooredoo)"
+      - type: "SMPP"
+        destination: "Content providers / ESMEs"
+      - type: "HTTP/SOAP"
+        destination: "Application platforms"
+
+  # ===========================================================================
+  # INTERNATIONAL GATEWAYS
+  # ===========================================================================
+  igmsc_international:
+    name: "IGMSC-Algiers-International"
+    point_code: 280
+    location: "Algiers International Gateway"
+    type: "GMSC/IGMSC"
+    vendor: "Ericsson"
+    model: "International Gateway"
+    status: "active"
+    functions:
+      - "International call termination"
+      - "International call origination"
+      - "Roaming support (incoming/outgoing)"
+      - "CAMEL interworking"
+    roaming_partners: 450  # Number of roaming agreements
+    links:
+      - node: "border_stp_mediterranean"
+        type: "quad"
+      - node: "stp_1"
+        type: "quad"
+
+  border_stp_mediterranean:
+    name: "Border-STP-Mediterranean"
+    point_code: 295
+    location: "Algiers Cable Landing Station"
+    type: "Border STP"
+    vendor: "Tekelec"
+    model: "Eagle STP"
+    status: "active"
+    function: "International SS7 gateway"
+    connected_networks:
+      - "France Telecom (Orange)"
+      - "Telefonica"
+      - "Telecom Italia"
+      - "Maroc Telecom"
+      - "Tunisie Telecom"
+    security_features:
+      - "Firewall screening"
+      - "Message filtering"
+      - "GT validation"
+      - "Rate limiting"
+
+# =============================================================================
+# WILAYA (PROVINCE) MAPPING
+# =============================================================================
+wilaya_mapping:
+  # Map signaling traffic to Algerian wilayas (provinces)
+  # Format: wilaya_code: wilaya_name (with regional grouping)
+  
+  # Northern Region (Capital & Coast)
+  16: "Algiers"
+  09: "Blida"
+  15: "Tizi Ouzou"
+  25: "Bejaia"
+  28: "Jijel"
+  24: "Annaba"
+  12: "Skikda"
+  23: "Constantine"
+  27: "Setif"
+  43: "MilA"
+  11: "Boumerdes"
+  29: "Guelma"
+  
+  # Western Region
+  31: "Oran"
+  13: "Tlemcen"
+  22: "Sidi Bel Abbes"
+  32: "Mostaganem"
+  10: "Mascara"
+  18: " Djelfa"
+  44: "Msila"
+  30: "Saida"
+  48: "Relizane"
+  39: "El Bayadh"
+  45: "Naama"
+  17: "Tiaret"
+  49: "Tissemsilt"
+  33: "Ain Temouchent"
+  
+  # Eastern Region
+  34: "El Tarf"
+  19: "Souk Ahras"
+  40: "Khenchela"
+  38: "Oum El Bouaghi"
+  04: "Oum El Bouaghi"
+  07: "Biskra"
+  26: "Batna"
+  05: "Batna"
+  08: "Biskra"
+  
+  # Southern Region (Sahara)
+  47: "Biskra"
+  03: "Laghouat"
+  14: "Touggourt"
+  33: "Adrar"
+  47: "Ghardaia"
+  01: "Tamanrasset"
+  46: "Illizi"
+  51: "Tindouf"
+  37: "El Oued"
+  06: "Bechar"
+  08: "Bordj Badji Mokhtar"
+  36: "Tamarasset"
+  55: "Tindouf"
+  56: "Djanet"
+  53: "In Salah"
+  54: "In Guezzam"
+
+# =============================================================================
+# ROUTING CONFIGURATION
+# =============================================================================
+routing:
+  # SCCP Global Title Translation rules
+  gtt_rules:
+    # Rule: Route to HLR based on IMSI GT
+    - name: "imsi-to-hlr"
+      match:
+        tt: 0
+        np: 1
+        nature: "international"
+        pattern: "^60301"  # Djezzy IMSI prefix
+      action:
+        translate_to: "hlr_main"
+        pc_dpc: 20
+        
+    # Rule: Route to SMSC for SMS delivery
+    - name: "sms-delivery"
+      match:
+        operation: ["mo-forwardSM", "mt-forwardSM"]
+      action:
+        translate_to: "smsc_djezzy"
+        pc_dpc: 256
+        
+    # Rule: Route to SCP for IN services
+    - name: "camel-services"
+      match:
+        operation: ["initialDP", "applyCharging", "connect"]
+        ssn: [6, 8, 9, 10]  # CAP SSCNs
+      action:
+        translate_to: "scp_main"
+        pc_dpc: 240
+
+  # MTP3 Routing (Point Code based)
+  mtp3_routes:
+    # Default route via primary STP
+    - destination: "default"
+      next_hop: "stp_1"
+      priority: 100
+      
+    # Direct routes for high-volume pairs
+    - destination: "hlr_*"
+      next_hop: "stp_1"
+      load_balance: true
+      
+    # Regional routes
+    - destination: "msc_west_*"
+      next_hop: "stp_oran"
+      
+    - destination: "msc_east_*"
+      next_hop: "stp_constantine"
+
+# =============================================================================
+# SECURITY ZONES
+# =============================================================================
+security_zones:
+  trusted_internal:
+    description: "Core network elements"
+    nodes:
+      - "hlr_*"
+      - "msc_*"
+      - "vlr_*"
+      - "stp_*"
+      - "scp_*"
+      - "smsc_*"
+    access_policy: "full_trust"
+    monitoring: "comprehensive"
+    
+  dmz_services:
+    description: "External-facing service nodes"
+    nodes:
+      - "igmsc_*"
+      - "border_stp_*"
+    access_policy: "restricted"
+    monitoring: "intensive"
+    firewall_rules:
+      - "block_unknown_pc"
+      - "validate_all_gt"
+      - "rate_limit_per_source"
+      
+  partner_interconnect:
+    description: "Operator interconnection points"
+    nodes:
+      - "border_stp_*"
+    access_policy: "strict_validation"
+    allowed_protocols:
+      - "ISUP"
+      - "MAP (subset)"
+      - "CAP (subset)"
+
+# =============================================================================
+# MONITORING ENDPOINTS
+# =============================================================================
+monitoring:
+  collection_points:
+    - node: "stp_1"
+      type: "passive_tap"
+      protocols: ["M3UA", "SCTP", "SCCP", "TCAP", "MAP", "CAP", "ISUP"]
+      export_format: ["IPFIX", "PCAP"]
+      soc_integration: true
+      
+    - node: "border_stp_mediterranean"
+      type: "full_capture"
+      retention_days: 90
+      alert_on_anomaly: true
+      
+  metrics_collection:
+    interval_seconds: 30
+    metrics:
+      - "message_count_by_protocol"
+      - "message_count_by_operation"
+      - "message_count_by_destination"
+      - "latency_percentiles"
+      - "error_rates"
+      - "link_utilization"

@@ -1,0 +1,1252 @@
+     1→/**
+     2→ * SS7 Data Format Definitions
+     3→ * Djezzy National SOC Platform - SS7 Tools Suite
+     4→ * 
+     5→ * Comprehensive data structures for SS7 protocol handling:
+     6→ * - ITU-T Q.700 series message types
+     7→ * - Global Title formats (E.164, E.214, E.212)
+     8→ * - Point Code formats (ANSI, ITU-T, China Telecom)
+     9→ * - Subsystem Number (SSN) mappings
+    10→ * - Error codes and cause values
+    11→ * 
+    12→ * @version 1.0.0
+    13→ * @license Proprietary - Djezzy SOC
+    14→ */
+    15→
+    16→// ============================================================
+    17→// POINT CODE DEFINITIONS
+    18→// ============================================================
+    19→
+    20→export enum PointCodeFormat {
+    21→  ANSI_24BIT = 'ANSI-24bit',      // 8-8-8 format (North America)
+    22→  ITU_14BIT = 'ITU-14bit',        // 3-8-3 format (International/Algeria)
+    23→  JAPAN_16BIT = 'Japan-16bit',    // 4-4-8 format
+    24→  CHINA_24BIT = 'China-24bit',    // 8-8-8 format (China Telecom)
+    25→  NATIONAL = 'National'           // Operator-specific
+    26→}
+    27→
+    28→export interface PointCode {
+    29→  raw: number;
+    30→  format: PointCodeFormat;
+    31→  network: number;   // Network identifier
+    32→  cluster: number;   // Cluster within network
+    33→  member: number;    // Member within cluster
+    34→  display: string;   // Human-readable representation
+    35→}
+    36→
+    37→// Djezzy Point Code Ranges (ITU-T 14-bit: 0-16383)
+    38→export const DJEZZY_POINT_CODES = {
+    39→  // STP Primary/Secondary
+    40→  STP_PRIMARY: { value: 1, name: 'STP-Algiers-Primary', type: 'stp' },
+    41→  STP_SECONDARY: { value: 2, name: 'STP-Oran-Secondary', type: 'stp' },
+    42→  
+    43→  // HLR Pool (3-100)
+    44→  HLR_POOL_START: 3,
+    45→  HLR_POOL_END: 100,
+    46→  
+    47→  // MSC Pool (101-200)
+    48→  MSC_POOL_START: 101,
+    49→  MSC_POOL_END: 200,
+    50→  
+    51→  // VLR Pool (201-250)
+    52→  VLR_POOL_START: 201,
+    53→  VLR_POOL_END: 250,
+    54→  
+    55→  // SGSN Pool (251-270)
+    56→  SGSN_POOL_START: 251,
+    57→  SGSN_POOL_END: 270,
+    58→  
+    59→  // GMSC/Gateway (271-280)
+    60→  GMSC_POOL_START: 271,
+    61→  GMSC_POOL_END: 280,
+    62→  
+    63→  // SCP/CAMEL (281-290)
+    64→  SCP_POOL_START: 281,
+    65→  SCP_POOL_END: 290,
+    66→  
+    67→  // SMSC (291-300)
+    68→  SMSC_POOL_START: 291,
+    69→  SMSC_POOL_END: 300,
+    70→} as const;
+    71→
+    72→// Algerian Network Operators Point Codes
+    73→export const ALGERIAN_OPERATOR_PCS = {
+    74→  DJEZZY: [3, 100],
+    75→  MOBILIS: [500, 600],
+    76→  OOREDOO: [700, 800],
+    77→  ALGERIE_TELECOM: [900, 1000],
+    78→  ALGOSPACE: [1100, 1200],
+    79→} as const;
+    80→
+    81→// ============================================================
+    82→// GLOBAL TITLE FORMATS
+    83→// ============================================================
+    84→
+    85→export enum GlobalTitleType {
+    86→  E164 = 'E.164',       // International phone number (ISDN)
+    87→  E212 = 'E.212',       // Mobile subscriber identity (IMSI)
+    88→  E214 = 'E.214',       // Mobile station roaming number (MSRN) - E.212 in E.214 format
+    89→  DATA = 'Data',        // Data numbering plan
+    90→  TELEX = 'Telex',     // Telex number
+    91→  MARITIME = 'Maritime', // Maritime identification
+    92→  PRIVATE = 'Private',  // Private network
+    93→  NATIONAL = 'National' // National standard
+    94→}
+    95→
+    96→export interface GlobalTitle {
+    97→  type: GlobalTitleType;
+    98→  translationType: number;
+    99→  numberingPlan: number;
+   100→  encodingScheme: number;
+   101→  natureOfAddressIndicator: number;
+   102→  digits: string;
+   103→  masked?: string;      // Masked version for display (GDPR/privacy)
+   104→}
+   105→
+   106→// Algeria Country Code and Numbering Plan
+   107→export const ALGERIA_NUMBERING = {
+   108→  CC: '213',
+   109→  COUNTRY_CODE: 213,
+   110→  MSISDN_LENGTH: 12,    // +213XXXXXXXXX
+   111→  IMSI_LENGTH: 15,      // 60301XXXXXXXXX
+   112→  MCC: '603',           // Algeria Mobile Country Code
+   113→  MNC_DJEZZY: '01',     // Djezzy Mobile Network Code
+   114→  
+   115→  // Wilaya (Province) Area Codes
+   116→  WILAYA_CODES: {
+   117→    21: 'Algiers',
+   118→    25: 'Oran',
+   119→    27: 'Constantine',
+   120→    28: 'Tizi Ouzou',
+   121→    29: 'Batna',
+   122→    31: 'Bejaia',
+   123→    32: 'Biskra',
+   124→    33: 'Blida',
+   125→    34: 'Bouira',
+   126→    35: 'Tamanrasset',
+   127→    36: 'Tebessa',
+   128→    37: 'Tlemcen',
+   129→    38: 'Tiaret',
+   130→    39: 'Tizi Ouzou',
+   131→    41: 'Alger',
+   132→    42: 'Djelfa',
+   133→    43: 'Jijel',
+   134→    44: 'Setif',
+   135→    45: 'Saida',
+   136→    46: 'Skikda',
+   137→    47: 'Sidi Bel Abbes',
+   138→    48: 'Annaba',
+   139→    49: 'Guelma',
+   140→    51: 'M\'sila',
+   141→    52: 'Mascara',
+   142→    53: 'Medea',
+   143→    54: 'Mostaganem',
+   144→    55: 'M\'Ghla',
+   145→    56: 'Naama',
+   146→    58: 'Ain Temouchent',
+   147→    59: 'Ain Defla',
+   148→    60: 'Ain Timouchent',
+   149→    61: 'Relizane',
+   150→    62: 'El Bayadh',
+   151→    63: 'El Tarf',
+   152→    64: 'Tindouf',
+   153→    65: 'Tissemsilt',
+   154→    66: 'El Oued',
+   155→    67: 'Khenchela',
+   156→    68: 'Souk Ahras',
+   157→    69: 'Tipaza',
+   158→    70: 'Mila',
+   159→    71: 'Ain Driss',
+   160→    72: 'Naama',
+   161→    73: 'Ain Guezzam',
+   162→    74: 'Ouargla',
+   163→    75: 'Touggourt',
+   164→    76: 'Djanet',
+   165→    77: 'In Salah',
+   166→    78: 'Illizi',
+   167→    79: ' Bordj Badji Mokhtar',
+   168→    80: 'Tamarasset',
+   169→    81: 'Ghardaia',
+   170→    82: 'El Meniaa',
+   171→    83: 'Timimoun',
+   172→    84: 'Bordj Baji Mokhtar',
+   173→    85: 'Adrar',
+   174→    86: 'Tamanrasset',
+   175→  } as Record<number, string>,
+   176→};
+   177→
+   178→// ============================================================
+   179→// SUBSYSTEM NUMBERS (SSN)
+   180→// ============================================================
+   181→
+   182→export enum SubsystemNumber {
+   183→  SCCP_MANAGEMENT = 1,
+   184→  ITU_TCAP = 6,
+   185→  ANSI_TCAP = 7,
+   186→  MAP_HLR = 8,          // Home Location Register
+   187→  MAP_VLR = 9,          // Visitor Location Register
+   188→  MAP_EIR = 10,         // Equipment Identity Register
+   189→  MAP_AUC = 11,         // Authentication Center
+   190→  MSC = 2,              // Mobile Switching Center
+   191→  EIR = 5,              // Equipment Identity Register
+   192→  SGSN = 147,           // Serving GPRS Support Node
+   193→  GGSN = 148,           // Gateway GPRS Support Node
+   194→  GMLC = 149,           // Gateway Mobile Location Center
+   195→  CAP = 146,            // CAMEL Application Part
+   196→  GSM_SCF = 145,        // GSM Service Control Function
+   197→  SMS_SC = 150,         // Short Message Service Center
+   198→  BSSAP = 142,          // BSS Application Part
+   199→  RANAP = 143,          // Radio Access Network Application Part
+   200→  PSP = 135,            // Positioning Service Application
+   201→  SSN_BSSMAP = 254,     // BSS Management Application Part
+   202→}
+   203→
+   204→export const SSN_NAMES: Record<SubsystemNumber, string> = {
+   205→  [SubsystemNumber.SCCP_MANAGEMENT]: 'SCCP Management',
+   206→  [SubsystemNumber.ANSI_TCAP]: 'ANSI TCAP',
+   207→  [SubsystemNumber.ITU_TCAP]: 'ITU TCAP',
+   208→  [SubsystemNumber.MAP_HLR]: 'MAP-HLR',
+   209→  [SubsystemNumber.MAP_VLR]: 'MAP-VLR',
+   210→  [SubsystemNumber.MAP_EIR]: 'MAP-EIR',
+   211→  [SubsystemNumber.MAP_AUC]: 'MAP-AUC',
+   212→  [SubsystemNumber.MSC]: 'MSC',
+   213→  [SubsystemNumber.EIR]: 'EIR',
+   214→  [SubsystemNumber.SGSN]: 'SGSN',
+   215→  [SubsystemNumber.GGSN]: 'GGSN',
+   216→  [SubsystemNumber.GMLC]: 'GMLC',
+   217→  [SubsystemNumber.CAP]: 'CAP',
+   218→  [SubsystemNumber.GSM_SCF]: 'GSM SCF',
+   219→  [SubsystemNumber.SMS_SC]: 'SMS-SC',
+   220→  [SubsystemNumber.BSSAP]: 'BSSAP',
+   221→  [SubsystemNumber.RANAP]: 'RANAP',
+   222→  [SubsystemNumber.PSP]: 'PSP',
+   223→  [SubsystemNumber.SSN_BSSMAP]: 'BSSMAP',
+   224→};
+   225→
+   226→// ============================================================
+   227→// SCCP MESSAGE TYPES
+   228→// ============================================================
+   229→
+   230→export enum SCCPMessageType {
+   231→  CR = 0x01,  // Connection Request
+   232→  CC = 0x02,  // Connection Confirm
+   233→  CREF = 0x03, // Connection Refused
+   234→  RLSD = 0x04, // Released
+   235→  RLC = 0x05,  // Release Complete
+   236→  DT1 = 0x06,  // Data Form 1
+   237→  DT2 = 0x07,  // Data Form 2
+   238→  AK = 0x08,   // Data Acknowledgement
+   239→  UDT = 0x09,  // Unitdata
+   240→  UDTS = 0x0a, // Unitdata Service
+   241→  ED = 0x0b,   // Expedited Data
+   242→  EA = 0x0c,   // Expedited Data Acknowledgement
+   243→  RSR = 0x0d,  // Reset Request
+   244→  RSC = 0x0e,  // Reset Confirmation
+   245→  ERR = 0x0f,  // Protocol Error
+   246→  IT = 0x10,   // Inactivity Test
+   247→  XUDT = 0x11, // Extended Unitdata
+   248→  XUDTS = 0x12,// Extended Unitdata Service
+   249→  LUDT = 0x13, // Long Unitdata
+   250→  LUDTS = 0x14, // Long Unitdata Service
+   251→}
+   252→
+   253→export const SCCP_MESSAGE_NAMES: Record<SCCPMessageType, string> = {
+   254→  [SCCPMessageType.CR]: 'Connection Request',
+   255→  [SCCPMessageType.CC]: 'Connection Confirm',
+   256→  [SCCPMessageType.CREF]: 'Connection Refused',
+   257→  [SCCPMessageType.RLSD]: 'Released',
+   258→  [SCCPMessageType.RLC]: 'Release Complete',
+   259→  [SCCPMessageType.DT1]: 'Data Form 1',
+   260→  [SCCPMessageType.DT2]: 'Data Form 2',
+   261→  [SCCPMessageType.AK]: 'Data Acknowledgement',
+   262→  [SCCPMessageType.UDT]: 'Unitdata',
+   263→  [SCCPMessageType.UDTS]: 'Unitdata Service',
+   264→  [SCCPMessageType.ED]: 'Expedited Data',
+   265→  [SCCPMessageType.EA]: 'Expedited Data Acknowledgement',
+   266→  [SCCPMessageType.RSR]: 'Reset Request',
+   267→  [SCCPMessageType.RSC]: 'Reset Confirmation',
+   268→  [SCCPMessageType.ERR]: 'Protocol Error',
+   269→  [SCCPMessageType.IT]: 'Inactivity Test',
+   270→  [SCCPMessageType.XUDT]: 'Extended Unitdata',
+   271→  [SCCPMessageType.XUDTS]: 'Extended Unitdata Service',
+   272→  [SCCPMessageType.LUDT]: 'Long Unitdata',
+   273→  [SCCPMessageType.LUDTS]: 'Long Unitdata Service',
+   274→};
+   275→
+   276→// ============================================================
+   277→// TCAP MESSAGE TYPES
+   278→// ============================================================
+   279→
+   280→export enum TCAPMessageType {
+   281→  UNIDIRECTIONAL = 0x61,  // Unidirectional
+   282→  QUERY_WITH_PERMISSION = 0x62, // Query With Permission
+   283→  QUERY_WITHOUT_PERMISSION = 0x63, // Query Without Permission
+   284→  RESPONSE_WITH_PERMISSION = 0x64, // Response With Permission
+   285→  RESPONSE_WITHOUT_PERMISSION = 0x65, // Response Without Permission
+   286→  CONVERSATION_WITH_PERMISSION = 0x66, // Conversation With Permission
+   287→  CONVERSATION_WITHOUT_PERMISSION = 0x67, // Conversation Without Permission
+   288→  ABORT = 0x68,  // Abort
+   289→}
+   290→
+   291→export const TCAP_MESSAGE_NAMES: Record<TCAPMessageType, string> = {
+   292→  [TCAPMessageType.UNIDIRECTIONAL]: 'Unidirectional',
+   293→  [TCAPMessageType.QUERY_WITH_PERMISSION]: 'Query With Permission',
+   294→  [TCAPMessageType.QUERY_WITHOUT_PERMISSION]: 'Query Without Permission',
+   295→  [TCAPMessageType.RESPONSE_WITH_PERMISSION]: 'Response With Permission',
+   296→  [TCAPMessageType.RESPONSE_WITHOUT_PERMISSION]: 'Response Without Permission',
+   297→  [TCAPMessageType.CONVERSATION_WITH_PERMISSION]: 'Conversation With Permission',
+   298→  [TCAPMessageType.CONVERSATION_WITHOUT_PERMISSION]: 'Conversation Without Permission',
+   299→  [TCAPMessageType.ABORT]: 'Abort',
+   300→};
+   301→
+   302→// ============================================================
+   303→// MAP (Mobile Application Part) OPERATIONS
+   304→// ============================================================
+   305→
+   306→export enum MAPOperationCode {
+   307→  // Location Management
+   308→  UPDATE_LOCATION = 2,
+   309→  CANCEL_LOCATION = 3,
+   310→  PROVIDE_ROAMING_NUMBER = 4,
+   311→  NOTE_SUBSCRIBER_PRESENT_IN_VLR = 11,
+   312→  RESET = 37,
+   313→  FORWARD_CHECK_SS_INDICATION = 38,
+   314→  
+   315→  // Subscriber Management
+   316→  INSERT_SUBSCRIBER_DATA = 9,
+   317→  DELETE_SUBSCRIBER_DATA = 10,
+   318→  
+   319→  // Authentication
+   320→  SEND_AUTHENTICATION_INFO = 56,
+   321→  SEND_IDENTIFICATION = 57,
+   322→  SEND_PARAMETERS = 59,
+   323→  
+   324→  // Call Handling
+   325→  PROCESS_ACCESS_REQUEST = 44,
+   326→  PREPARE_HANDOVER = 45,
+   327→  PREPARE_SUBSEQUENT_HANDOVER = 47,
+   328→  PROCESS_ROAMING_NUMBER = 50,
+   329→  EXECUTE_HANDOVER = 51,
+   330→  SEND_END_SIGNAL = 58,
+   331→  
+   332→  // SMS Operations
+   333→  ROUTING_INFO_FOR_SM = 22,
+   334→  MO_FORWARD_SHORT_MESSAGE = 46,
+   335→  MT_FORWARD_SHORT_MESSAGE = 44,
+   336→  REPORT_SM_DELIVERY_STATUS = 23,
+   337→  INFORM_SERVICE_CENTRE = 32,
+   338→  ALERT_SERVICE_CENTRE = 33,
+   339→  READY_FOR_SM = 24,
+   340→  NOTE_MS_PRESENT_FOR_GPRS = 73,
+   341→  
+   342→  // USSD
+   343→  PROCESS_UNSTRUCTURED_SS_REQUEST = 59,
+   344→  PROCESS_UNSTRUCTURE_SS_REQUEST = 59,
+   345→  UNSTRUCTURE_SS_REQUEST = 60,
+   346→  UNSTRUCTURE_SS_NOTIFY = 61,
+   347→  
+   348→  // Subscriber Information Enquiry
+   349→  ANY_TIME_INTERROGATION = 66,
+   350→  ANY_TIME_SUBSCRIPTION_INTERROGATION = 69,
+   351→  PROVIDE_SUBSCRIBER_INFO = 70,
+   352→  PROVIDESubscriberInfo = 71,
+   353→  
+   354→  // IMEI Management
+   355→  CHECK_IMEI = 41,
+   356→  
+   357→  // LCS (Location Services)
+   358→  PROVIDE_SUBSCRIBER_LOCATION = 83,
+   359→  SUBSCRIBER_LOCATION_REPORT = 74,
+   360→  
+   361→  // MGRL (Multimedia)
+   362→  PREPARE_GRPS_HANDOVER = 75,
+   363→  SEND_ROUTING_INFO_FOR_GPRS = 12,
+   364→  FAILURE_REPORT = 25,
+   365→  NOTE_MSUBSCRIBER_PRESENT_IN_GPRS = 26,
+   366→}
+   367→
+   368→export const MAP_OPERATION_NAMES: Record<MAPOperationCode, string> = {
+   369→  [MAPOperationCode.UPDATE_LOCATION]: 'updateLocation',
+   370→  [MAPOperationCode.CANCEL_LOCATION]: 'cancelLocation',
+   371→  [MAPOperationCode.PROVIDE_ROAMING_NUMBER]: 'provideRoamingNumber',
+   372→  [MAPOperationCode.NOTE_SUBSCRIBER_PRESENT_IN_VLR]: 'noteSubscriberPresentInVLR',
+   373→  [MAPOperationCode.RESET]: 'reset',
+   374→  [MAPOperationCode.FORWARD_CHECK_SS_INDICATION]: 'forwardCheckSSIndication',
+   375→  [MAPOperationCode.INSERT_SUBSCRIBER_DATA]: 'insertSubscriberData',
+   376→  [MAPOperationCode.DELETE_SUBSCRIBER_DATA]: 'deleteSubscriberData',
+   377→  [MAPOperationCode.SEND_AUTHENTICATION_INFO]: 'sendAuthenticationInfo',
+   378→  [MAPOperationCode.SEND_IDENTIFICATION]: 'sendIdentification',
+   379→  [MAPOperationCode.SEND_PARAMETERS]: 'sendParameters',
+   380→  [MAPOperationCode.PROCESS_ACCESS_REQUEST]: 'processAccessRequest',
+   381→  [MAPOperationCode.PREPARE_HANDOVER]: 'prepareHandover',
+   382→  [MAPOperationCode.PREPARE_SUBSEQUENT_HANDOVER]: 'prepareSubsequentHandover',
+   383→  [MAPOperationCode.PROCESS_ROAMING_NUMBER]: 'processRoamingNumber',
+   384→  [MAPOperationCode.EXECUTE_HANDOVER]: 'executeHandover',
+   385→  [MAPOperationCode.SEND_END_SIGNAL]: 'sendEndSignal',
+   386→  [MAPOperationCode.ROUTING_INFO_FOR_SM]: 'routingInfoForSM',
+   387→  [MAPOperationCode.MO_FORWARD_SHORT_MESSAGE]: 'moForwardSM',
+   388→  [MAPOperationCode.MT_FORWARD_SHORT_MESSAGE]: 'mtForwardSM',
+   389→  [MAPOperationCode.REPORT_SM_DELIVERY_STATUS]: 'reportSMDeliveryStatus',
+   390→  [MAPOperationCode.INFORM_SERVICE_CENTRE]: 'informServiceCentre',
+   391→  [MAPOperationCode.ALERT_SERVICE_CENTRE]: 'alertServiceCentre',
+   392→  [MAPOperationCode.READY_FOR_SM]: 'readyForSM',
+   393→  [MAPOperationCode.NOTE_MS_PRESENT_FOR_GPRS]: 'noteMSPresentForGPRS',
+   394→  [MAPOperationCode.PROCESS_UNSTRUCTURED_SS_REQUEST]: 'processUSSD',
+   395→  [MAPOperationCode.UNSTRUCTURE_SS_REQUEST]: 'unstructuredSSRequest',
+   396→  [MAPOperationCode.UNSTRUCTURE_SS_NOTIFY]: 'unstructuredSSNotify',
+   397→  [MAPOperationCode.ANY_TIME_INTERROGATION]: 'anyTimeInterrogation',
+   398→  [MAPOperationCode.ANY_TIME_SUBSCRIPTION_INTERROGATION]: 'anyTimeSubscriptionInterrogation',
+   399→  [MAPOperationCode.PROVIDE_SUBSCRIBER_INFO]: 'provideSubscriberInfo',
+   400→  [MAPOperationCode.ProvideSubscriberInfo]: 'provideSubscriberInfoV3',
+   401→  [MAPOperationCode.CHECK_IMEI]: 'checkIMEI',
+   402→  [MAPOperationCode.PROVIDE_SUBSCRIBER_LOCATION]: 'provideSubscriberLocation',
+   403→  [MAPOperationCode.SUBSCRIBER_LOCATION_REPORT]: 'subscriberLocationReport',
+   404→  [MAPOperationCode.PREPARE_GRPS_HANDOVER]: 'prepareGRPSHandover',
+   405→  [MAPOperationCode.SEND_ROUTING_INFO_FOR_GPRS]: 'sendRoutingInfoForGPRS',
+   406→  [MAPOperationCode.FAILURE_REPORT]: 'failureReport',
+   407→  [MAPOperationCode.NOTE_MSUBSCRIBER_PRESENT_IN_GPRS]: 'noteMSubscriberPresentForGPRS',
+   408→};
+   409→
+   410→// ============================================================
+   411→// CAP (CAMEL Application Part) OPERATIONS
+   412→// ============================================================
+   413→
+   414→export enum CAPOperationCode {
+   415→  // Initial DP
+   416→  INITIAL_DP = 0,
+   417→  
+   418→  // Call Information
+   419→  REQUEST_REPORT_BCSM_EVENT = 1,
+   420→  EVENT_REPORT_BCSM = 2,
+   421→  
+   422→  // Call Processing
+   423→  CALL_INFORMATION_REPORT = 3,
+   424→  CONNECT = 4,
+   425→  CONTINUE = 5,
+   426→  RELEASE_CALL = 6,
+   427→  REQUEST_CURRENT_BCSM_REPORT = 7,
+   428→  
+   429→  // Activity Test
+   430→  ACTIVITY_TEST = 17,
+   431→  
+   432→  // Applied Charges
+   433→  APPLIED_CHARGES_REPORT = 18,
+   434→  
+   435→  // Specialized Resources
+   436→  ASSISTANCE_REQUEST = 19,
+   437→  PLAY_ANNOUNCEMENT = 20,
+   438→  PROMPT_AND_COLLECT_USER_INFORMATION = 21,
+   439→  SPECIALIZED_RESOURCE_REPORT = 22,
+   440→  
+   441→  // Call Gap
+   442→  CALL_GAP = 23,
+   443→  CONNECT_REPORT = 24,
+   444→  
+   445→  // Timer Management & Reset
+   446→  FURNISH_CHARGING_INFORMATION = 26,
+   447→  RESET_TIMER = 27,
+   448→  
+   449→  // Mobility
+   450→  INITIAL_DP_EVENT = 40,
+   451→  
+   452→  // SMS
+   453→  CONNECT_TO_RESOURCE = 50,
+   454→  ESTABLISH_TEMPORARY_CONNECTION = 51,
+   455→  EVENT_NOTIFICATION = 52,
+   456→  CALL_RESULT = 53,
+   457→  
+   458→  // GPRS
+   459→  APPLY_CHARGING_GPRS = 55,
+   460→  FURNISH_CHARGING_INFORMATION_GPRS = 56,
+   461→  INITIAL_DP_GPRS = 70,
+   462→}
+   463→
+   464→export const CAP_OPERATION_NAMES: Record<CAPOperationCode, string> = {
+   465→  [CAPOperationCode.INITIAL_DP]: 'initialDP',
+   466→  [CAPOperationCode.REQUEST_REPORT_BCSM_EVENT]: 'requestReportBCSMEvent',
+   467→  [CAPOperationCode.EVENT_REPORT_BCSM]: 'eventReportBCSM',
+   468→  [CAPOperationCode.CALL_INFORMATION_REPORT]: 'callInformationReport',
+   469→  [CAPOperationCode.CONNECT]: 'connect',
+   470→  [CAPOperationCode.CONTINUE]: 'continue',
+   471→  [CAPOperationCode.RELEASE_CALL]: 'releaseCall',
+   472→  [CAPOperationCode.REQUEST_CURRENT_BCSM_REPORT]: 'requestCurrentBCSMReport',
+   473→  [CAPOperationCode.ACTIVITY_TEST]: 'activityTest',
+   474→  [CAPOperationCode.APPLIED_CHARGES_REPORT]: 'appliedChargesReport',
+   475→  [CAPOperationCode.ASSISTANCE_REQUEST]: 'assistanceRequest',
+   476→  [CAPOperationCode.PLAY_ANNOUNCEMENT]: 'playAnnouncement',
+   477→  [CAPOperationCode.PROMPT_AND_COLLECT_USER_INFORMATION]: 'promptAndCollectUserInformation',
+   478→  [CAPOperationCode.SPECIALIZED_RESOURCE_REPORT]: 'specializedResourceReport',
+   479→  [CAPOperationCode.CALL_GAP]: 'callGap',
+   480→  [CAPOperationCode.CONNECT_REPORT]: 'connectReport',
+   481→  [CAPOperationCode.FURNISH_CHARGING_INFORMATION]: 'furnishChargingInformation',
+   482→  [CAPOperationCode.RESET_TIMER]: 'resetTimer',
+   483→  [CAPOperationCode.INITIAL_DP_EVENT]: 'initialDPEvent',
+   484→  [CAPOperationCode.CONNECT_TO_RESOURCE]: 'connectToResource',
+   485→  [CAPOperationCode.ESTABLISH_TEMPORARY_CONNECTION]: 'establishTemporaryConnection',
+   486→  [CAPOperationCode.EVENT_NOTIFICATION]: 'eventNotification',
+   487→  [CAPOperationCode.CALL_RESULT]: 'callResult',
+   488→  [CAPOperationCode.APPLY_CHARGING_GPRS]: 'applyChargingGPRS',
+   489→  [CAPOperationCode.FURNISH_CHARGING_INFORMATION_GPRS]: 'furnishChargingInformationGPRS',
+   490→  [CAPOperationCode.INITIAL_DP_GPRS]: 'initialDPGPRS',
+   491→};
+   492→
+   493→// ============================================================
+   494→// ISUP (ISDN User Part) MESSAGE TYPES
+   495→// ============================================================
+   496→
+   497→export enum ISUPMessageType {
+   498→  IAM = 0x01,   // Initial Address Message
+   499→  ACM = 0x02,   // Address Complete Message
+   500→  ANM = 0x06,   // Answer Message
+   501→  REL = 0x0c,   // Release
+   502→  RLC = 0x10,   // Release Complete
+   503→  SUS = 0x02,   // Suspend
+   504→  RES = 0x04,   // Resume
+   505→  
+   506→  // Call management
+   507→  INF = 0x03,   // Information
+   508→  INR = 0x04,   // Information Request
+   509→  APR = 0x06,   // Address Progress
+   510→  CPG = 0x2c,   // Call Progress
+   511→  COT = 0x05,   // Continuity
+   512→  CCR = 0x11,   // Continuity Check Request
+   513→  RAA = 0x12,   // Continuity Check Response
+   514→  FOT = 0x07,   // Forward Transfer
+   515→  PAS = 0x07,   // Pause
+   516→  RESUME = 0x08, // Resume
+   517→  SUSPEND = 0x09, // Suspend
+   518→  
+   519→  // Circuit supervision
+   520→  GRG = 0x08,   // Circuit Group Reset
+   521→  GRA = 0x10,   // Circuit Group Acknowledge
+   522→  GRS = 0x04,   // Circuit Group Reset
+   523→  CGB = 0x13,   // Circuit Group Blocking
+   524→  GBA = 0x14,   // Circuit Group Blocking Ack
+   525→  CGU = 0x17,   // Circuit Group Unblock
+   526→  GUA = 0x18,   // Circuit Group Unblock Ack
+   527→  CQM = 0x1b,   // Circuit Group Query
+   528→  CGR = 0x1c,   // Circuit Group Response
+   529→  
+   530→  // Maintenance
+   531→  CPM = 0x2d,   // Call Progress
+   532→  CIF = 0x2e,   // User Part Available
+   533→  CONF = 0x03,  // Confusion
+   534→  DRS = 0x0f,   // Delayed Release
+   535→  FAR = 0x02,   // Facility Accepted
+   536→  FAC = 0x03,   // Facility Requested
+   537→  FAA = 0x06,   // Facility not Applied
+   538→  LPA = 0x04,   // Loop Back Ack
+   539→  OLM = 0x21,   // Overload Message
+   540→  PAM = 0x1a,   // Pass Along
+   541→  PRI = 0x01,   // Pre-release Information
+   542→  RSC = 0x12,   // Reset Circuit
+   543→  SSR = 0x17,   // Suspension
+   544→  UBA = 0x19,   // User Part Available
+   545→  UBL = 0x1a,   // User Part Available
+   546→  UCIC = 0x1e,  // Unequipped CIC
+   547→  
+   548→  // MTP management
+   549→  TCR = 0x01,   // Traffic Received
+   550→  TFA = 0x03,   // Transfer Allowed
+   551→  TFP = 0x04,   // Transfer Prohibited
+   552→  TRW = 0x05,   // Transfer Restricted
+   553→  RST = 0x09,   // Restart
+   554→  UPUP = 0x0b,  // User Part Up
+   555→  UPUG = 0x0c,  // User Part Down
+   556→}
+   557→
+   558→export const ISUP_MESSAGE_NAMES: Record<ISUPMessageType, string> = {
+   559→  [ISUPMessageType.IAM]: 'Initial Address Message (IAM)',
+   560→  [ISUPMessageType.ACM]: 'Address Complete Message (ACM)',
+   561→  [ISUPMessageType.ANM]: 'Answer Message (ANM)',
+   562→  [ISUPMessageType.REL]: 'Release (REL)',
+   563→  [ISUPMessageType.RLC]: 'Release Complete (RLC)',
+   564→  [ISUPMessageType.INF]: 'Information (INF)',
+   565→  [ISUPMessageType.INR]: 'Information Request (INR)',
+   566→  [ISUPMessageType.CPG]: 'Call Progress (CPG)',
+   567→  [ISUPMessageType.COT]: 'Continuity (COT)',
+   568→  [ISUPMessageType.CCR]: 'Continuity Check Request (CCR)',
+   569→  [ISUPMessageType.RAA]: 'Continuity Check Response (RAA)',
+   570→  [ISUPMessageType.FOT]: 'Forward Transfer (FOT)',
+   571→  [ISUPMessageType.GRG]: 'Circuit Group Reset (GRG)',
+   572→  [ISUPMessageType.GRA]: 'Circuit Group Acknowledge (GRA)',
+   573→  [ISUPMessageType.GRS]: 'Circuit Group Reset (GRS)',
+   574→  [ISUPMessageType.CGB]: 'Circuit Group Blocking (CGB)',
+   575→  [ISUPMessageType.GBA]: 'Circuit Group Blocking Ack (GBA)',
+   576→  [ISUPMessageType.CGU]: 'Circuit Group Unblock (CGU)',
+   577→  [ISUPMessageType.GUA]: 'Circuit Group Unblock Ack (GUA)',
+   578→  [ISUPMessageType.CQM]: 'Circuit Group Query (CQM)',
+   579→  [ISUPMessageType.CGR]: 'Circuit Group Response (CGR)',
+   580→  [ISUPMessageType.CONF]: 'Confusion (CONF)',
+   581→  [ISUPMessageType.DRS]: 'Delayed Release (DRS)',
+   582→  [ISUPMessageType.RSC]: 'Reset Circuit (RSC)',
+   583→  [ISUPMessageType.UCIC]: 'Unequipped CIC (UCIC)',
+   584→  [ISUPMessageType.TCR]: 'Traffic Received (TCR)',
+   585→  [ISUPMessageType.TFA]: 'Transfer Allowed (TFA)',
+   586→  [ISUPMessageType.TFP]: 'Transfer Prohibited (TFP)',
+   587→  [ISUPMessageType.TRW]: 'Transfer Restricted (TRW)',
+   588→  [ISUPMessageType.RST]: 'Restart (RST)',
+   589→  [ISUPMessageType.UPUP]: 'User Part Up (UPUP)',
+   590→  [ISUPMessageType.UPUG]: 'User Part Down (UPUG)',
+   591→};
+   592→
+   593→// ============================================================
+   594→// CAUSE VALUES (Q.850 / ISUP)
+   595→// ============================================================
+   596→
+   597→export enum CauseValue {
+   598→  // Normal causes
+   599→  NORMAL_UNSPECIFIED = 1,
+   600→  USER_BUSY = 17,
+   601→  NO_USER_RESPONDING = 18,
+   602→  NO_ANSWER_FROM_USER = 19,
+   603→  SUBSCRIBER_ABSENT = 20,
+   604→  CALL_REJECTED = 21,
+   605→  NUMBER_CHANGED = 22,
+   606→  NON_EXISTING_USER = 27,
+   607→  DESTINATION_OUT_OF_ORDER = 28,
+   608→  INVALID_NUMBER_FORMAT = 28,
+   609→  FACILITY_REJECTED = 29,
+   610→  RESP_STATUS_ENQUIRY = 30,
+   611→  NORMAL_CALL_CLEARING = 16,
+   612→  USER_NOT_MEMBER_OF_CUG = 87,
+   613→  INCOMPATIBLE_DESTINATION = 88,
+   614→  INVALID_TRANSIT_NETWORK_SELECTION = 91,
+   615→  USER_NOT_CUG_MEMBER = 102,
+   616→  PAYLOAD_TYPE_NOT_IMPLEMENTED = 112,
+   617→  OUTAGE_DISCONNECTION = 127,
+   618→  
+   619→  // Resource unavailable
+   620→  NO_CIRCUIT_AVAILABLE = 34,
+   621→  NETWORK_OUT_OF_ORDER = 38,
+   622→  TEMPORARY_FAILURE = 41,
+   623→  SWITCHING_EQUIPMENT_CONGESTION = 42,
+   624→  ACCESS_INFO_DISCARDED = 43,
+   625→  REQUESTED_CHANNEL_NOT_AVAILABLE = 44,
+   626→  RESOURCE_UNAVAILABLE = 47,
+   627→  QOS_UNAVAILABLE = 49,
+   628→  FACILITY_NOT_SUBSCRIBED = 50,
+   629→  INCOMING_CALL_BARRED_WITHIN_CUG = 52,
+   630→  BEARER_CAPABILITY_NOT_AUTHORIZED = 57,
+   631→  BEARER_CAPABILITY_NOT_AVAILABLE = 58,
+   632→  CAPABILITY_ALREADY_IN_USE = 63,
+   633→  INCOMPATIBLE_PAYLOAD_TYPE = 114,
+   634→  NON_EXISTENT_CUG = 126,
+   635→  
+   636→  // Invalid message
+   637→  MANDATORY_IE_MISSING = 96,
+   638→  MESSAGE_TYPE_NONEXISTENT = 97,
+   639→  MESSAGE_NOT_COMPATIBLE = 99,
+   640→  IE_NOT_IMPLEMENTED = 103,
+   641→  CONDITIONAL_IE_MISSING = 104,
+   642→  MESSAGE_INCOMPATIBLE_STATE = 101,
+   643→  RECOVERY_ON_TIMER_EXPIRY = 102,
+   644→  PROTOCOL_ERROR = 111,
+   645→  INTERWORKING_UNSPECIFIED = 127,
+   646→  
+   647→  // Security
+   648→  ACCESS_CLASS_DENIED = 113,
+   649→  CONGESTION = 42,
+   650→  SERVICE_OPTION_NOT_SUPPORTED = 117,
+   651→  REQUESTED_SERVICE_NOT_IMPLEMENTED = 118,
+   652→  USER_NOT_MEMBER_OF_QSG = 119,
+   653→  ERROR_IN_QSG = 120,
+   654→  ACL_FAILURE = 122,
+   655→  REQUESTED_FACILITY_NOT_IMPLEMENTED = 63,
+   656→  INVALID_IE_CONTENTS = 100,
+   657→  WRONG_MESSAGE = 98,
+   658→  NOT_CUG_MEMBER = 111,
+   659→  EXISTING_CUG_MEMBERSHIP = 123,
+   660→  NON_SELECTED_USER_CLEARING = 124,
+   661→  DESTINATION_OUT_OF_ORDER_ALT = 125,
+   662→  NUMBER_PORTABILITY_NOT_ALLOWED = 127,
+   663→}
+   664→
+   665→export const CAUSE_VALUE_NAMES: Record<CauseValue, string> = {
+   666→  [CauseValue.NORMAL_UNSPECIFIED]: 'Normal, unspecified',
+   667→  [CauseValue.USER_BUSY]: 'User busy',
+   668→  [CauseValue.NO_USER_RESPONDING]: 'No user responding',
+   669→  [CauseValue.NO_ANSWER_FROM_USER]: 'No answer from user',
+   670→  [CauseValue.SUBSCRIBER_ABSENT]: 'Subscriber absent',
+   671→  [CauseValue.CALL_REJECTED]: 'Call rejected',
+   672→  [CauseValue.NUMBER_CHANGED]: 'Number changed',
+   673→  [CauseValue.NON_EXISTING_USER]: 'Non-existing user',
+   674→  [CauseValue.DESTINATION_OUT_OF_ORDER]: 'Destination out of order',
+   675→  [CauseValue.INVALID_NUMBER_FORMAT]: 'Invalid number format',
+   676→  [CauseValue.FACILITY_REJECTED]: 'Facility rejected',
+   677→  [CauseValue.RESP_STATUS_ENQUIRY]: 'Response status enquiry',
+   678→  [CauseValue.NORMAL_CALL_CLEARING]: 'Normal call clearing',
+   679→  [CauseValue.USER_NOT_MEMBER_OF_CUG]: 'User not member of CUG',
+   680→  [CauseValue.INCOMPATIBLE_DESTINATION]: 'Incompatible destination',
+   681→  [CauseValue.INVALID_TRANSIT_NETWORK_SELECTION]: 'Invalid transit network selection',
+   682→  [CauseValue.USER_NOT_CUG_MEMBER]: 'User not CUG member',
+   683→  [CauseValue.PAYLOAD_TYPE_NOT_IMPLEMENTED]: 'Payload type not implemented',
+   684→  [CauseValue.OUTAGE_DISCONNECTION]: 'Outage disconnection',
+   685→  [CauseValue.NO_CIRCUIT_AVAILABLE]: 'No circuit available',
+   686→  [CauseValue.NETWORK_OUT_OF_ORDER]: 'Network out of order',
+   687→  [CauseValue.TEMPORARY_FAILURE]: 'Temporary failure',
+   688→  [CauseValue.SWITCHING_EQUIPMENT_CONGESTION]: 'Switching equipment congestion',
+   689→  [CauseValue.ACCESS_INFO_DISCARDED]: 'Access info discarded',
+   690→  [CauseValue.REQUESTED_CHANNEL_NOT_AVAILABLE]: 'Requested channel not available',
+   691→  [CauseValue.RESOURCE_UNAVAILABLE]: 'Resource unavailable',
+   692→  [CauseValue.QOS_UNAVAILABLE]: 'QoS unavailable',
+   693→  [CauseValue.FACILITY_NOT_SUBSCRIBED]: 'Facility not subscribed',
+   694→  [CauseValue.INCOMING_CALL_BARRED_WITHIN_CUG]: 'Incoming call barred within CUG',
+   695→  [CauseValue.BEARER_CAPABILITY_NOT_AUTHORIZED]: 'Bearer capability not authorized',
+   696→  [CauseValue.BEARER_CAPABILITY_NOT_AVAILABLE]: 'Bearer capability not available',
+   697→  [CauseValue.CAPABILITY_ALREADY_IN_USE]: 'Capability already in use',
+   698→  [CauseValue.INCOMPATIBLE_PAYLOAD_TYPE]: 'Incompatible payload type',
+   699→  [CauseValue.NON_EXISTENT_CUG]: 'Non-existent CUG',
+   700→  [CauseValue.MANDATORY_IE_MISSING]: 'Mandatory IE missing',
+   701→  [CauseValue.MESSAGE_TYPE_NONEXISTENT]: 'Message type nonexistent',
+   702→  [CauseValue.MESSAGE_NOT_COMPATIBLE]: 'Message not compatible',
+   703→  [CauseValue.IE_NOT_IMPLEMENTED]: 'IE not implemented',
+   704→  [CauseValue.CONDITIONAL_IE_MISSING]: 'Conditional IE missing',
+   705→  [CauseValue.MESSAGE_INCOMPATIBLE_STATE]: 'Message incompatible state',
+   706→  [CauseValue.RECOVERY_ON_TIMER_EXPIRY]: 'Recovery on timer expiry',
+   707→  [CauseValue.PROTOCOL_ERROR]: 'Protocol error',
+   708→  [CauseValue.INTERWORKING_UNSPECIFIED]: 'Interworking, unspecified',
+   709→  [CauseValue.ACCESS_CLASS_DENIED]: 'Access class denied',
+   710→  [CauseValue.CONGESTION]: 'Congestion',
+   711→  [CauseValue.SERVICE_OPTION_NOT_SUPPORTED]: 'Service option not supported',
+   712→  [CauseValue.REQUESTED_SERVICE_NOT_IMPLEMENTED]: 'Requested service not implemented',
+   713→  [CauseValue.USER_NOT_MEMBER_OF_QSG]: 'User not member of QSG',
+   714→  [CauseValue.ERROR_IN_QSG]: 'Error in QSG',
+   715→  [CauseValue.ACL_FAILURE]: 'ACL failure',
+   716→  [CauseValue.REQUESTED_FACILITY_NOT_IMPLEMENTED]: 'Requested facility not implemented',
+   717→  [CauseValue.INVALID_IE_CONTENTS]: 'Invalid IE contents',
+   718→  [CauseValue.WRONG_MESSAGE]: 'Wrong message',
+   719→  [CauseValue.NOT_CUG_MEMBER]: 'Not CUG member',
+   720→  [CauseValue.EXISTING_CUG_MEMBERSHIP]: 'Existing CUG membership',
+   721→  [CauseValue.NON_SELECTED_USER_CLEARING]: 'Non-selected user clearing',
+   722→  [CauseValue.DESTINATION_OUT_OF_ORDER_ALT]: 'Destination out of order (alt)',
+   723→  [CauseValue.NUMBER_PORTABILITY_NOT_ALLOWED]: 'Number portability not allowed',
+   724→};
+   725→
+   726→// ============================================================
+   727→// M3UA (MTP Level 3 User Adaptation) MESSAGE TYPES
+   728→// ============================================================
+   729→
+   730→export enum M3UAMessageType {
+   731→  // Transfer Messages
+   732→  TRANSFER = 0x01,        // Payload Data
+   733→  
+   734→  // SS7 Signalling Network Management (SSNM)
+   735→  DAVA = 0x03,            // Destination Available
+   736→  DAUD = 0x04,            // Destination State Audit
+   737→  SCON = 0x05,            // Congestion Indication
+   738→  DUPU = 0x06,            // Destination User Part Unavailable
+   739→  DRST = 0x07,            // Destination Restricted
+   740→  
+   741→  // ASP State Maintenance (ASPSM)
+   742→  ASPUP = 0x01,           // ASP Up
+   743→  ASPDN = 0x02,           // ASP Down
+   744→  BEAT = 0x03,            // Heartbeat
+   745→  ASPUP_ACK = 0x04,       // ASP Up Ack
+   746→  ASPDN_ACK = 0x05,       // ASP Down Ack
+   747→  BEAT_ACK = 0x06,        // Heartbeat Ack
+   748→  
+   749→  // ASP Traffic Maintenance (ASPTM)
+   750→  ACTIVE = 0x01,          // Active
+   751→  INACTIVE = 0x02,        // Inactive
+   752→  ACTIVE_ACK = 0x03,      // Active Ack
+   753→  INACTIVE_ACK = 0x04,    // Inactive Ack
+   754→  
+   755→  // Routing Key Management (RKM)
+   756→  REG_REQ = 0x01,         // Registration Request
+   757→  REG_RSP = 0x02,         // Registration Response
+   758→  DEREG_REQ = 0x03,       // Deregistration Request
+   759→  DEREG_RSP = 0x04,       // Deregistration Response
+   760→}
+   761→
+   762→export const M3UA_MESSAGE_NAMES: Record<M3UAMessageType, string> = {
+   763→  [M3UAMessageType.TRANSFER]: 'Payload Data (TRANSFER)',
+   764→  [M3UAMessageType.DAVA]: 'Destination Available (DAVA)',
+   765→  [M3UAMessageType.DAUD]: 'Destination State Audit (DAUD)',
+   766→  [M3UAMessageType.SCON]: 'Congestion Indication (SCON)',
+   767→  [M3UAMessageType.DUPU]: 'Destination User Part Unavailable (DUPU)',
+   768→  [M3UAMessageType.DRST]: 'Destination Restricted (DRST)',
+   769→  [M3UAMessageType.ASPUP]: 'ASP Up (ASPUP)',
+   770→  [M3UAMessageType.ASPDN]: 'ASP Down (ASPDN)',
+   771→  [M3UAMessageType.BEAT]: 'Heartbeat (BEAT)',
+   772→  [M3UAMessageType.ASPUP_ACK]: 'ASP Up Ack (ASPUP_ACK)',
+   773→  [M3UAMessageType.ASPDN_ACK]: 'ASP Down Ack (ASPDN_ACK)',
+   774→  [M3UAMessageType.BEAT_ACK]: 'Heartbeat Ack (BEAT_ACK)',
+   775→  [M3UAMessageType.ACTIVE]: 'Active (ACTIVE)',
+   776→  [M3UAMessageType.INACTIVE]: 'Inactive (INACTIVE)',
+   777→  [M3UAMessageType.ACTIVE_ACK]: 'Active Ack (ACTIVE_ACK)',
+   778→  [M3UAMessageType.INACTIVE_ACK]: 'Inactive Ack (INACTIVE_ACK)',
+   779→  [M3UAMessageType.REG_REQ]: 'Registration Request (REG_REQ)',
+   780→  [M3UAMessageType.REG_RSP]: 'Registration Response (REG_RSP)',
+   781→  [M3UAMessageType.DEREG_REQ]: 'Deregistration Request (DEREG_REQ)',
+   782→  [M3UAMessageType.DEREG_RSP]: 'Deregistration Response (DEREG_RSP)',
+   783→};
+   784→
+   785→// ============================================================
+   786→// SCTP (Stream Control Transmission Protocol) CHUNK TYPES
+   787→// ============================================================
+   788→
+   789→export enum SCTPChunkType {
+   790→  DATA = 0x00,             // Payload data
+   791→  INIT = 0x01,             // Initiation
+   792→  INIT_ACK = 0x02,         // Initiation Ack
+   793→  SACK = 0x03,             // Selective Acknowledgment
+   794→  HEARTBEAT = 0x04,        // Heartbeat
+   795→  HEARTBEAT_ACK = 0x05,    // Heartbeat Ack
+   796→  ABORT = 0x06,            // Abort
+   797→  SHUTDOWN = 0x07,         // Shutdown
+   798→  SHUTDOWN_ACK = 0x08,     // Shutdown Ack
+   799→  ERROR = 0x09,            // Operation Error
+   800→  COOKIE_ECHO = 0x0a,      // Cookie Echo
+   801→  COOKIE_ACK = 0x0b,       // Cookie Ack
+   802→  ECNE = 0x80,             // ECN Echo
+   803→  CWR = 0x81,              // Congestion Window Reduced
+   804→  SHUTDOWN_COMPLETE = 0x84, // Shutdown Complete
+   805→  AUTH = 0x0f,             // Authentication Chunk
+   806→  ASCONF = 0xc1,           // Address Stream Configuration Change
+   807→  ASCONF_ACK = 0x80,       // ASCONF Ack
+   808→  FORWARD_TSN = 0xc0,      // Forward TSN
+   809→  I_FORWARD_TSN = 0xc1,    // I-Forward TSN
+   810→  RE_CONFIG = 0x82,        // Re-configuration
+   811→  PAD = 0x84,              // Padding
+   812→  IDATA = 0x40,            // I-Data
+   813→  I_DONT_KNOW = 0xa0,      // I Don't Know
+   814→}
+   815→
+   816→export const SCTP_CHUNK_NAMES: Record<SCTPChunkType, string> = {
+   817→  [SCTPChunkType.DATA]: 'DATA',
+   818→  [SCTPChunkType.INIT]: 'INIT',
+   819→  [SCTPChunkType.INIT_ACK]: 'INIT ACK',
+   820→  [SCTPChunkType.SACK]: 'SACK',
+   821→  [SCTPChunkType.HEARTBEAT]: 'HEARTBEAT',
+   822→  [SCTPChunkType.HEARTBEAT_ACK]: 'HEARTBEAT ACK',
+   823→  [SCTPChunkType.ABORT]: 'ABORT',
+   824→  [SCTPChunkType.SHUTDOWN]: 'SHUTDOWN',
+   825→  [SCTPChunkType.SHUTDOWN_ACK]: 'SHUTDOWN ACK',
+   826→  [SCTPChunkType.ERROR]: 'ERROR',
+   827→  [SCTPChunkType.COOKIE_ECHO]: 'COOKIE ECHO',
+   828→  [SCTPChunkType.COOKIE_ACK]: 'COOKIE ACK',
+   829→  [SCTPChunkType.ECNE]: 'ECN Echo',
+   830→  [SCTPChunkType.CWR]: 'Congestion Window Reduced',
+   831→  [SCTPChunkType.SHUTDOWN_COMPLETE]: 'SHUTDOWN COMPLETE',
+   832→  [SCTPChunkType.AUTH]: 'AUTH',
+   833→  [SCTPChunkType.ASCONF]: 'ASCONF',
+   834→  [SCTPChunkType.ASCONF_ACK]: 'ASCONF ACK',
+   835→  [SCTPChunkType.FORWARD_TSN]: 'FORWARD TSN',
+   836→  [SCTPChunkType.I_FORWARD_TSN]: 'I-FORWARD TSN',
+   837→  [SCTPChunkType.RE_CONFIG]: 'RE-CONFIG',
+   838→  [SCTPChunkType.PAD]: 'PAD',
+   839→  [SCTPChunkType.IDATA]: 'I-DATA',
+   840→  [SCTPChunkType.I_DONT_KNOW]: "I DON'T KNOW",
+   841→};
+   842→
+   843→// ============================================================
+   844→// MAIN SS7 MESSAGE TYPE ENUMERATION
+   845→// ============================================================
+   846→
+   847→export enum SS7ProtocolLayer {
+   848→  MTP1 = 'MTP1',           // Physical Layer
+   849→  MTP2 = 'MTP2',           // Data Link Layer
+   850→  MTP3 = 'MTP3',           // Network Layer
+   851→  SCCP = 'SCCP',           // Signaling Connection Control Part
+   852→  TCAP = 'TCAP',           // Transaction Capabilities Application Part
+   853→  MAP = 'MAP',             // Mobile Application Part
+   854→  CAP = 'CAP',             // CAMEL Application Part
+   855→  ISUP = 'ISUP',           // ISDN User Part
+   856→  M3UA = 'M3UA',           // MTP3 User Adaptation
+   857→  SCTP = 'SCTP',           // Stream Control Transmission Protocol
+   858→  SIGTRAN = 'SIGTRAN',     // SIGTRAN (umbrella)
+   859→  Diameter = 'Diameter',   // Diameter Protocol
+   860→}
+   861→
+   862→export const PROTOCOL_COLORS: Record<SS7ProtocolLayer, string> = {
+   863→  [SS7ProtocolLayer.MTP1]: '#6b7280',
+   864→  [SS7ProtocolLayer.MTP2]: '#8b5cf6',
+   865→  [SS7ProtocolLayer.MTP3]: '#ec4899',
+   866→  [SS7ProtocolLayer.SCCP]: '#f59e0b',
+   867→  [SS7ProtocolLayer.TCAP]: '#10b981',
+   868→  [SS7ProtocolLayer.MAP]: '#3b82f6',
+   869→  [SS7ProtocolLayer.CAP]: '#ef4444',
+   870→  [SS7ProtocolLayer.ISUP]: '#06b6d4',
+   871→  [SS7ProtocolLayer.M3UA]: '#8b5cf6',
+   872→  [SS7ProtocolLayer.SCTP]: '#f97316',
+   873→  [SS7ProtocolLayer.SIGTRAN]: '#14b8a6',
+   874→  [SS7ProtocolLayer.Diameter]: '#6366f1',
+   875→};
+   876→
+   877→// ============================================================
+   878→// CORE SS7 MESSAGE INTERFACE
+   879→// ============================================================
+   880→
+   881→export interface SS7Message {
+   882→  id: string;
+   883→  timestamp: Date;
+   884→  protocol: SS7ProtocolLayer;
+   885→  direction: 'inbound' | 'outbound';
+   886→  
+   887→  // Routing information
+   888→  opc: PointCode;          // Originating Point Code
+   889→  dpc: PointCode;          // Destination Point Code
+   890→  sls?: number;            // Signaling Link Selection
+   891→  slc?: number;            // Signaling Link Code
+   892→  
+   893→  // SCCP layer
+   894→  sccp?: {
+   895→    messageType: SCCPMessageType;
+   896→    sourceGlobalTitle?: GlobalTitle;
+   897→    destinationGlobalTitle?: GlobalTitle;
+   898→    sourceSSN?: SubsystemNumber;
+   899→    destinationSSN?: SubsystemNumber;
+   900→    sequenceControl?: number;
+   901→    returnOption?: boolean;
+   902→    segmentation?: boolean;
+   903→    hopCounter?: number;
+   904→  };
+   905→  
+   906→  // TCAP layer
+   907→  tcap?: {
+   908→    transactionId: string;
+   909→    origTransactionId?: string;
+   910→    messageType: TCAPMessageType;
+   911→    dialoguePortion?: any;
+   912→  };
+   913→  
+   914→  // Application layer
+   915→  mapOperation?: MAPOperationCode;
+   916→  capOperation?: CAPOperationCode;
+   917→  isupMessage?: ISUPMessageType;
+   918→  
+   919→  // Decoded fields
+   920→  decodedFields?: Record<string, any>;
+   921→  
+   922→  // Raw data
+   923→  rawData?: Buffer;
+   924→  hexDump?: string;
+   925→  packetLength?: number;
+   926→  
+   927→  // Metadata
+   928→  sourceIP?: string;
+   929→  destIP?: string;
+   930→  sourcePort?: number;
+   931→  destPort?: number;
+   932→  linksetName?: string;
+   933→  fraudIndicators?: FraudIndicator[];
+   934→  riskScore?: number;
+   935→}
+   936→
+   937→// ============================================================
+   938→// FRAUD INDICATORS
+   939→// ============================================================
+   940→
+   941→export enum FraudIndicator {
+   942→  IRSF_SUSPICIOUS_PATTERN = 'irsf_suspicious_pattern',
+   943→  IRSF_HIGH_VOLUME_INTERNATIONAL = 'irsf_high_volume_international',
+   944→  IRSF_PREMIUM_RATE_TARGET = 'irsf_premium_rate_target',
+   945→  SIM_SWAP_MULTIPLE_ATTEMPTS = 'sim_swap_multiple_attempts',
+   946→  SIM_SWAP_PROVISIONING_ANOMALY = 'sim_swap_provisioning_anomaly',
+   947→  SIM_SWAP_AUTH_FAILURE_BURST = 'sim_swap_auth_failure_burst',
+   948→  WANGIRI_ONE_RING = 'wangiri_one_ring',
+   949→  WANGIRI_SHORT_DURATION = 'wangiri_short_duration',
+   950→  BYPASS_FRAUD_GSM_GATEWAY = 'bypass_fraud_gsm_gateway',
+   951→  BYPASS_FRAUD_SIMBOX = 'bypass_fraud_simbox',
+   952→  PREMIUM_RATE_ABUSE = 'premium_rate_abuse',
+   953→  ROAMING_ANOMALY_FAST_TRAVEL = 'roaming_anomaly_fast_travel',
+   954→  ROAMING_ANOMALY_IMPOSSIBLE = 'roaming_anomaly_impossible',
+   955→  LOCATION_UPDATE_WHILE_ACTIVE_CALL = 'location_update_while_active_call',
+   956→  INTERCEPT_SUSPICIOUS = 'intercept_suspicious',
+   957→  CLONING_DETECTED = 'cloning_detected',
+   958→  IMEI_MISMATCH = 'imei_mismatch',
+   959→  SUPPLIES_FRAUD = 'supplies_fraud',
+   960→  TRAFFIC_PUMPING = 'traffic_pumping',
+   961→}
+   962→
+   963→export const FRAUD_INDICATOR_DETAILS: Record<FraudIndicator, {
+   964→  name: string;
+   965→  severity: 'low' | 'medium' | 'high' | 'critical';
+   966→  category: string;
+   967→  description: string;
+   968→}> = {
+   969→  [FraudIndicator.IRSF_SUSPICIOUS_PATTERN]: {
+   970→    name: 'IRSF Suspicious Pattern',
+   971→    severity: 'high',
+   972→    category: 'IRSF',
+   973→    description: 'International Revenue Share Fraud pattern detected'
+   974→  },
+   975→  [FraudIndicator.IRSF_HIGH_VOLUME_INTERNATIONAL]: {
+   976→    name: 'High Volume International Calls',
+   977→    severity: 'critical',
+   978→    category: 'IRSF',
+   979→    description: 'Unusual volume of international calls to premium destinations'
+   980→  },
+   981→  [FraudIndicator.IRSF_PREMIUM_RATE_TARGET]: {
+   982→    name: 'Premium Rate Target',
+   983→    severity: 'high',
+   984→    category: 'IRSF',
+   985→    description: 'Calls to known IRSF premium rate numbers'
+   986→  },
+   987→  [FraudIndicator.SIM_SWAP_MULTIPLE_ATTEMPTS]: {
+   988→    name: 'Multiple SIM Swap Attempts',
+   989→    severity: 'critical',
+   990→    category: 'SIM Swap',
+   991→    description: 'Multiple provisioning attempts for same subscriber'
+   992→  },
+   993→  [FraudIndicator.SIM_SWAP_PROVISIONING_ANOMALY]: {
+   994→    name: 'Provisioning Anomaly',
+   995→    severity: 'high',
+   996→    category: 'SIM Swap',
+   997→    description: 'Unusual SIM provisioning pattern'
+   998→  },
+   999→  [FraudIndicator.SIM_SWAP_AUTH_FAILURE_BURST]: {
+  1000→    name: 'Authentication Failure Burst',
+  1001→    severity: 'high',
+  1002→    category: 'SIM Swap',
+  1003→    description: 'Burst of authentication failures indicating potential SIM swap'
+  1004→  },
+  1005→  [FraudIndicator.WANGIRI_ONE_RING]: {
+  1006→    name: 'Wangiri One-Ring Pattern',
+  1007→    severity: 'medium',
+  1008→    category: 'Wangiri',
+  1009→    description: 'One-ring call pattern detected'
+  1010→  },
+  1011→  [FraudIndicator.WANGIRI_SHORT_DURATION]: {
+  1012→    name: 'Short Duration Calls',
+  1013→    severity: 'medium',
+  1014→    category: 'Wangiri',
+  1015→    description: 'Multiple very short duration calls (Wangiri indicator)'
+  1016→  },
+  1017→  [FraudIndicator.BYPASS_FRAUD_GSM_GATEWAY]: {
+  1018→    name: 'GSM Gateway Detection',
+  1019→    severity: 'high',
+  1020→    category: 'Bypass Fraud',
+  1021→    description: 'Traffic patterns consistent with GSM gateway bypass'
+  1022→  },
+  1023→  [FraudIndicator.BYPASS_FRAUD_SIMBOX]: {
+  1024→    name: 'Simbox Detection',
+  1025→    severity: 'high',
+  1026→    category: 'Bypass Fraud',
+  1027→    description: 'Multiple SIMs from single device (Simbox)'
+  1028→  },
+  1029→  [FraudIndicator.PREMIUM_RATE_ABUSE]: {
+  1030→    name: 'Premium Rate Abuse',
+  1031→    severity: 'medium',
+  1032→    category: 'Premium Rate',
+  1033→    description: 'Abnormal calls to premium rate services'
+  1034→  },
+  1035→  [FraudIndicator.ROAMING_ANOMALY_FAST_TRAVEL]: {
+  1036→    name: 'Fast Travel Anomaly',
+  1037→    severity: 'high',
+  1038→    category: 'Roaming',
+  1039→    description: 'Impossible roaming speed between locations'
+  1040→  },
+  1041→  [FraudIndicator.ROAMING_ANOMALY_IMPOSSIBLE]: {
+  1042→    name: 'Impossible Roaming',
+  1043→    severity: 'critical',
+  1044→    category: 'Roaming',
+  1045→    description: 'Subscriber appeared in two distant locations simultaneously'
+  1046→  },
+  1047→  [FraudIndicator.LOCATION_UPDATE_WHILE_ACTIVE_CALL]: {
+  1048→    name: 'Location Update During Call',
+  1049→    severity: 'high',
+  1050→    category: 'Anomaly',
+  1051→    description: 'Location update received while call is active'
+  1052→  },
+  1053→  [FraudIndicator.INTERCEPT_SUSPICIOUS]: {
+  1054→    name: 'Suspicious Intercept Activity',
+  1055→    severity: 'critical',
+  1056→    category: 'Security',
+  1057→    description: 'Potential lawful interception abuse or unauthorized access'
+  1058→  },
+  1059→  [FraudIndicator.CLONING_DETECTED]: {
+  1060→    name: 'IMEI Cloning Detected',
+  1061→    severity: 'critical',
+  1062→    category: 'Cloning',
+  1063→    description: 'Same IMEI registered from multiple locations'
+  1064→  },
+  1065→  [FraudIndicator.IMEI_MISMATCH]: {
+  1066→    name: 'IMEI Mismatch',
+  1067→    severity: 'medium',
+  1068→    category: 'Anomaly',
+  1069→    description: 'IMEI mismatch between expected and actual device'
+  1070→  },
+  1071→  [FraudIndicator.SUPPLIES_FRAUD]: {
+  1072→    name: 'Supplies Fraud',
+  1073→    severity: 'medium',
+  1074→    category: 'Other',
+  1075→    description: 'Potential supplies/reseller fraud'
+  1076→  },
+  1077→  [FraudIndicator.TRAFFIC_PUMPING]: {
+  1078→    name: 'Traffic Pumping',
+  1079→    severity: 'high',
+  1080→    category: 'Other',
+  1081→    description: 'Artificial traffic generation to inflate revenue share'
+  1082→  },
+  1083→};
+  1084→
+  1085→// ============================================================
+  1086→// HELPER FUNCTIONS
+  1087→// ============================================================
+  1088→
+  1089→/**
+  1090→ * Parse a point code based on format
+  1091→ */
+  1092→export function parsePointCode(raw: number, format: PointCodeFormat = PointCodeFormat.ITU_14BIT): PointCode {
+  1093→  switch (format) {
+  1094→    case PointCodeFormat.ITU_14BIT:
+  1095→      // 3-8-3 format
+  1096→      return {
+  1097→        raw,
+  1098→        format,
+  1099→        network: (raw >> 11) & 0x07,
+  1100→        cluster: (raw >> 3) & 0xFF,
+  1101→        member: raw & 0x07,
+  1102→        display: `${(raw >> 11) & 0x07}-${((raw >> 3) & 0xFF).toString().padStart(3, '0')}-${(raw & 0x07).toString()}`,
+  1103→      };
+  1104→    
+  1105→    case PointCodeFormat.ANSI_24BIT:
+  1106→      // 8-8-8 format
+  1107→      return {
+  1108→        raw,
+  1109→        format,
+  1110→        network: (raw >> 16) & 0xFF,
+  1111→        cluster: (raw >> 8) & 0xFF,
+  1112→        member: raw & 0xFF,
+  1113→        display: `${((raw >> 16) & 0xFF).toString().padStart(3, '0')}-${((raw >> 8) & 0xFF).toString().padStart(3, '0')}-${(raw & 0xFF).toString().padStart(3, '0')}`,
+  1114→      };
+  1115→    
+  1116→    case PointCodeFormat.JAPAN_16BIT:
+  1117→      // 4-4-8 format
+  1118→      return {
+  1119→        raw,
+  1120→        format,
+  1121→        network: (raw >> 12) & 0x0F,
+  1122→        cluster: (raw >> 8) & 0x0F,
+  1123→        member: raw & 0xFF,
+  1124→        display: `${((raw >> 12) & 0x0F).toString()}-${((raw >> 8) & 0x0F).toString()}-${(raw & 0xFF).toString().padStart(3, '0')}`,
+  1125→      };
+  1126→    
+  1127→    default:
+  1128→      return {
+  1129→        raw,
+  1130→        format,
+  1131→        network: 0,
+  1132→        cluster: 0,
+  1133→        member: raw,
+  1134→        display: raw.toString(),
+  1135→      };
+  1136→  }
+  1137→}
+  1138→
+  1139→/**
+  1140→ * Parse global title from digits
+  1141→ */
+  1142→export function parseGlobalTitle(
+  1143→  digits: string,
+  1144→  type: GlobalTitleType = GlobalTitleType.E164,
+  1145→  tt: number = 0,
+  1146→  np: number = 1,
+  1147→  enc: number = 3
+  1148→): GlobalTitle {
+  1149→  return {
+  1150→    type,
+  1151→    translationType: tt,
+  1152→    numberingPlan: np,
+  1153→    encodingScheme: enc,
+  1154→    natureOfAddressIndicator: getNAIFromGT(type),
+  1155→    digits,
+  1156→    masked: maskMSISDN(digits),
+  1157→  };
+  1158→}
+  1159→
+  1160→/**
+  1161→ * Get Nature of Address Indicator from GT type
+  1162→ */
+  1163→function getNAIFromGT(type: GlobalTitleType): number {
+  1164→  switch (type) {
+  1165→    case GlobalTitleType.E164:
+  1166→      return 4; // International number
+  1167→    case GlobalTitleType.E212:
+  1168→    case GlobalTitleType.E214:
+  1169→      return 4; // Mobile number
+  1170→    default:
+  1171→      return 0; // Unknown
+  1172→  }
+  1173→}
+  1174→
+  1175→/**
+  1176→ * Mask MSISDN for privacy compliance (GDPR/ARTP)
+  1177→ * Format: +213XXXXXXXXX -> +213XXX***XX
+  1178→ */
+  1179→export function maskMSISDN(msisdn: string): string {
+  1180→  if (!msisdn || msisdn.length < 6) return msisdn.replace(/\d/g, '*');
+  1181→  
+  1182→  // Keep country code and first 2 digits, mask the rest except last 2
+  1183→  const cleaned = msisdn.replace(/[^+\d]/g, '');
+  1184→  if (cleaned.startsWith('+213')) {
+  1185→    return '+213' + cleaned.slice(4, 6) + '****' + cleaned.slice(-2);
+  1186→  }
+  1187→  
+  1188→  // Generic masking for non-Algerian numbers
+  1189→  if (cleaned.startsWith('+')) {
+  1190→    return cleaned.substring(0, 4) + '****' + cleaned.slice(-2);
+  1191→  }
+  1192→  
+  1193→  return cleaned.substring(0, 3) + '****' + cleaned.slice(-2);
+  1194→}
+  1195→
+  1196→/**
+  1197→ * Mask IMSI for privacy compliance
+  1198→ * Format: 60301XXXXXXXXX -> 60301********
+  1199→ */
+  1200→export function maskIMSI(imsi: string): string {
+  1201→  if (!imsi || imsi.length < 5) return imsi.replace(/\d/g, '*');
+  1202→  // Keep MCC+MNC (5 digits), mask MSIN
+  1203→  return imsi.substring(0, 5) + '********';
+  1204→}
+  1205→
+  1206→/**
+  1207→ * Get wilaya name from area code
+  1208→ */
+  1209→export function getWilayaFromAreaCode(areaCode: number): string | undefined {
+  1210→  return ALGERIA_NUMBERING.WILAYA_CODES[areaCode];
+  1211→}
+  1212→
+  1213→/**
+  1214→ * Check if point code belongs to Djezzy network
+  1215→ */
+  1216→export function isDjezzyPointCode(pc: PointCode): boolean {
+  1217→  const raw = pc.raw;
+  1218→  return (
+  1219→    (raw >= DJEZZY_POINT_CODES.HLR_POOL_START && raw <= DJEZZY_POINT_CODES.SMSC_POOL_END) ||
+  1220→    raw === DJEZZY_POINT_CODES.STP_PRIMARY.value ||
+  1221→    raw === DJEZZY_POINT_CODES.STP_SECONDARY.value
+  1222→  );
+  1223→}
+  1224→
+  1225→/**
+  1226→ * Format bytes as hex dump
+  1227→ */
+  1228→export function hexDump(buffer: Buffer, bytesPerLine: number = 16): string {
+  1229→  const lines: string[] = [];
+  1230→  for (let offset = 0; offset < buffer.length; offset += bytesPerLine) {
+  1231→    const chunk = buffer.slice(offset, Math.min(offset + bytesPerLine, buffer.length));
+  1232→    const hex = Array.from(chunk).map(b => b.toString(16).padStart(2, '0')).join(' ');
+  1233→    const ascii = Array.from(chunk).map(b => b >= 32 && b <= 126 ? String.fromCharCode(b) : '.').join('');
+  1234→    lines.push(`${offset.toString(16).padStart(8, '0')}  ${hex.padEnd(bytesPerLine * 3)} |${ascii}|`);
+  1235→  }
+  1236→  return lines.join('\n');
+  1237→}
+  1238→
+  1239→/**
+  1240→ * Convert hex string to Buffer
+  1241→ */
+  1242→export function hexToBuffer(hex: string): Buffer {
+  1243→  const cleanHex = hex.replace(/[^0-9a-fA-F]/g, '');
+  1244→  return Buffer.from(cleanHex, 'hex');
+  1245→}
+  1246→
+  1247→/**
+  1248→ * Convert Buffer to hex string
+  1249→ */
+  1250→export function bufferToHex(buffer: Buffer): string {
+  1251→  return buffer.toString('hex').toUpperCase();
+  1252→}

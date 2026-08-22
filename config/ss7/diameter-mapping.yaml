@@ -1,0 +1,773 @@
+# Diameter ↔ SS7 MAP Operation Mapping
+# Djezzy National SOC Platform
+#
+# This configuration defines the interworking mapping between Diameter protocol
+# (used in LTE/VoLTE/5G networks) and SS7 MAP operations (used in 2G/3G networks).
+# Essential for supporting roaming, SMS, and subscriber data management across
+# circuit-switched and packet-switched domains.
+#
+# Version: 1.0.0
+# Standards Reference:
+#   - 3GPP TS 29.002 (MAP)
+#   - 3GPP TS 29.212 (Diameter)
+#   - 3GPP TS 29.339 (Sh interface)
+#   - 3GPP TS 29.272 (S6a/S6d interface)
+
+# =============================================================================
+# GLOBAL MAPPING CONFIGURATION
+# =============================================================================
+global_config:
+  platform: "Djezzy National SOC Platform"
+  operator: "Djezzy Algeria"
+  
+  # Default mapping behavior when no specific rule matches
+  default_action:
+    unsupported_operation: "reject"
+    error_code: 5001  # DIAMETER_UNSUPPORTED_COMMAND
+    log_level: "warning"
+    
+  # Translation mode
+  translation_mode: "strict"  # strict | permissive
+  
+  # Version compatibility matrix
+  map_versions:
+    supported: ["MAPv1", "MAPv2", "MAPv3"]
+    default: "MAPv3"
+    
+  diameter_versions:
+    supported: ["RFC3588", "RFC6733"]
+    default: "RFC6733"
+
+# =============================================================================
+# SUBSCRIBER AUTHENTICATION MAPPINGS
+# =============================================================================
+mappings:
+
+  # ===========================================================================
+  # AUTHENTICATION AND SECURITY
+  # ===========================================================================
+  
+  - name: "user-authorization-5g-sba"
+    description: "5G Service Based Architecture user authorization to MAP authentication"
+    
+    diameter:
+      command: "UDR"  # User Data Repository
+      application: "5G-SBA"  # 5G Service-Based Architecture (Nudr)
+      operation: "UserAuthorization"
+      request_avps:
+        - "UserID"
+        - "ServingPLMNId"
+        - "AccessType"
+        - "PeerId"
+      response_avps:
+        - "ResultCode"
+        - "AuthData"
+        - "SubscriptionData"
+        
+    map_operation: "sendAuthenticationInfo"
+    map_version: "MAPv3"
+    invoke_id_range: [1, 50]
+    
+    parameter_mapping:
+      UserID:
+        diameter_field: "UserID"
+        map_field: "imsi"
+        transformation: "extract_imsi_from_userid"
+      ServingPLMNId:
+        diameter_field: "ServingPLMNId"
+        map_field: "vlr_number"
+        transformation: "plmn_to_gt"
+      AuthData:
+        diameter_field: "AuthData"
+        map_field: "authenticationSetList"
+        transformation: "auth_vectors_to_map_format"
+
+  - name: "s6a-authentication-information"
+    description: "S6a AIR (Authentication Information Request) to sendAuthenticationInfo"
+    
+    diameter:
+      command: "AIR"  # Authentication Information Request
+      application: "S6a"  # 3GPP AAA Server (HSS)
+      operation: "AIR"
+      request_avps:
+        - "User-Name"           # IMSI
+        - "Requested-EUTRAN-Authentication-Info"
+        - "Visited-PLMN-Id"
+        - "Number-of-Requested-Vectors"
+      response_avps:
+        - "Result-Code"
+        - "EUTRAN-Vector"
+          children:
+            - "RAND"
+            - "XRES"
+            - "AUTN"
+            - "KASIF"
+            
+    map_operation: "sendAuthenticationInfo"
+    map_version: "MAPv3"
+    
+    parameter_mapping:
+      User-Name:
+        diameter_field: "User-Name"
+        map_field: "imsi"
+        format: "imsi@epc.mnc001.mcc603.3gppnetwork.org"
+      Requested-EUTRAN-Authentication-Info:
+        diameter_field: "Requested-EUTRAN-Authentication-Info"
+        map_field: "requestedVectors"
+        transformation: "vector_count_to_list"
+      EUTRAN-Vector:
+        diameter_field: "EUTRAN-Vector"
+        map_field: "authenticationSetList"
+        children:
+          RAND: "rand"
+          XRES: "sres"
+          AUTN: "autn"
+          KASIF: "cipherKeySetList.key[0]"
+
+  - name: "s6a-update-location"
+    description: "S6a ULR (Update Location) to updateLocation"
+    
+    diameter:
+      command: "ULR"  # Update Location Request
+      application: "S6a"
+      operation: "ULR"
+      request_avps:
+        - "User-Name"
+        - "ULR-Flags"
+        - "Visited-PLMN-Id"
+        - "UE-SRVCC-Capability"
+      response_avps:
+        - "Result-Code"
+        - "Subscription-Data"
+        
+    map_operation: "updateLocation"
+    map_version: "MAPv3"
+    
+    parameter_mapping:
+      ULR-Flags:
+        diameter_field: "ULR-Flags"
+        map_field: "updateLocationParameterList"
+        flags:
+          "MME-Registered-for-SMS": "sms_support"
+          "SGSN-Registered": "gprs_update"
+          "Implicit-Detach-Unregistered": "detach_type"
+
+  - name: "s6a-purge-ue"
+    description: "S6a PUR (Purge UE) to purgeMS"
+    
+    diameter:
+      command: "PUR"  # Purge UE Request
+      application: "S6a"
+      operation: "PUR"
+      request_avps:
+        - "User-Name"
+        - "Origin-Host"
+        - "Origin-Realm"
+      response_avps:
+        - "Result-Code"
+        
+    map_operation: "purgeMS"
+    map_version: "MAPv3"
+
+  - name: "s6a-cancel-location"
+    description: "S6a CLR (Cancel Location) to cancelLocation"
+    
+    diameter:
+      command: "CLR"  # Cancel Location Request
+      application: "S6a"
+      operation: "CLR"
+      request_avps:
+        - "User-Name"
+        - "CLR-Type"
+        - "Cancellation-Type"
+      response_avps:
+        - "Result-Code"
+        
+    map_operation: "cancelLocation"
+    map_version: "MAPv3"
+    
+    parameter_mapping:
+      Cancellation-Type:
+        diameter_field: "Cancellation-Type"
+        map_field: "cancellationType"
+        value_map:
+          "MME-UPDATE-PROCEDURE": "updateProcedure"
+          "SGSN-UPDATE-PROCEDURE": "updateProcedure"
+          "SUBSCRIPTION_WITHDRAWAL": "subscriptionWithdrawal"
+          "IMSI_DETACH": "imsiDetachInVLR"
+
+  # ===========================================================================
+  # SUBSCRIBER DATA MANAGEMENT
+  # ===========================================================================
+  
+  - name: "sh-profile-update"
+    description: "Sh interface Profile Update to insertSubscriberData"
+    
+    diameter:
+      command: "PNR"  # Profile Notification Request
+      application: "Sh"  # Sh Data Repository
+      operation: "ProfileUpdate"
+      request_avps:
+        - "Public-Identity"
+        - "User-Data"
+        - "Data-Reference"
+      response_avps:
+        - "Result-Code"
+        
+    map_operation: "insertSubscriberData"
+    map_version: "MAPv3"
+    
+    parameter_mapping:
+      Public-Identity:
+        diameter_field: "Public-Identity"
+        map_field: "msisdn"
+        transformation: "tel_uri_to_msisdn"
+      Data-Reference:
+        diameter_field: "Data-Reference"
+        map_field: "ss_List"
+        value_map:
+          "RepositoryData": "all_ss_data"
+          "InitialFilterCriteria": "odb"
+          "PSIS": "csi_data"
+
+  - name: "sh-user-data-request"
+    description: "Sh UDR (User Data Request) to anyTimeInterrogation"
+    
+    diameter:
+      command: "UDR"  # User Data Request
+      application: "Sh"
+      operation: "UserDataRequest"
+      request_avps:
+        - "User-Identity"
+        - "Data-Reference"
+        - "Subs-Req-Type"
+      response_avps:
+        - "Result-Code"
+        - "User-Data"
+        - "Server-Name"
+        
+    map_operation: "anyTimeInterrogation"
+    map_version: "MAPv3"
+    
+    parameter_mapping:
+      Subs-Req-Type:
+        diameter_field: "Subs-Req-Type"
+        map_field: "requestedInfo"
+        value_map:
+          "SUBSCRIBER_SPECIFIC": "subscriberData"
+          "GROUP_SPECIFIC": "groupData"
+
+  - name: "s6a-insert-subscriber-data"
+    description: "S6a IDR (Insert Subscriber Data) to insertSubscriberData"
+    
+    diameter:
+      command: "IDR"  # Insert Subscriber Data Request
+      application: "S6a"
+      operation: "IDR"
+      request_avps:
+        - "User-Name"
+        - "Subscription-Data"
+          children:
+            - "MSISDN"
+            - "Access-Restriction-Data"
+            - "Subscriber-Status"
+            - "Network-Access-Mode"
+            - "AMBR"
+      response_avps:
+        - "Result-Code"
+        
+    map_operation: "insertSubscriberData"
+    map_version: "MAPv3"
+    
+    parameter_mapping:
+      Subscription-Data:
+        diameter_field: "Subscription-Data"
+        map_fields:
+          MSISDN: "msisdnCND"
+          Access-Restriction-Data: "accessRestrictData"
+          Subscriber-Status: "subscriberStatus"
+          Network-Access-Mode: "networkAccessMode"
+
+  - name: "s6a-delete-subscriber-data"
+    description: "S6a DSR (Delete Subscriber Data) to deleteSubscriberData"
+    
+    diameter:
+      command: "DSR"  # Delete Subscriber Data Request
+      application: "S6a"
+      operation: "DSR"
+      request_avps:
+        - "User-Name"
+        - "CLR-Flags"
+      response_avps:
+        - "Result-Code"
+        
+    map_operation: "deleteSubscriberData"
+    map_version: "MAPv3"
+
+  - name: "s6a-reset"
+    description: "S6a RSR (Reset Request) to reset"
+    
+    diameter:
+      command: "RSR"  # Reset Request
+      application: "S6a"
+      operation: "RSR"
+      request_avps:
+        - "User-Name"
+      response_avps:
+        - "Result-Code"
+        
+    map_operation: "reset"
+    map_version: "MAPv3"
+
+  # ===========================================================================
+  # SMS ROUTING MAPPINGS
+  # ===========================================================================
+  
+  - name: "s6a-routing-info-for-sm"
+    description: "S6a SRI (Send Routing Info for SM) to routingInfoForSM"
+    
+    diameter:
+      command: "SRI"  # Send Routing Info Request
+      application: "S6a"
+      operation: "SRI"
+      request_avps:
+        - "User-Name"
+        - "SM-RP-PRI"
+        - "SM-Delivery-Outcome"
+      response_avps:
+        - "Result-Code"
+        - "MME-Realm"
+        - "MME-Host"
+        
+    map_operation: "routingInfoForSM"
+    map_version: "MAPv2"
+    
+    parameter_mapping:
+      User-Name:
+        diameter_field: "User-Name"
+        map_field: "msisdn"
+        note: "Can be IMSI or MSISDN depending on configuration"
+      MME-Realm:
+        diameter_field: "MME-Realm"
+        map_field: "networkNodeNumber"
+        transformation: "host_realm_to_sccp_address"
+      MME-Host:
+        diameter_field: "MME-Host"
+        map_field: "networkNodeNumber"
+        transformation: "append_to_sccp_address"
+
+  - name: "sms-ip-routing-info"
+    description: "Diameter over IP-based SMS routing to MAP routingInfoForSM"
+    
+    diameter:
+      command: "SRR"  # Send Routing Info Request (SMS IP)
+      application: "SMS-IP"
+      operation: "RoutingInfoRequest"
+      request_avps:
+        - "Destination-Identity"
+        - "Originator-Identity"
+        - "SM-Service-Type"
+      response_avps:
+        - "Result-Code"
+        - "Destination-Interface"
+        - "Destination-Host"
+        
+    map_operation: "routingInfoForSM"
+    map_version: "MAPv2"
+    
+    parameter_mapping:
+      Destination-Identity:
+        diameter_field: "Destination-Identity"
+        map_field: "msisdn"
+        transformation: "identity_to_msisdn"
+      Originator-Identity:
+        diameter_field: "Originator-Identity"
+        map_field: "sm_RP_OA"
+        transformation: "originator_identity_to_rp_oa"
+
+  # ===========================================================================
+  # LOCATION SERVICES (LCS) MAPPINGS
+  # ===========================================================================
+  
+  - name: "sls-provide-subscriber-info"
+    description: "SLh Provide Subscriber Info to provideSubscriberInfo (LCS)"
+    
+    diameter:
+      command: "PSI"  # Provide Subscriber Info
+      application: "SLh"  # LCS (Location Services)
+      operation: "ProvideSubscriberLocation"
+      request_avps:
+        - "User-Identifier"
+        - "Location-Type"
+        - "Requested-SLP-Mode"
+        - "QoS-Class"
+      response_avps:
+        - "Result-Code"
+        - "Location-Estimate"
+        - "Age-Of-Location-Estimate"
+        
+    map_operation: "provideSubscriberInfo"
+    map_version: "MAPv3"
+    
+    parameter_mapping:
+      User-Identifier:
+        diameter_field: "User-Identifier"
+        map_field: "msisdn"
+        type: "MSISDN"
+      Location-Type:
+        diameter_field: "Location-Type"
+        map_field: "locationInformation"
+        value_map:
+          "CURRENT_LOCATION": "currentLocation"
+          "LAST_KNOWN_LOCATION": "lastKnownLocation"
+          "AREA_EVENT": "areaEventInfo"
+
+  - name: "sls-subscribe-notifications"
+    description: "SLh Subscribe Notifications to subscribeLocationNotification"
+    
+    diameter:
+      command: "SN"  # Subscribe Notification
+      application: "SLh"
+      operation: "SubscribeNotifications"
+      request_avps:
+        - "User-Identifier"
+        - "Event-Type"
+        - "Reporting-PLMN"
+      response_avps:
+        - "Result-Code"
+        - "Subscription-Handle"
+        
+    map_operation: "subscribeLocationNotification"
+    map_version: "MAPv3"
+
+  # ===========================================================================
+  # CALL SESSION CONTROL (IMS/VoLTE)
+  # ===========================================================================
+  
+  - name: "sh-camel-info-retrieval"
+    description: "Sh CAMEL subscription info retrieval to anyTimeInterrogation"
+    
+    diameter:
+      command: "UDR"
+      application: "Sh"
+      operation: "GetCAMELSubscriptionInfo"
+      request_avps:
+        - "Public-Identity"
+        - "Data-Reference"
+      response_avps:
+        - "Result-Code"
+        - "Server-Name"
+        - "User-Data"
+        
+    map_operation: "anyTimeInterrogation"
+    map_version: "MAPv3"
+    
+    parameter_mapping:
+      Data-Reference:
+        diameter_field: "Data-Reference"
+        map_field: "requestedCAMELSubscriptionInfo"
+        value_map:
+          "OCS-CAMEL-Info": "o_csi"
+          "T-CSI": "t_csi"
+          "VT-CSI": "vt_csi"
+          "D-CSI": "d_csi"
+
+  - name: "cap-initial-dp-to-diameter"
+    description: "CAP InitialDP to Diameter Credit Control Initiate (Ro)"
+    
+    diameter:
+      command: "CCR"  # Credit Control Request
+      application: "Ro"  # Diameter Credit Control Application
+      operation: "Initiate"
+      request_avps:
+        - "Session-Id"
+        - "Auth-Application-Id"
+        - "Service-Context-Id"
+        - "CC-Request-Type"
+        - "CC-Request-Number"
+        - "Called-Party-Address"
+        - "Calling-Party-Address"
+        - "Service-Information"
+      response_avps:
+        - "Result-Code"
+        - "Granted-Service-Unit"
+        - "Credit-Control-Failure-Handling"
+        
+    map_operation: "initialDP"
+    map_version: "CAPv2"
+    direction: "map_to_diameter"
+    
+    parameter_mapping:
+      CC-Request-Type:
+        diameter_field: "CC-Request-Type"
+        map_field: "eventBasic"
+        value_map:
+          "EVENT_REQUEST": "callAttemptAuthorized"
+          "UPDATE_REQUEST": "callAnswer"
+          "TERMINATION_REQUEST": "callRelease"
+      Called-Party-Address:
+        diameter_field: "Called-Party-Address"
+        map_field: "destinationRoutingAddress"
+        transformation: "isdn_to_diameter_uri"
+      Calling-Party-Address:
+        diameter_field: "Calling-Party-Address"
+        map_field: "callingPartyNumber"
+        transformation: "isdn_to_diameter_uri"
+
+  # ===========================================================================
+  # EQUIPMENT IDENTITY (IMEI CHECKING)
+  # ===========================================================================
+  
+  - name: "s13-check-equipment"
+    description: "S13 EIR Check Equipment Identity to checkIMEI"
+    
+    diameter:
+      command: "CEIR"  # Check Equipment Identity Request
+      application: "S13"  # Equipment Identity Register
+      operation: "CheckEquipment"
+      request_avps:
+        - "IMEI"
+        - "IMSI"
+      response_avps:
+        - "Result-Code"
+        - "Equipment-Status"
+        
+    map_operation: "checkIMEI"
+    map_version: "MAPv3"
+    
+    parameter_mapping:
+      IMEI:
+        diameter_field: "IMEI"
+        map_field: "equipmentStatus"
+        value_map:
+          "WHITELISTED": "whiteListed"
+          "GREYLISTED": "greyListed"
+          "BLACKLISTED": "blackListed"
+
+# =============================================================================
+# ERROR CODE MAPPING
+# =============================================================================
+error_mapping:
+  # Diameter Result Codes to MAP Error Codes
+  diameter_to_map_errors:
+    "DIAMETER_SUCCESS":
+      map_error: "success"
+      return_result: null
+      
+    "DIAMETER_UNABLE_TO_DELIVER":
+      map_error: "absentSubscriber"
+      return_result: "unknownSubscriber"
+      
+    "DIAMETER_UNKNOWN_PEER":
+      map_error: "systemFailure"
+      return_result: "unknownSubscriber"
+      
+    "DIAMETER_AUTH_REJECTED":
+      map_error: "illegalSubscriber"
+      return_result: "illegalSubscriber"
+      
+    "DIAMETER_ERROR_USER_UNKNOWN":
+      map_error: "unknownSubscriber"
+      return_result: "unknownSubscriber"
+      
+    "DIAMETER_ERROR_IDENTITIES_DONT_MATCH":
+      map_error: "unknownSubscriber"
+      return_result: "unknownSubscriber"
+      
+    "DIAMETER_ERROR_ROAMING_NOT_ALLOWED":
+      map_error: "roamingNotAllowed"
+      return_result: "roamingNotAllowed"
+      
+    "DIAMETER_ERROR_ILLEGAL_EQUIPMENT":
+      map_error: "illegalEquipment"
+      return_result: "illegalEquipment"
+      
+    "DIAMETER_ERROR_UNKOWN_SERVED_USER":
+      map_error: "absentSubscriber"
+      return_result: "absentSubscriberSM"
+      
+    "DIAMETER_ERROR_BUSY_SUBSCRIBER":
+      map_error: "busySubscriber"
+      return_result: "busySubscriber"
+
+  # MAP Error Codes to Diameter Result Codes
+  map_to_diameter_errors:
+    "unknownSubscriber":
+      diameter_code: 5001  # DIAMETER_ERROR_USER_UNKNOWN
+      message: "Unknown Subscriber"
+      
+    "illegalSubscriber":
+      diameter_code: 5004  # DIAMETER_AUTH_REJECTED
+      message: "Illegal Subscriber"
+      
+    "roamingNotAllowed":
+      diameter_code: 5004  # DIAMETER_AUTH_REJECTED
+      message: "Roaming Not Allowed"
+      
+    "illegalEquipment":
+      diameter_code: 5017  # DIAMETER_ERROR_ILLEGAL_EQUIPMENT
+      message: "Illegal Equipment"
+      
+    "absentSubscriber":
+      diameter_code: 5001  # DIAMETER_ERROR_USER_UNKNOWN
+      message: "Absent Subscriber"
+      
+    "systemFailure":
+      diameter_code: 3001  # DIAMETER_UNABLE_TO_COMPLY
+      message: "System Failure"
+      
+    "dataMissing":
+      diameter_code: 5005  # DIAMETER_MISSING_AVP
+      message: "Data Missing"
+      
+    "unexpectedDataValue":
+      diameter_code: 5004  # DIAMETER_AUTH_REJECTED
+      message: "Unexpected Data Value"
+      
+    "facilityNotSupported":
+      diameter_code: 5001  # DIAMETER_ERROR_USER_UNKNOWN
+      message: "Facility Not Supported"
+      
+    "callBarred":
+      diameter_code: 4010  # DIAMETER_USER_DENIED
+      message: "Call Barred"
+      
+    "forwardingViolation":
+      diameter_code: 5004  # DIAMETER_AUTH_REJECTED
+      message: "Forwarding Violation"
+      
+    "CAMEL_Error_CW_NotInvoked":
+      diameter_code: 4001  # DIAMETER_COMMAND_NOT_SUPPORTED
+      message: "CW Not Invoked"
+      
+    "teMwFailure":
+      diameter_code: 3001  # DIAMETER_UNABLE_TO_COMPLY
+      message: "TE/MW Failure"
+      
+    "busySubscriber":
+      diameter_code: 4010  # DIAMETER_USER_DENIED
+      message: "Busy Subscriber"
+
+# =============================================================================
+# PROTOCOL TRANSLATION RULES
+# =============================================================================
+translation_rules:
+  # Address format conversions
+  address_formats:
+    imsi_format:
+      diameter: "imsi@mnc{mnc}.mcc{mcc}.3gppnetwork.org"
+      map: "raw_imsi_digits"
+      example_diameter: "603010123456789@mnc001.mcc603.3gppnetwork.org"
+      example_map: "603010123456789"
+      
+    msisdn_format:
+      diameter: "tel:+{msisdn}"
+      map: "e164_digits"
+      example_diameter: "tel:+213550123456"
+      example_map: "213550123456"
+      
+    gt_format:
+      diameter: "gt:{gt}"
+      map: "bcd_encoded_gt"
+      example_diameter: "gt:2136001123456"
+      example_map: "2143650000214321"  # BCD encoded
+
+  # ASN.1/AVP encoding rules
+  encoding_rules:
+    integer_encoding:
+      diameter: "unsigned32 / unsigned64"
+      map: "ASN.1 INTEGER"
+      byte_order: "big_endian"
+      
+    string_encoding:
+      diameter: "UTF-8 String"
+      map: "TBCDString or IA5String"
+      padding: "F"  # For TBCD strings
+      
+    enum_encoding:
+      diameter: "Enumerated"
+      map: "INTEGER with named values"
+      note: "Values may differ between protocols"
+
+  # Timeout and retry configurations
+  timeouts:
+    diameter_to_map:
+      t_response: 10  # seconds
+      t_cancel: 30    # seconds
+      max_retries: 3
+      
+    map_to_diameter:
+      t_response: 15  # seconds
+      t_cancel: 45    # seconds
+      max_retries: 2
+
+# =============================================================================
+# INTERWORKING FUNCTION CONFIGURATION
+# =============================================================================
+interworking_functions:
+  # IWF (Interworking Function) instances
+  instances:
+    - name: "iwf-algiers-primary"
+      location: "Algiers DC1"
+      capacity: 10000  # transactions per second
+      protocols_supported:
+        diameter:
+          - "S6a/S6d"
+          - "Sh"
+          - "Rx"
+          - "SLh"
+          - "Ro/Rf"
+        ss7:
+          - "MAPv2"
+          - "MAPv3"
+          - "CAPv2"
+          - "INAP"
+          
+    - name: "iwf-oran-secondary"
+      location: "Oran DC"
+      capacity: 5000
+      failover_target: "iwf-algiers-primary"
+      
+  # Load balancing
+  load_balancing:
+    algorithm: "weighted_round_robin"
+    health_check_interval: 10  # seconds
+    failover_threshold: 3  # consecutive failures
+
+# =============================================================================
+# SECURITY CONSIDERATIONS
+# =============================================================================
+security:
+  # Transport security
+  transport_security:
+    diameter:
+      use_ipsec: true
+      use_tls: false  # Typically IPSec for S6a, TLS for other interfaces
+      cipher_suites:
+        - "AES256-GCM-SHA384"
+        - "AES128-GCM-SHA256"
+        
+    ss7:
+      m3ua_authentication: true
+      sctp_validation: true
+      gt_screening: true
+
+  # Access control
+  access_control:
+    allowed_originating_nodes:
+      diameter:
+        - "MME-*"
+        - "MSC-*"
+        - "SMSC-*"
+        - "AS-*"
+      ss7:
+        - "VLR-*"
+        - "MSC-*"
+        - "GMSC-*"
+        - "SMSC-*"
+        
+  # Rate limiting
+  rate_limiting:
+    global_max_tps: 10000
+    per_node_max_tps: 2000
+    burst_allowance: 20  # percent

@@ -1,0 +1,577 @@
+# SS7 Fraud Detection Rules Configuration
+# Djezzy National SOC Platform
+# ANRT Compliant fraud detection thresholds and response procedures
+#
+# Version: 1.0.0
+# Last Updated: 2024
+# Classification: CONFIDENTIAL - SOC Operations
+
+# =============================================================================
+# GLOBAL CONFIGURATION
+# =============================================================================
+global:
+  enabled: true
+  platform_name: "Djezzy National SOC Platform"
+  operator_name: "Djezzy Algeria"
+  country_code: "+213"
+  itu_region: "Europe (Region 1)"
+  
+  # Default alerting settings
+  default_severity: "medium"
+  auto_block_enabled: true
+  notification_channels:
+    - soc_dashboard
+    - email_alerts
+    - sms_on_call
+    
+  # Time windows for analysis (in minutes)
+  analysis_windows:
+    short: 5        # Real-time detection
+    medium: 60      # Hourly aggregation
+    long: 1440      # Daily patterns
+
+# =============================================================================
+# FRAUD DETECTION RULES
+# =============================================================================
+rules:
+
+  # ---------------------------------------------------------------------------
+  # INTERNATIONAL REVENUE SHARE FRAUD (IRSF)
+  # ---------------------------------------------------------------------------
+  irsf:
+    enabled: true
+    name: "International Revenue Share Fraud"
+    description: >
+      Detect high-volume international calls to premium rate numbers.
+      IRSF occurs when fraudsters generate traffic to international premium
+      numbers they control, sharing revenue with complicit operators.
+    
+    category: "toll_fraud"
+    severity: critical
+    anrt_reportable: true
+    anrt_category: "FRAUD-IRSF"
+    
+    threshold:
+      # Primary detection thresholds
+      international_calls_per_hour:
+        value: 10
+        unit: calls
+        description: "Number of international calls triggering alert"
+      
+      unique_destinations:
+        value: 5
+        unit: destinations
+        description: "Unique international destinations in window"
+      
+      duration_pattern:
+        type: "exact_billing_interval"
+        target_durations: [60, 120, 180, 300]
+        tolerance_seconds: 5
+        description: "Calls exactly at billing intervals are suspicious"
+      
+      # High-risk country/destination lists
+      countries_high_risk:
+        - name: "Premium Rate Destinations"
+          prefixes: ["+882", "+883", "+878"]
+          risk_score: 95
+        
+        - name: "High-Termination Cost Countries"
+          prefixes: ["+244", "++242", "+225", "+243"]
+          risk_score: 80
+        
+        - name: "Unallocated Ranges"
+          prefixes: ["+881", "+889"]
+          risk_score: 90
+      
+      # Time-based thresholds
+      peak_hours_only: false
+      weekend_multiplier: 1.5
+    
+    indicators:
+      - name: "high_international_volume"
+        weight: 3.0
+        condition: "international_calls > threshold"
+      
+      - name: "premium_destination_pattern"
+        weight: 2.5
+        condition: "destinations match high_risk_list"
+      
+      - name: "billing_duration_match"
+        weight: 2.0
+        condition: "duration matches billing interval"
+      
+      - name: "rapid_succession_calls"
+        weight: 1.5
+        condition: "inter-call time < 30 seconds"
+    
+    action: block_and_alert
+    response_procedure:
+      immediate:
+        - "Block subscriber for outgoing international"
+        - "Generate high-priority SOC alert"
+        - "Notify on-call security analyst"
+      within_15min:
+        - "Pull CDR history for subscriber"
+        - "Check SIM provisioning records"
+        - "Verify subscriber identity"
+      within_1hour:
+        - "Prepare ANRT incident report if confirmed"
+        - "Initiate forensic analysis"
+
+  # ---------------------------------------------------------------------------
+  # SIM SWAP FRAUD DETECTION
+  # ---------------------------------------------------------------------------
+  sim_swap:
+    enabled: true
+    name: "SIM Swap Fraud Detection"
+    description: >
+      Detect unauthorized SIM card provisioning that may indicate account
+      takeover attempts. SIM swap allows attackers to intercept OTP messages,
+      access banking accounts, and impersonate victims.
+    
+    category: "identity_fraud"
+    severity: critical
+    anrt_reportable: true
+    anrt_category: "FRAUD-SIMSWAP"
+    
+    indicators:
+      - name: "multiple_provisioning_attempts"
+        description: "Multiple SIM provisioning requests in short window"
+        window_minutes: 60
+        max_allowed_attempts: 2
+        severity_boost: high
+        
+      - name: "location_update_while_active_call"
+        description: "Location update received during ongoing call session"
+        window_seconds: 10
+        severity_boost: critical
+        
+      - name: "authentication_failure_burst"
+        description: "Multiple authentication failures before successful auth"
+        window_minutes: 30
+        max_failures_before_alert: 5
+        severity_boost: medium
+        
+      - name: "provisioning_after_password_reset"
+        description: "SIM request shortly after password/account reset"
+        window_hours: 2
+        severity_boost: high
+        
+      - name: "cross_vlr_provisioning"
+        description: "Provisioning from unusual VLR for subscriber profile"
+        check_home_location: true
+        severity_boost: medium
+        
+      - name: "unusual_channel_request"
+        description: "SIM swap via non-standard channel (e.g., dealer portal)"
+        channels_to_monitor:
+          - "dealer_portal"
+          - "api_bulk"
+          - "third_party"
+        severity_boost: high
+    
+    threshold:
+      window_minutes: 60
+      composite_score_threshold: 75
+      individual_indicator_weight: 20
+    
+    action: alert_and_verify
+    response_procedure:
+      immediate:
+        - "Hold SIM activation pending verification"
+        - "Send SMS to old SIM number warning of potential swap"
+        - "Alert SOC with subscriber details"
+      within_5min:
+        - "Attempt contact via registered alternative methods"
+        - "Check recent account activity changes"
+      within_30min:
+        - "If unverified: block new SIM, restore old SIM service"
+        - "If verified: document legitimate swap reason"
+      escalation:
+        - "If fraud confirmed: initiate full investigation"
+        - "Preserve evidence for law enforcement"
+
+  # ---------------------------------------------------------------------------
+  # WANGIRI (ONE-RING) DETECTION
+  # ---------------------------------------------------------------------------
+  wangiri:
+    enabled: true
+    name: "Wangiri (One-Ring) Detection"
+    description: >
+      Detect short-duration call patterns characteristic of Wangiri attacks.
+      Attackers make brief calls to many victims hoping they will call back
+      to premium-rate numbers.
+    
+    category: "toll_fraud"
+    severity: high
+    anrt_reportable: true
+    anrt_category: "FRAUD-WANGIRI"
+    
+    threshold:
+      max_duration_seconds: 5
+      min_calls_per_hour: 20
+      unique_victims: 10
+      callback_number_check: true
+      
+      # Pattern recognition
+      ring_count_target: 1
+      answer_probability: 0.05  # Most wangiri calls aren't answered
+      
+      # Geographic analysis
+      victim_spread_required: true
+      min_different_prefixes: 5
+    
+    indicators:
+      - name: "short_duration_burst"
+        weight: 3.0
+        condition: "avg_call_duration < 5 seconds AND call_count > 20/hour"
+        
+      - name: "unique_victim_pattern"
+        weight: 2.5
+        condition: "unique_called_numbers > 10 AND repeat_rate < 20%"
+        
+      - name: "callback_premium_indication"
+        weight: 2.0
+        condition: "caller_id or header indicates callback to premium"
+        
+      - name: "off-hours_activity"
+        weight: 1.5
+        condition: "high volume during 02:00-06:00 local time"
+        
+      - name: "roaming_origin"
+        weight: 1.0
+        condition: "calls originate from roaming subscribers only"
+    
+    action: block_and_investigate
+    response_procedure:
+      immediate:
+        - "Block originating numbers from outbound calling"
+        - "Flag callback numbers as suspicious"
+        - "Auto-generate victim notification list"
+      within_1hour:
+        - "Analyze callback number ownership"
+        - "Check for associated premium rate agreements"
+        - "Cross-reference with known fraud databases"
+      victim_notification:
+        method: "sms_warning"
+        template: "wangiri_warning"
+        content: "You may have received a fraudulent call. Do not call back unknown numbers."
+
+  # ---------------------------------------------------------------------------
+  # SMS FLOODING / SPAM
+  # ---------------------------------------------------------------------------
+  sms_flood:
+    enabled: true
+    name: "SMS Flooding Detection"
+    description: >
+      Detect abnormal SMS sending patterns indicating spam campaigns,
+      DoS attacks, or SMShing (SMS phishing) operations.
+    
+    category: "spam_abuse"
+    severity: medium
+    anrt_reportable: false
+    anrt_category: "ABUSE-SMS"
+    
+    threshold:
+      max_sms_per_minute: 10
+      max_sms_per_hour: 100
+      max_sms_per_day: 500
+      unique_recipients_ratio: 0.7  # 70%+ unique recipients is suspicious
+      
+      # Content analysis
+      url_detection_enabled: true
+      max_url_per_message: 3
+      suspicious_keywords:
+        - "winner"
+        - "congratulations"
+        - "urgent"
+        - "verify"
+        - "account suspended"
+        - "click here"
+        - "free gift"
+    
+    indicators:
+      - name: "volume_spike"
+        weight: 2.5
+        condition: "sms_count exceeds threshold in window"
+        
+      - name: "bulk_pattern"
+        weight: 2.0
+        condition: "similar content across multiple recipients"
+        
+      - name: "url_shortener_usage"
+        weight: 1.5
+        condition: "messages contain URL shortener links"
+        
+      - name: "off-net_targeting"
+        weight: 1.0
+        condition: "majority of messages to other networks"
+    
+    action: throttle_and_alert
+    response_procedure:
+      immediate:
+        - "Throttle sending rate to 1 SMS per minute"
+        - "Queue messages for content inspection"
+      within_15min:
+        - "Apply spam classification model"
+        - "If spam confidence > 90%: block sender"
+      content_analysis:
+        extract_urls: true
+        check_malware: true
+        cross_reference_phishing_db: true
+
+  # ---------------------------------------------------------------------------
+  # USSD ABUSE DETECTION
+  # ---------------------------------------------------------------------------
+  ussd_abuse:
+    enabled: true
+    name: "USSD Abuse Detection"
+    description: >
+      Detect suspicious USSD session patterns including brute force attacks,
+      enumeration attempts, and unauthorized balance queries.
+    
+    category: "abuse"
+    severity: low
+    anrt_reportable: false
+    anrt_category: "ABUSE-USSD"
+    
+    threshold:
+      max_ussd_per_minute: 15
+      max_ussd_per_hour: 100
+      failed_session_limit: 10
+      
+      # Suspicious USSD codes to monitor
+      suspicious_patterns:
+        - pattern: "**00*"
+          name: "call_forwarding_set"
+          risk: medium
+        - pattern: "**21*"
+          name: "unconditional_forward"
+          risk: medium
+        - pattern: "**67*"
+          name: "cancel_forwarding"
+          risk: low
+        - pattern: "*#*#"
+          name: "service_code_enumeration"
+          risk: high
+    
+    indicators:
+      - name: "ussd_brute_force"
+        weight: 2.5
+        condition: "rapid sequential USSD sessions"
+        
+      - name: "enumeration_attempt"
+        weight: 2.0
+        condition: "systematic code probing detected"
+        
+      - name: "balance_query_flood"
+        weight: 1.0
+        condition: "excessive balance check frequency"
+    
+    action: monitor_and_throttle
+    response_procedure:
+      immediate:
+        - "Implement progressive delay between sessions"
+        - "Log all USSD activity for review"
+      threshold_exceeded:
+        - "Temporarily block USSD access (15 min)"
+        - "Require CAPTCHA for re-enablement"
+
+  # ---------------------------------------------------------------------------
+  # LOCATION TRACKING / PRIVACY VIOLATION
+  # ---------------------------------------------------------------------------
+  location_tracking:
+    enabled: true
+    name: "Unauthorized Location Tracking Detection"
+    description: >
+      Detect excessive location queries that may indicate stalking,
+      surveillance, or unauthorized tracking of subscribers.
+    
+    category: "privacy"
+    severity: high
+    anrt_reportable: true
+    anrt_category: "PRIVACY-LOCATION"
+    
+    threshold:
+      max_queries_per_subscriber_per_hour: 50
+      max_queries_per_requester_per_hour: 200
+      requester_diversity_check: true
+      
+      # Sensitive locations
+      protected_locations:
+        - type: "hospital"
+          sensitivity: high
+        - type: "government_facility"
+          sensitivity: high
+        - type: "religious_site"
+          sensitivity: medium
+        - type: "school"
+          sensitivity: high
+    
+    indicators:
+      - name: "excessive_single_target_queries"
+        weight: 3.0
+        condition: ">50 location queries for single MSISDN"
+        
+      - name: "bulk_tracking_pattern"
+        weight: 2.5
+        condition: "same requester queries many different targets"
+        
+      - name: "real_time_tracking"
+        weight: 2.0
+        condition: "queries at <5 min intervals for same target"
+        
+      - name: "cross_border_interest"
+        weight: 1.5
+        condition: "foreign entity querying local subscribers"
+    
+    action: block_and_investigate
+    response_procedure:
+      immediate:
+        - "Block requester from further location services"
+        - "Alert privacy officer"
+      investigation:
+        - "Verify requester authorization scope"
+        - "Check for valid legal process"
+        - "Notify affected subscribers if warranted by law"
+
+  # ---------------------------------------------------------------------------
+  # CALL BOMBING / HARASSMENT
+  # ---------------------------------------------------------------------------
+  call_bombing:
+    enabled: true
+    name: "Call Bombing / Harassment Detection"
+    description: >
+      Detect patterns of repeated calls to single targets indicating
+      harassment, stalking, or DoS against specific subscribers.
+    
+    category: "harassment"
+    severity: high
+    anrt_reportable: false
+    anrt_category: "HARASSMENT-CALL"
+    
+    threshold:
+      max_calls_to_single_target_per_hour: 30
+      max_unique_callers_before_flag: 3
+      victim_complaint_integration: true
+    
+    indicators:
+      - name: "single_target_volume"
+        weight: 3.0
+        condition: ">30 calls to same destination in hour"
+        
+      - name: "coordinated_attack"
+        weight: 2.5
+        condition: "multiple callers targeting same victim"
+        
+      - name: "time_pattern"
+        weight: 1.5
+        condition: "calls concentrated outside business hours"
+    
+    action: block_callers_and_notify
+    response_procedure:
+      immediate:
+        - "Block identified caller(s)"
+        - "Offer victim Do Not Disturb options"
+      if_victim_complaint:
+        - "Escalate to harassment protocol"
+        - "Preserve evidence for potential legal action"
+
+# =============================================================================
+# RESPONSE ACTION DEFINITIONS
+# =============================================================================
+actions:
+  block_and_alert:
+    type: "immediate_block"
+    notify_soc: true
+    notify_subscriber: false
+    auto_unblock: false
+    requires_manual_review: true
+    
+  alert_and_verify:
+    type: "monitor_with_alert"
+    notify_soc: true
+    notify_subscriber: true
+    verification_timeout_minutes: 30
+    auto_block_if_unverified: true
+    
+  block_and_investigate:
+    type: "block_and_forensic"
+    notify_soc: true
+    notify_subscriber: true
+    preserve_evidence: true
+    escalate_to_law_enforcement: false
+    
+  monitor_and_throttle:
+    type: "rate_limit"
+    notify_soc: false
+    notify_subscriber: false
+    throttle_percentage: 90
+    monitoring_duration_hours: 24
+    
+  throttle_and_alert:
+    type: "progressive_throttle"
+    notify_soc: true
+    notify_subscriber: false
+    throttle_stages:
+      - reduction_percent: 50
+        duration_minutes: 15
+      - reduction_percent: 90
+        duration_minutes: 60
+      - block: true
+        
+  block_callers_and_notify:
+    type: "targeted_block"
+    notify_soc: true
+    notify_victim: true
+    offer_protection_services: true
+
+# =============================================================================
+# NOTIFICATION TEMPLATES
+# =============================================================================
+notifications:
+  templates:
+    high_priority_alert:
+      subject: "[CRITICAL] SS7 Fraud Alert - {rule_name}"
+      body: |
+        Fraud indicator detected:
+        Rule: {rule_name}
+        Severity: {severity}
+        Subscriber: {msisdn}
+        Confidence: {confidence}%
+        Details: {description}
+        
+        Immediate action required.
+        
+    sim_swap_warning:
+      channel: "sms"
+      body: "Djezzy Alert: A SIM card request was made for your number. If this wasn't you, call {support_number} immediately."
+      
+    wangiri_warning:
+      channel: "sms"
+      body: "Djezzy Alert: You may have received a fraudulent 'missed call'. Do not call back unknown international numbers."
+
+# =============================================================================
+# ANRT REPORTING CONFIGURATION
+# =============================================================================
+anrt_reporting:
+  enabled: true
+  endpoint: "https://reporting.anrt.dz/api/v1/incidents"
+  report_formats:
+    - "ANRT-FR-001"  # Standard fraud report format
+    - "ANRT-FR-002"  # Monthly summary format
+  
+  required_fields:
+    - incident_timestamp
+    - operator_id
+    - fraud_type
+    - affected_subscribers_count
+    - estimated_financial_impact
+    - remediation_actions_taken
+    
+  submission_schedule:
+    immediate_for_severities:
+      - critical
+      - high
+    daily_summary: true
+    monthly_aggregate: true

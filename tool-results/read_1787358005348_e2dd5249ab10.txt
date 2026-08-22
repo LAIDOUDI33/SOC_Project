@@ -1,0 +1,1760 @@
+     1→/**
+     2→ * SS7 Message Decoder
+     3→ * Djezzy National SOC Platform - SS7 Tools Suite
+     4→ * 
+     5→ * Comprehensive decoder for SS7 protocol messages:
+     6→ * - MAP (Mobile Application Part) decoding
+     7→ * - CAP (CAMEL Application Part) decoding
+     8→ * - ISUP (ISDN User Part) decoding
+     9→ * - SCCP (Signaling Connection Control Part) decoding
+    10→ * - TCAP (Transaction Capabilities Application Part) decoding
+    11→ * 
+    12→ * Supports ITU-T Q.771-Q.775 (TCAP), Q.931 (ISUP), and 3GPP TS 29.002 (MAP)
+    13→ * 
+    14→ * @version 1.0.0
+    15→ */
+    16→
+    17→import {
+    18→  SS7Message,
+    19→  SS7ProtocolLayer,
+    20→  PointCode,
+    21→  PointCodeFormat,
+    22→  GlobalTitle,
+    23→  GlobalTitleType,
+    24→  SubsystemNumber,
+    25→  SCCPMessageType,
+    26→  TCAPMessageType,
+    27→  MAPOperationCode,
+    28→  CAPOperationCode,
+    29→  ISUPMessageType,
+    30→  M3UAMessageType,
+    31→  SCTPChunkType,
+    32→  parsePointCode,
+    33→  parseGlobalTitle,
+    34→  maskMSISDN,
+    35→  maskIMSI,
+    36→  hexDump,
+    37→  bufferToHex,
+    38→  hexToBuffer,
+    39→  SCCP_MESSAGE_NAMES,
+    40→  TCAP_MESSAGE_NAMES,
+    41→  MAP_OPERATION_NAMES,
+    42→  CAP_OPERATION_NAMES,
+    43→  ISUP_MESSAGE_NAMES,
+    44→  M3UA_MESSAGE_NAMES,
+    45→  SCTP_CHUNK_NAMES,
+    46→} from './ss7-formats';
+    47→
+    48→// ============================================================
+    49→// DECODER RESULT TYPES
+    50→// ============================================================
+    51→
+    52→export interface DecodeResult<T = any> {
+    53→  success: boolean;
+    54→  message?: string;
+    55→  error?: string;
+    56→  data?: T;
+    57→  rawBytes?: number;
+    58→  warnings?: string[];
+    59→}
+    60→
+    61→export interface DecodedMAPMessage extends SS7Message {
+    62→  operation: MAPOperationCode;
+    63→  operationName: string;
+    64→  invokeId?: number;
+    65→  parameters: Record<string, any>;
+    66→  sourceSubscriber?: {
+    67→    imsi: string;
+    68→    msisdn: string;
+    69→    maskedIMSI: string;
+    70→    maskedMSISDN: string;
+    71→  };
+    72→  destinationSubscriber?: {
+    73→    imsi: string;
+    74→    msisdn: string;
+    75→    maskedIMSI: string;
+    76→    maskedMSISDN: string;
+    77→  };
+    78→}
+    79→
+    80→export interface DecodedCAPMessage extends SS7Message {
+    81→  operation: CAPOperationCode;
+    82→  operationName: string;
+    83→  invokeId?: number;
+    84→  legID?: number;
+    85→  parameters: Record<string, any>;
+    86→  callingNumber?: string;
+    87→  calledNumber?: string;
+    88→}
+    89→
+    90→export interface DecodedISUPMessage extends SS7Message {
+    91→  message: ISUPMessageType;
+    92→  messageName: string;
+    93→  cic: number;                    // Circuit Identification Code
+    94→  callingPartyNumber?: string;
+    95→  calledPartyNumber?: string;
+    96→  causeValue?: number;
+    97→  causeDescription?: string;
+    98→  iams?: IAMFields;               // Initial Address Message fields
+    99→}
+   100→
+   101→export interface DecodedSCCPMessage extends SS7Message {
+   102→  messageType: SCCPMessageType;
+   103→  messageName: string;
+   104→  segmenting?: boolean;
+   105→  segmentation?: {
+   106→    firstSegment: boolean;
+   107→    remainingSegments: number;
+   108→  };
+   109→  hopCounter?: number;
+   110→  sequenceControl?: number;
+   111→  returnOption?: boolean;
+   112→}
+   113→
+   114→export interface DecodedTCAPMessage extends SS7Message {
+   115→  messageType: TCAPMessageType;
+   116→  messageName: string;
+   117→  otid?: string;                  // Originating Transaction ID
+   118→  dtid?: string;                  // Destination Transaction ID
+   119→  dialoguePortion?: DialoguePortion;
+   120→  components: TCAPComponent[];
+   121→}
+   122→
+   123→export interface DialoguePortion {
+   124→  applicationContextName?: string;
+   125→  userInformation?: any;
+   126→  confidentialityKey?: string;
+   127→  originatingEntity?: string;
+   128→  destinationEntity?: string;
+   129→}
+   130→
+   131→export interface TCAPComponent {
+   132→  type: ComponentType;
+   133→  invokeId?: number;
+   134→  linkedId?: number;
+   135→  operationCode?: number;
+   136→  operationName?: string;
+   137→  parameters?: any;
+   138→  error?: {
+   139→    code: number;
+   140→    name: string;
+   141→    parameters?: any;
+   142→  };
+   143→  problem?: {
+   144→    type: ProblemType;
+   145→    code: number;
+   146→    description: string;
+   147→  };
+   148→  rejectReason?: string;
+   149→}
+   150→
+   151→export enum ComponentType {
+   152→  INVOKE = 1,
+   153→  RETURN_RESULT_LAST = 2,
+   154→  RETURN_ERROR = 3,
+   155→  REJECT = 4,
+   156→  RETURN_RESULT_NOT_LAST = 7,
+   157→}
+   158→
+   159→export enum ProblemType {
+   160→  GENERAL = 0,
+   161→  INVOKE = 1,
+   162→  RETURN_RESULT = 2,
+   163→  RETURN_ERROR = 3,
+   164→}
+   165→
+   166→// ISUP-specific fields
+   167→export interface IAMFields {
+   168→  natureOfConnection?: number;
+   169→  forwardCallIndicators?: number;
+   170→  callingPartyCategory?: number;
+   171→  transmissionMediumRequirement?: number;
+   172→  calledPartyNumber?: string;
+   173→  callingPartyNumber?: string;
+   174→  optionalParameters?: Record<string, any>;
+   175→}
+   176→
+   177→// ============================================================
+   178→// ASN.1/BER DECODER UTILITIES
+   179→// ============================================================
+   180→
+   181→class BERDecoder {
+   182→  private buffer: Buffer;
+   183→  private offset: number;
+   184→
+   185→  constructor(buffer: Buffer) {
+   186→    this.buffer = buffer;
+   187→    this.offset = 0;
+   188→  }
+   189→
+   190→  get position(): number {
+   191→    return this.offset;
+   192→  }
+   193→
+   194→  set position(value: number) {
+   195→    this.offset = value;
+   196→  }
+   197→
+   198→  get remaining(): number {
+   199→    return this.buffer.length - this.offset;
+   200→  }
+   201→
+   202→  decodeTag(): { tagClass: number; constructed: boolean; tagNumber: number; length: number } {
+   203→    if (this.remaining < 2) throw new Error('Insufficient data for tag');
+   204→
+   205→    const byte = this.buffer[this.offset++];
+   206→    const tagClass = (byte >> 6) & 0x03;
+   207→    const constructed = (byte & 0x20) !== 0;
+   208→    let tagNumber = byte & 0x1F;
+   209→
+   210→    // Long form tag
+   211→    if (tagNumber === 0x1F) {
+   212→      tagNumber = 0;
+   213→      let b;
+   214→      do {
+   215→        if (this.remaining === 0) throw new Error('Truncated tag');
+   216→        b = this.buffer[this.offset++];
+   217→        tagNumber = (tagNumber << 7) | (b & 0x7F);
+   218→      } while (b & 0x80);
+   219→    }
+   220→
+   221→    const length = this.decodeLength();
+   222→
+   223→    return { tagClass, constructed, tagNumber, length };
+   224→  }
+   225→
+   226→  decodeLength(): number {
+   227→    if (this.remaining === 0) throw new Error('Insufficient data for length');
+   228→
+   229→    const byte = this.buffer[this.offset++];
+   230→
+   231→    if (byte & 0x80) {
+   232→      const numBytes = byte & 0x7F;
+   233→      if (numBytes > 4) throw new Error(`Length too long: ${numBytes} bytes`);
+   234→      
+   235→      if (this.remaining < numBytes) throw new Error('Insufficient data for length');
+   236→      
+   237→      let length = 0;
+   238→      for (let i = 0; i < numBytes; i++) {
+   239→        length = (length << 8) | this.buffer[this.offset++];
+   240→      }
+   241→      return length;
+   242→    }
+   243→
+   244→    return byte;
+   245→  }
+   246→
+   247→  readBytes(length: number): Buffer {
+   248→    if (this.remaining < length) throw new Error(`Insufficient data: need ${length}, have ${this.remaining}`);
+   249→    const result = this.buffer.slice(this.offset, this.offset + length);
+   250→    this.offset += length;
+   251→    return result;
+   252→  }
+   253→
+   254→  readOctetString(length: number): string {
+   255→    return this.readBytes(length).toString('hex').toUpperCase();
+   256→  }
+   257→
+   258→  readInteger(): number {
+   259→    const { length } = this.decodeTag();
+   260→    const bytes = this.readBytes(length);
+   261→    
+   262→    let value = 0;
+   263→    for (const byte of bytes) {
+   264→      value = (value << 8) | byte;
+   265→    }
+   266→    
+   267→    // Handle negative numbers (two's complement)
+   268→    if (bytes.length > 0 && (bytes[0] & 0x80)) {
+   269→      value -= (1 << (bytes.length * 8));
+   270→    }
+   271→    
+   272→    return value;
+   273→  }
+   274→
+   275→  readString(length: number): string {
+   276→    const bytes = this.readBytes(length);
+   277→    // Try to decode as ASCII/UTF-8
+   278→    try {
+   279→      return bytes.toString('utf-8');
+   280→    } catch {
+   281→      return bytes.toString('latin1');
+   282→    }
+   283→  }
+   284→
+   285→  skip(length: number): void {
+   286→    this.offset += length;
+   287→  }
+   288→
+   289→  peek(): number {
+   290→    return this.buffer[this.offset];
+   291→  }
+   292→}
+   293→
+   294→/**
+   295→ * Decode BCD-encoded digits from buffer
+   296→ */
+   297→function decodeBCDDigits(buffer: Buffer): string {
+   298→  let digits = '';
+   299→  for (const byte of buffer) {
+   300→    const lowNibble = byte & 0x0F;
+   301→    const highNibble = (byte >> 4) & 0x0F;
+   302→    
+   303→    if (lowNibble <= 9) digits += lowNibble.toString();
+   304→    if (highNibble <= 9) digits += highNibble.toString();
+   305→  }
+   306→  return digits;
+   307→}
+   308→
+   309→/**
+   310→ * Encode address string to/from TBCD format
+   311→ */
+   312→function decodeTBCDString(buffer: Buffer): string {
+   313→  let digits = '';
+   314→  for (let i = 0; i < buffer.length; i++) {
+   315→    const byte = buffer[i];
+   316→    const lowNibble = byte & 0x0F;
+   317→    const highNibble = (byte >> 4) & 0x0F;
+   318→    
+   319→    // Low nibble first in TBCD
+   320→    switch (lowNibble) {
+   321→      case 0x0A: digits += '*'; break;
+   322→      case 0x0B: digits += '#'; break;
+   323→      case 0x0C: digits += 'a'; break;
+   324→      case 0x0D: digits += 'b'; break;
+   325→      case 0x0E: digits += 'c'; break;
+   326→      default:
+   327→        if (lowNibble <= 9) digits += lowNibble.toString();
+   328→    }
+   329→    
+   330→    // High nibble second
+   331→    switch (highNibble) {
+   332→      case 0x0A: digits += '*'; break;
+   333→      case 0x0B: digits += '#'; break;
+   334→      case 0x0C: digits += 'a'; break;
+   335→      case 0x0D: digits += 'b'; break;
+   336→      case 0x0E: digits += 'c'; break;
+   337→      default:
+   338→        if (highNibble <= 9) digits += highNibble.toString();
+   339→    }
+   340→  }
+   341→  return digits;
+   342→}
+   343→
+   344→// ============================================================
+   345→// MAIN SS7 DECODER CLASS
+   346→// ============================================================
+   347→
+   348→export class SS7Decoder {
+   349→  private debugMode: boolean;
+   350→
+   351→  constructor(debug: boolean = false) {
+   352→    this.debugMode = debug;
+   353→  }
+   354→
+   355→  /**
+   356→   * Main entry point for decoding an SS7 message
+   357→   */
+   358→  decode(rawData: Buffer | string, options?: {
+   359→    assumedProtocol?: SS7ProtocolLayer;
+   360→    opc?: number;
+   361→    dpc?: number;
+   362→    direction?: 'inbound' | 'outbound';
+   363→  }): DecodeResult<SS7Message> {
+   364→    try {
+   365→      // Convert hex string to buffer if needed
+   366→      const buffer = typeof rawData === 'string' ? hexToBuffer(rawData) : rawData;
+   367→      
+   368→      if (buffer.length === 0) {
+   369→        return { success: false, error: 'Empty input data' };
+   370→      }
+   371→
+   372→      // Auto-detect or use specified protocol
+   373→      const protocol = options?.assumedProtocol || this.detectProtocol(buffer);
+   374→      
+   375→      this.log(`Detected protocol: ${protocol}`);
+   376→      
+   377→      switch (protocol) {
+   378→        case SS7ProtocolLayer.SCTP:
+   379→          return this.decodeSCTP(buffer, options);
+   380→        case SS7ProtocolLayer.M3UA:
+   381→          return this.decodeM3UA(buffer, options);
+   382→        case SS7ProtocolLayer.SCCP:
+   383→          return this.decodeSCCP(buffer, options);
+   384→        case SS7ProtocolLayer.TCAP:
+   385→          return this.decodeTCAP(buffer, options);
+   386→        case SS7ProtocolLayer.MAP:
+   387→          return this.decodeMAP(buffer, options);
+   388→        case SS7ProtocolLayer.CAP:
+   389→          return this.decodeCAP(buffer, options);
+   390→        case SS7ProtocolLayer.ISUP:
+   391→          return this.decodeISUP(buffer, options);
+   392→        default:
+   393→          return this.decodeRaw(buffer, options);
+   394→      }
+   395→    } catch (error) {
+   396→      return {
+   397→        success: false,
+   398→        error: `Decode failed: ${error instanceof Error ? error.message : 'Unknown error'}`,
+   399→      };
+   400→    }
+   401→  }
+   402→
+   403→  /**
+   404→   * Attempt to detect the protocol from raw bytes
+   405→   */
+   406→  private detectProtocol(buffer: Buffer): SS7ProtocolLayer {
+   407→    if (buffer.length < 4) return SS7ProtocolLayer.MTP3;
+   408→
+   409→    // Check SCTP signature
+   410→    if (buffer[0] >= 0x00 && buffer[0] <= 0x84 && buffer.length >= 12) {
+   411→      // Could be SCTP chunk
+   412→      const chunkType = buffer[0];
+   413→      if (Object.values(SCTPChunkType).includes(chunkType as SCTPChunkType)) {
+   414→        return SS7ProtocolLayer.SCTP;
+   415→      }
+   416→    }
+   417→
+   418→    // Check M3UA header (Version=2, Class, Type)
+   419→    if (buffer[0] === 0x02 || buffer[0] === 0x03) {
+   420→      const m3uaClass = buffer[1];
+   421→      if (m3uaClass >= 0 && m3uaClass <= 5) {
+   422→        return SS7ProtocolLayer.M3UA;
+   423→      }
+   424→    }
+   425→
+   426→    // Check SCCP message type
+   427→    const potentialSCCPMsgType = buffer[0];
+   428→    if (Object.values(SCCPMessageType).includes(potentialSCCPMsgType as SCCPMessageType)) {
+   429→      return SS7ProtocolLayer.SCCP;
+   430→    }
+   431→
+   432→    // Check TCAP tag (typically starts with 0x60-0x68)
+   433→    if ((buffer[0] >= 0x60 && buffer[0] <= 0x68) || buffer[0] === 0x61) {
+   434→      return SS7ProtocolLayer.TCAP;
+   435→    }
+   436→
+   437→    // Default to MTP3/ISUP
+   438→    return SS7ProtocolLayer.ISUP;
+   439→  }
+   440→
+   441→  // ============================================================
+   442→  // SCTP DECODING
+   443→  // ============================================================
+   444→
+   445→  private decodeSCTP(buffer: Buffer, options?: any): DecodeResult<SS7Message> {
+   446→    const result: SS7Message = {
+   447→      id: generateMessageId(),
+   448→      timestamp: new Date(),
+   449→      protocol: SS7ProtocolLayer.SCTP,
+   450→      direction: options?.direction || 'inbound',
+   451→      rawData: buffer,
+   452→      hexDump: hexDump(buffer),
+   453→      packetLength: buffer.length,
+   454→    };
+   455→
+   456→    try {
+   457→      const decoder = new BERDecoder(buffer);
+   458→      
+   459→      // SCTP Common Header (16 bytes)
+   460→      const srcPort = decoder.readBytes(2).readUInt16BE(0);
+   461→      const dstPort = decoder.readBytes(2).readUInt16BE(0);
+   462→      const verificationTag = decoder.readBytes(4).readUInt32BE(0);
+   463→      const checksum = decoder.readBytes(4).readUInt32BE(0);
+   464→
+   465→      result.sourcePort = srcPort;
+   466→      result.destPort = dstPort;
+   467→      result.decodedFields = {
+   468→        sourcePort: srcPort,
+   469→        destPort: dstPort,
+   470→        verificationTag: `0x${verificationTag.toString(16).toUpperCase()}`,
+   471→        checksum: `0x${checksum.toString(16).toUpperCase()}`,
+   472→        chunks: [],
+   473→      };
+   474→
+   475→      // Parse chunks
+   476→      while (decoder.remaining > 0) {
+   477→        const chunkStart = decoder.position;
+   478→        
+   479→        if (decoder.remaining < 4) break;
+   480→        
+   481→        const chunkType = decoder.buffer[decoder.position];
+   482→        const chunkLength = decoder.buffer.slice(decoder.position + 2, decoder.position + 4).readUInt16BE(0);
+   483→        
+   484→        const chunkTypeName = SCTP_CHUNK_NAMES[chunkType as SCTPChunkType] || `Unknown (${chunkType})`;
+   485→        
+   486→        const chunkInfo: Record<string, any> = {
+   487→          type: chunkTypeName,
+   488→          typeCode: chunkType,
+   489→          length: chunkLength,
+   490→        };
+   491→
+   492→        // Parse specific chunk types
+   493→        switch (chunkType) {
+   494→          case SCTPChunkType.DATA:
+   495→            if (decoder.remaining >= 17) {
+   496→              decoder.skip(1); // Type
+   497→              decoder.skip(2); // Length
+   498→              const flags = decoder.buffer[decoder.position];
+   499→              const tsn = decoder.readBytes(4).readUInt32BE(0);
+   500→              const sid = decoder.readBytes(2).readUInt16BE(0);
+   501→              const ssn = decoder.readBytes(2).readUInt16BE(0);
+   502→              const ppi = decoder.readBytes(4).readUInt32BE(0);
+   503→              
+   504→              chunkInfo.data = {
+   505→                flags,
+   506→                tsn,
+   507→                streamId: sid,
+   508→                streamSeqNum: ssn,
+   509→                payloadProtocolId: ppi,
+   510→                payloadSize: chunkLength - 17,
+   511→              };
+   512→            }
+   513→            break;
+   514→
+   515→          case SCTPChunkType.INIT:
+   516→            if (decoder.remaining >= 20) {
+   517→              decoder.skip(3); // Type + Length
+   518→              const initTag = decoder.readBytes(4).readUInt32BE(0);
+   519→              const aRwnd = decoder.readBytes(4).readUInt32BE(0);
+   520→              const numOutbound = decoder.readBytes(2).readUInt16BE(0);
+   521→              const numInbound = decoder.readBytes(2).readUInt16BE(0);
+   522→              
+   523→              chunkInfo.init = {
+   524→                initTag: `0x${initTag.toString(16)}`,
+   525→                aRwnd,
+   526→                numOutboundStreams: numOutbound,
+   527→                numInboundStreams: numInbound,
+   528→              };
+   529→            }
+   530→            break;
+   531→
+   532→          case SCTPChunkType.HEARTBEAT:
+   533→            // Heartbeat with optional parameter
+   534→            break;
+   535→        }
+   536→
+   537→        (result.decodedFields.chunks as Record<string, any>[]).push(chunkInfo);
+   538→        
+   539→        // Move to next chunk (pad to 4-byte boundary)
+   540→        const paddedLength = Math.ceil(chunkLength / 4) * 4;
+   541→        decoder.position = chunkStart + paddedLength;
+   542→      }
+   543→
+   544→      return { success: true, data: result };
+   545→    } catch (error) {
+   546→      return { success: true, data: result, warnings: [`SCTP parse warning: ${error}`] };
+   547→    }
+   548→  }
+   549→
+   550→  // ============================================================
+   551→  // M3UA DECODING
+   552→  // ============================================================
+   553→
+   554→  private decodeM3UA(buffer: Buffer, options?: any): DecodeResult<SS7Message> {
+   555→    const result: SS7Message = {
+   556→      id: generateMessageId(),
+   557→      timestamp: new Date(),
+   558→      protocol: SS7ProtocolLayer.M3UA,
+   559→      direction: options?.direction || 'inbound',
+   560→      rawData: buffer,
+   561→      hexDump: hexDump(buffer),
+   562→      packetLength: buffer.length,
+   563→    };
+   564→
+   565→    try {
+   566→      // M3UA Common Header (8 bytes)
+   567→      if (buffer.length < 8) {
+   568→        return { success: false, error: 'Buffer too short for M3UA' };
+   569→      }
+   570→
+   571→      const version = buffer[0];           // Should be 2 or 3
+   572→      const m3uaClass = buffer[1];         // Message Class
+   573→      const m3uaType = buffer[2];          // Message Type
+   574→      const m3uaLength = buffer.slice(6, 8).readUInt32BE(0); // Actually 4-byte length at offset 4
+   575→
+   576→      const msgName = M3UA_MESSAGE_NAMES[m3uaType as M3UAMessageType] || `Unknown (${m3uaType})`;
+   577→
+   578→      result.decodedFields = {
+   579→        version,
+   580→        class: m3uaClass,
+   581→        className: this.getM3UAClassName(m3uaClass),
+   582→        type: m3uaType,
+   583→        typeName: msgName,
+   584→        length: m3uaLength,
+   585→      };
+   586→
+   587→      // Parse based on message class/type
+   588→      if (m3uaClass === 1 && m3uaType === 1) {
+   589→        // TRANSFER - contains MTP3 routing label + payload
+   590→        this.parseM3UATransfer(result, buffer.slice(8));
+   591→      }
+   592→
+   593→      return { success: true, data: result };
+   594→    } catch (error) {
+   595→      return { success: false, error: `M3UA decode error: ${error}`, data: result };
+   596→    }
+   597→  }
+   598→
+   599→  private getM3UAClassName(classCode: number): string {
+   600→    switch (classCode) {
+   601→      case 0: return 'Message Transfer (MMT)';
+   602→      case 1: return 'SS7 Signaling Network Management (SSNM)';
+   603→      case 2: return 'ASP State Maintenance (ASPSM)';
+   604→      case 3: return 'ASP Traffic Maintenance (ASPTM)';
+   605→      case 4: return 'Routing Key Management (RKM)';
+   606→      case 5: return 'Reserved for IETF';
+   607→      default: return `Unknown (${classCode})`;
+   608→    }
+   609→  }
+   610→
+   611→  private parseM3UATransfer(result: SS7Message, payload: Buffer): void {
+   612→    if (payload.length < 11) return;
+   613→
+   614→    // Protocol Data (Tag=0x0100)
+   615→    // Routing Label (7 bytes)
+   616→    const opcRaw = payload.slice(0, 2).readUInt16BE(0);
+   617→    const dpcRaw = payload.slice(2, 4).readUInt16BE(0);
+   618→    const sls = payload[4];
+   619→    const slc = payload[5];
+   620→    const ni_ni = payload[6]; // Network Indicator
+   621→    
+   622→    result.opc = parsePointCode(opcRaw, PointCodeFormat.ITU_14BIT);
+   623→    result.dpc = parsePointCode(dpcRaw, PointCodeFormat.ITU_14BIT);
+   624→    result.sls = sls;
+   625→    result.slc = slc;
+   626→
+   627→    // SIO (Service Information Octet)
+   628→    const sio = payload[7];
+   629→    const serviceIndicator = sio & 0x0F;
+   630→    const priority = (sio >> 4) & 0x03;
+   631→    const networkIndicator = (sio >> 6) & 0x03;
+   632→
+   633→    result.decodedFields!.routingLabel = {
+   634→      opc: result.opc.display,
+   635→      dpc: result.dpc.display,
+   636→      sls,
+   637→      slc,
+   638→      serviceIndicator: this.getSIName(serviceIndicator),
+   639→      priority,
+   640→      networkIndicator: ['international', 'spare', 'national', 'reserved'][networkIndicator],
+   641→    };
+   642→
+   643→    // The rest is the actual payload (SCCP, ISUP, etc.)
+   644→    const userPart = payload.slice(8);
+   645→    result.decodedFields!.payloadSize = userPart.length;
+   646→    result.decodedFields!.payloadHex = bufferToHex(userPart);
+   647→  }
+   648→
+   649→  private getSIName(si: number): string {
+   650→    switch (si) {
+   651→      case 0: return 'Signaling Network Management';
+   652→      case 1: return 'Signaling Network Testing/Maintenance';
+   653→      case 2: return 'SCCP';
+   654→      case 3: return 'TUP';
+   655→      case 4: return 'ISUP';
+   656→      case 5: return 'Duplex';
+   657→      case 6: return 'MSC/TUP';
+   658→      case 7: return 'DUP (Reserved)';
+   659→      case 8: return 'B-ISUP';
+   660→      case 9: return 'Satellite ISUP';
+   661→      case 10: return 'Broadband ISUP';
+   662→      case 11: return 'SS7 Signaling Test';
+   663→      case 12: return 'AAL Type 2 Signaling';
+   664→      case 13: return 'BICC';
+   665→      case 14: return 'Gateway Control';
+   666→      case 15: return 'Reserved';
+   667→      default: return `Unknown (${si})`;
+   668→    }
+   669→  }
+   670→
+   671→  // ============================================================
+   672→  // SCCP DECODING
+   673→  // ============================================================
+   674→
+   675→  decodeSCCP(buffer: Buffer, options?: any): DecodeResult<DecodedSCCPMessage> {
+   676→    const result: DecodedSCCPMessage = {
+   677→      id: generateMessageId(),
+   678→      timestamp: new Date(),
+   679→      protocol: SS7ProtocolLayer.SCCP,
+   680→      direction: options?.direction || 'inbound',
+   681→      opc: options?.opc ? parsePointCode(options.opc) : parsePointCode(0),
+   682→      dpc: options?.dpc ? parsePointCode(options.dpc) : parsePointCode(0),
+   683→      rawData: buffer,
+   684→      hexDump: hexDump(buffer),
+   685→      packetLength: buffer.length,
+   686→    };
+   687→
+   688→    try {
+   689→      const decoder = new BERDecoder(buffer);
+   690→      
+   691→      // Message Type (first octet)
+   692→      const msgTypeByte = decoder.readBytes(1)[0];
+   693→      result.messageType = msgTypeByte as SCCPMessageType;
+   694→      result.messageName = SCCP_MESSAGE_NAMES[msgTypeByte as SCCPMessageType] || `Unknown (${msgTypeByte})`;
+   695→
+   696→      result.decodedFields = {
+   697→        messageType: result.messageType,
+   698→        messageName: result.messageName,
+   699→      };
+   700→
+   701→      // Parse based on message type
+   702→      switch (result.messageType) {
+   703→        case SCCPMessageType.UDT:   // Unitdata - most common for mobile
+   704→        case SCCPMessageType.XUDT:  // Extended Unitdata
+   705→        case SCCPMessageType.LUDT:  // Long Unitdata
+   706→          this.parseSCCPUnitdata(decoder, result);
+   707→          break;
+   708→          
+   709→        case SCCPMessageType.CR:    // Connection Request
+   710→        case SCCPMessageType.CC:    // Connection Confirm
+   711→          this.parseSCCPConnection(decoder, result);
+   712→          break;
+   713→          
+   714→        case SCCPMessageType.DT1:   // Data Form 1
+   715→        case SCCPMessageType.DT2:   // Data Form 2
+   716→          this.parseSCCPData(decoder, result);
+   717→          break;
+   718→          
+   719→        default:
+   720→          // Skip remaining parsing for unknown types
+   721→          break;
+   722→      }
+   723→
+   724→      return { success: true, data: result };
+   725→    } catch (error) {
+   726→      return { success: false, error: `SCCP decode error: ${error}`, data: result };
+   727→    }
+   728→  }
+   729→
+   730→  private parseSCCPUnitdata(decoder: BERDecoder, result: DecodedSCCPMessage): void {
+   731→    // UDT fixed part
+   732→    if (decoder.remaining < 3) return;
+   733→
+   734→    const classAndHandling = decoder.readBytes(1)[0];
+   735→    const pointerCalledAddr = decoder.readBytes(1)[0];
+   736→    const pointerCallingAddr = decoder.readBytes(1)[0];
+   737→    const pointerData = decoder.readBytes(1)[0];
+   738→
+   739→    result.decodedFields!.messageClass = (classAndHandling >> 4) & 0x03;
+   740→    result.decodedFields!.handling = classAndHandling & 0x0F;
+   741→
+   742→    // Called Party Address (at pointer position)
+   743→    const currentPos = decoder.position;
+   744→    decoder.position = pointerCalledAddr - 1; // Adjust for 0-based indexing
+   745→    result.sccp = {
+   746→      ...result.sccp!,
+   747→      messageType: result.messageType,
+   748→      destinationGlobalTitle: this.parseSCCPAddress(decoder),
+   749→    };
+   750→    result.decodedFields!.calledPartyAddress = result.sccp.destinationGlobalTitle;
+   751→
+   752→    // Calling Party Address
+   753→    decoder.position = pointerCallingAddr - 1;
+   754→    result.sccp = {
+   755→      ...result.sccp!,
+   756→      sourceGlobalTitle: this.parseSCCPAddress(decoder),
+   757→    };
+   758→    result.decodedFields!.callingPartyAddress = result.sccp.sourceGlobalTitle;
+   759→
+   760→    // Data (at pointer position)
+   761→    decoder.position = pointerData - 1;
+   762→    const dataLength = decoder.remaining;
+   763→    const data = decoder.readBytes(dataLength);
+   764→    
+   765→    result.decodedFields!.dataLength = dataLength;
+   766→    result.decodedFields!.dataHex = bufferToHex(data);
+   767→
+   768→    // Try to decode inner protocol (usually TCAP)
+   769→    if (dataLength > 0) {
+   770→      result.decodedFields!.innerProtocol = this.detectInnerProtocol(data);
+   771→    }
+   772→  }
+   773→
+   774→  private parseSCCPConnection(decoder: BERDecoder, result: DecodedSCCPMessage): void {
+   775→    // CR/CC have slightly different structure
+   776→    if (decoder.remaining < 1) return;
+   777→
+   778→    const sourceLocalRef = decoder.readBytes(3); // Variable length
+   779→    result.decodedFields!.sourceLocalRef = bufferToHex(sourceLocalRef);
+   780→
+   781→    if (decoder.remaining >= 3) {
+   782→      const destLocalRef = decoder.readBytes(3);
+   783→      result.decodedFields!.destLocalRef = bufferToHex(destLocalRef);
+   784→    }
+   785→
+   786→    // Parse optional addresses if present
+   787→    if (decoder.remaining > 0) {
+   788→      result.sccp = {
+   789→        ...result.sccp!,
+   790→        messageType: result.messageType,
+   791→        sourceGlobalTitle: this.parseSCCPAddress(decoder),
+   792→      };
+   793→    }
+   794→  }
+   795→
+   796→  private parseSCCPData(decoder: BERDecoder, result: DecodedSCCPMessage): void {
+   797→    // DT1/DT2 contain just local reference and data
+   798→    if (decoder.remaining < 1) return;
+   799→
+   800→    const localRef = decoder.readBytes(3);
+   801→    result.decodedFields!.localRef = bufferToHex(localRef);
+   802→
+   803→    if (decoder.remaining > 0) {
+   804→      const data = decoder.readBytes(decoder.remaining);
+   805→      result.decodedFields!.dataHex = bufferToHex(data);
+   806→    }
+   807→  }
+   808→
+   809→  private parseSCCPAddress(decoder: BERDecoder): GlobalTitle | undefined {
+   810→    if (decoder.remaining < 2) return undefined;
+   811→
+   812→    const addrHeader = decoder.readBytes(1)[0];
+   813→    const addrLength = decoder.readBytes(1)[0];
+   814→
+   815→    if (addrLength === 0 || decoder.remaining < addrLength) return undefined;
+   816→
+   817→    const addrData = decoder.readBytes(addrLength);
+   818→
+   819→    // Parse address indicators
+   820→    const pointCodeIndicator = (addrHeader >> 7) & 0x01;
+   821→    const ssnIndicator = (addrHeader >> 6) & 0x01;
+   822→    const gtIndicator = (addrHeader >> 5) & 0x01;
+   823→    const gtTranslationType = addrHeader & 0x1F;
+   824→
+   825→    let offset = 0;
+   826→    let globalTitle: GlobalTitle | undefined;
+   827→    let ssn: SubsystemNumber | undefined;
+   828→
+   829→    // Point Code (if present)
+   830→    if (pointCodeIndicator && offset + 2 <= addrData.length) {
+   831→      const pcRaw = addrData.slice(offset, offset + 2).readUInt16BE(0);
+   832→      offset += 2;
+   833→    }
+   834→
+   835→    // Subsystem Number (if present)
+   836→    if (ssnIndicator && offset < addrData.length) {
+   837→      ssn = addrData[offset++] as SubsystemNumber;
+   838→    }
+   839→
+   840→    // Global Title (if present)
+   841→    if (gtIndicator && offset < addrData.length) {
+   842→      const gtEncodingScheme = (addrData[offset] >> 4) & 0x07;
+   843→      const numberingPlan = addrData[offset] & 0x0F;
+   844→      offset++;
+   845→
+   846→      if (offset < addrData.length) {
+   847→        const natureOfAddr = (addrData[offset] >> 4) & 0x07;
+   848→        const digitsLength = addrData[offset] & 0x0F;
+   849→        offset++;
+   850→
+   851→        if (offset + digitsLength <= addrData.length) {
+   852→          const digits = decodeTBCDString(addrData.slice(offset, offset + digitsLength));
+   853→          
+   854→          globalTitle = {
+   855→            type: numberingPlan === 1 ? GlobalTitleType.E164 :
+   856→                   numberingPlan === 6 ? GlobalTitleType.E212 :
+   857→                   numberingPlan === 7 ? GlobalTitleType.E214 :
+   858→                   GlobalTitleType.E164,
+   859→            translationType: gtTranslationType,
+   860→            numberingPlan,
+   861→            encodingScheme: gtEncodingScheme,
+   862→            natureOfAddressIndicator: natureOfAddr,
+   863→            digits,
+   864→            masked: maskMSISDN(digits.startsWith('213') ? '+' + digits : digits),
+   865→          };
+   866→        }
+   867→      }
+   868→    }
+   869→
+   870→    if (globalTitle) {
+   871→      globalTitle.destinationSSN = ssn;
+   872→    }
+   873→
+   874→    return globalTitle;
+   875→  }
+   876→
+   877→  private detectInnerProtocol(data: Buffer): string {
+   878→    if (data.length < 2) return 'unknown';
+   879→    
+   880→    // TCAP tags are typically 0x60-0x68
+   881→    if (data[0] >= 0x60 && data[0] <= 0x68) return 'TCAP';
+   882→    
+   883→    // Could be other protocols
+   884→    return 'unknown';
+   885→  }
+   886→
+   887→  // ============================================================
+   888→  // TCAP DECODING
+   889→  // ============================================================
+   890→
+   891→  decodeTCAP(buffer: Buffer, options?: any): DecodeResult<DecodedTCAPMessage> {
+   892→    const result: DecodedTCAPMessage = {
+   893→      id: generateMessageId(),
+   894→      timestamp: new Date(),
+   895→      protocol: SS7ProtocolLayer.TCAP,
+   896→      direction: options?.direction || 'inbound',
+   897→      opc: options?.opc ? parsePointCode(options.opc) : parsePointCode(0),
+   898→      dpc: options?.dpc ? parsePointCode(options.dpc) : parsePointCode(0),
+   899→      rawData: buffer,
+   900→      hexDump: hexDump(buffer),
+   901→      packetLength: buffer.length,
+   902→      components: [],
+   903→    };
+   904→
+   905→    try {
+   906→      const decoder = new BERDecoder(buffer);
+   907→      
+   908→      // TCAP outer tag
+   909→      const outerTag = decoder.decodeTag();
+   910→      result.messageType = outerTag.tagNumber as TCAPMessageType;
+   911→      result.messageName = TCAP_MESSAGE_NAMES[result.messageType] || `Unknown (${outerTag.tagNumber})`;
+   912→
+   913→      result.decodedFields = {
+   914→        messageType: result.messageType,
+   915→        messageName: result.messageName,
+   916→      };
+   917→
+   918→      // Transaction portion
+   919→      if (decoder.remaining > 0) {
+   920→        const transTag = decoder.decodeTag();
+   921→        const transData = decoder.readBytes(transTag.length);
+   922→        
+   923→        // Originating Transaction ID (OTID)
+   924→        if (transData.length >= 4) {
+   925→          result.otid = transData.slice(0, 4).toString('hex').toUpperCase();
+   926→        }
+   927→        
+   928→        // Destination Transaction ID (DTID) - for some message types
+   929→        if (transData.length >= 8) {
+   930→          result.dtid = transData.slice(4, 8).toString('hex').toUpperCase();
+   931→        }
+   932→      }
+   933→
+   934→      result.decodedFields.otid = result.otid;
+   935→      result.decodedFields.dtid = result.dtid;
+   936→
+   937→      // Dialogue portion (optional)
+   938→      if (decoder.remaining > 0) {
+   939→        const savedPos = decoder.position;
+   940→        try {
+   941→          const dlgTag = decoder.decodeTag();
+   942→          if (dlgTag.tagClass === 1 && dlgTag.constructed) {
+   943→            result.dialoguePortion = this.parseDialoguePortion(decoder, dlgTag.length);
+   944→          } else {
+   945→            decoder.position = savedPos;
+   946→          }
+   947→        } catch {
+   948→          decoder.position = savedPos;
+   949→        }
+   950→      }
+   951→
+   952→      // Components portion
+   953→      if (decoder.remaining > 0) {
+   954→        const compTag = decoder.decodeTag();
+   955→        if (compTag.constructed) {
+   956→          result.components = this.parseComponents(decoder, compTag.length);
+   957→        }
+   958→      }
+   959→
+   960→      result.decodedFields.componentCount = result.components.length;
+   961→
+   962→      return { success: true, data: result };
+   963→    } catch (error) {
+   964→      return { success: false, error: `TCAP decode error: ${error}`, data: result };
+   965→    }
+   966→  }
+   967→
+   968→  private parseDialoguePortion(decoder: BERDecoder, length: number): DialoguePortion {
+   969→    const result: DialoguePortion = {};
+   970→    const endPos = decoder.position + length;
+   971→
+   972→    while (decoder.position < endPos) {
+   973→      const tag = decoder.decodeTag();
+   974→      
+   975→      if (tag.tagNumber === 0x06) { // OID
+   976→        const oid = decoder.readBytes(tag.length);
+   977→        result.applicationContextName = this.formatOID(oid);
+   978→      } else if (tag.constructed && tag.length > 0) {
+   979→        // User information or other complex field
+   980→        decoder.skip(tag.length);
+   981→      } else {
+   982→        decoder.skip(tag.length);
+   983→      }
+   984→    }
+   985→
+   986→    return result;
+   987→  }
+   988→
+   989→  private formatOID(oid: Buffer): string {
+   990→    const components: number[] = [];
+   991→    let value = 0;
+   992→    
+   993→    for (let i = 0; i < oid.length; i++) {
+   994→      const byte = oid[i];
+   995→      value = (value << 7) | (byte & 0x7F);
+   996→      if (!(byte & 0x80)) {
+   997→        components.push(value);
+   998→        value = 0;
+   999→      }
+  1000→    }
+  1001→
+  1002→    // Well-known OIDs
+  1003→    const oidStr = components.join('.');
+  1004→    const knownOIDs: Record<string, string> = {
+  1005→      '0.4.0.0.1.0.1.1': 'map-ac (MAP v1)',
+  1006→      '0.4.0.0.1.0.1.2': 'map-ac (MAP v2)',
+  1007→      '0.4.0.0.1.0.1.3': 'map-ac (MAP v3)',
+  1008→      '0.4.0.0.1.0.19.2': 'cap-ac (CAP v2)',
+  1009→      '0.4.0.0.1.0.24.3': 'cap-ac (CAP v3)',
+  1010→      '0.4.0.0.1.0.20.2': 'IN-CSE-ac',
+  1011→      '0.17.134.1': 'Remote Operations',
+  1012→    };
+  1013→
+  1014→    return knownOIDs[oidStr] || oidStr;
+  1015→  }
+  1016→
+  1017→  private parseComponents(decoder: BERDecoder, length: number): TCAPComponent[] {
+  1018→    const components: TCAPComponent[] = [];
+  1019→    const endPos = decoder.position + length;
+  1020→
+  1021→    while (decoder.position < endPos) {
+  1022→      try {
+  1023→        const compTag = decoder.decodeTag();
+  1024→        const component = this.parseComponent(decoder, compTag);
+  1025→        components.push(component);
+  1026→      } catch {
+  1027→        // Skip malformed component
+  1028→        break;
+  1029→      }
+  1030→    }
+  1031→
+  1032→    return components;
+  1033→  }
+  1034→
+  1035→  private parseComponent(decoder: BERDecoder, tag: any): TCAPComponent {
+  1036→    const component: TCAPComponent = {
+  1037→      type: tag.tagNumber as ComponentType,
+  1038→    };
+  1039→
+  1040→    switch (component.type) {
+  1041→      case ComponentType.INVOKE:
+  1042→        component.invokeId = this.decodeInvokeId(decoder);
+  1043→        component.operationCode = this.decodeOperationCode(decoder);
+  1044→        component.operationName = this.getOperationName(component.operationCode);
+  1045→        component.parameters = this.decodeParameters(decoder);
+  1046→        break;
+  1047→
+  1048→      case ComponentType.RETURN_RESULT_LAST:
+  1049→      case ComponentType.RETURN_RESULT_NOT_LAST:
+  1050→        component.invokeId = this.decodeInvokeId(decoder);
+  1051→        // Skip result marker
+  1052→        if (decoder.peek() === 0x02) {
+  1053→          decoder.decodeTag(); // Result tag
+  1054→          decoder.readBytes(decoder.decodeTag().length);
+  1055→        }
+  1056→        component.parameters = this.decodeParameters(decoder);
+  1057→        break;
+  1058→
+  1059→      case ComponentType.RETURN_ERROR:
+  1060→        component.invokeId = this.decodeInvokeId(decoder);
+  1061→        component.error = this.decodeError(decoder);
+  1062→        break;
+  1063→
+  1064→      case ComponentType.REJECT:
+  1065→        component.invokeId = this.decodeInvokeId(decoder);
+  1066→        component.problem = this.decodeProblem(decoder);
+  1067→        component.rejectReason = this.getRejectReason(component.problem);
+  1068→        break;
+  1069→    }
+  1070→
+  1071→    return component;
+  1072→  }
+  1073→
+  1074→  private decodeInvokeId(decoder: BERDecoder): number {
+  1075→    const tag = decoder.decodeTag();
+  1076→    if (tag.tagNumber === 0x02) { // INTEGER
+  1077→      return decoder.readInteger();
+  1078→    }
+  1079→    return 0;
+  1080→  }
+  1081→
+  1082→  private decodeOperationCode(decoder: BERDecoder): number {
+  1083→    const tag = decoder.decodeTag();
+  1084→    if (tag.tagNumber === 0x02) { // Local integer form
+  1085→      return decoder.readInteger();
+  1086→    } else if (tag.tagNumber === 0x06) { // OID form
+  1087→      const oid = decoder.readBytes(tag.length);
+  1088→      // Extract last component as operation code
+  1089→      const oidStr = oid.toString('.');
+  1090→      const parts = oidStr.split('.').map(Number);
+  1091→      return parts[parts.length - 1] || 0;
+  1092→    }
+  1093→    return 0;
+  1094→  }
+  1095→
+  1096→  private getOperationName(code: number): string {
+  1097→    // Check both MAP and CAP operations
+  1098→    return MAP_OPERATION_NAMES[code as MAPOperationCode] ||
+  1099→           CAP_OPERATION_NAMES[code as CAPOperationCode] ||
+  1100→           `Operation(${code})`;
+  1101→  }
+  1102→
+  1103→  private decodeParameters(decoder: BERDecoder): any {
+  1104→    if (decoder.remaining === 0) return null;
+  1105→    
+  1106→    try {
+  1107→      const tag = decoder.decodeTag();
+  1108→      if (!tag.constructed) {
+  1109→        return decoder.readBytes(tag.length).toString('hex');
+  1110→      }
+  1111→      
+  1112→      // For SET/SEQUENCE, recursively decode
+  1113→      const params: Record<string, any> = {};
+  1114→      const endPos = decoder.position + tag.length;
+  1115→      
+  1116→      while (decoder.position < endPos) {
+  1117→        try {
+  1118→          const paramTag = decoder.decodeTag();
+  1119→          const paramName = `param_${paramTag.tagNumber}`;
+  1120→          
+  1121→          if (paramTag.constructed) {
+  1122→            params[paramName] = this.decodeParameters(decoder);
+  1123→          } else {
+  1124→            const data = decoder.readBytes(paramTag.length);
+  1125→            
+  1126→            // Try to interpret common types
+  1127→            if (paramTag.tagNumber === 0x04) { // OCTET STRING
+  1128→              params[paramName] = decodeTBCDString(data);
+  1129→            } else if (paramTag.tagNumber === 0x12) { // NumericString
+  1130→              params[paramName] = data.toString('ascii');
+  1131→            } else if (paramTag.tagNumber === 0x13) { // PrintableString
+  1132→              params[paramName] = data.toString('ascii');
+  1133→            } else {
+  1134→              params[paramName] = data.toString('hex').toUpperCase();
+  1135→            }
+  1136→          }
+  1137→        } catch {
+  1138→          break;
+  1139→        }
+  1140→      }
+  1141→      
+  1142→      return Object.keys(params).length > 0 ? params : null;
+  1143→    } catch {
+  1144→      return null;
+  1145→    }
+  1146→  }
+  1147→
+  1148→  private decodeError(decoder: BERDecoder): { code: number; name: string; parameters?: any } {
+  1149→    const tag = decoder.decodeTag();
+  1150→    const code = decoder.readInteger();
+  1151→    
+  1152→    // Known MAP/CAP errors
+  1153→    const errorNames: Record<number, string> = {
+  1154→      // MAP errors
+  1155→      34: 'unknownSubscriber',
+  1156→      35: 'unknownBaseStation',
+  1157→      36: 'unknownMSC',
+  1158→      37: 'unknownVLR',
+  1159→      38: 'unknownLMSI',
+  1160→      39: 'unknownLAI',
+  1161→      42: 'unexpectedDataValue',
+  1162→      43: 'dataMissing',
+  1163→      44: 'unknownAlphabet',
+  1164→      47: 'systemFailure',
+  1165→      48: 'dataMissing',
+  1166→      49: 'unexpectedDataValue',
+  1167→      50: 'facilityNotSupported',
+  1168→      51: 'unknownOrInvalidParameter',
+  1169→      53: 'resourceLimitation',
+  1170→      54: 'roamingNotAllowed',
+  1171→      55: 'positionMethodFailure',
+  1172→      56: 'illegalSubscriber',
+  1173→      57: 'illegalEquipment',
+  1174→      58: 'illegalME',
+  1175→      59: 'subscriberBusyForMT-SMS',
+  1176→      62: 'absentSubscriberSM',
+  1177→      64: 'success',
+  1178→      65: 'callBarred',
+  1179→      66: 'forwardingViolation',
+  1180→      67: 'cug-Reject',
+  1181→      70: 'subscriberBusyForMT-SMS',
+  1182→      71: 'absentSubscriber',
+  1183→      72: 'subscriptionViolation',
+  1184→      73: 'illegalSS-Operation',
+  1185→      74: 'SS-ErrorStatus',
+  1186→      75: 'SS-NotAvailable',
+  1187→      76: 'SS-SubscriptionViolation',
+  1188→      77: 'SS-Incompatibility',
+  1189→      78: 'FacilityNotSupported',
+  1190→      79: 'invalidTargetBaseStation',
+  1191→      80: 'noRadioResourceAvailable',
+  1192→      81: 'noRoamingNumberAvailable',
+  1193→      82: 'teardown',
+  1194→      83: 'callAttemptTerminated',
+  1195→      84: 'absentSubscriber',
+  1196→      85: 'operationNotAllowed',
+  1197→      86: 'shortTermDenial',
+  1198→      87: 'incompatibleTerminal',
+  1199→      88: 'resourceLimitation',
+  1200→      89: 'ATI-NotAllowed',
+  1201→      90: 'noGroupCallNumber',
+  1202→      91: 'encodingProblem',
+  1203→      92: 'rejectByUser',
+  1204→      93: 'rejectByNetwork',
+  1205→      94: 'lowerLayerFailure',
+  1206→      95: 'semanticError',
+  1207→      96: 'syntacticError',
+  1208→      97: 'invalidReceivedInfo',
+  1209→      98: 'missingMandatoryIE',
+  1210→      99: 'missingConditionalIE',
+  1211→      100: 'messageNotCompliantWithEncoder',
+  1212→      101: 'messageNotAcceptedForProtocolState',
+  1213→      102: 'timeExpiry',
+  1214→      103: 'unauthorizedRequestingNetwork',
+  1215→      104: 'unauthorizedRequestingLocation',
+  1216→      105: 'unauthorizedLCSClient',
+  1217→      106: 'positionMethodNotSupported',
+  1218→    };
+  1219→
+  1220→    return {
+  1221→      code,
+  1222→      name: errorNames[code] || `Error(${code})`,
+  1223→    };
+  1224→  }
+  1225→
+  1226→  private decodeProblem(decoder: BERDecoder): { type: ProblemType; code: number; description: string } {
+  1227→    const tag = decoder.decodeTag();
+  1228→    const problemType = tag.tagNumber as ProblemType;
+  1229→    const code = decoder.readInteger();
+  1230→
+  1231→    const descriptions: Record<string, Record<number, string>> = {
+  1232→      [ProblemType.GENERAL]: {
+  1233→        0: 'Unrecognized component',
+  1234→        1: 'Mistyped component',
+  1235→        2: 'Badly structured component',
+  1236→      },
+  1237→      [ProblemType.INVOKE]: {
+  1238→        1: 'Duplicate invocation',
+  1239→        2: 'Unrecognized operation',
+  1240→        3: 'Mistyped argument',
+  1241→        4: 'Resource limitation',
+  1242→        5: 'Initiator releasing',
+  1243→        6: 'Unrecognized linked ID',
+  1244→        7: 'Linked response unexpected',
+  1245→        8: 'Unexpected child operation',
+  1246→      },
+  1247→      [ProblemType.RETURN_RESULT]: {
+  1248→        0: 'Unrecognized invocation',
+  1249→        1: 'Return result unexpected',
+  1250→        2: 'Mistyped result',
+  1251→      },
+  1252→      [ProblemType.RETURN_ERROR]: {
+  1253→        0: 'Unrecognized invocation',
+  1254→        1: 'Return error unexpected',
+  1255→        2: 'Unrecognized error',
+  1256→        3: 'Unexpected error',
+  1257→        4: 'Mistyped error',
+  1258→      },
+  1259→    };
+  1260→
+  1261→    return {
+  1262→      type: problemType,
+  1263→      code,
+  1264→      description: descriptions[problemType]?.[code] || `Unknown problem ${code}`,
+  1265→    };
+  1266→  }
+  1267→
+  1268→  private getRejectReason(problem?: { type: ProblemType; code: number; description: string }): string {
+  1269→    if (!problem) return 'Unknown reason';
+  1270→    return `[${ProblemType[problem.type]}] ${problem.description}`;
+  1271→  }
+  1272→
+  1273→  // ============================================================
+  1274→  // MAP DECODING
+  1275→  // ============================================================
+  1276→
+  1277→  decodeMAP(buffer: Buffer, options?: any): DecodeResult<DecodedMAPMessage> {
+  1278→    // First decode as TCAP, then extract MAP-specific info
+  1279→    const tcapResult = this.decodeTCAP(buffer, options);
+  1280→    
+  1281→    if (!tcapResult.success || !tcapResult.data) {
+  1282→      return tcapResult as DecodeResult<DecodedMAPMessage>;
+  1283→    }
+  1284→
+  1285→    const tcap = tcapResult.data;
+  1286→    const result: DecodedMAPMessage = {
+  1287→      ...tcap,
+  1288→      protocol: SS7ProtocolLayer.MAP,
+  1289→      operation: MAPOperationCode.UPDATE_LOCATION, // Will be updated
+  1290→      operationName: '',
+  1291→      parameters: {},
+  1292→    };
+  1293→
+  1294→    // Extract MAP operation from TCAP components
+  1295→    if (tcap.components.length > 0) {
+  1296→      const invokeComp = tcap.components.find(c => c.type === ComponentType.INVOKE);
+  1297→      if (invokeComp) {
+  1298→        result.operation = (invokeComp.operationCode || 0) as MAPOperationCode;
+  1299→        result.operationName = MAP_OPERATION_NAMES[result.operation] || `Unknown(${result.operation})`;
+  1300→        result.invokeId = invokeComp.invokeId;
+  1301→        result.parameters = invokeComp.parameters || {};
+  1302→
+  1303→        // Extract subscriber info from parameters
+  1304→        this.extractMAPSubscribers(result, invokeComp.parameters);
+  1305→      }
+  1306→    }
+  1307→
+  1308→    return { success: true, data: result };
+  1309→  }
+  1310→
+  1311→  private extractMAPSubscribers(result: DecodedMAPMessage, params: any): void {
+  1312→    if (!params || typeof params !== 'object') return;
+  1313→
+  1314→    // Look for IMSI/MSISDN in various parameter names
+  1315→    for (const [key, value] of Object.entries(params)) {
+  1316→      if (typeof value === 'string') {
+  1317→        // IMSI is 15 digits starting with MCC
+  1318→        if (/^\d{15}$/.test(value) && value.startsWith('603')) {
+  1319→          result.sourceSubscriber = {
+  1320→            imsi: value,
+  1321→            msisdn: '', // Would need separate lookup
+  1322→            maskedIMSI: maskIMSI(value),
+  1323→            maskedMSISDN: '',
+  1324→          };
+  1325→        }
+  1326→        // MSISDN detection (Algerian numbers)
+  1327→        if (/^213\d{9}$/.test(value) || /^\+?213\d{9}$/.test(value)) {
+  1328→          const msisdn = value.startsWith('+') ? value : '+213' + value;
+  1329→          if (result.sourceSubscriber) {
+  1330→            result.sourceSubscriber.msisdn = msisdn;
+  1331→            result.sourceSubscriber.maskedMSISDN = maskMSISDN(msisdn);
+  1332→          } else {
+  1333→            result.sourceSubscriber = {
+  1334→              imsi: '',
+  1335→              msisdn,
+  1336→              maskedIMSI: '',
+  1337→              maskedMSISDN: maskMSISDN(msisdn),
+  1338→            };
+  1339→          }
+  1340→        }
+  1341→      }
+  1342→    }
+  1343→  }
+  1344→
+  1345→  // ============================================================
+  1346→  // CAP DECODING
+  1347→  // ============================================================
+  1348→
+  1349→  decodeCAP(buffer: Buffer, options?: any): DecodeResult<DecodedCAPMessage> {
+  1350→    // First decode as TCAP, then extract CAP-specific info
+  1351→    const tcapResult = this.decodeTCAP(buffer, options);
+  1352→    
+  1353→    if (!tcapResult.success || !tcapResult.data) {
+  1354→      return tcapResult as DecodeResult<DecodedCAPMessage>;
+  1355→    }
+  1356→
+  1357→    const tcap = tcapResult.data;
+  1358→    const result: DecodedCAPMessage = {
+  1359→      ...tcap,
+  1360→      protocol: SS7ProtocolLayer.CAP,
+  1361→      operation: CAPOperationCode.INITIAL_DP,
+  1362→      operationName: '',
+  1363→      parameters: {},
+  1364→    };
+  1365→
+  1366→    // Extract CAP operation from TCAP components
+  1367→    if (tcap.components.length > 0) {
+  1368→      const invokeComp = tcap.components.find(c => c.type === ComponentType.INVOKE);
+  1369→      if (invokeComp) {
+  1370→        result.operation = (invokeComp.operationCode || 0) as CAPOperationCode;
+  1371→        result.operationName = CAP_OPERATION_NAMES[result.operation] || `Unknown(${result.operation})`;
+  1372→        result.invokeId = invokeComp.invokeId;
+  1373→        result.parameters = invokeComp.parameters || {};
+  1374→
+  1375→        // Extract call party numbers
+  1376→        this.extractCAPNumbers(result, invokeComp.parameters);
+  1377→      }
+  1378→    }
+  1379→
+  1380→    return { success: true, data: result };
+  1381→  }
+  1382→
+  1383→  private extractCAPNumbers(result: DecodedCAPMessage, params: any): void {
+  1384→    if (!params || typeof params !== 'object') return;
+  1385→
+  1386→    // Look for calling/called party numbers
+  1387→    for (const [key, value] of Object.entries(params)) {
+  1388→      if (typeof value === 'string') {
+  1389→        const lowerKey = key.toLowerCase();
+  1390→        if (lowerKey.includes('calling') || lowerKey.includes('a_party')) {
+  1391→          result.callingNumber = value;
+  1392→        }
+  1393→        if (lowerKey.includes('called') || lowerKey.includes('b_party')) {
+  1394→          result.calledNumber = value;
+  1395→        }
+  1396→      }
+  1397→    }
+  1398→  }
+  1399→
+  1400→  // ============================================================
+  1401→  // ISUP DECODING
+  1402→  // ============================================================
+  1403→
+  1404→  decodeISUP(buffer: Buffer, options?: any): DecodeResult<DecodedISUPMessage> {
+  1405→    const result: DecodedISUPMessage = {
+  1406→      id: generateMessageId(),
+  1407→      timestamp: new Date(),
+  1408→      protocol: SS7ProtocolLayer.ISUP,
+  1409→      direction: options?.direction || 'inbound',
+  1410→      opc: options?.opc ? parsePointCode(options.opc) : parsePointCode(0),
+  1411→      dpc: options?.dpc ? parsePointCode(options.dpc) : parsePointCode(0),
+  1412→      rawData: buffer,
+  1413→      hexDump: hexDump(buffer),
+  1414→      packetLength: buffer.length,
+  1415→      message: ISUPMessageType.IAM,
+  1416→      messageName: '',
+  1417→      cic: 0,
+  1418→    };
+  1419→
+  1420→    try {
+  1421→      // ISUP message structure:
+  1422→      // Byte 0: Circuit Identification Code (CIC) - low bits
+  1423→      // Byte 1: CIC - high bits + Message Type
+  1424→      
+  1425→      if (buffer.length < 4) {
+  1426→        return { success: false, error: 'Buffer too short for ISUP', data: result };
+  1427→      }
+  1428→
+  1429→      const cicLow = buffer[0];
+  1430→      const cicHighAndMsgType = buffer[1];
+  1431→      const cic = cicLow | ((cicHighAndMsgType & 0x0F) << 8);
+  1432→      const msgType = (cicHighAndMsgType >> 4) & 0x0F;
+  1433→      
+  1434→      // Some implementations use different byte ordering
+  1435→      // Let's also check if byte 2 is the message type
+  1436→      const altMsgType = buffer[2];
+  1437→      
+  1438→      result.cic = cic;
+  1439→      result.message = (msgType > 0 && msgType <= 0x30) ? msgType as ISUPMessageType : 
+  1440→                       altMsgType as ISUPMessageType;
+  1441→      result.messageName = ISUP_MESSAGE_NAMES[result.message] || `Unknown ISUP(${result.message})`;
+  1442→
+  1443→      result.decodedFields = {
+  1444→        circuitIdentificationCode: cic,
+  1445→        messageType: result.message,
+  1446→        messageName: result.messageName,
+  1447→      };
+  1448→
+  1449→      // Parse mandatory fixed parameters based on message type
+  1450→      this.parseISUPMandatoryFixed(result, buffer.slice(3));
+  1451→
+  1452→      // Parse optional parameters
+  1453→      this.parseISUPOptional(result, buffer);
+  1454→
+  1455→      return { success: true, data: result };
+  1456→    } catch (error) {
+  1457→      return { success: false, error: `ISUP decode error: ${error}`, data: result };
+  1458→    }
+  1459→  }
+  1460→
+  1461→  private parseISUPMandatoryFixed(result: DecodedISUPMessage, buffer: Buffer): void {
+  1462→    let offset = 0;
+  1463→
+  1464→    switch (result.message) {
+  1465→      case ISUPMessageType.IAM: // Initial Address Message
+  1466→        if (buffer.length >= offset + 4) {
+  1467→          result.iams = {
+  1468→            natureOfConnection: buffer[offset++],
+  1469→            forwardCallIndicators: buffer[offset++],
+  1470→            callingPartyCategory: buffer[offset++],
+  1471→            transmissionMediumRequirement: buffer[offset++],
+  1472→          };
+  1473→        }
+  1474→        break;
+  1475→
+  1476→      case ISUPMessageType.ACM: // Address Complete
+  1477→        if (buffer.length >= offset + 1) {
+  1478→          result.decodedFields!.backwardCallIndicators = buffer[offset];
+  1479→        }
+  1480→        break;
+  1481→
+  1482→      case ISUPMessageType.ANM: // Answer
+  1483→        // No mandatory fixed parameters
+  1484→        break;
+  1485→
+  1486→      case ISUPMessageType.REL: // Release
+  1487→        if (buffer.length >= offset + 2) {
+  1488→          result.causeValue = buffer[offset + 1];
+  1489→          result.causeDescription = this.getCauseDescription(result.causeValue);
+  1490→          result.decodedFields!.causeIndicator = buffer[offset];
+  1491→        }
+  1492→        break;
+  1493→
+  1494→      case ISUPMessageType.RLC: // Release Complete
+  1495→        // No mandatory fixed parameters
+  1496→        break;
+  1497→    }
+  1498→  }
+  1499→
+  1500→  private parseISUPOptional(result: DecodedISUPMessage, buffer: Buffer): void {
+  1501→    // Find optional parameters pointer
+  1502→    // This varies by message type, but usually after mandatory fixed
+  1503→    let optPtr = 0;
+  1504→    
+  1505→    switch (result.message) {
+  1506→      case ISUPMessageType.IAM:
+  1507→        optPtr = buffer[7] || 0; // Optional pointer after fixed fields
+  1508→        break;
+  1509→      case ISUPMessageType.REL:
+  1510→        optPtr = buffer[3] || 0;
+  1511→        break;
+  1512→      default:
+  1513→        optPtr = buffer[buffer.length - 1] || 0;
+  1514→    }
+  1515→
+  1516→    if (optPtr >= buffer.length) return;
+  1517→
+  1518→    const optStart = optPtr;
+  1519→    const optLength = buffer[optStart];
+  1520→
+  1521→    if (optStart + optLength > buffer.length) return;
+  1522→
+  1523→    let offset = optStart + 1;
+  1524→    const endOpt = optStart + 1 + optLength;
+  1525→
+  1526→    while (offset < endOpt && offset < buffer.length) {
+  1527→      const paramType = buffer[offset++];
+  1528→      const paramLength = buffer[offset++];
+  1529→
+  1530→      if (offset + paramLength > buffer.length) break;
+  1531→
+  1532→      const paramData = buffer.slice(offset, offset + paramLength);
+  1533→      offset += paramLength;
+  1534→
+  1535→      this.parseISUPParameter(result, paramType, paramData);
+  1536→    }
+  1537→  }
+  1538→
+  1539→  private parseISUPParameter(result: DecodedISUPMessage, paramType: number, paramData: Buffer): void {
+  1540→    switch (paramType) {
+  1541→      case 0x01: // Called Party Number
+  1542→        result.calledPartyNumber = this.decodeISUPNumber(paramData);
+  1543→        result.decodedFields!.calledPartyNumber = result.calledPartyNumber;
+  1544→        break;
+  1545→
+  1546→      case 0x0A: // Calling Party Number
+  1547→        result.callingPartyNumber = this.decodeISUPNumber(paramData);
+  1548→        result.decodedFields!.callingPartyNumber = result.callingPartyNumber;
+  1549→        break;
+  1550→
+  1551→      case 0x1E: // Cause Indicators
+  1552→        if (paramData.length >= 2) {
+  1553→          result.causeValue = paramData[1] & 0x7F;
+  1554→          result.causeDescription = this.getCauseDescription(result.causeValue);
+  1555→        }
+  1556→        break;
+  1557→
+  1558→      default:
+  1559→        // Store unknown parameters
+  1560→        if (!result.decodedFields!.optionalParameters) {
+  1561→          result.decodedFields!.optionalParameters = {};
+  1562→        }
+  1563→        result.decodedFields!.optionalParameters![`param_0x${paramType.toString(16)}`] = bufferToHex(paramData);
+  1564→    }
+  1565→  }
+  1566→
+  1567→  private decodeISUPNumber(data: Buffer): string {
+  1568→    if (data.length < 1) return '';
+  1569→
+  1570→    const oddEvenIndicator = data[0] & 0x80;
+  1571→    const natureOfAddress = data[0] & 0x7F;
+  1572→    const digits = decodeTBCDString(data.slice(1));
+  1573→    
+  1574→    // If odd number of digits, last nibble is filler
+  1575→    let number = oddEvenIndicator ? digits.slice(0, -1) : digits;
+  1576→    
+  1577→    // Add + prefix for international numbers
+  1578→    if (natureOfAddress === 0x04 || natureOfAddress === 0x05) {
+  1579→      number = '+' + number;
+  1580→    }
+  1581→
+  1582→    return number;
+  1583→  }
+  1584→
+  1585→  private getCauseDescription(cause?: number): string {
+  1586→    if (cause === undefined) return '';
+  1587→    
+  1588→    const causeDescriptions: Record<number, string> = {
+  1589→      1: 'Unassigned (unallocated) number',
+  1590→      3: 'No route to destination',
+  1591→      6: 'Channel unacceptable',
+  1592→      16: 'Normal call clearing',
+  1593→      17: 'User busy',
+  1594→      18: 'No user responding',
+  1595→      19: 'User alerting, no answer',
+  1596→      21: 'Call rejected',
+  1597→      22: 'Number changed',
+  1598→      27: 'Destination out of order',
+  1599→      28: 'Invalid number format (address incomplete)',
+  1600→      29: 'Facility rejected',
+  1601→      30: 'Response to STATUS ENQUIRY',
+  1602→      31: 'Normal, unspecified',
+  1603→      34: 'No circuit/channel available',
+  1604→      38: 'Network out of order',
+  1605→      41: 'Temporary failure',
+  1606→      42: 'Switching equipment congestion',
+  1607→      43: 'Access information discarded',
+  1608→      44: 'Requested circuit/channel not available',
+  1609→      47: 'Resource unavailable, unspecified',
+  1610→      49: 'Quality of service unavailable',
+  1611→      50: 'Requested facility not subscribed',
+  1612→      52: 'Outgoing calls barred within CUG',
+  1613→      54: 'Incoming calls barred within CUG',
+  1614→      57: 'Bearer capability not authorized',
+  1615→      58: 'Bearer capability not presently available',
+  1616→      63: 'Service or option not available, unspecified',
+  1617→      65: 'Bearer capability not implemented',
+  1618→      66: 'Channel type not implemented',
+  1619→      69: 'Requested facility not implemented',
+  1620→      70: 'Only restricted digital information bearer capability available',
+  1621→      79: 'Service or option not implemented, unspecified',
+  1622→      87: 'User not member of CUG',
+  1623→      87: 'Incoming calls barred within CUG',
+  1624→      88: 'Incompatible destination',
+  1625→      91: 'Invalid transit network selection',
+  1626→      95: 'Semantically incorrect message',
+  1627→      96: 'Invalid mandatory information',
+  1628→      97: 'Message type non-existent or not implemented',
+  1629→      98: 'Message not compatible with call state or message type non-existent',
+  1630→      99: 'Information element/parameter non-existent or not implemented',
+  1631→      100: 'Invalid information element contents',
+  1632→      101: 'Message not compatible with call state',
+  1633→      102: 'Recovery on timer expiry',
+  1634→      111: 'Protocol error, unspecified',
+  1635→      127: 'Interworking, unspecified',
+  1636→    };
+  1637→
+  1638→    return causeDescriptions[cause] || `Cause ${cause}`;
+  1639→  }
+  1640→
+  1641→  // ============================================================
+  1642→  // RAW FALLBACK DECODER
+  1643→  // ============================================================
+  1644→
+  1645→  private decodeRaw(buffer: Buffer, options?: any): DecodeResult<SS7Message> {
+  1646→    const result: SS7Message = {
+  1647→      id: generateMessageId(),
+  1648→      timestamp: new Date(),
+  1649→      protocol: SS7ProtocolLayer.MTP3,
+  1650→      direction: options?.direction || 'inbound',
+  1651→      rawData: buffer,
+  1652→      hexDump: hexDump(buffer),
+  1653→      packetLength: buffer.length,
+  1654→      decodedFields: {
+  1655→        rawHex: bufferToHex(buffer),
+  1656→        note: 'Could not auto-detect protocol',
+  1657→      },
+  1658→    };
+  1659→
+  1660→    return { success: true, data: result };
+  1661→  }
+  1662→
+  1663→  // ============================================================
+  1664→  // UTILITY METHODS
+  1665→  // ============================================================
+  1666→
+  1667→  /**
+  1668→   * Batch decode multiple messages
+  1669→   */
+  1670→  batchDecode(messages: Array<{ data: Buffer | string; options?: any }>): DecodeResult<SS7Message>[] {
+  1671→    return messages.map(msg => this.decode(msg.data, msg.options));
+  1672→  }
+  1673→
+  1674→  /**
+  1675→   * Get protocol statistics from decoded messages
+  1676→   */
+  1677→  getProtocolStats(messages: SS7Message[]): Record<string, number> {
+  1678→    const stats: Record<string, number> = {};
+  1679→    
+  1680→    for (const msg of messages) {
+  1681→      const proto = msg.protocol;
+  1682→      stats[proto] = (stats[proto] || 0) + 1;
+  1683→    }
+  1684→    
+  1685→    return stats;
+  1686→  }
+  1687→
+  1688→  private log(message: string): void {
+  1689→    if (this.debugMode) {
+  1690→      console.log(`[SS7Decoder] ${message}`);
+  1691→    }
+  1692→  }
+  1693→}
+  1694→
+  1695→// ============================================================
+  1696→// HELPER FUNCTIONS
+  1697→// ============================================================
+  1698→
+  1699→let messageIdCounter = 0;
+  1700→
+  1701→function generateMessageId(): string {
+  1702→  messageIdCounter++;
+  1703→  const timestamp = Date.now().toString(36);
+  1704→  const random = Math.random().toString(36).substring(2, 8);
+  1705→  return `ss7_${timestamp}_${random}_${messageIdCounter}`;
+  1706→}
+  1707→
+  1708→/**
+  1709→ * Create a singleton decoder instance
+  1710→ */
+  1711→export function createDecoder(debug: boolean = false): SS7Decoder {
+  1712→  return new SS7Decoder(debug);
+  1713→}
+  1714→
+  1715→// Export convenience functions
+  1716→export function decodeSS7Message(
+  1717→  data: Buffer | string,
+  1718→  options?: {
+  1719→    assumedProtocol?: SS7ProtocolLayer;
+  1720→    opc?: number;
+  1721→    dpc?: number;
+  1722→    direction?: 'inbound' | 'outbound';
+  1723→  }
+  1724→): DecodeResult<SS7Message> {
+  1725→  const decoder = new SS7Decoder();
+  1726→  return decoder.decode(data, options);
+  1727→}
+  1728→
+  1729→export function decodeMAPMessage(
+  1730→  data: Buffer | string,
+  1731→  options?: any
+  1732→): DecodeResult<DecodedMAPMessage> {
+  1733→  const decoder = new SS7Decoder();
+  1734→  return decoder.decodeMAP(typeof data === 'string' ? hexToBuffer(data) : data, options);
+  1735→}
+  1736→
+  1737→export function decodeCAPMessage(
+  1738→  data: Buffer | string,
+  1739→  options?: any
+  1740→): DecodeResult<DecodedCAPMessage> {
+  1741→  const decoder = new SS7Decoder();
+  1742→  return decoder.decodeCAP(typeof data === 'string' ? hexToBuffer(data) : data, options);
+  1743→}
+  1744→
+  1745→export function decodeISUPMessage(
+  1746→  data: Buffer | string,
+  1747→  options?: any
+  1748→): DecodeResult<DecodedISUPMessage> {
+  1749→  const decoder = new SS7Decoder();
+  1750→  return decoder.decodeISUP(typeof data === 'string' ? hexToBuffer(data) : data, options);
+  1751→}
+  1752→
+  1753→export function decodeSCCPMessage(
+  1754→  data: Buffer | string,
+  1755→  options?: any
+  1756→): DecodeResult<DecodedSCCPMessage> {
+  1757→  const decoder = new SS7Decoder();
+  1758→  return decoder.decodeSCCP(typeof data === 'string' ? hexToBuffer(data) : data, options);
+  1759→}
+  1760→

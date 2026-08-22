@@ -1,0 +1,1334 @@
+     1→/**
+     2→ * SS7 Fraud Detection Engine
+     3→ * Djezzy National SOC Platform - SS7 Tools Suite
+     4→ * 
+     5→ * Advanced fraud detection for telecom signaling:
+     6→ * - IRSF (International Revenue Share Fraud) detection
+     7→ * - SIM Swap detection via MAP message analysis
+     8→ * - Wangiri (one-ring) call pattern detection
+     9→ * - Bypass fraud (Simbox/GSM Gateway) detection
+    10→ * - Premium rate service abuse detection
+    11→ * - Roaming anomaly detection
+    12→ * 
+    13→ * Uses ML-enhanced scoring and ARTP-compliant reporting
+    14→ * 
+    15→ * @version 1.0.0
+    16→ */
+    17→
+    18→import {
+    19→  SS7Message,
+    20→  SS7ProtocolLayer,
+    21→  DecodedMAPMessage,
+    22→  DecodedISUPMessage,
+    23→  MAPOperationCode,
+    24→  ISUPMessageType,
+    25→  PointCode,
+    26→  GlobalTitle,
+    27→  SubsystemNumber,
+    28→  FraudIndicator,
+    29→  FRAUD_INDICATOR_DETAILS,
+    30→  maskMSISDN,
+    31→  maskIMSI,
+    32→} from './ss7-formats';
+    33→import { decodeSS7Message, DecodeResult } from './ss7-decoder';
+    34→
+    35→// ============================================================
+    36→// FRAUD DETECTION TYPES
+    37→// ============================================================
+    38→
+    39→export interface FraudAlert {
+    40→  id: string;
+    41→  timestamp: Date;
+    42→  type: FraudType;
+    43→  severity: 'low' | 'medium' | 'high' | 'critical';
+    44→  status: AlertStatus;
+    45→  confidence: number;        // 0-100
+    46→  indicators: FraudIndicator[];
+    47→  
+    48→  // Subscriber info (masked)
+    49→  subscriber?: {
+    50→    msisdn: string;
+    51→    imsi: string;
+    52→    maskedMSISDN: string;
+    53→    maskedIMSI: string;
+    54→  };
+    55→  
+    56→  // Evidence
+    57→  evidence: EvidenceItem[];
+    58→  
+    59→  // Financial impact estimation
+    60→  financialImpact?: {
+    61→    estimatedLossDZD: number;
+    62→    currency: 'DZD';
+    63→    calculationBasis: string;
+    64→  };
+    65→  
+    66→  // Detection metadata
+    67→  ruleId: string;
+    68→  ruleName: string;
+    69→  source: string;           // e.g., 'ss7-analyzer', 'ml-model'
+    70→  
+    71→  // Actions taken/recommended
+    72→  actions?: FraudAction[];
+    73→  
+    74→  // ARTP reporting
+    75→  artpReportable: boolean;
+    76→  artpDeadline?: Date;
+    77→  artpCaseNumber?: string;
+    78→}
+    79→
+    80→export enum FraudType {
+    81→  IRSF = 'irsf',
+    82→  SIM_SWAP = 'sim_swap',
+    83→  WANGIRI = 'wangiri',
+    84→  BYPASS_FRAUD = 'bypass_fraud',
+    85→  PREMIUM_RATE_ABUSE = 'premium_rate_abuse',
+    86→  ROAMING_ANOMALY = 'roaming_anomaly',
+    87→  INTERCEPTION = 'interception',
+    88→  CLONING = 'cloning',
+    89→  SUBSCRIPTION_FRAUD = 'subscription_fraud',
+    90→  TRAFFIC_PUMPING = 'traffic_pumping',
+    91→  OTHER = 'other',
+    92→}
+    93→
+    94→export enum AlertStatus {
+    95→  NEW = 'new',
+    96→  INVESTIGATING = 'investigating',
+    97→  CONFIRMED = 'confirmed',
+    98→  FALSE_POSITIVE = 'false_positive',
+    99→  ESCALATED = 'escalated',
+   100→  BLOCKED = 'blocked',
+   101→  RESOLVED = 'resolved',
+   102→  CLOSED = 'closed',
+   103→}
+   104→
+   105→export interface EvidenceItem {
+   106→  id: string;
+   107→  timestamp: Date;
+   108→  type: 'ss7_message' | 'call_record' | 'subscriber_change' | 'location_update' | 'authentication' | 'other';
+   109→  description: string;
+   110→  data: Record<string, any>;
+   111→  riskContribution: number;  // 0-100 contribution to overall score
+   112→}
+   113→
+   114→export interface FraudAction {
+   115→  id: string;
+   116→  type: FraudActionType;
+   117→  status: ActionStatus;
+   118→  timestamp: Date;
+   119→  performedBy: string;
+   120→  details: string;
+   121→  result?: string;
+   122→}
+   123→
+   124→export enum FraudActionType {
+   125→  BLOCK_SUBSCRIBER = 'block_subscriber',
+   126→  SUSPEND_SIM = 'suspend_sim',
+   127→  ALERT_ANALYST = 'alert_analyst',
+   128→  NOTIFY_ARPT = 'notify_arpt',
+   129→  RATE_LIMIT = 'rate_limit',
+   130→  ADD_WATCHLIST = 'add_watchlist',
+   131→  CAPTURE_PCAP = 'capture_pcap',
+   132→  NOTIFY_MNO = 'notify_mno',
+   133→  LEGAL_INTERCEPT = 'legal_intercept',
+   134→}
+   135→
+   136→export enum ActionStatus {
+   137→  PENDING = 'pending',
+   138→  EXECUTED = 'executed',
+   139→  FAILED = 'failed',
+   140→  SKIPPED = 'skipped',
+   141→}
+   142→
+   143→// ============================================================
+   144→// FRAUD DETECTION RULES CONFIGURATION
+   145→// ============================================================
+   146→
+   147→export interface FraudRule {
+   148→  id: string;
+   149→  name: string;
+   150→  type: FraudType;
+   151→  enabled: boolean;
+   152→  severity: 'low' | 'medium' | 'high' | 'critical';
+   153→  threshold: RuleThreshold;
+   154→  action: FraudActionType[];
+   155→  cooldownMinutes: number;     // Minimum time between alerts for same subscriber
+   156→  artpReportable: boolean;
+   157→  description: string;
+   158→}
+   159→
+   160→export interface RuleThreshold {
+   161→  // IRSF thresholds
+   162→  internationalCallsPerHour?: number;
+   163→  uniqueInternationalDestinations?: number;
+   164→  averageCallDurationSeconds?: number;
+   165→  premiumRateTargetPercentage?: number;
+   166→  
+   167→  // SIM Swap thresholds
+   168→  provisioningAttemptsPerHour?: number;
+   169→  authFailuresPerHour?: number;
+   170→  locationUpdateDuringCallWindow?: number; // minutes
+   171→  
+   172→  // Wangiri thresholds
+   173→  shortDurationCallsPerHour?: number;
+   174→  maxWangiriDurationSeconds?: number;
+   175→  uniqueCalledNumbersPerHour?: number;
+   176→  
+   177→  // Bypass fraud thresholds
+   178→  callsFromSingleLocation?: number;
+   179→  distinctIMSIMultipleLocations?: number;
+   180→  simboxPatternScore?: number;
+   181→  
+   182→  // Roaming anomaly thresholds
+   183→  impossibleDistanceKm?: number;
+   184→  timeBetweenLocationsHours?: number;
+   185→  countriesVisitedPerDay?: number;
+   186→  
+   187→  // General
+   188→  riskScoreThreshold?: number;
+   189→  timeWindowMinutes?: number;
+   190→}
+   191→
+   192→// Default rules configuration
+   193→const DEFAULT_RULES: FraudRule[] = [
+   194→  {
+   195→    id: 'irsf-001',
+   196→    name: 'High Volume International Calls to Premium Destinations',
+   197→    type: FraudType.IRSF,
+   198→    enabled: true,
+   199→    severity: 'critical',
+   200→    threshold: {
+   201→      internationalCallsPerHour: 10,
+   202→      uniqueInternationalDestinations: 5,
+   203→      averageCallDurationSeconds: 60,
+   204→      premiumRateTargetPercentage: 30,
+   205→      timeWindowMinutes: 60,
+   206→    },
+   207→    action: [FraudActionType.BLOCK_SUBSCRIBER, FraudActionType.NOTIFY_ARPT],
+   208→    cooldownMinutes: 60,
+   209→    artpReportable: true,
+   210→    description: 'Detects IRSF patterns with high volume of international calls to known premium rate destinations',
+   211→  },
+   212→  {
+   213→    id: 'irsf-002',
+   214→    name: 'IRSF Pattern - Exactly 60 Second Calls',
+   215→    type: FraudType.IRSF,
+   216→    enabled: true,
+   217→    severity: 'high',
+   218→    threshold: {
+   219→      averageCallDurationSeconds: 58, // Allow 2s tolerance
+   220→      premiumRateTargetPercentage: 50,
+   221→      timeWindowMinutes: 60,
+   222→    },
+   223→    action: [FraudActionType.ALERT_ANALYST, FraudActionType.RATE_LIMIT],
+   224→    cooldownMinutes: 120,
+   225→    artpReportable: true,
+   226→    description: 'Detects classic IRSF pattern of exactly 60-second calls to generate maximum revenue share',
+   227→  },
+   228→  {
+   229→    id: 'simswap-001',
+   230→    name: 'Multiple SIM Provisioning Attempts',
+   231→    type: FraudType.SIM_SWAP,
+   232→    enabled: true,
+   233→    severity: 'critical',
+   234→    threshold: {
+   235→      provisioningAttemptsPerHour: 3,
+   236→      timeWindowMinutes: 60,
+   237→    },
+   238→    action: [FraudActionType.SUSPEND_SIM, FraudActionType.ALERT_ANALYST],
+   239→    cooldownMinutes: 30,
+   240→    artpReportable: true,
+   241→    description: 'Detects multiple SIM swap/provisioning attempts indicating potential SIM hijacking',
+   242→  },
+   243→  {
+   244→    id: 'simswap-002',
+   245→    name: 'Authentication Failure Burst After SIM Change',
+   246→    type: FraudType.SIM_SWAP,
+   247→    enabled: true,
+   248→    severity: 'high',
+   249→    threshold: {
+   250→      authFailuresPerHour: 5,
+   251→      timeWindowMinutes: 15,
+   252→    },
+   253→    action: [FraudActionType.ADD_WATCHLIST, FraudActionType.CAPTURE_PCAP],
+   254→    cooldownMinutes: 60,
+   255→    artpReportable: false,
+   256→    description: 'Detects authentication failures following SIM change, potential SIM clone attack',
+   257→  },
+   258→  {
+   259→    id: 'simswap-003',
+   260→    name: 'Location Update During Active Call',
+   261→    type: FraudType.SIM_SWAP,
+   262→    enabled: true,
+   263→    severity: 'high',
+   264→    threshold: {
+   265→      locationUpdateDuringCallWindow: 5,
+   266→      timeWindowMinutes: 5,
+   267→    },
+   268→    action: [FraudActionType.ALERT_ANALYST, FraudActionType.CAPTURE_PCAP],
+   269→    cooldownMinutes: 30,
+   270→    artpReportable: false,
+   271→    description: 'Detects suspicious location updates while call is active, possible interception indicator',
+   272→  },
+   273→  {
+   274→    id: 'wangiri-001',
+   275→    name: 'One-Ring Call Pattern Detection',
+   276→    type: FraudType.WANGIRI,
+   277→    enabled: true,
+   278→    severity: 'medium',
+   279→    threshold: {
+   280→      shortDurationCallsPerHour: 20,
+   281→      maxWangiriDurationSeconds: 5,
+   282→      uniqueCalledNumbersPerHour: 50,
+   283→      timeWindowMinutes: 60,
+   284→    },
+   285→    action: [FraudActionType.ALERT_ANALYST, FraudActionType.ADD_WATCHLIST],
+   286→    cooldownMinutes: 240,
+   287→    artpReportable: false,
+   288→    description: 'Detects wangiri (one-ring) fraud patterns with many short-duration outgoing calls',
+   289→  },
+   290→  {
+   291→    id: 'bypass-001',
+   292→    name: 'GSM Gateway / Simbox Detection',
+   293→    type: FraudType.BYPASS_FRAUD,
+   294→    enabled: true,
+   295→    severity: 'high',
+   296→    threshold: {
+   297→      callsFromSingleLocation: 100,
+   298→      distinctIMSIMultipleLocations: 10,
+   299→      simboxPatternScore: 80,
+   300→      timeWindowMinutes: 1440, // 24 hours
+   301→    },
+   302→    action: [FraudActionType.BLOCK_SUBSCRIBER, FraudActionType.NOTIFY_ARPT],
+   303→    cooldownMinutes: 480,
+   304→    artpReportable: true,
+   305→    description: 'Detects GSM gateway/simbox bypass fraud patterns',
+   306→  },
+   307→  {
+   308→    id: 'roaming-001',
+   309→    name: 'Impossible Roaming Speed Detection',
+   310→    type: FraudType.ROAMING_ANOMALY,
+   311→    enabled: true,
+   312→    severity: 'critical',
+   313→    threshold: {
+   314→      impossibleDistanceKm: 800, // Faster than commercial aircraft
+   315→      timeBetweenLocationsHours: 1,
+   316→      timeWindowMinutes: 60,
+   317→    },
+   318→    action: [FraudActionType.BLOCK_SUBSCRIBER, FraudActionType.ALERT_ANALYST],
+   319→    cooldownMinutes: 60,
+   320→    artpReportable: true,
+   321→    description: 'Detects impossible roaming speeds indicating cloning or location spoofing',
+   322→  },
+   323→  {
+   324→    id: 'roaming-002',
+   325→    name: 'Excessive Country Hopping',
+   326→    type: FraudType.ROAMING_ANOMALY,
+   327→    enabled: true,
+   328→    severity: 'high',
+   329→    threshold: {
+   330→      countriesVisitedPerDay: 5,
+   331→      timeWindowMinutes: 1440,
+   332→    },
+   333→    action: [FraudActionType.ALERT_ANALYST, FraudActionType.ADD_WATCHLIST],
+   334→    cooldownMinutes: 360,
+   335→    artpReportable: false,
+   336→    description: 'Detects subscribers visiting unrealistic number of countries per day',
+   337→  },
+   338→];
+   339→
+   340→// Known IRSF destination prefixes (international premium rate)
+   341→const IRSF_DESTINATION_PREFIXES = [
+   342→  // High-risk country codes for IRSF
+   343→  '+222', // Mauritania
+   344→  '+241', // Gabon
+   345→  '+242', // Congo
+   346→  '+244', // Angola
+   347→  '+245', // Guinea-Bissau
+   348→  '+246', // Diego Garcia
+   349→  '+248', // Seychelles
+   350→  '+249', // Sudan
+   351→  '+250', // Rwanda
+   352→  '+251', // Ethiopia
+   353→  '+252', // Somalia
+   354→  '+253', // Djibouti
+   355→  '+254', // Kenya
+   356→  '+255', // Tanzania
+   357→  '+256', // Uganda
+   358→  '+257', // Burundi
+   359→  '+258', // Mozambique
+   360→  '+260', // Zambia
+   361→  '+261', // Madagascar
+   362→  '+262', // Reunion
+   363→  '+263', // Zimbabwe
+   364→  '+264', // Namibia
+   365→  '+265', // Malawi
+   366→  '+266', // Lesotho
+   367→  '+267', // Botswana
+   368→  '+268', // Swaziland
+   369→  '+269', // Comoros
+   370→  '+290', // Saint Helena
+   371→  '+291', // Eritrea
+   372→  '+297', // Aruba
+   373→  '+298', // Faroe Islands
+   374→  '+299', // Greenland
+   375→  '+350', // Gibraltar
+   376→  '+351', // Portugal
+   377→  '+352', // Luxembourg
+   378→  '+353', // Ireland
+   379→  '+354', // Iceland
+   380→  '+355', // Albania
+   381→  '+356', // Malta
+   382→  '+357', // Cyprus
+   383→  '+358', // Finland
+   384→  '+359', // Bulgaria
+   385→  '+370', // Lithuania
+   386→  '+371', // Latvia
+   387→  '+372', // Estonia
+   388→  '+373', // Moldova
+   389→  '+374', // Armenia
+   390→  '+375', // Belarus
+   391→  '+376', // Andorra
+   392→  '+377', // Monaco
+   393→  '+378', // San Marino
+   394→  '+380', // Ukraine
+   395→  '+381', // Serbia
+   396→  '+382', // Montenegro
+   397→  '+383', // Kosovo
+   398→  '+385', // Croatia
+   399→  '+386', // Slovenia
+   400→  '+387', // Bosnia and Herzegovina
+   401→  '+388', // European numbering
+   402→  '+389', // North Macedonia
+   403→  '+420', // Czech Republic
+   404→  '+421', // Slovakia
+   405→  '+423', // Liechtenstein
+   406→  // Premium rate ranges within these countries would be tracked separately
+   407→];
+   408→
+   409→// ============================================================
+   410→// FRAUD DETECTOR CLASS
+   411→// ============================================================
+   412→
+   413→export class FraudDetector {
+   414→  private rules: Map<string, FraudRule>;
+   415→  private alertHistory: Map<string, FraudAlert[]>;
+   416→  private subscriberProfiles: Map<string, SubscriberProfile>;
+   417→  private activeAlerts: Set<string>;
+   418→  private onAlertCallback?: (alert: FraudAlert) => void;
+   419→
+   420→  constructor() {
+   421→    this.rules = new Map();
+   422→    this.alertHistory = new Map();
+   423→    this.subscriberProfiles = new Map();
+   424→    this.activeAlerts = new Set();
+   425→
+   426→    // Load default rules
+   427→    DEFAULT_RULES.forEach(rule => this.rules.set(rule.id, rule));
+   428→  }
+   429→
+   430→  /**
+   431→   * Set callback for real-time alerts
+   432→   */
+   433→  onAlert(callback: (alert: FraudAlert) => void): void {
+   434→    this.onAlertCallback = callback;
+   435→  }
+   436→
+   437→  /**
+   438→   * Add or update a fraud detection rule
+   439→   */
+   440→  updateRule(rule: FraudRule): void {
+   441→    this.rules.set(rule.id, rule);
+   442→  }
+   443→
+   444→  /**
+   445→   * Get all configured rules
+   446→   */
+   447→  getRules(): FraudRule[] {
+   448→    return Array.from(this.rules.values());
+   449→  }
+   450→
+   451→  /**
+   452→   * Enable/disable a rule
+   453→   */
+   454→  setRuleEnabled(ruleId: string, enabled: boolean): boolean {
+   455→    const rule = this.rules.get(ruleId);
+   456→    if (!rule) return false;
+   457→    rule.enabled = enabled;
+   458→    return true;
+   459→  }
+   460→
+   461→  /**
+   462→   * Main analysis entry point - analyze an SS7 message for fraud indicators
+   463→   */
+   464→  analyze(message: SS7Message): FraudIndicator[] {
+   465→    const indicators: FraudIndicator[] = [];
+   466→
+   467→    switch (message.protocol) {
+   468→      case SS7ProtocolLayer.MAP:
+   469→        indicators.push(...this.analyzeMAPMessage(message as DecodedMAPMessage));
+   470→        break;
+   471→      case SS7ProtocolLayer.ISUP:
+   472→        indicators.push(...this.analyzeISUPMessage(message as DecodedISUPMessage));
+   473→        break;
+   474→      case SS7ProtocolLayer.CAP:
+   475→        indicators.push(...this.analyzeCAPMessage(message));
+   476→        break;
+   477→      default:
+   478→        // Generic analysis for other protocols
+   479→        break;
+   480→    }
+   481→
+   482→    return indicators;
+   483→  }
+   484→
+   485→  /**
+   486→   * Analyze batch of messages and generate alerts
+   487→   */
+   488→  analyzeBatch(messages: SS7Message[]): FraudAlert[] {
+   489→    const alerts: FraudAlert[] = [];
+   490→    
+   491→    // Update subscriber profiles first
+   492→    messages.forEach(msg => this.updateSubscriberProfile(msg));
+   493→
+   494→    // Check each message against rules
+   495→    for (const message of messages) {
+   496→      const indicators = this.analyze(message);
+   497→      
+   498→      if (indicators.length > 0) {
+   499→        // Generate alerts based on indicators
+   500→        const generatedAlerts = this.generateAlerts(message, indicators);
+   501→        alerts.push(...generatedAlerts);
+   502→      }
+   503→    }
+   504→
+   505→    return alerts;
+   506→  }
+   507→
+   508→  // ============================================================
+   509→  // MAP MESSAGE ANALYSIS
+   510→  // ============================================================
+   511→
+   512→  private analyzeMAPMessage(message: DecodedMAPMessage): FraudIndicator[] {
+   513→    const indicators: FraudIndicator[] = [];
+   514→
+   515→    switch (message.operation) {
+   516→      case MAPOperationCode.UPDATE_LOCATION:
+   517→        indicators.push(...this.checkLocationUpdateAnomalies(message));
+   518→        break;
+   519→
+   520→      case MAPOperationCode.SEND_AUTHENTICATION_INFO:
+   521→        indicators.push(...this.checkAuthPatterns(message));
+   522→        break;
+   523→
+   524→      case MAPOperationCode.INSERT_SUBSCRIBER_DATA:
+   525→        indicators.push(...this.checkProvisioningPatterns(message));
+   526→        break;
+   527→
+   528→      case MAPOperationCode.ROUTING_INFO_FOR_SM:
+   529→      case MAPOperationCode.MO_FORWARD_SHORT_MESSAGE:
+   530→      case MAPOperationCode.MT_FORWARD_SHORT_MESSAGE:
+   531→        indicators.push(...this.checkSMSAbusePatterns(message));
+   532→        break;
+   533→
+   534→      case MAPOperationCode.PROVIDE_ROAMING_NUMBER:
+   535→        indicators.push(...this.checkRoamingPatterns(message));
+   536→        break;
+   537→
+   538→      default:
+   539→        break;
+   540→    }
+   541→
+   542→    return indicators;
+   543→  }
+   544→
+   545→  private checkLocationUpdateAnomalies(message: DecodedMAPMessage): FraudIndicator[] {
+   546→    const indicators: FraudIndicator[] = [];
+   547→    const profile = this.getOrCreateProfile(message);
+   548→
+   549→    // Check for location updates during active call
+   550→    if (profile.activeCalls > 0) {
+   551→      indicators.push(FraudIndicator.LOCATION_UPDATE_WHILE_ACTIVE_CALL);
+   552→      
+   553→      // Add evidence
+   554→      profile.addEvidence({
+   555→        id: `ev_${Date.now()}`,
+   556→        timestamp: new Date(),
+   557→        type: 'location_update',
+   558→        description: `Location update received while ${profile.activeCalls} call(s) active`,
+   559→        data: { operation: MAP_OPERATION_NAMES[message.operation] },
+   560→        riskContribution: 75,
+   561→      });
+   562→    }
+   563→
+   564→    // Check for impossible roaming speed
+   565→    if (profile.lastLocation && message.sccp?.destinationGlobalTitle?.digits) {
+   566→      const distance = this.calculateDistance(
+   567→        profile.lastLocation,
+   568→        message.sccp.destinationGlobalTitle.digits
+   569→      );
+   570→      const timeDiff = Date.now() - profile.lastLocationTime.getTime();
+   571→      const hoursDiff = timeDiff / (1000 * 60 * 60);
+   572→
+   573→      if (hoursDiff > 0 && distance / hoursDiff > 800) { // Faster than plane
+   574→        indicators.push(FraudIndicator.ROAMING_ANOMALY_FAST_TRAVEL);
+   575→        
+   576→        profile.addEvidence({
+   577→          id: `ev_${Date.now()}`,
+   578→          timestamp: new Date(),
+   579→          type: 'location_update',
+   580→          description: `Impossible travel: ${Math.round(distance)}km in ${hoursDiff.toFixed(1)}h`,
+   581→          data: { distance, timeHours: hoursDiff, speed: distance / hoursDiff },
+   582→          riskContribution: 90,
+   583→        });
+   584→      }
+   585→    }
+   586→
+   587→    // Update last location
+   588→    if (message.sccp?.sourceGlobalTitle?.digits) {
+   589→      profile.lastLocation = message.sccp.sourceGlobalTitle.digits;
+   590→      profile.lastLocationTime = new Date();
+   591→    }
+   592→    profile.locationsSeen.add(message.sccp?.destinationGlobalTitle?.digits || 'unknown');
+   593→
+   594→    return indicators;
+   595→  }
+   596→
+   597→  private checkAuthPatterns(message: DecodedMAPMessage): FraudIndicator[] {
+   598→    const indicators: FraudIndicator[] = [];
+   599→    const profile = this.getOrCreateProfile(message);
+   600→
+   601→    // Track authentication attempts
+   602→    profile.authAttempts.push(Date.now());
+   603→
+   604→    // Clean old auth attempts (keep only last hour)
+   605→    const oneHourAgo = Date.now() - 60 * 60 * 1000;
+   606→    profile.authAttempts = profile.authAttempts.filter(t => t > oneHourAgo);
+   607→
+   608→    // Check for auth failure burst
+   609→    if (profile.authAttempts.length >= 5) {
+   610→      indicators.push(FraudIndicator.SIM_SWAP_AUTH_FAILURE_BURST);
+   611→      
+   612→      profile.addEvidence({
+   613→        id: `ev_${Date.now()}`,
+   614→        timestamp: new Date(),
+   615→        type: 'authentication',
+   616→        description: `${profile.authAttempts.length} authentication attempts in last hour`,
+   617→        data: { attemptCount: profile.authAttempts.length },
+   618→        riskContribution: 70,
+   619→      });
+   620→    }
+   621→
+   622→    return indicators;
+   623→  }
+   624→
+   625→  private checkProvisioningPatterns(message: DecodedMAPMessage): FraudIndicator[] {
+   626→    const indicators: FraudIndicator[] = [];
+   627→    const profile = this.getOrCreateProfile(message);
+   628→
+   629→    // Track provisioning attempts
+   630→    profile.provisioningAttempts.push(Date.now());
+   631→
+   632→    // Clean old attempts (keep last hour)
+   633→    const oneHourAgo = Date.now() - 60 * 60 * 1000;
+   634→    profile.provisioningAttempts = profile.provisioningAttempts.filter(t => t > oneHourAgo);
+   635→
+   636→    // Check for multiple provisioning attempts
+   637→    if (profile.provisioningAttempts.length >= 3) {
+   638→      indicators.push(FraudIndicator.SIM_SWAP_MULTIPLE_ATTEMPTS);
+   639→      indicators.push(FraudIndicator.SIM_SWAP_PROVISIONING_ANOMALY);
+   640→      
+   641→      profile.addEvidence({
+   642→        id: `ev_${Date.now()}`,
+   643→        timestamp: new Date(),
+   644→        type: 'subscriber_change',
+   645→        description: `${profile.provisioningAttempts.length} provisioning attempts in last hour`,
+   646→        data: { attemptCount: profile.provisioningAttempts.length },
+   647→        riskContribution: 85,
+   648→      });
+   649→    }
+   650→
+   651→    return indicators;
+   652→  }
+   653→
+   654→  private checkSMSAbusePatterns(message: DecodedMAPMessage): FraudIndicator[] {
+   655→    const indicators: FraudIndicator[] = [];
+   656→    const profile = this.getOrCreateProfile(message);
+   657→
+   658→    // Track SMS activity
+   659→    profile.smsCount++;
+   660→
+   661→    // Could add more sophisticated SMS abuse patterns here
+   662→    // e.g., bulk SMS to premium numbers, SMS spam patterns
+   663→
+   664→    return indicators;
+   665→  }
+   666→
+   667→  private checkRoamingPatterns(message: DecodedMAPMessage): FraudIndicator[] {
+   668→    const indicators: FraudIndicator[] = [];
+   669→    const profile = this.getOrCreateProfile(message);
+   670→
+   671→    // Track roaming number requests
+   672→    profile.roamingRequests++;
+   673→
+   674→    // Multiple roaming number requests could indicate roaming abuse
+   675→    if (profile.roamingRequests > 20) {
+   676→      indicators.push(FraudIndicator.ROAMING_ANOMALY_IMPOSSIBLE);
+   677→    }
+   678→
+   679→    return indicators;
+   680→  }
+   681→
+   682→  // ============================================================
+   683→  // ISUP MESSAGE ANALYSIS
+   684→  // ============================================================
+   685→
+   686→  private analyzeISUPMessage(message: DecodedISUPMessage): FraudIndicator[] {
+   687→    const indicators: FraudIndicator[] = [];
+   688→    const profile = this.getOrCreateProfile(message);
+   689→
+   690→    switch (message.message) {
+   691→      case ISUPMessageType.IAM: // Initial Address Message (outgoing call)
+   692→        indicators.push(...this.analyzeOutgoingCall(message, profile));
+   693→        break;
+   694→
+   695→      case ISUPMessageType.ACM: // Address Complete (incoming call answered)
+   696→        profile.activeCalls++;
+   697→        break;
+   698→
+   699→      case ISUPMessageType.ANM: // Answer
+   700→        // Track answer for duration calculations
+   701→        break;
+   702→
+   703→      case ISUPMessageType.REL: // Release (call ended)
+   704→        if (profile.activeCalls > 0) {
+   705→          profile.activeCalls--;
+   706→        }
+   707→        // Analyze call duration for IRSF/wangiri patterns
+   708→        indicators.push(...this.analyzeCallRelease(message, profile));
+   709→        break;
+   710→
+   711→      default:
+   712→        break;
+   713→    }
+   714→
+   715→    return indicators;
+   716→  }
+   717→
+   718→  private analyzeOutgoingCall(message: DecodedISUPMessage, profile: SubscriberProfile): FraudIndicator[] {
+   719→    const indicators: FraudIndicator[] = [];
+   720→
+   721→    // Track call
+   722→    profile.callCount++;
+   723→    profile.callsToday.push({
+   724→      timestamp: new Date(),
+   725→      calledNumber: message.calledPartyNumber || '',
+   726→      duration: 0, // Will be updated on REL
+   727→    });
+   728→
+   729→    // Check for international call to high-risk destination
+   730→    if (message.calledPartyNumber) {
+   731→      const isInternational = this.isHighRiskDestination(message.calledPartyNumber);
+   732→      
+   733→      if (isInternational) {
+   734→        profile.internationalCallCount++;
+   735→        profile.internationalDestinations.add(message.calledPartyNumber.substring(0, 6));
+   736→
+   737→        if (profile.internationalDestinations.size >= 5) {
+   738→          indicators.push(FraudIndicator.IRSF_SUSPICIOUS_PATTERN);
+   739→          indicators.push(FraudIndicator.IRSF_HIGH_VOLUME_INTERNATIONAL);
+   740→        }
+   741→
+   742→        // Check for premium rate target
+   743→        if (this.isPremiumRateNumber(message.calledPartyNumber)) {
+   744→          indicators.push(FraudIndicator.IRSF_PREMIUM_RATE_TARGET);
+   745→        }
+   746→      }
+   747→    }
+   748→
+   749→    return indicators;
+   750→  }
+   751→
+   752→  private analyzeCallRelease(message: DecodedISUPMessage, profile: SubscriberProfile): FraudIndicator[] {
+   753→    const indicators: FraudIndicator[] = [];
+   754→
+   755→    // Check cause value for abnormal releases
+   756→    if (message.causeValue === 17 || message.causeValue === 18 || message.causeValue === 19) {
+   757→      // User busy, no response, no answer - common in wangiri
+   758→      profile.noAnswerCount++;
+   759→    }
+   760→
+   761→    // Look at recent short calls for wangiri pattern
+   762→    const recentShortCalls = profile.callsToday.filter(
+   763→      c => c.duration > 0 && c.duration <= 5 && 
+   764→      Date.now() - c.timestamp.getTime() < 60 * 60 * 1000
+   765→    );
+   766→
+   767→    if (recentShortCalls.length >= 20) {
+   768→      indicators.push(FraudIndicator.WANGIRI_ONE_RING);
+   769→      indicators.push(FraudIndicator.WANGIRI_SHORT_DURATION);
+   770→    }
+   771→
+   772→    return indicators;
+   773→  }
+   774→
+   775→  // ============================================================
+   776→  // CAP MESSAGE ANALYSIS
+   777→  // ============================================================
+   778→
+   779→  private analyzeCAPMessage(message: SS7Message): FraudIndicator[] {
+   780→    const indicators: FraudIndicator[] = [];
+   781→    const profile = this.getOrCreateProfile(message);
+   782→
+   783→    // CAP messages can indicate CAMEL-based fraud
+   784→    // e.g., unusual prepaid top-up patterns, call forwarding abuse
+   785→    
+   786→    return indicators;
+   787→  }
+   788→
+   789→  // ============================================================
+   790→  // ALERT GENERATION
+   791→  // ============================================================
+   792→
+   793→  private generateAlerts(message: SS7Message, indicators: FraudIndicator[]): FraudAlert[] {
+   794→    const alerts: FraudAlert[] = [];
+   795→    const subscriberKey = this.getSubscriberKey(message);
+   796→
+   797→    // Group indicators by fraud type
+   798→    const indicatorGroups = this.groupIndicatorsByType(indicators);
+   799→
+   800→    for (const [fraudType, groupIndicators] of indicatorGroups.entries()) {
+   801→      // Find matching rules
+   802→      for (const [ruleId, rule] of this.rules.entries()) {
+   803→        if (!rule.enabled || rule.type !== fraudType) continue;
+   804→
+   805→        // Check cooldown
+   806→        if (this.isInCooldown(subscriberKey, ruleId)) continue;
+   807→
+   808→        // Evaluate rule conditions
+   809→        const evaluation = this.evaluateRule(rule, message, groupIndicators);
+   810→        
+   811→        if (evaluation.triggered) {
+   812→          const alert = this.createAlert(rule, message, groupIndicators, evaluation);
+   813→          alerts.push(alert);
+   814→          
+   815→          // Store alert
+   816→          this.storeAlert(alert, subscriberKey);
+   817→          
+   818→          // Trigger callback
+   819→          if (this.onAlertCallback) {
+   820→            this.onAlertCallback(alert);
+   821→          }
+   822→        }
+   823→      }
+   824→    }
+   825→
+   826→    return alerts;
+   827→  }
+   828→
+   829→  private evaluateRule(
+   830→    rule: FraudRule,
+   831→    message: SS7Message,
+   832→    indicators: FraudIndicator[]
+   833→  ): { triggered: boolean; score: number; reason: string } {
+   834→    let score = 0;
+   835→    const reasons: string[] = [];
+   836→    const profile = this.getOrCreateProfile(message);
+   837→    const threshold = rule.threshold;
+   838→
+   839→    switch (rule.type) {
+   840→      case FraudType.IRSF:
+   841→        if (threshold.internationalCallsPerHour && 
+   842→            profile.internationalCallCount >= threshold.internationalCallsPerHour) {
+   843→          score += 40;
+   844→          reasons.push(`${profile.internationalCallCount} international calls/hour`);
+   845→        }
+   846→        if (threshold.uniqueInternationalDestinations &&
+   847→            profile.internationalDestinations.size >= threshold.uniqueInternationalDestinations) {
+   848→          score += 35;
+   849→          reasons.push(`${profile.internationalDestinations.size} unique destinations`);
+   850→        }
+   851→        if (indicators.includes(FraudIndicator.IRSF_PREMIUM_RATE_TARGET)) {
+   852→          score += 25;
+   853→          reasons.push('Premium rate targets detected');
+   854→        }
+   855→        break;
+   856→
+   857→      case FraudType.SIM_SWAP:
+   858→        if (threshold.provisioningAttemptsPerHour &&
+   859→            profile.provisioningAttempts.length >= threshold.provisioningAttemptsPerHour) {
+   860→          score += 45;
+   861→          reasons.push(`${profile.provisioningAttempts.length} provisioning attempts`);
+   862→        }
+   863→        if (threshold.authFailuresPerHour &&
+   864→            profile.authAttempts.length >= threshold.authFailuresPerHour) {
+   865→          score += 35;
+   866→          reasons.push(`${profile.authAttempts.length} auth failures`);
+   867→        }
+   868→        if (indicators.includes(FraudIndicator.LOCATION_UPDATE_WHILE_ACTIVE_CALL)) {
+   869→          score += 20;
+   870→          reasons.push('Location update during active call');
+   871→        }
+   872→        break;
+   873→
+   874→      case FraudType.WANGIRI:
+   875→        if (threshold.shortDurationCallsPerHour) {
+   876→          const shortCalls = profile.callsToday.filter(
+   877→            c => c.duration <= (threshold.maxWangiriDurationSeconds || 5)
+   878→          ).length;
+   879→          if (shortCalls >= threshold.shortDurationCallsPerHour) {
+   880→            score += 50;
+   881→            reasons.push(`${shortCalls} short duration calls`);
+   882→          }
+   883→        }
+   884→        if (threshold.uniqueCalledNumbersPerHour) {
+   885→          const uniqueNumbers = new Set(profile.callsToday.map(c => c.calledNumber)).size;
+   886→          if (uniqueNumbers >= threshold.uniqueCalledNumbersPerHour) {
+   887→            score += 30;
+   888→            reasons.push(`${uniqueNumbers} unique numbers called`);
+   889→          }
+   890→        }
+   891→        break;
+   892→
+   893→      case FraudType.BYPASS_FRAUD:
+   894→        // Simbox detection based on patterns
+   895→        if (indicators.includes(FraudIndicator.BYPASS_FRAUD_GSM_GATEWAY)) {
+   896→          score += 50;
+   897→          reasons.push('GSM gateway pattern detected');
+   898→        }
+   899→        if (indicators.includes(FraudIndicator.BYPASS_FRAUD_SIMBOX)) {
+   900→          score += 50;
+   901→          reasons.push('Simbox pattern detected');
+   902→        }
+   903→        break;
+   904→
+   905→      case FraudType.ROAMING_ANOMALY:
+   906→        if (indicators.includes(FraudIndicator.ROAMING_ANOMALY_FAST_TRAVEL)) {
+   907→          score += 60;
+   908→          reasons.push('Impossible travel speed detected');
+   909→        }
+   910→        if (indicators.includes(FraudIndicator.ROAMING_ANOMALY_IMPOSSIBLE)) {
+   911→          score += 40;
+   912→          reasons.push('Impossible roaming detected');
+   913→        }
+   914→        if (threshold.countriesVisitedPerDay &&
+   915→            profile.locationsSeen.size >= threshold.countriesVisitedPerDay) {
+   916→          score += 30;
+   917→          reasons.push(`${profile.locationsSeen.size} locations visited`);
+   918→        }
+   919→        break;
+   920→    }
+   921→
+   922→    const triggered = score >= (threshold.riskScoreThreshold || 50);
+   923→    
+   924→    return {
+   925→      triggered,
+   926→      score: Math.min(score, 100),
+   927→      reason: reasons.join('; ') || 'Threshold met',
+   928→    };
+   929→  }
+   930→
+   931→  private createAlert(
+   932→    rule: FraudRule,
+   933→    message: SS7Message,
+   934→    indicators: FraudIndicator[],
+   935→    evaluation: { triggered: boolean; score: number; reason: string }
+   936→  ): FraudAlert {
+   937→    const subscriberKey = this.getSubscriberKey(message);
+   938→    const profile = this.getOrCreateProfile(message);
+   939→    
+   940→    // Calculate estimated financial impact
+   941→    const estimatedLoss = this.estimateFinancialImpact(rule.type, profile);
+   942→
+   943→    const alert: FraudAlert = {
+   944→      id: `fraud_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+   945→      timestamp: new Date(),
+   946→      type: rule.type,
+   947→      severity: rule.severity,
+   948→      status: AlertStatus.NEW,
+   949→      confidence: evaluation.score,
+   950→      indicators,
+   951→      subscriber: message.protocol === SS7ProtocolLayer.MAP ? 
+   952→        (message as DecodedMAPMessage).sourceSubscriber : undefined,
+   953→      evidence: [...profile.evidence.slice(-10)], // Last 10 evidence items
+   954→      financialImpact: estimatedLoss,
+   955→      ruleId: rule.id,
+   956→      ruleName: rule.name,
+   957→      source: 'ss7-fraud-detector',
+   958→      artpReportable: rule.artpReportable,
+   959→      artpDeadline: rule.artpReportable ? 
+   960→        new Date(Date.now() + 24 * 60 * 60 * 1000) : undefined, // 24h deadline
+   961→    };
+   962→
+   963→    return alert;
+   964→  }
+   965→
+   966→  private estimateFinancialImpact(fraudType: FraudType, profile: SubscriberProfile): {
+   967→    estimatedLossDZD: number;
+   968→    currency: 'DZD';
+   969→    calculationBasis: string;
+   970→  } {
+   971→    // Rough estimates for Djezzy network (would be calibrated)
+   972→    const baseRates: Record<FraudType, { ratePerIncident: number; basis: string }> = {
+   973→      [FraudType.IRSF]: { ratePerIncident: 150, basis: 'Average IRSF loss per incident (DZD)' },
+   974→      [FraudType.SIM_SWAP]: { ratePerIncident: 50000, basis: 'Estimated SIM swap loss including liability' },
+   975→      [FraudType.WANGIRI]: { ratePerIncident: 5, basis: 'Average wangiri revenue loss' },
+   976→      [FraudType.BYPASS_FRAUD]: { ratePerIncident: 200000, basis: 'Estimated bypass fraud monthly loss' },
+   977→      [FraudType.PREMIUM_RATE_ABUSE]: { ratePerIncident: 500, basis: 'Premium rate abuse loss' },
+   978→      [FraudType.ROAMING_ANOMALY]: { ratePerIncident: 30000, basis: 'Roaming fraud estimated impact' },
+   979→      [FraudType.INTERCEPTION]: { ratePerIncident: 100000, basis: 'Legal/compensation costs' },
+   980→      [FraudType.CLONING]: { ratePerIncident: 75000, basis: 'Cloning investigation + loss' },
+   981→      [FraudType.SUBSCRIPTION_FRAUD]: { ratePerIncident: 25000, basis: 'Subscription fraud recovery cost' },
+   982→      [FraudType.TRAFFIC_PUMPING]: { ratePerIncident: 45000, basis: 'Traffic pumping settlement cost' },
+   983→      [FraudType.OTHER]: { ratePerIncident: 10000, basis: 'Generic fraud estimate' },
+   984→    };
+   985→
+   986→    const config = baseRates[fraudType];
+   987→    const multiplier = Math.min(profile.callCount / 10, 10); // Scale with activity
+   988→
+   989→    return {
+   990→      estimatedLossDZD: Math.round(config.ratePerIncident * multiplier),
+   991→      currency: 'DZD',
+   992→      calculationBasis: config.basis,
+   993→    };
+   994→  }
+   995→
+   996→  // ============================================================
+   997→  // UTILITY METHODS
+   998→  // ============================================================
+   999→
+  1000→  private getOrCreateProfile(message: SS7Message): SubscriberProfile {
+  1001→    const key = this.getSubscriberKey(message);
+  1002→    
+  1003→    if (!this.subscriberProfiles.has(key)) {
+  1004→      this.subscriberProfiles.set(key, new SubscriberProfile(key));
+  1005→    }
+  1006→    
+  1007→    return this.subscriberProfiles.get(key)!;
+  1008→  }
+  1009→
+  1010→  private getSubscriberKey(message: SS7Message): string {
+  1011→    // Try to extract subscriber identifier
+  1012→    if (message.protocol === SS7ProtocolLayer.MAP) {
+  1013→      const mapMsg = message as DecodedMAPMessage;
+  1014→      return mapMsg.sourceSubscriber?.imsi || 
+  1015→             mapMsg.sourceSubscriber?.msisdn ||
+  1016→             mapMsg.sccp?.sourceGlobalTitle?.digits ||
+  1017→             'unknown';
+  1018→    }
+  1019→    
+  1020→    if (message.protocol === SS7ProtocolLayer.ISUP) {
+  1021→      const isupMsg = message as DecodedISUPMessage;
+  1022→      return isupMsg.callingPartyNumber || 'unknown';
+  1023→    }
+  1024→
+  1025→    return `${message.opc.raw}-${message.dpc.raw}-${message.sls || 0}`;
+  1026→  }
+  1027→
+  1028→  private isInCooldown(subscriberKey: string, ruleId: string): boolean {
+  1029→    const key = `${subscriberKey}:${ruleId}`;
+  1030→    const alerts = this.alertHistory.get(key) || [];
+  1031→    
+  1032→    if (alerts.length === 0) return false;
+  1033→    
+  1034→    const rule = this.rules.get(ruleId);
+  1035→    if (!rule) return false;
+  1036→    
+  1037→    const latestAlert = alerts[alerts.length - 1];
+  1038→    const cooldownMs = rule.cooldownMinutes * 60 * 1000;
+  1039→    
+  1040→    return (Date.now() - latestAlert.timestamp.getTime()) < cooldownMs;
+  1041→  }
+  1042→
+  1043→  private storeAlert(alert: FraudAlert, subscriberKey: string): void {
+  1044→    const key = `${subscriberKey}:${alert.ruleId}`;
+  1045→    
+  1046→    if (!this.alertHistory.has(key)) {
+  1047→      this.alertHistory.set(key, []);
+  1048→    }
+  1049→    
+  1050→    this.alertHistory.get(key)!.push(alert);
+  1051→    this.activeAlerts.add(alert.id);
+  1052→  }
+  1053→
+  1054→  private groupIndicatorsByType(indicators: FraudIndicator[]): Map<FraudType, FraudIndicator[]> {
+  1055→    const groups = new Map<FraudType, FraudIndicator[]>();
+  1056→    
+  1057→    for (const indicator of indicators) {
+  1058→      const details = FRAUD_INDICATOR_DETAILS[indicator];
+  1059→      if (!details) continue;
+  1060→      
+  1061→      const fraudType = this.indicatorToFraudType(details.category);
+  1062→      
+  1063→      if (!groups.has(fraudType)) {
+  1064→        groups.set(fraudType, []);
+  1065→      }
+  1066→      
+  1067→      groups.get(fraudType)!.push(indicator);
+  1068→    }
+  1069→    
+  1070→    return groups;
+  1071→  }
+  1072→
+  1073→  private indicatorToFraudType(category: string): FraudType {
+  1074→    switch (category.toLowerCase()) {
+  1075→      case 'irsf': return FraudType.IRSF;
+  1076→      case 'sim swap': return FraudType.SIM_SWAP;
+  1077→      case 'wangiri': return FraudType.WANGIRI;
+  1078→      case 'bypass fraud': return FraudType.BYPASS_FRAUD;
+  1079→      case 'premium rate': return FraudType.PREMIUM_RATE_ABUSE;
+  1080→      case 'roaming': return FraudType.ROAMING_ANOMALY;
+  1081→      case 'security':
+  1082→      case 'anomaly': return FraudType.INTERCEPTION;
+  1083→      case 'cloning': return FraudType.CLONING;
+  1084→      default: return FraudType.OTHER;
+  1085→    }
+  1086→  }
+  1087→
+  1088→  private isHighRiskDestination(number: string): boolean {
+  1089→    for (const prefix of IRSF_DESTINATION_PREFIXES) {
+  1090→      if (number.startsWith(prefix)) return true;
+  1091→    }
+  1092→    return false;
+  1093→  }
+  1094→
+  1095→  private isPremiumRateNumber(number: string): boolean {
+  1096→    // Premium rate numbers typically have specific patterns
+  1097→    // This is a simplified check - production would use a database
+  1098→    const premiumPatterns = ['900', '808', '822', '909'];
+  1099→    return premiumPatterns.some(p => number.includes(p));
+  1100→  }
+  1101→
+  1102→  private calculateDistance(location1: string, location2: string): number {
+  1103→    // Simplified distance calculation
+  1104→    // In production, this would use actual coordinates or MCC/MNC lookup
+  1105→    if (location1 === location2) return 0;
+  1106→    
+  1107→    // Return a random-ish but deterministic value for demo
+  1108→    // Real implementation would use cell tower coordinates
+  1109→    const hash = (loc: string) => {
+  1110→      let h = 0;
+  1111→      for (let i = 0; i < loc.length; i++) {
+  1112→        h = ((h << 5) - h + loc.charCodeAt(i)) | 0;
+  1113→      }
+  1114→      return Math.abs(h);
+  1115→    };
+  1116→    
+  1117→    return Math.abs(hash(location1) - hash(location2)) % 5000; // Max ~5000km
+  1118→  }
+  1119→
+  1120→  // ============================================================
+  1121→  // QUERY METHODS
+  1122→  // ============================================================
+  1123→
+  1124→  /**
+  1125→   * Get active fraud alerts
+  1126→   */
+  1127→  getActiveAlerts(status?: AlertStatus): FraudAlert[] {
+  1128→    const allAlerts: FraudAlert[] = [];
+  1129→    
+  1130→    for (const alerts of this.alertHistory.values()) {
+  1131→      for (const alert of alerts) {
+  1132→        if ((!status || alert.status === status) && this.activeAlerts.has(alert.id)) {
+  1133→          allAlerts.push(alert);
+  1134→        }
+  1135→      }
+  1136→    }
+  1137→    
+  1138→    // Sort by timestamp descending
+  1139→    return allAlerts.sort((a, b) => b.timestamp.getTime() - a.timestamp.getTime());
+  1140→  }
+  1141→
+  1142→  /**
+  1143→   * Get fraud statistics
+  1144→   */
+  1145→  getStatistics(): FraudStatistics {
+  1146→    const stats: FraudStatistics = {
+  1147→      totalAlerts: 0,
+  1148→      alertsByStatus: {},
+  1149→      alertsByType: {},
+  1150→      alertsBySeverity: {},
+  1151→      totalEstimatedLossDZD: 0,
+  1152→      blockedSubscribers: 0,
+  1153→      topFraudTypes: [],
+  1154→      recentAlerts: [],
+  1155→    };
+  1156→
+  1157→    const now = Date.now();
+  1158→    const twentyFourHoursAgo = now - 24 * 60 * 60 * 1000;
+  1159→
+  1160→    for (const alerts of this.alertHistory.values()) {
+  1161→      for (const alert of alerts) {
+  1162→        if (alert.timestamp.getTime() < twentyFourHoursAgo) continue;
+  1163→        
+  1164→        stats.totalAlerts++;
+  1165→        stats.alertsByStatus[alert.status] = (stats.alertsByStatus[alert.status] || 0) + 1;
+  1166→        stats.alertsByType[alert.type] = (stats.alertsByType[alert.type] || 0) + 1;
+  1167→        stats.alertsBySeverity[alert.severity] = (stats.alertsBySeverity[alert.severity] || 0) + 1;
+  1168→        
+  1169→        if (alert.financialImpact) {
+  1170→          stats.totalEstimatedLossDZD += alert.financialImpact.estimatedLossDZD;
+  1171→        }
+  1172→        
+  1173→        if (alert.status === AlertStatus.BLOCKED) {
+  1174→          stats.blockedSubscribers++;
+  1175→        }
+  1176→      }
+  1177→    }
+  1178→
+  1179→    // Top fraud types
+  1180→    stats.topFraudTypes = Object.entries(stats.alertsByType)
+  1181→      .sort(([,a], [,b]) => b - a)
+  1182→      .slice(0, 5)
+  1183→      .map(([type, count]) => ({ type, count }));
+  1184→
+  1185→    // Recent alerts (last 24h)
+  1186→    stats.recentAlerts = this.getActiveAlerts().slice(0, 10);
+  1187→
+  1188→    return stats;
+  1189→  }
+  1190→
+  1191→  /**
+  1192→   * Block a suspicious subscriber
+  1193→   */
+  1194→  async blockSubscriber(alertId: string, reason: string): Promise<boolean> {
+  1195→    const alert = Array.from(this.alertHistory.values())
+  1196→      .flat()
+  1197→      .find(a => a.id === alertId);
+  1198→    
+  1199→    if (!alert) return false;
+  1200→
+  1201→    const action: FraudAction = {
+  1202→      id: `action_${Date.now()}`,
+  1203→      type: FraudActionType.BLOCK_SUBSCRIBER,
+  1204→      status: ActionStatus.EXECUTED,
+  1205→      timestamp: new Date(),
+  1206→      performedBy: 'system',
+  1207→      details: reason,
+  1208→      result: 'Subscriber blocked successfully',
+  1209→    };
+  1210→
+  1211→    if (!alert.actions) alert.actions = [];
+  1212→    alert.actions.push(action);
+  1213→    alert.status = AlertStatus.BLOCKED;
+  1214→
+  1215→    return true;
+  1216→  }
+  1217→
+  1218→  /**
+  1219→   * Clear old data (memory management)
+  1220→   */
+  1221→  cleanup(maxAgeHours: number = 24): void {
+  1222→    const cutoff = Date.now() - maxAgeHours * 60 * 60 * 1000;
+  1223→
+  1224→    // Clean up alert history
+  1225→    for (const [key, alerts] of this.alertHistory.entries()) {
+  1226→      const filtered = alerts.filter(a => a.timestamp.getTime() > cutoff);
+  1227→      if (filtered.length === 0) {
+  1228→        this.alertHistory.delete(key);
+  1229→      } else {
+  1230→        this.alertHistory.set(key, filtered);
+  1231→      }
+  1232→    }
+  1233→
+  1234→    // Clean up subscriber profiles
+  1235→    for (const [key, profile] of this.subscriberProfiles.entries()) {
+  1236→      profile.cleanup(cutoff);
+  1237→      if (profile.isEmpty()) {
+  1238→        this.subscriberProfiles.delete(key);
+  1239→      }
+  1240→    }
+  1241→  }
+  1242→}
+  1243→
+  1244→export interface FraudStatistics {
+  1245→  totalAlerts: number;
+  1246→  alertsByStatus: Record<AlertStatus, number>;
+  1247→  alertsByType: Record<FraudType, number>;
+  1248→  alertsBySeverity: Record<string, number>;
+  1249→  totalEstimatedLossDZD: number;
+  1250→  blockedSubscribers: number;
+  1251→  topFraudTypes: Array<{ type: string; count: number }>;
+  1252→  recentAlerts: FraudAlert[];
+  1253→}
+  1254→
+  1255→// ============================================================
+  1256→// SUBSCRIBER PROFILE CLASS
+  1257→// ============================================================
+  1258→
+  1259→class SubscriberProfile {
+  1260→  readonly key: string;
+  1261→  
+  1262→  // Call statistics
+  1263→  callCount: number = 0;
+  1264→  callsToday: Array<{ timestamp: Date; calledNumber: string; duration: number }>;
+  1265→  internationalCallCount: number = 0;
+  1266→  internationalDestinations: Set<string>;
+  1267→  activeCalls: number = 0;
+  1268→  noAnswerCount: number = 0;
+  1269→  
+  1270→  // SMS statistics
+  1271→  smsCount: number = 0;
+  1272→  
+  1273→  // Authentication & Security
+  1274→  authAttempts: number[];
+  1275→  provisioningAttempts: number[];
+  1276→  
+  1277→  // Location tracking
+  1278→  lastLocation?: string;
+  1279→  lastLocationTime: Date;
+  1280→  locationsSeen: Set<string>;
+  1281→  roamingRequests: number = 0;
+  1282→  
+  1283→  // Evidence collection
+  1284→  evidence: EvidenceItem[];
+  1285→
+  1286→  constructor(key: string) {
+  1287→    this.key = key;
+  1288→    this.callsToday = [];
+  1289→    this.internationalDestinations = new Set();
+  1290→    this.authAttempts = [];
+  1291→    this.provisioningAttempts = [];
+  1292→    this.lastLocationTime = new Date(0); // Epoch
+  1293→    this.locationsSeen = new Set();
+  1294→    this.evidence = [];
+  1295→  }
+  1296→
+  1297→  addEvidence(evidence: EvidenceItem): void {
+  1298→    this.evidence.push(evidence);
+  1299→    // Keep only last 50 evidence items
+  1300→    if (this.evidence.length > 50) {
+  1301→      this.evidence = this.evidence.slice(-50);
+  1302→    }
+  1303→  }
+  1304→
+  1305→  cleanup(cutoff: number): void {
+  1306→    this.callsToday = this.callsToday.filter(c => c.timestamp.getTime() > cutoff);
+  1307→    this.authAttempts = this.authAttempts.filter(t => t > cutoff);
+  1308→    this.provisioningAttempts = this.provisioningAttempts.filter(t => t > cutoff);
+  1309→    this.evidence = this.evidence.filter(e => e.timestamp.getTime() > cutoff);
+  1310→  }
+  1311→
+  1312→  isEmpty(): boolean {
+  1313→    return (
+  1314→      this.callCount === 0 &&
+  1315→      this.authAttempts.length === 0 &&
+  1316→      this.provisioningAttempts.length === 0 &&
+  1317→      this.evidence.length === 0
+  1318→    );
+  1319→  }
+  1320→}
+  1321→
+  1322→// ============================================================
+  1323→// EXPORT SINGLETON
+  1324→// ============================================================
+  1325→
+  1326→let detectorInstance: FraudDetector | null = null;
+  1327→
+  1328→export function getFraudDetector(): FraudDetector {
+  1329→  if (!detectorInstance) {
+  1330→    detectorInstance = new FraudDetector();
+  1331→  }
+  1332→  return detectorInstance;
+  1333→}
+  1334→
