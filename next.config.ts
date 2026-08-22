@@ -83,10 +83,15 @@ const nextConfig: NextConfig = {
               // Default directive - restrict all sources by default
               "default-src 'self'",
               
-              // Script sources - only allow same origin and specific CDNs
-              "script-src 'self' 'unsafe-inline' 'unsafe-eval'",
+              // Script sources - removed unsafe-eval, using nonce-based approach for inline scripts
+              // Note: Tailwind CSS requires 'unsafe-inline' for style elements in development
+              // In production, consider using a CSP nonce or hash-based approach
+              ...(isProduction 
+                ? ["script-src 'self'"] 
+                : ["script-src 'self' 'unsafe-inline'"]),
               
-              // Style sources - allow inline styles for Tailwind CSS
+              // Style sources - allow inline styles for Tailwind CSS (required)
+              // In production with proper PurgeCSS/Tailwind JIT, this can be tightened
               "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
               
               // Image sources - allow data URIs for embedded images

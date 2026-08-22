@@ -23,6 +23,7 @@ import {
 } from '@/lib/auth/utils';
 import { authenticateUser as ldapAuth, syncUserWithDatabase, checkLDAPHealth } from '@/lib/auth/ldap';
 import { initiateLogin as samlInitiateLogin, processResponse as samlProcessResponse } from '@/lib/auth/saml';
+import { authRateLimiter } from '@/lib/middleware/rate-limit';
 
 // ============================================================
 // REQUEST TYPES
@@ -51,6 +52,12 @@ interface RegisterData {
 // ============================================================
 
 export async function POST(request: NextRequest) {
+  // SECURITY: Apply rate limiting to all auth endpoints
+  const rateLimitResult = authRateLimiter(request);
+  if (!rateLimitResult.success && rateLimitResult.response) {
+    return rateLimitResult.response;
+  }
+
   try {
     const body: LoginRequest = await request.json();
     const { action } = body;

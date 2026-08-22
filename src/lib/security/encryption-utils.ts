@@ -7,7 +7,7 @@
  * @compliance ANRT-SEC-009, NIST SP 800-38D, FIPS 140-2
  */
 
-import { randomBytes, createCipheriv, createDecipheriv, scrypt, createHash, pbkdf2 } from 'crypto';
+import { randomBytes, createCipheriv, createDecipheriv, scrypt, createHash, pbkdf2, timingSafeEqual } from 'crypto';
 import { promisify } from 'util';
 
 const scryptAsync = promisify(scrypt);
@@ -304,6 +304,7 @@ export class PasswordHasher {
   
   /**
    * Verify a password against a hash
+   * SECURITY: Uses constant-time comparison to prevent timing attacks
    */
   async verify(password: string, hashResult: PasswordHashResult): Promise<boolean> {
     try {
@@ -317,22 +318,30 @@ export class PasswordHasher {
         'sha512'
       );
       
-      // Constant-time comparison to prevent timing attacks
+      // SECURITY: Use crypto.timingSafeEqual for constant-time comparison
+      // This prevents timing attacks that could reveal password similarity
       const computedHash = derivedKey.toString('base64');
       const storedHash = hashResult.hash;
       
-      if (computedHash.length !== storedHash.length) {
+      // Convert strings to buffers for timingSafeEqual comparison
+      const computedBuf = Buffer.from(computedHash, 'utf8');
+      const storedBuf = Buffer.from(storedHash, 'utf8');
+      
+      // Lengths must match for timingSafeEqual
+      if (computedBuf.length !== storedBuf.length) {
         return false;
       }
       
-      // Use crypto.timingSafeEqual would be ideal here
-      // Simple implementation for compatibility
-      let result = 0;
-      for (let i = 0; i < computedHash.length; i++) {
-        result |= computedHash.charCodeAt(i) ^ storedHash.charCodeAt(i);
+      try {
+        return timingSafeEqual(computedBuf, storedBuf);
+      } catch {
+        // Fallback for Node.js versions without timingSafeEqual support
+        let result = 0;
+        for (let i = 0; i < computedBuf.length; i++) {
+          result |= computedBuf[i] ^ storedBuf[i];
+        }
+        return result === 0;
       }
-      
-      return result === 0;
     } catch {
       return false;
     }
@@ -467,10 +476,27 @@ export class HashUtils {
   
   /**
    * Anonymize/hash PII for logging purposes
+   * SECURITY: Requires ANONYMIZATION_SALT to be set - fails fast in production if not configured
    */
   static anonymizePii(pii: string): string {
-    // Use keyed hash so values can't be reversed but are consistent
-    const salt = process.env.ANONYMIZATION_SALT || 'default-salt-change-me';
+    const salt = process.env.ANONYMIZATION_SALT;
+    
+    // SECURITY: Fail fast in production if salt not configured
+    if (!salt) {
+      if (process.env.NODE_ENV === 'production') {
+        throw new Error(
+          'FATAL: ANONYMIZATION_SALT environment variable must be set in production.\n' +
+          'Generate with: openssl rand -base64 32'
+        );
+      }
+      // In development, use a warning but allow operation
+      console.warn(
+        'WARNING: ANONYMIZATION_SALT not set. Using development-only fallback. ' +
+        'This MUST be configured in production!'
+      );
+      return `${pii.charAt(0)}[DEV_MODE]${pii.charAt(pii.length - 1)}`;
+    }
+    
     const hash = createHmac('sha256', salt).update(pii).digest('hex').slice(0, 12);
     return `${pii.charAt(0)}${hash}${pii.charAt(pii.length - 1)}`;
   }
