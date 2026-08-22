@@ -2,6 +2,7 @@
 
 import React, { useState, useEffect } from 'react'
 import Link from 'next/link'
+import { useRouter } from 'next/navigation'
 import {
   Shield, AlertTriangle, Activity, Clock, Users, Server,
   Globe, Lock, Eye, TrendingUp, Bell, Search, Filter,
@@ -25,6 +26,80 @@ import {
   anrtComplianceData,
   systemComponents
 } from '@/lib/demo-data'
+
+// Module ID to Route Mapping for navigation
+const moduleRoutes: Record<string, string> = {
+  'siem': '/dashboards/analyst',
+  'edr': '/dashboards/analyst',
+  'network-security': '/dashboards/analyst',
+  'ss7-tools': '/dashboards/telecom',
+  'telecom-security': '/dashboards/telecom',
+  'fraud-detection': '/dashboards/telecom',
+  'analytics': '/dashboards/analyst',
+  'compliance': '/dashboards/compliance',
+  'ml-platform': '/dashboards/executive',
+  'threat-hunting': '/dashboards/threat-hunting',
+  'soar': '/dashboards/threat-hunting',
+  'incidents': '/dashboards/analyst',
+}
+
+// Sub-module ID to Route Mapping
+const subModuleRoutes: Record<string, string> = {
+  'siem-dashboard': '/dashboards/analyst',
+  'log-management': '/dashboards/analyst',
+  'correlation-engine': '/dashboards/analyst',
+  'rule-management': '/dashboards/analyst',
+  'log-analytics': '/dashboards/analyst',
+  'endpoint-monitoring': '/dashboards/analyst',
+  'threat-hunting-edr': '/dashboards/threat-hunting',
+  'incident-response': '/dashboards/analyst',
+  'forensics': '/dashboards/analyst',
+  'ids-ips': '/dashboards/analyst',
+  'traffic-analysis': '/dashboards/analyst',
+  'vulnerability-scanner': '/dashboards/analyst',
+  'firewall-mgmt': '/dashboards/analyst',
+  'ss7-decoder': '/dashboards/telecom',
+  'traffic-monitor': '/dashboards/telecom',
+  'fraud-detector': '/dashboards/telecom',
+  'signaling-analyzer': '/dashboards/telecom',
+  'message-inspector': '/dashboards/telecom',
+  'ss7-firewall': '/dashboards/telecom',
+  'gtp-inspector': '/dashboards/telecom',
+  'diameter-analyzer': '/dashboards/telecom',
+  'sip-sentry': '/dashboards/telecom',
+  'ims-protection': '/dashboards/telecom',
+  'sim-swap-detector': '/dashboards/telecom',
+  'fraud-dashboard': '/dashboards/telecom',
+  'subscription-fraud': '/dashboards/telecom',
+  'billing-fraud': '/dashboards/telecom',
+  'roaming-fraud': '/dashboards/telecom',
+  'threat-intel': '/dashboards/analyst',
+  'behavioral-analytics': '/dashboards/executive',
+  'threat-scoring': '/dashboards/executive',
+  'ml-predictions': '/dashboards/executive',
+  'reporting': '/dashboards/executive',
+  'artp-reporting': '/dashboards/compliance',
+  'anssi-alignment': '/dashboards/compliance',
+  'iso27001': '/dashboards/compliance',
+  'nist-framework': '/dashboards/compliance',
+  'evidence-vault': '/dashboards/compliance',
+  'gap-analysis': '/dashboards/compliance',
+  'anomaly-detection': '/dashboards/executive',
+  'predictive-analytics': '/dashboards/executive',
+  'uba-engine': '/dashboards/executive',
+  'model-management': '/dashboards/executive',
+  'automated-response-ai': '/dashboards/threat-hunting',
+  'hunt-sessions': '/dashboards/threat-hunting',
+  'hypothesis-builder': '/dashboards/threat-hunting',
+  'query-workbench': '/dashboards/threat-hunting',
+  'ioc-extraction': '/dashboards/threat-hunting',
+  'timeline-analysis': '/dashboards/threat-hunting',
+  'playbooks': '/dashboards/threat-hunting',
+  'case-management': '/dashboards/analyst',
+  'automation-rules': '/dashboards/threat-hunting',
+  'task-automation': '/dashboards/threat-hunting',
+  'integration-hub': '/dashboards/analyst',
+}
 
 // Import SS7 Components
 import SS7TrafficMonitor from '@/components/ss7/SS7TrafficMonitor'
@@ -339,11 +414,31 @@ const PhaseBadge = ({ phase }: { phase: number }) => (
 )
 
 export default function SOCDashboard() {
+  const router = useRouter()
   const [selectedModule, setSelectedModule] = useState<string>('ss7-tools')
   const [viewMode, setViewMode] = useState<'grid' | 'list'>('grid')
   const [searchQuery, setSearchQuery] = useState('')
   const [showMobileMenu, setShowMobileMenu] = useState(false)
   const [showSS7Tools, setShowSS7Tools] = useState(true)
+
+  // Handle module card click - navigate to the appropriate dashboard
+  const handleModuleClick = (moduleId: string) => {
+    const route = moduleRoutes[moduleId]
+    if (route) {
+      router.push(route)
+    } else {
+      // Fallback: toggle expansion if no route exists
+      setSelectedModule(selectedModule === moduleId ? null : moduleId)
+    }
+  }
+
+  // Handle sub-module item click - navigate to the appropriate dashboard
+  const handleSubModuleClick = (subModuleId: string) => {
+    const route = subModuleRoutes[subModuleId]
+    if (route) {
+      router.push(route)
+    }
+  }
 
   const filteredModules = socModules.filter(module =>
     (module.name && module.name.toLowerCase().includes(searchQuery.toLowerCase())) ||
@@ -456,7 +551,7 @@ export default function SOCDashboard() {
                       ? 'border-cyan-500 bg-cyan-500/10'
                       : 'border-slate-700 hover:border-slate-600 hover:bg-slate-800/50'
                   }`}
-                  onClick={() => setSelectedModule(selectedModule === module.id ? null : module.id)}
+                  onClick={() => handleModuleClick(module.id)}
                 >
                   {/* Module Header */}
                   <div className="p-4">
@@ -498,7 +593,8 @@ export default function SOCDashboard() {
                       {module.subModules.map((sub) => (
                         <div
                           key={sub.id}
-                          className="flex items-center justify-between p-2.5 rounded-lg hover:bg-slate-700/50 transition-colors group/sub"
+                          className="flex items-center justify-between p-2.5 rounded-lg hover:bg-slate-700/50 transition-colors group/sub cursor-pointer hover:border-cyan-500/30 border border-transparent"
+                          onClick={() => handleSubModuleClick(sub.id)}
                         >
                           <div className="flex items-center gap-2.5 min-w-0">
                             <span className="w-4 h-4 text-slate-400 group-hover/sub:text-cyan-400 flex-shrink-0 inline-flex items-center justify-center">{sub.icon}</span>
@@ -791,7 +887,7 @@ export default function SOCDashboard() {
                 <div
                   key={idx}
                   className="bg-gradient-to-br from-slate-900 to-slate-800 rounded-xl border border-slate-700 p-5 hover:border-cyan-500/50 transition-all cursor-pointer group"
-                  onClick={() => setSelectedModule(module.id)}
+                  onClick={() => handleModuleClick(module.id)}
                 >
                   <div className="flex items-center gap-3 mb-3">
                     <div className="p-2.5 rounded-xl bg-cyan-500/20 text-cyan-400 group-hover:bg-cyan-500/30 transition-colors">
