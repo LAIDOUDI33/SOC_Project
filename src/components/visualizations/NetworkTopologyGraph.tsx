@@ -1,24 +1,28 @@
 'use client';
 
-import React, { useState, useCallback, useMemo, useRef, useEffect } from 'react';
+import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { cn } from '@/lib/utils';
 import {
   Server,
-  Shield,
+  Wifi,
   Router,
-  Smartphone,
   Database,
-  Network,
-  Activity,
+  Shield,
   AlertTriangle,
-  CheckCircle2,
+  CheckCircle,
   XCircle,
-  ZoomIn,
-  ZoomOut,
-  Maximize2,
-  Move,
+  Activity,
+  Globe,
+  Phone,
+  Radio,
+  Cloud,
+  Lock,
+  Network,
+  Satellite,
+  Zap,
   Info,
-  X,
+  Maximize2,
+  RefreshCw
 } from 'lucide-react';
 import {
   Card,
@@ -26,6 +30,7 @@ import {
   CardHeader,
   CardTitle,
 } from '@/components/ui/card';
+import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import {
   Tooltip,
@@ -33,746 +38,996 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from '@/components/ui/tooltip';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
 
-/**
- * Node type enumeration for network elements
- */
+// ============================================================
+// TYPES & INTERFACES
+// ============================================================
+
+export type NodeStatus = 'operational' | 'degraded' | 'down' | 'maintenance' | 'unknown';
 export type NodeType = 
-  | 'hlr'      // Home Location Register
-  | 'hss'      // Home Subscriber Server
-  | 'stp'      // Signal Transfer Point
-  | 'msc'      // Mobile Switching Center
-  | 'mgw'      // Media Gateway
-  | 'sgsn'     // Serving GPRS Support Node
-  | 'ggsn'     // Gateway GPRS Support Node
-  | 'pgw'      // PDN Gateway
-  | 'mme'      // Mobility Management Entity
-  | 'siem'     // Security Information & Event Management
-  | 'edr'      // Event Data Recorder
-  | 'firewall'
-  | 'loadbalancer'
-  | 'router'
+  | 'core-router' 
+  | 'edge-router' 
+  | 'switch' 
+  | 'firewall' 
+  | 'server' 
+  | 'database'
+  | 'siem'
+  | 'ss7-node'
+  | 'hlr'
+  | 'probe'
+  | 'cloud'
   | 'endpoint';
 
-/** Node health status */
-export type NodeStatus = 'healthy' | 'warning' | 'critical' | 'offline';
-
-/** Status color mapping */
-export const STATUS_COLORS: Record<NodeStatus, string> = {
-  healthy: '#22c55e',
-  warning: '#eab308',
-  critical: '#ef4444',
-  offline: '#6b7280',
-};
-
-/** Node type configuration with icons and labels */
-export const NODE_TYPE_CONFIG: Record<NodeType, {
-  label: string;
-  icon: React.ElementType;
-  color: string;
-  category: string;
-}> = {
-  hlr: { label: 'HLR', icon: Database, color: '#8b5cf6', category: 'Core' },
-  hss: { label: 'HSS', icon: Database, color: '#a855f7', category: 'Core' },
-  stp: { label: 'STP', icon: Network, color: '#06b6d4', category: 'Signaling' },
-  msc: { label: 'MSC', icon: Server, color: '#3b82f6', category: 'Switching' },
-  mgw: { label: 'MGW', icon: Server, color: '#60a5fa', category: 'Switching' },
-  sgsn: { label: 'SGSN', icon: Router, color: '#f59e0b', category: 'Packet' },
-  ggsn: { label: 'GGSN', icon: Router, color: '#fbbf24', category: 'Packet' },
-  pgw: { label: 'PGW', icon: Router, color: '#fcd34d', category: 'Packet' },
-  mme: { label: 'MME', icon: Smartphone, color: '#10b981', category: 'LTE' },
-  siem: { label: 'SIEM', icon: Shield, color: '#ef4444', category: 'Security' },
-  edr: { label: 'EDR', icon: Activity, color: '#f97316', category: 'Monitoring' },
-  firewall: { label: 'Firewall', icon: Shield, color: '#dc2626', category: 'Security' },
-  loadbalancer: { label: 'LB', icon: Activity, color: '#0ea5e9', category: 'Infrastructure' },
-  router: { label: 'Router', icon: Router, color: '#6366f1', category: 'Network' },
-  endpoint: { label: 'Endpoint', icon: Smartphone, color: '#84cc16', category: 'Access' },
-};
-
-/** Network node interface */
-export interface NetworkNode {
+interface NetworkNode {
   id: string;
-  type: NodeType;
   name: string;
+  type: NodeType;
   status: NodeStatus;
-  /** Optional metrics to display */
+  position: { x: number; y: number }; // Percentage position (0-100)
   metrics?: {
     cpu?: number;
     memory?: number;
+    latency?: number;
+    throughput?: number;
     connections?: number;
-    throughput?: string;
   };
-  /** Position (will be auto-calculated if not provided) */
-  x?: number;
-  y?: number;
+  details?: string;
+  lastUpdate?: Date;
 }
 
-/** Connection between nodes */
-export interface NetworkConnection {
+interface NetworkLink {
   id: string;
-  sourceId: string;
-  targetId: string;
-  /** Connection type affects line style */
-  type?: 'primary' | 'secondary' | 'signaling' | 'data';
-  /** Bandwidth or traffic info */
-  bandwidth?: string;
-  /** Latency in ms */
+  source: string;
+  target: string;
+  bandwidth: string;
+  status: NodeStatus;
   latency?: number;
+  utilization?: number;
 }
 
-/** Sample Djezzy Telecom Network Topology Data */
-export const DJEZZY_NETWORK_TOPOLOGY: {
-  nodes: NetworkNode[];
-  connections: NetworkConnection[];
-} = {
-  nodes: [
-    // Core HLR/HSS Nodes (2)
-    { id: 'hlr-1', type: 'hlr', name: 'HLR-Primary', status: 'healthy', metrics: { cpu: 45, memory: 62, connections: 1250 } },
-    { id: 'hlr-2', type: 'hss', name: 'HSS-Backup', status: 'healthy', metrics: { cpu: 38, memory: 58, connections: 980 } },
-    
-    // STP Signaling (3)
-    { id: 'stp-1', type: 'stp', name: 'STP-Algiers', status: 'healthy', metrics: { cpu: 52, memory: 71, connections: 4500 } },
-    { id: 'stp-2', type: 'stp', name: 'STP-Oran', status: 'warning', metrics: { cpu: 78, memory: 82, connections: 4200 } },
-    { id: 'stp-3', type: 'stp', name: 'STP-Constantine', status: 'healthy', metrics: { cpu: 41, memory: 65, connections: 3800 } },
-    
-    // MSC/MGW Switching (4)
-    { id: 'msc-1', type: 'msc', name: 'MSC-West', status: 'healthy', metrics: { cpu: 35, memory: 55, connections: 8900 } },
-    { id: 'msc-2', type: 'msc', name: 'MSC-East', status: 'healthy', metrics: { cpu: 42, memory: 60, connections: 9200 } },
-    { id: 'mgw-1', type: 'mgw', name: 'MGW-Media-1', status: 'healthy', metrics: { cpu: 28, memory: 45, throughput: '2.4 Gbps' } },
-    { id: 'mgw-2', type: 'mgw', name: 'MGW-Media-2', status: 'warning', metrics: { cpu: 72, memory: 78, throughput: '2.1 Gbps' } },
-    
-    // SGSN/GGSN/PGW Packet Core (3)
-    { id: 'sgsn-1', type: 'sgsn', name: 'SGSN-1', status: 'healthy', metrics: { cpu: 48, memory: 68, connections: 15000 } },
-    { id: 'ggsn-1', type: 'ggsn', name: 'GGSN-1', status: 'healthy', metrics: { cpu: 39, memory: 62, connections: 12000 } },
-    { id: 'pgw-1', type: 'pgw', name: 'PGW-LTE', status: 'critical', metrics: { cpu: 92, memory: 94, connections: 18000 } },
-    
-    // MME LTE (2)
-    { id: 'mme-1', type: 'mme', name: 'MME-Primary', status: 'healthy', metrics: { cpu: 44, memory: 59, connections: 8500 } },
-    { id: 'mme-2', type: 'mme', name: 'MME-Secondary', status: 'healthy', metrics: { cpu: 40, memory: 56, connections: 7200 } },
-    
-    // Security & Monitoring
-    { id: 'siem-1', type: 'siem', name: 'SIEM-SOC', status: 'healthy', metrics: { cpu: 55, memory: 73, connections: 450 } },
-    { id: 'edr-1', type: 'edr', name: 'EDR-Collector', status: 'healthy', metrics: { cpu: 32, memory: 48, throughput: '850 Mbps' } },
-    
-    // Infrastructure
-    { id: 'fw-1', type: 'firewall', name: 'FW-Perimeter', status: 'healthy', metrics: { cpu: 25, memory: 38, throughput: '10 Gbps' } },
-    { id: 'lb-1', type: 'loadbalancer', name: 'LB-Internal', status: 'healthy', metrics: { cpu: 18, memory: 28, connections: 25000 } },
-  ],
-  connections: [
-    // HLR/HSS to STPs
-    { id: 'c1', sourceId: 'hlr-1', targetId: 'stp-1', type: 'signaling', bandwidth: '10 Gbps', latency: 2 },
-    { id: 'c2', sourceId: 'hlr-1', targetId: 'stp-2', type: 'signaling', bandwidth: '10 Gbps', latency: 3 },
-    { id: 'c3', sourceId: 'hlr-2', targetId: 'stp-3', type: 'signaling', bandwidth: '10 Gbps', latency: 2 },
-    
-    // STP interconnections
-    { id: 'c4', sourceId: 'stp-1', targetId: 'stp-2', type: 'signaling', bandwidth: '40 Gbps', latency: 1 },
-    { id: 'c5', sourceId: 'stp-2', targetId: 'stp-3', type: 'signaling', bandwidth: '40 Gbps', latency: 2 },
-    
-    // STP to MSCs
-    { id: 'c6', sourceId: 'stp-1', targetId: 'msc-1', type: 'signaling', bandwidth: '10 Gbps', latency: 1 },
-    { id: 'c7', sourceId: 'stp-2', targetId: 'msc-2', type: 'signaling', bandwidth: '10 Gbps', latency: 2 },
-    
-    // MSC to MGW
-    { id: 'c8', sourceId: 'msc-1', targetId: 'mgw-1', type: 'data', bandwidth: '20 Gbps', latency: 1 },
-    { id: 'c9', sourceId: 'msc-2', targetId: 'mgw-2', type: 'data', bandwidth: '20 Gbps', latency: 1 },
-    
-    // Packet core interconnections
-    { id: 'c10', sourceId: 'sgsn-1', targetId: 'ggsn-1', type: 'data', bandwidth: '40 Gbps', latency: 2 },
-    { id: 'c11', sourceId: 'ggsn-1', targetId: 'pgw-1', type: 'data', bandwidth: '40 Gbps', latency: 1 },
-    
-    // MME connections
-    { id: 'c12', sourceId: 'mme-1', targetId: 'sgsn-1', type: 'signaling', bandwidth: '10 Gbps', latency: 1 },
-    { id: 'c13', sourceId: 'mme-2', targetId: 'pgw-1', type: 'signaling', bandwidth: '10 Gbps', latency: 2 },
-    
-    // Security infrastructure
-    { id: 'c14', sourceId: 'fw-1', targetId: 'lb-1', type: 'primary', bandwidth: '40 Gbps', latency: 0 },
-    { id: 'c15', sourceId: 'lb-1', targetId: 'siem-1', type: 'data', bandwidth: '10 Gbps', latency: 1 },
-    { id: 'c16', sourceId: 'siem-1', targetId: 'edr-1', type: 'data', bandwidth: '5 Gbps', latency: 1 },
-    
-    // Cross-domain connections
-    { id: 'c17', sourceId: 'fw-1', targetId: 'stp-1', type: 'primary', bandwidth: '10 Gbps', latency: 2 },
-    { id: 'c18', sourceId: 'lb-1', targetId: 'mme-1', type: 'data', bandwidth: '20 Gbps', latency: 1 },
-  ],
-};
-
-export interface NetworkTopologyGraphProps {
-  /** Network nodes to display */
+interface NetworkTopologyProps {
+  /** Array of network nodes to display */
   nodes?: NetworkNode[];
-  /** Connections between nodes */
-  connections?: NetworkConnection[];
+  /** Array of links between nodes */
+  links?: NetworkLink[];
   /** Callback when a node is clicked */
   onNodeClick?: (node: NetworkNode) => void;
+  /** Callback when a link is clicked */
+  onLinkClick?: (link: NetworkLink) => void;
+  /** Enable real-time simulation mode */
+  simulateRealTime?: boolean;
+  /** Show node details panel */
+  showDetailsPanel?: boolean;
   /** Additional CSS classes */
   className?: string;
-  /** Show legend (default: true) */
-  showLegend?: boolean;
-  /** Enable zoom and pan (default: true) */
-  enableZoomPan?: boolean;
-  /** Width of the graph container (default: 100%) */
-  width?: number | string;
-  /** Height of the graph container (default: 500) */
-  height?: number;
 }
 
+// ============================================================
+// CONFIGURATION & CONSTANTS
+// ============================================================
+
+/** Node type configuration with icons and colors */
+const NODE_TYPE_CONFIG: Record<NodeType, {
+  label: string;
+  icon: React.ElementType;
+  color: string;
+  size: number;
+}> = {
+  'core-router': { label: 'Core Router', icon: Router, color: '#3b82f6', size: 40 },
+  'edge-router': { label: 'Edge Router', icon: Router, color: '#60a5fa', size: 32 },
+  'switch': { label: 'Switch', icon: Network, color: '#8b5cf6', size: 28 },
+  'firewall': { label: 'Firewall', icon: Shield, color: '#ef4444', size: 36 },
+  'server': { label: 'Server', icon: Server, color: '#22c55e', size: 32 },
+  'database': { label: 'Database', icon: Database, color: '#f97316', size: 34 },
+  'siem': { label: 'SIEM', icon: Shield, color: '#06b6d4', size: 38 },
+  'ss7-node': { label: 'SS7 Node', icon: Radio, color: '#a855f7', size: 34 },
+  'hlr': { label: 'HLR', icon: Database, color: '#eab308', size: 30 },
+  'probe': { label: 'Probe', icon: Satellite, color: '#14b8a6', size: 24 },
+  'cloud': { label: 'Cloud', icon: Cloud, color: '#64748b', size: 44 },
+  'endpoint': { label: 'Endpoint', icon: Zap, size: 20, color: '#94a3b8' },
+};
+
+/** Status configuration */
+const STATUS_CONFIG: Record<NodeStatus, {
+  label: string;
+  color: string;
+  bgColor: string;
+  pulseColor: string;
+  icon: React.ElementType;
+}> = {
+  operational: {
+    label: 'Operational',
+    color: 'text-green-400',
+    bgColor: 'bg-green-500/20',
+    pulseColor: '#22c55e',
+    icon: CheckCircle,
+  },
+  degraded: {
+    label: 'Degraded',
+    color: 'text-yellow-400',
+    bgColor: 'bg-yellow-500/20',
+    pulseColor: '#eab308',
+    icon: AlertTriangle,
+  },
+  down: {
+    label: 'Down',
+    color: 'text-red-400',
+    bgColor: 'bg-red-500/20',
+    pulseColor: '#ef4444',
+    icon: XCircle,
+  },
+  maintenance: {
+    label: 'Maintenance',
+    color: 'text-blue-400',
+    bgColor: 'bg-blue-500/20',
+    pulseColor: '#3b82f6',
+    icon: Activity,
+  },
+  unknown: {
+    label: 'Unknown',
+    color: 'text-slate-400',
+    bgColor: 'bg-slate-500/20',
+    pulseColor: '#64748b',
+    icon: Info,
+  },
+};
+
+// ============================================================
+// SAMPLE DATA - Djezzy Telecom Infrastructure
+// ============================================================
+
+/** Generate sample Djezzy network topology data */
+export const generateDjezzyTopology = (): { nodes: NetworkNode[]; links: NetworkLink[] } => {
+  const nodes: NetworkNode[] = [
+    // Core Infrastructure
+    {
+      id: 'core-1',
+      name: 'Core Router Algiers',
+      type: 'core-router',
+      status: 'operational',
+      position: { x: 50, y: 45 },
+      metrics: { cpu: 45, memory: 62, latency: 2, throughput: 9800, connections: 1247 },
+      details: 'Primary backbone router - handles inter-wilaya traffic',
+      lastUpdate: new Date(),
+    },
+    {
+      id: 'core-2',
+      name: 'Core Router Oran',
+      type: 'core-router',
+      status: 'operational',
+      position: { x: 22, y: 58 },
+      metrics: { cpu: 38, memory: 55, latency: 3, throughput: 7200, connections: 892 },
+      details: 'Western region core router',
+      lastUpdate: new Date(),
+    },
+    {
+      id: 'core-3',
+      name: 'Core Router Constantine',
+      type: 'core-router',
+      status: 'degraded',
+      position: { x: 72, y: 35 },
+      metrics: { cpu: 78, memory: 82, latency: 15, throughput: 4500, connections: 654 },
+      details: 'Eastern region core router - elevated CPU detected',
+      lastUpdate: new Date(),
+    },
+
+    // SS7 / Signaling
+    {
+      id: 'ss7-1',
+      name: 'SS7 STP Primary',
+      type: 'ss7-node',
+      status: 'operational',
+      position: { x: 45, y: 55 },
+      metrics: { cpu: 32, memory: 48, latency: 5, connections: 234 },
+      details: 'Primary Signal Transfer Point for SS7 network',
+      lastUpdate: new Date(),
+    },
+    {
+      id: 'ss7-2',
+      name: 'SS7 STP Secondary',
+      type: 'ss7-node',
+      status: 'operational',
+      position: { x: 55, y: 35 },
+      metrics: { cpu: 28, memory: 42, latency: 4, connections: 198 },
+      details: 'Secondary/backup Signal Transfer Point',
+      lastUpdate: new Date(),
+    },
+    {
+      id: 'hlr-1',
+      name: 'HLR Primary',
+      type: 'hlr',
+      status: 'operational',
+      position: { x: 40, y: 40 },
+      metrics: { cpu: 52, memory: 68, latency: 8, connections: 156 },
+      details: 'Home Location Register - subscriber database',
+      lastUpdate: new Date(),
+    },
+
+    // Security Infrastructure
+    {
+      id: 'siem-1',
+      name: 'Wazuh SIEM Cluster',
+      type: 'siem',
+      status: 'operational',
+      position: { x: 60, y: 60 },
+      metrics: { cpu: 42, memory: 74, latency: 12, connections: 89 },
+      details: 'Central SIEM platform - security event correlation',
+      lastUpdate: new Date(),
+    },
+    {
+      id: 'fw-1',
+      name: 'Perimeter Firewall',
+      type: 'firewall',
+      status: 'operational',
+      position: { x: 50, y: 15 },
+      metrics: { cpu: 25, memory: 45, latency: 1, throughput: 8500, connections: 567 },
+      details: 'Internet edge firewall - Palo Alto PA-5260',
+      lastUpdate: new Date(),
+    },
+    {
+      id: 'fw-2',
+      name: 'Internal Firewall',
+      type: 'firewall',
+      status: 'operational',
+      position: { x: 35, y: 70 },
+      metrics: { cpu: 18, memory: 35, latency: 1, throughput: 5200, connections: 423 },
+      details: 'Internal segmentation firewall',
+      lastUpdate: new Date(),
+    },
+
+    // Data Center
+    {
+      id: 'db-1',
+      name: 'Primary DB Cluster',
+      type: 'database',
+      status: 'operational',
+      position: { x: 30, y: 50 },
+      metrics: { cpu: 58, memory: 78, latency: 3, connections: 234 },
+      details: 'PostgreSQL cluster - CDRs, billing, subscriber data',
+      lastUpdate: new Date(),
+    },
+    {
+      id: 'srv-1',
+      name: 'App Server Farm',
+      type: 'server',
+      status: 'operational',
+      position: { x: 65, y: 48 },
+      metrics: { cpu: 48, memory: 65, latency: 5, connections: 567 },
+      details: 'Kubernetes cluster - microservices platform',
+      lastUpdate: new Date(),
+    },
+
+    // Edge / Regional
+    {
+      id: 'edge-1',
+      name: 'Edge Router Annaba',
+      type: 'edge-router',
+      status: 'operational',
+      position: { x: 82, y: 52 },
+      metrics: { cpu: 28, memory: 42, latency: 4, throughput: 2800, connections: 234 },
+      details: 'Annaba regional edge router',
+      lastUpdate: new Date(),
+    },
+    {
+      id: 'edge-2',
+      name: 'Edge Router Tlemcen',
+      type: 'edge-router',
+      status: 'maintenance',
+      position: { x: 10, y: 48 },
+      metrics: { cpu: 0, memory: 0, latency: 0, throughput: 0, connections: 0 },
+      details: 'Scheduled maintenance window',
+      lastUpdate: new Date(),
+    },
+
+    // Probes & Sensors
+    {
+      id: 'probe-1',
+      name: 'IDS Sensor DC1',
+      type: 'probe',
+      status: 'operational',
+      position: { x: 42, y: 58 },
+      metrics: { cpu: 15, memory: 28, latency: 2 },
+      details: 'Suricata IDS sensor - data center 1',
+      lastUpdate: new Date(),
+    },
+    {
+      id: 'probe-2',
+      name: 'NetFlow Collector',
+      type: 'probe',
+      status: 'operational',
+      position: { x: 58, y: 42 },
+      metrics: { cpu: 22, memory: 38, latency: 3 },
+      details: 'nProbe NetFlow collector',
+      lastUpdate: new Date(),
+    },
+
+    // Cloud Connectivity
+    {
+      id: 'cloud-1',
+      name: 'Azure ExpressRoute',
+      type: 'cloud',
+      status: 'operational',
+      position: { x: 85, y: 20 },
+      metrics: { latency: 18, throughput: 10000, connections: 45 },
+      details: 'Microsoft Azure hybrid connectivity',
+      lastUpdate: new Date(),
+    },
+    {
+      id: 'cloud-2',
+      name: 'AWS Direct Connect',
+      type: 'cloud',
+      status: 'degraded',
+      position: { x: 15, y: 20 },
+      metrics: { latency: 45, throughput: 3500, connections: 23 },
+      details: 'AWS backup link - elevated latency',
+      lastUpdate: new Date(),
+    },
+  ];
+
+  const links: NetworkLink[] = [
+    // Core to Core
+    { id: 'l1', source: 'core-1', target: 'core-2', bandwidth: '10 Gbps', status: 'operational', latency: 3, utilization: 45 },
+    { id: 'l2', source: 'core-1', target: 'core-3', bandwidth: '10 Gbps', status: 'degraded', latency: 12, utilization: 78 },
+    { id: 'l3', source: 'core-2', target: 'core-3', bandwidth: '10 Gbps', status: 'operational', latency: 8, utilization: 32 },
+
+    // Core to SS7
+    { id: 'l4', source: 'core-1', target: 'ss7-1', bandwidth: '1 Gbps', status: 'operational', latency: 2, utilization: 25 },
+    { id: 'l5', source: 'core-1', target: 'ss7-2', bandwidth: '1 Gbps', status: 'operational', latency: 2, utilization: 22 },
+    { id: 'l6', source: 'ss7-1', target: 'hlr-1', bandwidth: '100 Mbps', status: 'operational', latency: 1, utilization: 35 },
+
+    // Core to Security
+    { id: 'l7', source: 'fw-1', target: 'core-1', bandwidth: '10 Gbps', status: 'operational', latency: 1, utilization: 55 },
+    { id: 'l8', source: 'fw-2', target: 'core-1', bandwidth: '10 Gbps', status: 'operational', latency: 1, utilization: 42 },
+    { id: 'l9', source: 'siem-1', target: 'core-1', bandwidth: '1 Gbps', status: 'operational', latency: 3, utilization: 28 },
+
+    // Core to Data Center
+    { id: 'l10', source: 'db-1', target: 'core-1', bandwidth: '10 Gbps', status: 'operational', latency: 2, utilization: 48 },
+    { id: 'l11', source: 'srv-1', target: 'core-1', bandwidth: '10 Gbps', status: 'operational', latency: 2, utilization: 52 },
+
+    // Core to Edge
+    { id: 'l12', source: 'core-2', target: 'edge-2', bandwidth: '1 Gbps', status: 'down', latency: 0, utilization: 0 },
+    { id: 'l13', source: 'core-3', target: 'edge-1', bandwidth: '1 Gbps', status: 'operational', latency: 4, utilization: 38 },
+
+    // Probe connections
+    { id: 'l14', source: 'probe-1', target: 'core-1', bandwidth: '100 Mbps', status: 'operational', latency: 1, utilization: 15 },
+    { id: 'l15', source: 'probe-2', target: 'core-1', bandwidth: '100 Mbps', status: 'operational', latency: 1, utilization: 18 },
+
+    // Cloud connections
+    { id: 'l16', source: 'fw-1', target: 'cloud-1', bandwidth: '10 Gbps', status: 'operational', latency: 18, utilization: 35 },
+    { id: 'l17', source: 'fw-1', target: 'cloud-2', bandwidth: '5 Gbps', status: 'degraded', latency: 45, utilization: 72 },
+  ];
+
+  return { nodes, links };
+};
+
+// ============================================================
+// COMPONENTS
+// ============================================================
+
 /**
- * NetworkTopologyGraph - Interactive network topology visualization
- * 
+ * NetworkTopology - Interactive network infrastructure visualization
+ *
  * Features:
- * - Displays telecom network nodes (servers, firewalls, routers, etc.)
- * - Animated connection lines with data flow indication
- * - Status indicators on each node
- * - Click-to-inspect node details popup
- * - Zoom and pan support
- * - Auto-layout algorithm for positioning
- * - SVG rendering for crisp display
- * - Djezzy telecom sample data included
- * 
+ * - SVG-based rendering of network nodes and links
+ * - Real-time status updates with animations
+ * - Interactive nodes with detailed tooltips
+ * - Click-to-select functionality
+ * - Auto-layout or manual positioning
+ * - Status filtering
+ * - Responsive design
+ *
  * @example
  * ```tsx
- * <NetworkTopologyGraph
- *   nodes={networkData.nodes}
- *   connections={networkData.connections}
+ * <NetworkTopology
+ *   simulateRealTime={true}
  *   onNodeClick={(node) => console.log('Selected:', node)}
  * />
  * ```
  */
-export function NetworkTopologyGraph({
-  nodes = DJEZZY_NETWORK_TOPOLOGY.nodes,
-  connections = DJEZZY_NETWORK_TOPOLOGY.connections,
+export function NetworkTopology({
+  nodes: initialNodes,
+  links: initialLinks,
   onNodeClick,
+  onLinkClick,
+  simulateRealTime = true,
+  showDetailsPanel = true,
   className,
-  showLegend = true,
-  enableZoomPan = true,
-  width = '100%',
-  height = 500,
-}: NetworkTopologyGraphProps) {
+}: NetworkTopologyProps) {
   // State management
-  const [selectedNode, setSelectedNode] = useState<NetworkNode | null>(null);
-  const [zoom, setZoom] = useState(1);
-  const [pan, setPan] = useState({ x: 0, y: 0 });
-  const [isDragging, setIsDragging] = useState(false);
-  const [dragStart, setDragStart] = useState({ x: 0, y: 0 });
-  const svgRef = useRef<SVGSVGElement>(null);
+  const [nodes, setNodes] = useState<NetworkNode[]>(
+    initialNodes || generateDjezzyTopology().nodes
+  );
+  const [links] = useState<NetworkLink[]>(
+    initialLinks || generateDjezzyTopology().links
+  );
+  const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
+  const [hoveredNodeId, setHoveredNodeId] = useState<string | null>(null);
+  const [statusFilter, setStatusFilter] = useState<string>('all');
+  const [isFullscreen, setIsFullscreen] = useState(false);
 
-  /**
-   * Auto-layout algorithm using force-directed positioning
-   * Groups nodes by category and positions them in clusters
-   */
-  const layoutNodes = useMemo(() => {
-    const padding = 80;
-    const graphWidth = typeof width === 'number' ? width : 900;
-    const graphHeight = height;
-    
-    // Define cluster centers based on node categories
-    const clusterCenters: Record<string, { x: number; y: number }> = {
-      'Core': { x: graphWidth * 0.15, y: graphHeight * 0.25 },
-      'Signaling': { x: graphWidth * 0.4, y: graphHeight * 0.2 },
-      'Switching': { x: graphWidth * 0.65, y: graphHeight * 0.25 },
-      'Packet': { x: graphWidth * 0.85, y: graphHeight * 0.25 },
-      'LTE': { x: graphWidth * 0.85, y: graphHeight * 0.55 },
-      'Security': { x: graphWidth * 0.15, y: graphHeight * 0.7 },
-      'Monitoring': { x: graphWidth * 0.4, y: graphHeight * 0.75 },
-      'Infrastructure': { x: graphWidth * 0.5, y: graphHeight * 0.5 },
-      'Network': { x: graphWidth * 0.65, y: graphHeight * 0.7 },
-      'Access': { x: graphWidth * 0.85, y: graphHeight * 0.85 },
-    };
+  // Filter nodes by status
+  const filteredNodes = useMemo(() => {
+    if (statusFilter === 'all') return nodes;
+    return nodes.filter((node) => node.status === statusFilter);
+  }, [nodes, statusFilter]);
 
-    // Group nodes by category
-    const categoryGroups: Record<string, NetworkNode[]> = {};
-    nodes.forEach((node) => {
-      const config = NODE_TYPE_CONFIG[node.type];
-      const category = config?.category || 'Other';
-      if (!categoryGroups[category]) {
-        categoryGroups[category] = [];
-      }
-      categoryGroups[category].push(node);
-    });
+  // Get selected/hovered node objects
+  const selectedNode = useMemo(
+    () => nodes.find((n) => n.id === selectedNodeId) || null,
+    [nodes, selectedNodeId]
+  );
+  const hoveredNode = useMemo(
+    () => nodes.find((n) => n.id === hoveredNodeId) || null,
+    [nodes, hoveredNodeId]
+  );
 
-    // Position nodes within their clusters
-    const positionedNodes: (NetworkNode & { x: number; y: number })[] = [];
-    
-    Object.entries(categoryGroups).forEach(([category, groupNodes]) => {
-      const center = clusterCenters[category] || { x: graphWidth / 2, y: graphHeight / 2 };
-      const clusterRadius = Math.min(80, 150 / Math.sqrt(groupNodes.length));
-      
-      groupNodes.forEach((node, index) => {
-        // Arrange in circle around cluster center
-        const angle = (2 * Math.PI * index) / groupNodes.length - Math.PI / 2;
-        const offsetX = index === 0 ? 0 : Math.cos(angle) * clusterRadius;
-        const offsetY = index === 0 ? 0 : Math.sin(angle) * clusterRadius;
-        
-        positionedNodes.push({
+  // Simulate real-time metric changes
+  useEffect(() => {
+    if (!simulateRealTime) return;
+
+    const interval = setInterval(() => {
+      setNodes((prevNodes) =>
+        prevNodes.map((node) => ({
           ...node,
-          x: Math.max(padding, Math.min(graphWidth - padding, center.x + offsetX)),
-          y: Math.max(padding, Math.min(graphHeight - padding, center.y + offsetY)),
-        });
-      });
-    });
+          metrics: node.metrics
+            ? {
+                ...node.metrics,
+                cpu: Math.min(100, Math.max(0, node.metrics.cpu! + (Math.random() - 0.5) * 5)),
+                memory: Math.min(100, Math.max(0, node.metrics.memory! + (Math.random() - 0.5) * 3)),
+                latency: Math.max(0, node.metrics.latency! + (Math.random() - 0.5) * 2),
+              }
+            : undefined,
+          lastUpdate: new Date(),
+        }))
+      );
+    }, 3000);
 
-    return positionedNodes;
-  }, [nodes, width, height]);
+    return () => clearInterval(interval);
+  }, [simulateRealTime]);
 
   // Handle node click
   const handleNodeClick = useCallback(
     (node: NetworkNode) => {
-      setSelectedNode(node);
+      setSelectedNodeId(node.id === selectedNodeId ? null : node.id);
       onNodeClick?.(node);
     },
-    [onNodeClick]
+    [selectedNodeId, onNodeClick]
   );
 
-  // Zoom controls
-  const handleZoomIn = useCallback(() => setZoom((z) => Math.min(z + 0.2, 3)), []);
-  const handleZoomOut = useCallback(() => setZoom((z) => Math.max(z - 0.2, 0.5)), []);
-  const handleResetView = useCallback(() => {
-    setZoom(1);
-    setPan({ x: 0, y: 0 });
-  }, []);
+  // Calculate statistics
+  const stats = useMemo(() => {
+    const total = nodes.length;
+    const operational = nodes.filter((n) => n.status === 'operational').length;
+    const degraded = nodes.filter((n) => n.status === 'degraded').length;
+    const down = nodes.filter((n) => n.status === 'down').length;
+    const maintenance = nodes.filter((n) => n.status === 'maintenance').length;
 
-  // Pan handlers
-  const handleMouseDown = useCallback(
-    (e: React.MouseEvent) => {
-      if (!enableZoomPan) return;
-      setIsDragging(true);
-      setDragStart({ x: e.clientX - pan.x, y: e.clientY - pan.y });
-    },
-    [enableZoomPan, pan]
-  );
-
-  const handleMouseMove = useCallback(
-    (e: React.MouseEvent) => {
-      if (!isDragging || !enableZoomPan) return;
-      setPan({
-        x: e.clientX - dragStart.x,
-        y: e.clientY - dragStart.y,
-      });
-    },
-    [isDragging, enableZoomPan, dragStart]
-  );
-
-  const handleMouseUp = useCallback(() => setIsDragging(false), []);
-
-  // Get status icon component
-  const getStatusIcon = (status: NodeStatus) => {
-    switch (status) {
-      case 'healthy':
-        return <CheckCircle2 className="w-3 h-3" style={{ color: STATUS_COLORS.healthy }} />;
-      case 'warning':
-        return <AlertTriangle className="w-3 h-3" style={{ color: STATUS_COLORS.warning }} />;
-      case 'critical':
-        return <XCircle className="w-3 h-3" style={{ color: STATUS_COLORS.critical }} />;
-      case 'offline':
-        return <XCircle className="w-3 h-3" style={{ color: STATUS_COLORS.offline }} />;
-    }
-  };
-
-  // Get connection line style
-  const getConnectionStyle = (type: NetworkConnection['type']) => {
-    switch (type) {
-      case 'primary':
-        return { stroke: '#3b82f6', strokeWidth: 3, strokeDasharray: 'none' };
-      case 'signaling':
-        return { stroke: '#8b5cf6', strokeWidth: 2, strokeDasharray: '8 4' };
-      case 'data':
-        return { stroke: '#06b6d4', strokeWidth: 2, strokeDasharray: 'none' };
-      default:
-        return { stroke: '#64748b', strokeWidth: 1, strokeDasharray: '4 4' };
-    }
-  };
-
-  // Count nodes by status for summary
-  const statusCounts = useMemo(() => {
-    const counts: Record<NodeStatus, number> = { healthy: 0, warning: 0, critical: 0, offline: 0 };
-    nodes.forEach((node) => counts[node.status]++);
-    return counts;
+    return { total, operational, degraded, down, maintenance };
   }, [nodes]);
 
   return (
-    <TooltipProvider delayDuration={200}>
+    <TooltipProvider delayDuration={150}>
       <Card className={cn('overflow-hidden', className)}>
         <CardHeader className="pb-3">
           <div className="flex items-center justify-between">
             <CardTitle className="flex items-center gap-2 text-base">
-              <Network className="w-5 h-5 text-blue-400" />
-              Network Topology - Djezzy Telecom Infrastructure
+              <Network className="h-5 w-5 text-blue-400" />
+              Network Topology - Djezzy Infrastructure
             </CardTitle>
-            <div className="flex items-center gap-2">
-              {/* Status summary badges */}
-              <Badge variant="outline" className="text-green-400 border-green-500/30">
-                <CheckCircle2 className="w-3 h-3 mr-1" />
-                {statusCounts.healthy}
-              </Badge>
-              <Badge variant="outline" className="text-yellow-400 border-yellow-500/30">
-                <AlertTriangle className="w-3 h-3 mr-1" />
-                {statusCounts.warning}
-              </Badge>
-              <Badge variant="outline" className="text-red-400 border-red-500/30">
-                <XCircle className="w-3 h-3 mr-1" />
-                {statusCounts.critical}
-              </Badge>
+
+            <div className="flex items-center gap-3">
+              {/* Status Filter */}
+              <Select value={statusFilter} onValueChange={setStatusFilter}>
+                <SelectTrigger className="w-[130px] h-8 bg-slate-800 border-slate-600 text-xs">
+                  <SelectValue placeholder="Filter by status" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All Nodes</SelectItem>
+                  <SelectItem value="operational">
+                    Operational ({stats.operational})
+                  </SelectItem>
+                  <SelectItem value="degraded">Degraded ({stats.degraded})</SelectItem>
+                  <SelectItem value="down">Down ({stats.down})</SelectItem>
+                  <SelectItem value="maintenance">
+                    Maintenance ({stats.maintenance})
+                  </SelectItem>
+                </SelectContent>
+              </Select>
+
+              {/* Fullscreen Toggle */}
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-8 w-8 text-slate-400 hover:text-white"
+                onClick={() => setIsFullscreen(!isFullscreen)}
+              >
+                <Maximize2 className="h-4 w-4" />
+              </Button>
+
+              {/* Refresh Button */}
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-8 w-8 text-slate-400 hover:text-white"
+                onClick={() =>
+                  setNodes(generateDjezzyTopology().nodes)
+                }
+              >
+                <RefreshCw className="h-4 w-4" />
+              </Button>
             </div>
           </div>
-        </CardHeader>
-        
-        <CardContent className="p-0 relative">
-          {/* Controls overlay */}
-          {enableZoomPan && (
-            <div className="absolute top-3 right-3 z-20 flex flex-col gap-1 bg-slate-900/90 rounded-lg p-1 border border-slate-700">
-              <button
-                onClick={handleZoomIn}
-                className="p-1.5 hover:bg-slate-800 rounded transition-colors"
-                aria-label="Zoom in"
-              >
-                <ZoomIn className="w-4 h-4 text-slate-400" />
-              </button>
-              <button
-                onClick={handleZoomOut}
-                className="p-1.5 hover:bg-slate-800 rounded transition-colors"
-                aria-label="Zoom out"
-              >
-                <ZoomOut className="w-4 h-4 text-slate-400" />
-              </button>
-              <button
-                onClick={handleResetView}
-                className="p-1.5 hover:bg-slate-800 rounded transition-colors"
-                aria-label="Reset view"
-              >
-                <Maximize2 className="w-4 h-4 text-slate-400" />
-              </button>
-            </div>
-          )}
 
-          {/* SVG Canvas */}
-          <svg
-            ref={svgRef}
-            width={width}
-            height={height}
+          {/* Legend */}
+          <div className="flex items-center gap-4 mt-3 flex-wrap">
+            {Object.entries(STATUS_CONFIG).map(([status, config]) => (
+              <button
+                key={status}
+                onClick={() =>
+                  setStatusFilter(statusFilter === status ? 'all' : status)
+                }
+                className={cn(
+                  'flex items-center gap-1.5 px-2 py-1 rounded-full text-xs transition-colors',
+                  statusFilter === status
+                    ? 'ring-2 ring-offset-2 ring-offset-slate-900'
+                    : 'opacity-70 hover:opacity-100'
+                )}
+                style={{
+                  backgroundColor: `${config.pulseColor}20`,
+                  borderColor: config.pulseColor,
+                  ...(statusFilter === status && { '--tw-ring-color': config.pulseColor }),
+                }}
+              >
+                <config.icon className="h-3 w-3" style={{ color: config.color }} />
+                <span style={{ color: config.color }}>{config.label}</span>
+                <span className="text-slate-300 ml-1">
+                  (
+                  {status === 'operational'
+                    ? stats.operational
+                    : status === 'degraded'
+                    ? stats.degraded
+                    : status === 'down'
+                    ? stats.down
+                    : stats.maintenance}
+                  )
+                </span>
+              </button>
+            ))}
+          </div>
+        </CardHeader>
+
+        <CardContent className="p-0 relative">
+          {/* SVG Topology Canvas */}
+          <div
             className={cn(
-              'bg-slate-950/50 cursor-grab',
-              isDragging && 'cursor-grabbing'
+              'relative bg-slate-950/50 overflow-hidden',
+              isFullscreen ? 'h-[700px]' : 'h-[500px]'
             )}
-            onMouseDown={handleMouseDown}
-            onMouseMove={handleMouseMove}
-            onMouseUp={handleMouseUp}
-            onMouseLeave={handleMouseUp}
           >
-            {/* Transform group for zoom/pan */}
-            <g transform={`translate(${pan.x}, ${pan.y}) scale(${zoom})`}>
-              {/* Definitions */}
+            <svg
+              viewBox="0 0 100 100"
+              className="w-full h-full"
+              preserveAspectRatio="xMidYMid meet"
+            >
               <defs>
-                {/* Animated dash pattern for data flow */}
-                <pattern id={`grid-${Math.random()}`} width="40" height="40" patternUnits="userSpaceOnUse">
-                  <path d="M 40 0 L 0 0 0 40" fill="none" stroke="#1e293b" strokeWidth="0.5" />
-                </pattern>
-                
-                {/* Glow filter for nodes */}
+                {/* Gradient background */}
+                <linearGradient id="topology-bg" x1="0%" y1="0%" x2="100%" y2="100%">
+                  <stop offset="0%" stopColor="#0f172a" />
+                  <stop offset="100%" stopColor="#1e293b" />
+                </linearGradient>
+
+                {/* Glow filter for active elements */}
                 <filter id="node-glow" x="-50%" y="-50%" width="200%" height="200%">
-                  <feGaussianBlur stdDeviation="3" result="blur" />
+                  <feGaussianBlur stdDeviation="1" result="blur" />
                   <feMerge>
                     <feMergeNode in="blur" />
                     <feMergeNode in="SourceGraphic" />
                   </feMerge>
                 </filter>
 
-                {/* Arrow marker for directed edges */}
-                <marker id="arrowhead" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
-                  <polygon points="0 0, 10 3.5, 0 7" fill="#64748b" />
+                {/* Arrow marker for directed links */}
+                <marker
+                  id="arrowhead"
+                  markerWidth="3"
+                  markerHeight="3"
+                  refX="3"
+                  refY="1.5"
+                  orient="auto"
+                >
+                  <polygon points="0 0, 3 1.5, 0 3" fill="#475569" />
                 </marker>
               </defs>
 
-              {/* Grid background */}
-              <rect width="100%" height="100%" fill={`url(#grid-${Math.random().toString().slice(2)})`} />
+              {/* Background */}
+              <rect width="100" height="100" fill="url(#topology-bg)" />
 
-              {/* Connection lines */}
-              {connections.map((conn) => {
-                const source = layoutNodes.find((n) => n.id === conn.sourceId);
-                const target = layoutNodes.find((n) => n.id === conn.targetId);
-                if (!source || !target) return null;
-
-                const style = getConnectionStyle(conn.type);
-                const midX = (source.x + target.x) / 2;
-                const midY = (source.y + target.y) / 2;
-
-                return (
-                  <g key={conn.id}>
-                    {/* Main connection line */}
-                    <line
-                      x1={source.x}
-                      y1={source.y}
-                      x2={target.x}
-                      y2={target.y}
-                      {...style}
-                      opacity={0.7}
-                    />
-                    
-                    {/* Animated pulse along connection */}
-                    {(conn.type === 'data' || conn.type === 'signaling') && (
-                      <circle r="3" fill={style.stroke} opacity={0.8}>
-                        <animateMotion
-                          dur={`${2 + Math.random() * 2}s`}
-                          repeatCount="indefinite"
-                          path={`M${source.x},${source.y} L${target.x},${target.y}`}
-                        />
-                      </circle>
-                    )}
-
-                    {/* Bandwidth label */}
-                    {conn.bandwidth && (
-                      <text
-                        x={midX}
-                        y={midY - 8}
-                        textAnchor="middle"
-                        className="text-[10px] fill-slate-500 font-mono"
-                      >
-                        {conn.bandwidth}
-                      </text>
-                    )}
+              {/* Grid pattern (subtle) */}
+              <g stroke="#1e293b" strokeWidth={0.05} opacity={0.5}>
+                {Array.from({ length: 10 }, (_, i) => (
+                  <g key={`grid-${i}`}>
+                    <line x1={i * 10} y1="0" x2={i * 10} y2="100" />
+                    <line x1="0" y1={i * 10} x2="100" y2={i * 10} />
                   </g>
-                );
-              })}
+                ))}
+              </g>
+
+              {/* Links */}
+              <g className="links">
+                {links.map((link) => {
+                  const sourceNode = nodes.find((n) => n.id === link.source);
+                  const targetNode = nodes.find((n) => n.id === link.target);
+
+                  if (!sourceNode || !targetNode) return null;
+                  if (
+                    statusFilter !== 'all' &&
+                    sourceNode.status !== statusFilter &&
+                    targetNode.status !== statusFilter
+                  )
+                    return null;
+
+                  const isSelected =
+                    selectedNodeId === link.source ||
+                    selectedNodeId === link.target;
+
+                  const getLinkStyle = () => {
+                    switch (link.status) {
+                      case 'operational':
+                        return { stroke: '#22c55e', strokeWidth: 0.3 };
+                      case 'degraded':
+                        return { stroke: '#eab308', strokeWidth: 0.4 };
+                      case 'down':
+                        return { stroke: '#ef4444', strokeWidth: 0.2, strokeDasharray: '1,1' };
+                      default:
+                        return { stroke: '#475569', strokeWidth: 0.2 };
+                    }
+                  };
+
+                  const style = getLinkStyle();
+
+                  return (
+                    <g key={link.id}>
+                      {/* Link line */}
+                      <line
+                        x1={sourceNode.position.x}
+                        y1={sourceNode.position.y}
+                        x2={targetNode.position.x}
+                        y2={targetNode.position.y}
+                        {...style}
+                        opacity={isSelected ? 1 : 0.6}
+                        className="cursor-pointer transition-opacity hover:opacity-100"
+                        onClick={() => onLinkClick?.(link)}
+                      />
+
+                      {/* Utilization indicator (if available) */}
+                      {link.utilization && link.utilization > 70 && (
+                        <circle
+                          cx={
+                            (sourceNode.position.x + targetNode.position.x) / 2
+                          }
+                          cy={
+                            (sourceNode.position.y + targetNode.position.y) / 2
+                          }
+                          r={0.8}
+                          fill="#ef4444"
+                          opacity={0.8}
+                        >
+                          <animate
+                            attributeName="opacity"
+                            values="0.8;0.4;0.8"
+                            dur="2s"
+                            repeatCount="indefinite"
+                          />
+                        </circle>
+                      )}
+                    </g>
+                  );
+                })}
+              </g>
 
               {/* Nodes */}
-              {layoutNodes.map((node) => {
-                const config = NODE_TYPE_CONFIG[node.type];
-                const IconComponent = config?.icon || Server;
-                const isSelected = selectedNode?.id === node.id;
+              <g className="nodes">
+                {filteredNodes.map((node) => {
+                  const config = NODE_TYPE_CONFIG[node.type];
+                  const statusConfig = STATUS_CONFIG[node.status];
+                  const IconComponent = config.icon;
+                  const isSelected = selectedNodeId === node.id;
+                  const isHovered = hoveredNodeId === node.id;
 
-                return (
-                  <g key={node.id}>
-                    {/* Outer glow ring for critical/warning nodes */}
-                    {(node.status === 'critical' || node.status === 'warning') && (
-                      <circle
-                        cx={node.x}
-                        cy={node.y}
-                        r={32}
-                        fill="none"
-                        stroke={STATUS_COLORS[node.status]}
-                        strokeWidth={1}
-                        opacity={0.3}
-                      >
-                        <animate
-                          attributeName="r"
-                          values="32;38;32"
-                          dur="2s"
-                          repeatCount="indefinite"
-                        />
-                        <animate
-                          attributeName="opacity"
-                          values="0.3;0.1;0.3"
-                          dur="2s"
-                          repeatCount="indefinite"
-                        />
-                      </circle>
-                    )}
-
-                    {/* Node container */}
+                  return (
                     <g
-                      onClick={() => handleNodeClick(node)}
+                      key={node.id}
                       className="cursor-pointer"
-                      style={{ filter: isSelected ? 'url(#node-glow)' : undefined }}
+                      onClick={() => handleNodeClick(node)}
+                      onMouseEnter={() => setHoveredNodeId(node.id)}
+                      onMouseLeave={() => setHoveredNodeId(null)}
                     >
-                      {/* Node background circle */}
+                      {/* Selection/Hover glow */}
+                      {(isSelected || isHovered) && (
+                        <circle
+                          cx={node.position.x}
+                          cy={node.position.y}
+                          r={config.size / 10 + 4}
+                          fill={config.color}
+                          opacity={isHovered ? 0.15 : 0.25}
+                        >
+                          {isSelected && (
+                            <animate
+                              attributeName="r"
+                              values={`${config.size / 10 + 4};${config.size / 10 + 6};${config.size / 10 + 4}`}
+                              dur="2s"
+                              repeatCount="indefinite"
+                            />
+                          )}
+                        </circle>
+                      )}
+
+                      {/* Status indicator ring */}
                       <circle
-                        cx={node.x}
-                        cy={node.y}
-                        r={28}
-                        fill="#0f172a"
-                        stroke={config?.color || '#64748b'}
-                        strokeWidth={isSelected ? 3 : 2}
-                        className="transition-all duration-200 hover:brightness-125"
+                        cx={node.position.x}
+                        cy={node.position.y}
+                        r={config.size / 10 + 2}
+                        fill="none"
+                        stroke={statusConfig.pulseColor}
+                        strokeWidth={0.4}
+                        opacity={0.5}
                       />
 
-                      {/* Status indicator dot */}
+                      {/* Main node circle */}
                       <circle
-                        cx={node.x + 20}
-                        cy={node.y - 20}
-                        r={6}
-                        fill={STATUS_COLORS[node.status]}
-                        stroke="#0f172a"
-                        strokeWidth={2}
+                        cx={node.position.x}
+                        cy={node.position.y}
+                        r={config.size / 10}
+                        fill={`${config.color}20`}
+                        stroke={config.color}
+                        strokeWidth={0.5}
+                        filter={isSelected ? 'url(#node-glow)' : undefined}
                       />
 
-                      {/* Node icon */}
+                      {/* Pulse animation for non-operational nodes */}
+                      {node.status !== 'operational' && (
+                        <circle
+                          cx={node.position.x}
+                          cy={node.position.y}
+                          r={config.size / 10}
+                          fill="none"
+                          stroke={statusConfig.pulseColor}
+                          strokeWidth={0.3}
+                          opacity={0.6}
+                        >
+                          <animate
+                            attributeName="r"
+                            values={`${config.size / 10};${config.size / 10 + 3};${config.size / 10}`}
+                            dur="2s"
+                            repeatCount="indefinite"
+                          />
+                          <animate
+                            attributeName="opacity"
+                            values="0.6;0;0.6"
+                            dur="2s"
+                            repeatCount="indefinite"
+                          />
+                        </circle>
+                      )}
+
+                      {/* Node icon (rendered as foreignObject for React components) */}
                       <foreignObject
-                        x={node.x - 14}
-                        y={node.y - 14}
-                        width={28}
-                        height={28}
+                        x={node.position.x - config.size / 20}
+                        y={node.position.y - config.size / 20}
+                        width={config.size / 10}
+                        height={config.size / 10}
                       >
-                        <div className="flex items-center justify-center w-full h-full">
+                        <div className="flex items-center justify-center h-full">
                           <IconComponent
-                            className="w-5 h-5"
-                            style={{ color: config?.color || '#94a3b8' }}
+                            className="h-3 w-3"
+                            style={{ color: config.color }}
                           />
                         </div>
                       </foreignObject>
-                    </g>
 
-                    {/* Node label */}
-                    <text
-                      x={node.x}
-                      y={node.y + 45}
-                      textAnchor="middle"
-                      className="text-[11px] fill-slate-300 font-medium"
-                    >
-                      {node.name}
-                    </text>
-                    <text
-                      x={node.x}
-                      y={node.y + 58}
-                      textAnchor="middle"
-                      className="text-[9px] fill-slate-500 uppercase tracking-wider"
-                    >
-                      {config?.label}
-                    </text>
-                  </g>
-                );
-              })}
-            </g>
-          </svg>
+                      {/* Node label */}
+                      <text
+                        x={node.position.x}
+                        y={node.position.y + config.size / 10 + 3}
+                        textAnchor="middle"
+                        className="text-[3px] font-medium fill-slate-300 pointer-events-none select-none"
+                      >
+                        {node.name.length > 15
+                          ? node.name.substring(0, 14) + '...'
+                          : node.name}
+                      </text>
 
-          {/* Legend */}
-          {showLegend && (
-            <div className="absolute bottom-3 left-3 bg-slate-900/95 rounded-lg p-3 border border-slate-700 z-10">
-              <p className="text-xs font-semibold text-slate-300 mb-2">Node Types</p>
-              <div className="grid grid-cols-2 gap-x-4 gap-y-1">
-                {Object.entries(NODE_TYPE_CONFIG).slice(0, 8).map(([key, config]) => (
-                  <div key={key} className="flex items-center gap-1.5">
-                    <div
-                      className="w-2.5 h-2.5 rounded-sm"
-                      style={{ backgroundColor: config.color }}
-                    />
-                    <span className="text-[10px] text-slate-400">{config.label}</span>
-                  </div>
-                ))}
-              </div>
-              
-              <p className="text-xs font-semibold text-slate-300 mt-3 mb-1.5">Connection Types</p>
-              <div className="space-y-1">
-                <div className="flex items-center gap-2">
-                  <div className="w-6 h-0.5 bg-blue-500" />
-                  <span className="text-[10px] text-slate-400">Primary</span>
-                </div>
-                <div className="flex items-center gap-2">
-                  <div className="w-6 h-0.5 bg-purple-500" style={{ backgroundImage: 'linear-gradient(to right, #8b5cf6 50%, transparent 50%)', backgroundSize: '8px' }} />
-                  <span className="text-[10px] text-slate-400">Signaling</span>
-                </div>
-                <div className="flex items-center gap-2">
-                  <div className="w-6 h-0.5 bg-cyan-500" />
-                  <span className="text-[10px] text-slate-400">Data</span>
-                </div>
-              </div>
-            </div>
-          )}
-
-          {/* Node Details Popup */}
-          {selectedNode && (
-            <div className="absolute top-3 left-3 w-72 bg-slate-900/98 rounded-xl border border-slate-700 shadow-2xl z-30 overflow-hidden">
-              <div className="flex items-center justify-between p-4 border-b border-slate-800">
-                <div className="flex items-center gap-2">
-                  {(() => {
-                    const IconComponent = NODE_TYPE_CONFIG[selectedNode.type]?.icon || Server;
-                    return (
-                      <IconComponent
-                        className="w-5 h-5"
-                        style={{ color: NODE_TYPE_CONFIG[selectedNode.type]?.color }}
+                      {/* Status badge */}
+                      <circle
+                        cx={node.position.x + config.size / 10 - 1}
+                        cy={node.position.y - config.size / 10 + 1}
+                        r={1}
+                        fill={statusConfig.pulseColor}
+                        stroke="#0f172a"
+                        strokeWidth={0.3}
                       />
-                    );
-                  })()}
-                  <div>
-                    <p className="font-semibold text-slate-200">{selectedNode.name}</p>
-                    <p className="text-xs text-slate-500">{NODE_TYPE_CONFIG[selectedNode.type]?.label}</p>
-                  </div>
-                </div>
-                <button
-                  onClick={() => setSelectedNode(null)}
-                  className="p-1 hover:bg-slate-800 rounded transition-colors"
-                >
-                  <X className="w-4 h-4 text-slate-500" />
-                </button>
-              </div>
-              
-              <div className="p-4 space-y-3">
-                {/* Status */}
-                <div className="flex items-center justify-between">
-                  <span className="text-sm text-slate-400">Status</span>
+                    </g>
+                  );
+                })}
+              </g>
+            </svg>
+
+            {/* Hover Tooltip Overlay */}
+            {hoveredNode && !selectedNode && (
+              <div
+                className="absolute z-20 bg-slate-900/98 rounded-lg border border-slate-700 shadow-xl p-3 min-w-[200px] pointer-events-none"
+                style={{
+                  left: `${hoveredNode.position.x}%`,
+                  top: `${hoveredNode.position.y}%`,
+                  transform: 'translate(-50%, -120%)',
+                }}
+              >
+                <div className="flex items-center justify-between mb-2">
+                  <span className="font-semibold text-sm text-white">
+                    {hoveredNode.name}
+                  </span>
                   <Badge
                     variant="outline"
-                    className={
-                      selectedNode.status === 'healthy'
-                        ? 'border-green-500/50 text-green-400'
-                        : selectedNode.status === 'warning'
-                        ? 'border-yellow-500/50 text-yellow-400'
-                        : selectedNode.status === 'critical'
-                        ? 'border-red-500/50 text-red-400'
-                        : 'border-gray-500/50 text-gray-400'
-                    }
+                    className="text-[10px]"
+                    style={{
+                      color: STATUS_CONFIG[hoveredNode.status].color,
+                      borderColor: STATUS_CONFIG[hoveredNode.status].pulseColor,
+                    }}
                   >
-                    {getStatusIcon(selectedNode.status)}
-                    {selectedNode.status.toUpperCase()}
+                    {STATUS_CONFIG[hoveredNode.status].label}
                   </Badge>
                 </div>
 
-                {/* Metrics */}
-                {selectedNode.metrics && (
-                  <>
-                    {selectedNode.metrics.cpu !== undefined && (
-                      <div className="flex items-center justify-between">
-                        <span className="text-sm text-slate-400">CPU</span>
-                        <span className={cn(
-                          'text-sm font-medium',
-                          selectedNode.metrics.cpu > 80 ? 'text-red-400' :
-                          selectedNode.metrics.cpu > 60 ? 'text-yellow-400' : 'text-green-400'
-                        )}>
-                          {selectedNode.metrics.cpu}%
-                        </span>
-                      </div>
-                    )}
-                    {selectedNode.metrics.memory !== undefined && (
-                      <div className="flex items-center justify-between">
-                        <span className="text-sm text-slate-400">Memory</span>
-                        <span className={cn(
-                          'text-sm font-medium',
-                          selectedNode.metrics.memory > 80 ? 'text-red-400' :
-                          selectedNode.metrics.memory > 60 ? 'text-yellow-400' : 'text-green-400'
-                        )}>
-                          {selectedNode.metrics.memory}%
-                        </span>
-                      </div>
-                    )}
-                    {selectedNode.metrics.connections !== undefined && (
-                      <div className="flex items-center justify-between">
-                        <span className="text-sm text-slate-400">Connections</span>
-                        <span className="text-sm font-medium text-slate-300">
-                          {selectedNode.metrics.connections.toLocaleString()}
-                        </span>
-                      </div>
-                    )}
-                    {selectedNode.metrics.throughput && (
-                      <div className="flex items-center justify-between">
-                        <span className="text-sm text-slate-400">Throughput</span>
-                        <span className="text-sm font-medium text-cyan-400">
-                          {selectedNode.metrics.throughput}
-                        </span>
-                      </div>
-                    )}
-                  </>
-                )}
+                <p className="text-xs text-slate-400 mb-2">{hoveredNode.details}</p>
 
-                {/* Actions */}
-                <button
-                  onClick={() => {
-                    onNodeClick?.(selectedNode);
-                    setSelectedNode(null);
-                  }}
-                  className="w-full mt-2 py-2 px-3 bg-blue-600 hover:bg-blue-700 text-white text-sm font-medium rounded-lg transition-colors flex items-center justify-center gap-2"
-                >
-                  <Info className="w-4 h-4" />
-                  View Details
-                </button>
+                {hoveredNode.metrics && (
+                  <div className="grid grid-cols-2 gap-2 text-[10px]">
+                    {hoveredNode.metrics.cpu !== undefined && (
+                      <div className="flex justify-between">
+                        <span className="text-slate-500">CPU:</span>
+                        <span className="text-white font-mono">
+                          {Math.round(hoveredNode.metrics.cpu)}%
+                        </span>
+                      </div>
+                    )}
+                    {hoveredNode.metrics.memory !== undefined && (
+                      <div className="flex justify-between">
+                        <span className="text-slate-500">Memory:</span>
+                        <span className="text-white font-mono">
+                          {Math.round(hoveredNode.metrics.memory)}%
+                        </span>
+                      </div>
+                    )}
+                    {hoveredNode.metrics.latency !== undefined && (
+                      <div className="flex justify-between">
+                        <span className="text-slate-500">Latency:</span>
+                        <span className="text-white font-mono">
+                          {hoveredNode.metrics.latency.toFixed(1)}ms
+                        </span>
+                      </div>
+                    )}
+                    {hoveredNode.metrics.connections !== undefined && (
+                      <div className="flex justify-between">
+                        <span className="text-slate-500">Connections:</span>
+                        <span className="text-white font-mono">
+                          {hoveredNode.metrics.connections}
+                        </span>
+                      </div>
+                    )}
+                  </div>
+                )}
               </div>
-            </div>
-          )}
+            )}
+
+            {/* Selected Node Details Panel */}
+            {showDetailsPanel && selectedNode && (
+              <div className="absolute top-4 right-4 w-72 bg-slate-900/98 rounded-xl border border-slate-700 shadow-2xl z-30 overflow-hidden">
+                <div className="flex items-center justify-between p-4 border-b border-slate-800">
+                  <div className="flex items-center gap-2">
+                    {React.createElement(NODE_TYPE_CONFIG[selectedNode.type].icon, {
+                      className: 'h-4 w-4',
+                      style: { color: NODE_TYPE_CONFIG[selectedNode.type].color },
+                    })}
+                    <span className="font-semibold text-sm text-slate-200">
+                      {selectedNode.name}
+                    </span>
+                  </div>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="h-6 w-6 text-slate-500"
+                    onClick={() => setSelectedNodeId(null)}
+                  >
+                    ×
+                  </Button>
+                </div>
+
+                <div className="p-4 space-y-4">
+                  {/* Status & Type */}
+                  <div className="flex items-center gap-2">
+                    <Badge
+                      variant="outline"
+                      style={{
+                        color: STATUS_CONFIG[selectedNode.status].color,
+                        borderColor: STATUS_CONFIG[selectedNode.status].pulseColor,
+                      }}
+                    >
+                      {STATUS_CONFIG[selectedNode.status].label}
+                    </Badge>
+                    <Badge variant="secondary" className="text-xs">
+                      {NODE_TYPE_CONFIG[selectedNode.type].label}
+                    </Badge>
+                  </div>
+
+                  {/* Description */}
+                  {selectedNode.details && (
+                    <p className="text-xs text-slate-400">{selectedNode.details}</p>
+                  )}
+
+                  {/* Metrics */}
+                  {selectedNode.metrics && (
+                    <div className="space-y-2">
+                      <p className="text-xs font-medium text-white">Live Metrics</p>
+                      <div className="grid grid-cols-2 gap-2">
+                        {Object.entries(selectedNode.metrics).map(
+                          ([key, value]) => (
+                            <div
+                              key={key}
+                              className="bg-slate-800/50 rounded-lg p-2 text-center"
+                            >
+                              <p className="text-lg font-bold text-white font-mono">
+                                {typeof value === 'number'
+                                  ? Number.isInteger(value)
+                                    ? value
+                                    : value.toFixed(1)
+                                  : value}
+                                {key === 'cpu' || key === 'memory'
+                                  ? '%'
+                                  : key === 'latency'
+                                  ? 'ms'
+                                  : key === 'throughput'
+                                  ? ' Mbps'
+                                  : ''}
+                              </p>
+                              <p className="text-[10px] text-slate-500 uppercase tracking-wider">
+                                {key}
+                              </p>
+                            </div>
+                          )
+                        )}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Actions */}
+                  <div className="space-y-2">
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="w-full border-slate-600 text-xs"
+                    >
+                      <Activity className="h-3 w-3 mr-2" />
+                      View Detailed Metrics
+                    </Button>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="w-full border-slate-600 text-xs"
+                    >
+                      <Phone className="h-3 w-3 mr-2" />
+                      Run Diagnostics
+                    </Button>
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
         </CardContent>
       </Card>
     </TooltipProvider>
@@ -780,4 +1035,4 @@ export function NetworkTopologyGraph({
 }
 
 // Named export for barrel file
-export default NetworkTopologyGraph;
+export default NetworkTopology;
