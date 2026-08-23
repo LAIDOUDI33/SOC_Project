@@ -40,8 +40,8 @@ export async function GET(request: NextRequest) {
     // Parse query parameters for channel selection
     const { searchParams } = new URL(request.url);
     const includeComments = searchParams.get('comments') === 'true';
-    includeAlerts = searchParams.get('alerts') === 'true';
-    includeStatusChanges = searchParams.get('status') !== 'false'; // default true
+    const includeAlerts = searchParams.get('alerts') === 'true';
+    const includeStatusChanges = searchParams.get('status') !== 'false'; // default true
     
     // Build channel list
     const channels = [SSEChannels.INCIDENTS];

@@ -99,3 +99,47 @@ export async function GET(request: NextRequest) {
     });
   }
 }
+
+// POST /api/stream/threats - Subscribe/unsubscribe to channels
+export async function POST(request: NextRequest) {
+  const authResult = await authenticateRequest(request);
+  
+  if (!authResult.success || !authResult.user) {
+    return Response.json({ success: false, error: 'Authentication required' }, { status: 401 });
+  }
+
+  try {
+    const body = await request.json();
+    const { connectionId, action, channels } = body;
+
+    if (!connectionId || !action) {
+      return Response.json({
+        success: false,
+        error: 'Missing connectionId or action'
+      }, { status: 400 });
+    }
+
+    let success = false;
+
+    if (action === 'subscribe' && Array.isArray(channels)) {
+      success = sseManager.subscribeToChannels(connectionId, channels);
+    } else if (action === 'unsubscribe' && Array.isArray(channels)) {
+      success = sseManager.unsubscribeFromChannels(connectionId, channels);
+    } else if (action === 'close') {
+      sseManager.closeConnection(connectionId);
+      success = true;
+    }
+
+    return Response.json({
+      success,
+      action,
+      ...(channels && { channels })
+    });
+
+  } catch (error) {
+    return Response.json({
+      success: false,
+      error: 'Failed to update subscription'
+    }, { status: 500 });
+  }
+}
