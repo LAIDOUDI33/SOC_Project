@@ -32,9 +32,10 @@ function ClockDisplay() {
 interface DashboardHeaderProps {
   showMobileMenu: boolean
   onToggleMobileMenu: () => void
+  onAdminClick?: () => void
 }
 
-export function DashboardHeader({ showMobileMenu, onToggleMobileMenu }: DashboardHeaderProps) {
+export function DashboardHeader({ showMobileMenu, onToggleMobileMenu, onAdminClick }: DashboardHeaderProps) {
   return (
     <header className="bg-slate-900 border-b border-slate-800 px-6 py-4 sticky top-0 z-50">
       <div className="flex items-center justify-between">
@@ -61,13 +62,25 @@ export function DashboardHeader({ showMobileMenu, onToggleMobileMenu }: Dashboar
           </div>
 
           {/* Actions */}
-          <button className="p-2 hover:bg-slate-800 rounded-lg transition-colors">
-            <RefreshCw className="w-5 h-5" />
-          </button>
-          <button className="relative p-2 hover:bg-slate-800 rounded-lg transition-colors">
-            <Bell className="w-5 h-5" />
-            <span className="absolute top-1 right-1 w-2 h-2 bg-red-500 rounded-full"></span>
-          </button>
+          <div className="flex items-center gap-2">
+            {onAdminClick && (
+              <button 
+                onClick={onAdminClick}
+                className="flex items-center gap-2 px-3 py-2 bg-red-500/10 hover:bg-red-500/20 text-red-400 border border-red-500/30 rounded-lg transition-colors text-sm font-medium"
+                title="Open Admin Panel"
+              >
+                <Shield className="w-4 h-4" />
+                <span className="hidden lg:inline">Admin</span>
+              </button>
+            )}
+            <button className="p-2 hover:bg-slate-800 rounded-lg transition-colors">
+              <RefreshCw className="w-5 h-5" />
+            </button>
+            <button className="relative p-2 hover:bg-slate-800 rounded-lg transition-colors">
+              <Bell className="w-5 h-5" />
+              <span className="absolute top-1 right-1 w-2 h-2 bg-red-500 rounded-full"></span>
+            </button>
+          </div>
         </div>
 
         {/* Mobile Menu Button */}

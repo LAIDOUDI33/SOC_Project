@@ -6,12 +6,12 @@ import { Radio, Activity, AlertTriangle, X, Zap, Shield, TrendingUp } from 'luci
 
 // Dynamic imports for SS7 components
 const SS7TrafficMonitor = dynamic(
-  () => import('@/components/ss7/SS7TrafficMonitor').then(mod => ({ default: mod.SS7TrafficMonitor })),
+  () => import('@/components/ss7/SS7TrafficMonitor'),
   { ssr: false, loading: () => <div className="p-4 animate-pulse bg-slate-800 rounded-lg">Loading SS7 Monitor...</div> }
 )
 
 const FraudDetectionPanel = dynamic(
-  () => import('@/components/ss7/FraudDetectionPanel').then(mod => ({ default: mod.FraudDetectionPanel })),
+  () => import('@/components/ss7/FraudDetectionPanel'),
   { ssr: false, loading: () => <div className="p-4 animate-pulse bg-slate-800 rounded-lg">Loading Fraud Detection...</div> }
 )
 
