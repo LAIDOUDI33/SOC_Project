@@ -192,7 +192,18 @@ export async function POST(request: NextRequest) {
 
 // Helper functions to generate mock data for demonstration
 function generateMockGeoEvents(count: number): any[] {
-  const events = []
+  const events: Array<{
+    id: string;
+    timestamp: Date;
+    location: { latitude: number; longitude: number };
+    eventType: string;
+    severity: string;
+    source: string;
+    description: string;
+    wilaya: string;
+    affectedAssets: string[];
+    iocs: string[];
+  }> = []
   const eventTypes = [
     'malware_c2', 'ddos', 'phishing', 'ss7_attack', 'sim_swap_fraud',
     'irsf', 'unauthorized_access', 'data_exfiltration', 'port_scan',
@@ -225,7 +236,16 @@ function generateMockGeoEvents(count: number): any[] {
 }
 
 function generateMockSubscribers(count: number): any[] {
-  const subscribers = []
+  const subscribers: Array<{
+    imsi: string;
+    msisdn: string;
+    currentLocation: { latitude: number; longitude: number };
+    lastUpdate: Date;
+    riskScore: number;
+    status: string;
+    connectedCellTower: string;
+    signalStrength: number;
+  }> = []
   const statuses = ['active', 'roaming', 'suspicious', 'blocked']
 
   for (let i = 0; i < count; i++) {
@@ -250,7 +270,16 @@ function generateMockSubscribers(count: number): any[] {
 }
 
 function generateMockLocations(subscriberId: string): any[] {
-  const locations = []
+  const locations: Array<{
+    imsi: string;
+    msisdn: string;
+    currentLocation: { latitude: number; longitude: number };
+    lastUpdate: Date;
+    riskScore: number;
+    status: string;
+    connectedCellTower: string;
+    signalStrength: number;
+  }> = []
   let currentTime = new Date()
   let currentWilaya = ALGERIAN_WILAYAS[Math.floor(Math.random() * ALGERIAN_WILAYAS.length)]
 

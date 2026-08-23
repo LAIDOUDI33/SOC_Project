@@ -185,6 +185,7 @@ function createSuccessResponse<T>(data: T, meta?: Partial<ApiResponse['meta']>):
     meta: {
       requestId: randomUUID(),
       timestamp: new Date().toISOString(),
+      processingTimeMs: 0,
       ...meta,
     },
   });
@@ -197,6 +198,7 @@ function createErrorResponse(code: string, message: string, status: number = 400
     meta: {
       requestId: randomUUID(),
       timestamp: new Date().toISOString(),
+      processingTimeMs: 0,
     },
   }, { status });
 }
@@ -389,7 +391,9 @@ export async function SEARCH(request: NextRequest) {
     });
 
     const total = allEvents.length;
-    const paginatedEvents = allEvents.slice(filters.offset, filters.offset + filters.limit);
+    const offset = filters.offset || 0;
+    const limit = filters.limit || 50;
+    const paginatedEvents = allEvents.slice(offset, offset + limit);
 
     const processingTime = Date.now() - startTime;
 
@@ -397,9 +401,9 @@ export async function SEARCH(request: NextRequest) {
       events: paginatedEvents,
       pagination: {
         total,
-        limit: filters.limit,
-        offset: filters.offset,
-        hasMore: filters.offset + filters.limit < total,
+        limit,
+        offset,
+        hasMore: offset + limit < total,
       },
       appliedFilters: filters,
     }, { processingTimeMs: processingTime });

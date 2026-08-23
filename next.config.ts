@@ -3,6 +3,9 @@ import type { NextConfig } from "next";
 const nextConfig: NextConfig = {
   output: "standalone",
   
+  // Turbopack configuration (Next.js 16+)
+  turbopack: {},
+  
   // SECURITY: Don't ignore TypeScript errors - catch them at build time
   typescript: {
     ignoreBuildErrors: false,

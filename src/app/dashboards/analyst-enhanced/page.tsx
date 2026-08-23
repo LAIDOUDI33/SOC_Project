@@ -8,7 +8,7 @@ import {
   Keyboard, Zap, Shield, Target, FileText, MessageSquare,
   LayoutGrid, List, RefreshCw, Download, Archive,
   Play, Pause, SkipForward, RotateCcw, TrendingUp,
-  BarChart3, PieChart, Activity
+  BarChart3, PieChart as PieChartIcon, Activity
 } from 'lucide-react'
 import {
   Card, CardContent, CardDescription, CardHeader, CardTitle
@@ -164,7 +164,7 @@ const generateTimeline = (): InvestigationEvent[] => [
 const generateAlertTrendData = () => {
   const now = new Date()
   return Array.from({ length: 24 }, (_, i) => {
-    const hour = new Date(now - (24 - i) * 3600000)
+    const hour = new Date(now.getTime() - (24 - i) * 3600000)
     return {
       time: hour.toLocaleTimeString('en-US', { hour: '2-digit', hour12: false }),
       critical: Math.floor(Math.random() * 8),
@@ -289,7 +289,7 @@ function SeverityDistribution({ data }: { data: ReturnType<typeof generateSeveri
     <Card className="bg-slate-900 border-slate-700">
       <CardHeader className="pb-3">
         <CardTitle className="text-white text-base flex items-center gap-2">
-          <PieChart className="h-4 w-4 text-purple-400" />
+          <PieChartIcon className="h-4 w-4 text-purple-400" />
           Severity Breakdown
         </CardTitle>
       </CardHeader>

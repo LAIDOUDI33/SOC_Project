@@ -61,7 +61,7 @@ export async function GET(request: NextRequest) {
   }
 
   // Create SSE connection with channels
-  const { response, sessionId } = createSSEConnection(validChannels);
+  const response = createSSEConnection(validChannels);
 
   // Start data polling for each channel with cleanup on disconnect
   const connectionIntervals = new Map<string, NodeJS.Timeout>();

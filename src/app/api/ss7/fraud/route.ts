@@ -18,7 +18,7 @@ function generateFraudAlerts(status?: string, type?: string) {
   const alertTypes = Object.values(FraudType);
   const statuses = [AlertStatus.NEW, AlertStatus.INVESTIGATING, AlertStatus.CONFIRMED, AlertStatus.BLOCKED];
   
-  const alerts = [];
+  const alerts: any[] = [];
   for (let i = 0; i < 15; i++) {
     const alertType = type ? type : alertTypes[Math.floor(Math.random() * alertTypes.length)];
     const alertStatus = status ? status : statuses[Math.floor(Math.random() * statuses.length)];
@@ -98,7 +98,7 @@ function getRuleName(type: string): string {
 
 // Generate fraud statistics
 function generateFraudStatistics(type?: string) {
-  const baseStats = {
+  const baseStats: any = {
     totalAlerts: Math.floor(Math.random() * 200) + 50,
     alertsByStatus: {
       [AlertStatus.NEW]: Math.floor(Math.random() * 30) + 10,
@@ -268,8 +268,8 @@ export async function POST(request: NextRequest) {
 }
 
 async function handleGetAlerts(searchParams: URLSearchParams) {
-  const status = searchParams.get('status');
-  const type = searchParams.get('type');
+  const status = searchParams.get('status') ?? undefined;
+  const type = searchParams.get('type') ?? undefined;
   const limit = parseInt(searchParams.get('limit') || '50');
   
   const alerts = generateFraudAlerts(status, type).slice(0, limit);
@@ -286,7 +286,7 @@ async function handleGetAlerts(searchParams: URLSearchParams) {
 }
 
 async function handleGetStatistics(searchParams: URLSearchParams) {
-  const type = searchParams.get('type');
+  const type = searchParams.get('type') ?? undefined;
   const period = searchParams.get('period') || '24h';
   
   const stats = generateFraudStatistics(type);

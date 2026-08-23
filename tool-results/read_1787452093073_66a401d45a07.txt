@@ -1,0 +1,768 @@
+     1→/**
+     2→ * Djezzy SOC Platform - Next.js Cache Configuration
+     3→ * 
+     4→ * ISR/SSR/Static optimization for enterprise SOC dashboard performance
+     5→ * Target: <2s initial load, <100ms subsequent navigations, 95%+ cache hit rate
+     6→ * Scale: 10K concurrent users, 500K EPS ingestion support
+     7→ * 
+     8→ * @version 2.0.0
+     9→ * @author Djezzy SOC Platform Team
+    10→ */
+    11→
+    12→import { NextConfig } from 'next';
+    13→import type { NextFetchEvent } from 'next/server';
+    14→
+    15→// ============================================================
+    16→// CACHE CONFIGURATION CONSTANTS
+    17→// ============================================================
+    18→
+    19→export const CacheConfig = {
+    20→  // ============================================================
+    21→  // TIME-TO-LIVE VALUES (in seconds)
+    22→  // ============================================================
+    23→  TTL: {
+    24→    // Static assets - very long caching with content-based versioning
+    25→    STATIC_ASSETS: 365 * 24 * 60 * 60,        // 1 year (immutable with hash)
+    26→    FONTS: 365 * 24 * 60 * 60,                // 1 year (immutable)
+    27→    IMAGES: 30 * 24 * 60 * 60,               // 30 days (optimized + hashed)
+    28→    ICONS: 7 * 24 * 60 * 60,                  // 1 week
+    29→    
+    30→    // Page-level caching for different page types
+    31→    DASHBOARD_PAGE: 10,                       // 10 seconds - real-time security data
+    32→    ALERTS_PAGE: 5,                           // 5 seconds - critical alerts need freshness
+    33→    INCIDENTS_PAGE: 15,                       // 15 seconds - incident data
+    34→    THREATS_PAGE: 60,                         // 1 minute - threat intel
+    35→    HUNTING_PAGE: 30,                         // 30 seconds - threat hunting workspace
+    36→    REPORTS_PAGE: 300,                        // 5 minutes - generated reports
+    37→    COMPLIANCE_PAGE: 300,                     // 5 minutes - compliance status
+    38→    SETTINGS_PAGE: 86400,                     // 24 hours - user settings rarely change
+    39→    ANALYTICS_PAGE: 60,                       // 1 minute - analytics dashboards
+    40→    TELECOM_PAGE: 30,                         // 30 seconds - telecom monitoring
+    41→    
+    42→    // API response caching by endpoint type
+    43→    PUBLIC_API: 60,                           // 1 minute for public endpoints
+    44→    AUTHENTICATED_API: 0,                     // No server-side cache (dynamic per-user)
+    45→    METRICS_API: 15,                          // 15 seconds for metrics aggregation
+    46→    ALERTS_API: 5,                            // 5 seconds for alert data
+    47→    INCIDENTS_API: 15,                        // 15 seconds for incident data
+    48→    THREATS_API: 60,                          // 1 minute for threat intelligence
+    49→    REFERENCE_DATA: 3600,                     // 1 hour for lookup/reference data
+    50→    HEALTH_API: 10,                           // 10 seconds for health checks
+    51→    STREAMING_API: 0,                         // No caching for SSE/WebSocket endpoints
+    52→    
+    53→    // ============================================================
+    54→    // INCREMENTAL STATIC REGENERATION (ISR) CONFIGURATION
+    55→    // ============================================================
+    56→    ISR_REVALIDATION: {
+    57→      DASHBOARD: 10,                          // Revalidate every 10 seconds
+    58→      ALERTS: 5,                              // Revalidate every 5 seconds (critical path)
+    59→      ALERTS_DETAIL: 10,                      // Alert detail pages
+    60→      INCIDENTS: 15,                          // Revalidate every 15 seconds
+    61→      INCIDENTS_DETAIL: 30,                   // Incident detail pages
+    62→      THREATS: 60,                            // Revalidate every minute
+    63→      THREATS_DETAIL: 120,                    // Threat detail pages
+    64→      COMPLIANCE: 300,                         // Revalidate every 5 minutes
+    65→      KPI_REPORTS: 900,                       // Revalidate every 15 minutes
+    66→      HISTORICAL_DATA: 1800,                  // Revalidate every 30 minutes
+    67→      REFERENCE: 86400,                       // Revalidate daily
+    68→    },
+    69→    
+    70→    // ============================================================
+    71→    // STALE-WHILE-REVALIDATE (SWR) CONFIGURATION
+    72→    // Serve stale content while fetching fresh in background
+    73→    // ============================================================
+    74→    SWR: {
+    75→      DEFAULT: 60,                            // Serve stale for 1 minute while refreshing
+    76→      CRITICAL_DATA: 10,                      // 10 seconds for critical security data
+    77→      REALTIME_DATA: 5,                       // 5 seconds for real-time alerts/metrics
+    78→      NEAR_REALTIME: 15,                      // 15 seconds for near-real-time data
+    79→      REFERENCE_DATA: 300,                    // 5 minutes for reference data
+    80→      STATIC_CONTENT: 86400,                  // 24 hours for static content
+    81→    },
+    82→  },
+    83→  
+    84→  // ============================================================
+    85→  // CACHE CONTROL HEADERS
+    86→  // ============================================================
+    87→  HEADERS: {
+    88→    // Static immutable assets (hashed filenames)
+    89→    STATIC: 'public, max-age=31536000, immutable',
+    90→    
+    91→    // Static versioned assets with SWR fallback
+    92→    STATIC_VERSIONED: 'public, max-age=31536000, stale-while-revalidate=86400, stale-if-error=604800',
+    93→    
+    94→    // Public API responses (cacheable at CDN edge)
+    95→    API_PUBLIC: 'public, s-maxage=60, stale-while-revalidate=59, stale-if-error=300',
+    96→    
+    97→    // Private/authenticated responses (no shared caching)
+    98→    API_PRIVATE: 'private, no-cache, no-store, must-revalidate',
+    99→    
+   100→    // Default ISR response headers
+   101→    ISR_DEFAULT: 's-maxage=10, stale-while-revalidate=299',
+   102→    
+   103→    // Real-time data (very short cache)
+   104→    ISR_REALTIME: 's-maxage=5, stale-while-revalidate=55',
+   105→    
+   106→    // CDN-only caching (bypass Next.js cache)
+   107→    CDN_ONLY: 'public, s-maxage=300, proxy-revalidate',
+   108→  },
+   109→  
+   110→  // Note: ROUTES configuration moved to end of file to avoid circular reference
+   111→};
+   112→
+   113→// ============================================================
+   114→// ROUTE-SPECIFIC CACHE CONFIGURATIONS (defined after CacheConfig)
+   115→// ============================================================
+   116→
+   117→export const RouteCacheConfig = {
+   118→  // Main dashboard routes
+   119→  '/': {
+   120→    cache: 'ISR',
+   121→    revalidate: CacheConfig.TTL.ISR_REVALIDATION.DASHBOARD,
+   122→    swr: CacheConfig.TTL.SWR.REALTIME_DATA,
+   123→    description: 'Main SOC Dashboard',
+   124→  },
+   125→  '/dashboard': {
+   126→    cache: 'ISR',
+   127→    revalidate: CacheConfig.TTL.ISR_REVALIDATION.DASHBOARD,
+   128→    swr: CacheConfig.TTL.SWR.REALTIME_DATA,
+   129→    description: 'Dashboard Home',
+   130→  },
+   131→  
+   132→  // Security operations routes
+   133→  '/alerts': {
+   134→    cache: 'SSR',                           // Always fresh - critical security data
+   135→    headers: CacheConfig.HEADERS.API_PRIVATE,
+   136→    description: 'Active Alerts Feed',
+   137→  },
+   138→  '/alerts/[id]': {
+   139→    cache: 'ISR',
+   140→    revalidate: CacheConfig.TTL.ISR_REVALIDATION.ALERTS_DETAIL,
+   141→    description: 'Alert Detail View',
+   142→  },
+   143→  '/incidents': {
+   144→    cache: 'ISR',
+   145→    revalidate: CacheConfig.TTL.ISR_REVALIDATION.INCIDENTS,
+   146→    swr: CacheConfig.TTL.SWR.NEAR_REALTIME,
+   147→    description: 'Incident Management',
+   148→  },
+   149→  '/incidents/[id]': {
+   150→    cache: 'ISR',
+   151→    revalidate: CacheConfig.TTL.ISR_REVALIDATION.INCIDENTS_DETAIL,
+   152→    description: 'Incident Detail View',
+   153→  },
+   154→  '/threat-hunting': {
+   155→    cache: 'SSR',                           // Interactive hunting workspace
+   156→    headers: CacheConfig.HEADERS.API_PRIVATE,
+   157→    description: 'Threat Hunting Workspace',
+   158→  },
+   159→  
+   160→  // Intelligence routes
+   161→  '/threats': {
+   162→    cache: 'ISR',
+   163→    revalidate: CacheConfig.TTL.ISR_REVALIDATION.THREATS,
+   164→    description: 'Threat Intelligence Feed',
+   165→  },
+   166→  '/threats/[id]': {
+   167→    cache: 'ISR',
+   168→    revalidate: CacheConfig.TTL.ISR_REVALIDATION.THREATS_DETAIL,
+   169→    description: 'Threat Detail View',
+   170→  },
+   171→  
+   172→  // Analytics & Reporting
+   173→  '/dashboards/analytics': {
+   174→    cache: 'ISR',
+   175→    revalidate: CacheConfig.TTL.ISR_REVALIDATION.DASHBOARD,
+   176→    description: 'Analytics Dashboard',
+   177→  },
+   178→  '/reports': {
+   179→    cache: 'ISR',
+   180→    revalidate: CacheConfig.TTL.ISR_REVALIDATION.KPI_REPORTS,
+   181→    description: 'Reports Library',
+   182→  },
+   183→  
+   184→  // Compliance
+   185→  '/dashboards/compliance': {
+   186→    cache: 'ISR',
+   187→    revalidate: CacheConfig.TTL.ISR_REVALIDATION.COMPLIANCE,
+   188→    description: 'Compliance Dashboard',
+   189→  },
+   190→  
+   191→  // Telecom-specific
+   192→  '/dashboards/telecom': {
+   193→    cache: 'ISR',
+   194→    revalidate: CacheConfig.TTL.ISR_REVALIDATION.DASHBOARD,
+   195→    description: 'Telecom Monitoring Dashboard',
+   196→  },
+   197→  
+   198→  // Settings (user-specific, but rarely changes)
+   199→  '/settings': {
+   200→    cache: 'SSR',                           // User-specific settings
+   201→    headers: CacheConfig.HEADERS.API_PRIVATE,
+   202→    description: 'User Settings',
+   203→  },
+   204→  
+   205→  // Authentication (never cached)
+   206→  '/auth/login': {
+   207→    cache: 'NO_STORE',
+   208→    headers: 'private, no-cache, no-store, must-revalidate, max-age=0',
+   209→    description: 'Login Page',
+   210→  },
+   211→  
+   212→  // ============================================================
+   213→  // API ROUTE CACHING
+   214→  // ============================================================
+   215→  '/api/health': {
+   216→    cache: 'EDGE',
+   217→    ttl: CacheConfig.TTL.HEALTH_API,
+   218→    description: 'Health Check Endpoint',
+   219→  },
+   220→  '/api/metrics': {
+   221→    cache: 'EDGE',
+   222→    ttl: CacheConfig.TTL.METRICS_API,
+   223→    swr: CacheConfig.TTL.SWR.CRITICAL_DATA,
+   224→    description: 'Metrics Aggregation API',
+   225→  },
+   226→  '/api/alerts': {
+   227→    cache: 'NONE',                          // Real-time alerts, no caching
+   228→    description: 'Alerts API',
+   229→  },
+   230→  '/api/incidents': {
+   231→    cache: 'EDGE',
+   232→    ttl: CacheConfig.TTL.INCIDENTS_API,
+   233→    description: 'Incidents API',
+   234→  },
+   235→  '/api/threats': {
+   236→    cache: 'EDGE',
+   237→    ttl: CacheConfig.TTL.THREATS_API,
+   238→    description: 'Threat Intelligence API',
+   239→  },
+   240→  '/api/dashboard': {
+   241→    cache: 'EDGE',
+   242→    ttl: CacheConfig.TTL.METRICS_API,
+   243→    description: 'Dashboard Data API',
+   244→  },
+   245→  '/api/compliance': {
+   246→    cache: 'EDGE',
+   247→    ttl: CacheConfig.TTL.COMPLIANCE_PAGE,
+   248→    description: 'Compliance Status API',
+   249→  },
+   250→  '/api/system': {
+   251→    cache: 'EDGE',
+   252→    ttl: CacheConfig.TTL.HEALTH_API,
+   253→    description: 'System Status API',
+   254→  },
+   255→  '/api/stream/*': {
+   256→    cache: 'NONE',                          // Streaming endpoints never cached
+   257→    description: 'SSE/Streaming Endpoints',
+   258→  },
+   259→  '/api/v1/events': {
+   260→    cache: 'NONE',                          // Ingestion endpoint, write-heavy
+   261→    description: 'Event Ingestion API',
+   262→  },
+   263→  '/api/auth/*': {
+   264→    cache: 'NONE',                          // Auth endpoints never cached
+   265→    description: 'Authentication APIs',
+   266→  },
+   267→};
+   268→
+   269→// ============================================================
+   270→// NEXT.JS CONFIGURATION WITH PERFORMANCE OPTIMIZATIONS
+   271→// ============================================================
+   272→
+   273→const nextConfig: NextConfig = {
+   274→  // Enable React strict mode for development warnings
+   275→  reactStrictMode: true,
+   276→  
+   277→  // Output optimization for Docker deployment
+   278→  output: 'standalone',
+   279→  
+   280→  // Image optimization configuration for SOC dashboards
+   281→  images: {
+   282→    // Modern formats for better compression
+   283→    formats: ['image/avif', 'image/webp'],
+   284→    
+   285→    // Responsive device sizes for SOC dashboard layouts
+   286→    deviceSizes: [640, 750, 828, 1080, 1200, 1440, 1920, 2048, 2560],
+   287→    
+   288→    // Image sizes for responsive srcset
+   289→    imageSizes: [16, 32, 48, 64, 96, 128, 256, 384, 512],
+   290→    
+   291→    // Cache optimized images for 24h
+   292→    minimumCacheTTL: 86400,
+   293→    
+   294→    // Allowed remote image sources (CDN domains)
+   295→    remotePatterns: [
+   296→      {
+   297→        protocol: 'https',
+   298→        hostname: 'cdn.djezzy.dz',
+   299→      },
+   300→      {
+   301→        protocol: 'https',
+   302→        hostname: 'static.djezzy.dz',
+   303→      },
+   304→      {
+   305→        protocol: 'https',
+   306→        hostname: 'images.djezzy.dz',
+   307→      },
+   308→    ],
+   309→    
+   310→    // Security settings
+   311→    dangerouslyAllowSVG: false,
+   312→    contentSecurityPolicy: "default-src 'self'; script-src 'none'; sandbox;",
+   313→  },
+   314→  
+   315→  // Experimental features for maximum performance
+   316→  experimental: {
+   317→    // Optimize package imports for tree-shaking
+   318→    optimizePackageImports: [
+   319→      'lucide-react',
+   320→      '@radix-ui/react-*',
+   321→      'recharts',
+   322→      'date-fns',
+   323→      'clsx',
+   324→      'tailwind-merge',
+   325→      '@tanstack/react-query',
+   326→      'zustand',
+   327→    ],
+   328→    
+   329→    // Server components external packages
+   330→    serverComponentsExternalPackages: [
+   331→      '@prisma/client',
+   332→      '@elastic/elasticsearch',
+   333→      'ioredis',
+   334→      'kafkajs',
+   335→    ],
+   336→    
+   337→    // Server actions optimization
+   338→    serverActions: {
+   339→      bodySizeLimit: '2mb',
+   340→    },
+   341→  },
+   342→  
+   343→  // Headers configuration for multi-layer caching
+   344→  async headers() {
+   345→    return [
+   346→      // ============================================================
+   347→      // STATIC ASSETS - Aggressive caching with immutability
+   348→      // ============================================================
+   349→      {
+   350→        source: '/static/:path*',
+   351→        headers: [
+   352→          { key: 'Cache-Control', value: CacheConfig.HEADERS.STATIC },
+   353→          { key: 'CDN-Cache-Control', value: CacheConfig.HEADERS.STATIC },
+   354→        ],
+   355→      },
+   356→      
+   357→      // Fonts - should be immutable
+   358→      {
+   359→        source: '/fonts/:path*',
+   360→        headers: [
+   361→          { key: 'Cache-Control', value: CacheConfig.HEADERS.STATIC },
+   362→          { key: 'X-Content-Type-Options', value: 'nosniff' },
+   363→          { key: 'Cross-Origin-Resource-Policy', value: 'cross-origin' },
+   364→        ],
+   365→      },
+   366→      
+   367→      // Next.js optimized images
+   368→      {
+   369→        source: '/_next/image(:.*)',
+   370→        headers: [
+   371→          { key: 'Cache-Control', value: CacheConfig.HEADERS.STATIC_VERSIONED },
+   372→          { key: 'CDN-Cache-Control', value: CacheConfig.HEADERS.STATIC_VERSIONED },
+   373→        ],
+   374→      },
+   375→      
+   376→      // Static chunks (JS/CSS with hashes)
+   377→      {
+   378→        source: '/_next/static/:path*',
+   379→        headers: [
+   380→          { key: 'Cache-Control', value: CacheConfig.HEADERS.STATIC },
+   381→        ],
+   382→      },
+   383→      
+   384→      // ============================================================
+   385→      // SECURITY HEADERS - All responses
+   386→      // ============================================================
+   387→      {
+   388→        source: '/(.*)',
+   389→        headers: [
+   390→          // DNS prefetching
+   391→          { key: 'X-DNS-Prefetch-Control', value: 'on' },
+   392→          
+   393→          // HSTS - Strict transport security
+   394→          { key: 'Strict-Transport-Security', value: 'max-age=63072000; includeSubDomains; preload' },
+   395→          
+   396→          // XSS Protection
+   397→          { key: 'X-XSS-Protection', value: '1; mode=block' },
+   398→          
+   399→          // Clickjacking protection
+   400→          { key: 'X-Frame-Options', value: 'SAMEORIGIN' },
+   401→          
+   402→          // MIME type sniffing prevention
+   403→          { key: 'X-Content-Type-Options', value: 'nosniff' },
+   404→          
+   405→          // Referrer policy
+   406→          { key: 'Referrer-Policy', value: 'strict-origin-when-cross-origin' },
+   407→          
+   408→          // Permissions policy
+   409→          { key: 'Permissions-Policy', value: 'camera=(), microphone=(), geolocation=(), interest-cohort=()' },
+   410→          
+   411→          // Content Security Policy hints
+   412→          { key: 'Content-Security-Policy', value: "upgrade-insecure-requests" },
+   413→        ],
+   414→      },
+   415→      
+   416→      // ============================================================
+   417→      // API HEADERS - CORS and caching
+   418→      // ============================================================
+   419→      {
+   420→        source: '/api/(.*)',
+   421→        headers: [
+   422→          // CORS configuration
+   423→          { key: 'Access-Control-Allow-Origin', value: process.env.ALLOWED_ORIGIN || 'https://soc.djezzy.dz' },
+   424→          { key: 'Access-Control-Allow-Methods', value: 'GET,POST,PUT,PATCH,DELETE,OPTIONS' },
+   425→          { key: 'Access-Control-Allow-Headers', value: 'Content-Type, Authorization, X-Request-ID, X-SOC-Token, X-Batch-Size' },
+   426→          { key: 'Access-Control-Max-Age', value: '86400' },
+   427→          { key: 'Access-Control-Allow-Credentials', value: 'true' },
+   428→          
+   429→          // No caching for private API responses
+   430→          { key: 'Cache-Control', value: 'private, no-cache, no-store, must-revalidate' },
+   431→          { key: 'Pragma', value: 'no-cache' },
+   432→        ],
+   433→      },
+   434→      
+   435→      // Public API endpoints (cacheable)
+   436→      {
+   437→        source: '/api/public/(.*)',
+   438→        headers: [
+   439→          { key: 'Cache-Control', value: CacheConfig.HEADERS.API_PUBLIC },
+   440→          { key: 'CDN-Cache-Control', value: CacheConfig.HEADERS.API_PUBLIC },
+   441→          { key: 'Vercel-CDN-Cache-Control', value: CacheConfig.HEADERS.API_PUBLIC },
+   442→        ],
+   443→      },
+   444→      
+   445→      // Health check endpoint (short cache)
+   446→      {
+   447→        source: '/api/health',
+   448→        headers: [
+   449→          { key: 'Cache-Control', value: `public, s-maxage=${CacheConfig.TTL.HEALTH_API}, stale-while-revalidate=${CacheConfig.TTL.HEALTH_API}` },
+   450→        ],
+   451→      },
+   452→    ];
+   453→  },
+   454→  
+   455→  // Redirect configuration
+   456→  async redirects() {
+   457→    return [
+   458→      { source: '/home', destination: '/', permanent: true },
+   459→      { source: '/login', destination: '/auth/login', permanent: true },
+   460→      { source: '/dashboard', destination: '/', permanent: false },
+   461→    ];
+   462→  },
+   463→  
+   464→  // Webpack configuration for optimal bundle performance
+   465→  webpack: (config, { isServer }) => {
+   466→    // ============================================================
+   467→    // BUNDLE OPTIMIZATION
+   468→    // ============================================================
+   469→    config.optimization = {
+   470→      ...config.optimization,
+   471→      splitChunks: {
+   472→        chunks: 'all',
+   473→        maxSize: 244000, // ~244KB per chunk for caching
+   474→        cacheGroups: {
+   475→          // React core - stable, rarely changes
+   476→          react: {
+   477→            test: /[\\/]node_modules[\\/](react|react-dom|scheduler)[\\/]/,
+   478→            name: 'react',
+   479→            chunks: 'all',
+   480→            priority: 50,
+   481→            enforce: true,
+   482→          },
+   483→          
+   484→          // Next.js framework
+   485→          next: {
+   486→            test: /[\\/]node_modules[\\/](next)[\\/]/,
+   487→            name: 'next',
+   488→            chunks: 'all',
+   489→            priority: 45,
+   490→            enforce: true,
+   491→          },
+   492→          
+   493→          // UI libraries (Radix, Lucide, etc.)
+   494→          ui: {
+   495→            test: /[\\/]node_modules[\\/](@radix-ui|lucide-react|recharts)[\\/]/,
+   496→            name: 'ui-vendor',
+   497→            chunks: 'all',
+   498→            priority: 40,
+   499→          },
+   500→          
+   501→          // Other vendor code
+   502→          vendor: {
+   503→            test: /[\\/]node_modules[\\/]/,
+   504→            name: 'vendors',
+   505→            chunks: 'all',
+   506→            priority: 20,
+   507→            minChunks: 2,
+   508→          },
+   509→          
+   510→          // Common shared code
+   511→          common: {
+   512→            name: 'common',
+   513→            minChunks: 2,
+   514→            chunks: 'all',
+   515→            priority: 10,
+   516→            reuseExistingChunk: true,
+   517→          },
+   518→        },
+   519→      },
+   520→      
+   521→      // Runtime chunk for long-term caching
+   522→      runtimeChunk: 'single',
+   523→    };
+   524→    
+   525→    // ============================================================
+   526→    // RESOLVE ALIASES
+   527→    // ============================================================
+   528→    config.resolve = {
+   529→      ...config.resolve,
+   530→      alias: {
+   531→        ...config.resolve.alias,
+   532→        '@': '/src',
+   533→        '@components': '/src/components',
+   534→        '@lib': '/src/lib',
+   535→        '@hooks': '/src/hooks',
+   536→        '@utils': '/src/lib/utils',
+   537→        '@config': '/config',
+   538→        '@types': '/src/types',
+   539→      },
+   540→      // Optimize resolution
+   541→      extensions: ['.ts', '.tsx', '.js', '.jsx', '.json'],
+   542→    };
+   543→    
+   544→    // ============================================================
+   545→    // BUNDLE SIZE OPTIMIZATIONS
+   546→    // ============================================================
+   547→    if (!isServer) {
+   548→      // Replace heavy libraries with lighter alternatives
+   549→      config.resolve.alias = {
+   550→        ...config.resolve.alias,
+   551→        moment$: 'dayjs',           // moment -> dayjs (much smaller)
+   552→      };
+   553→    }
+   554→    
+   555→    // Ignore locale files for smaller bundles
+   556→    // Note: IgnorePlugin is configured via next.config.js plugins array if needed
+   557→    
+   558→    // Source maps in production for debugging
+   559→    config.devtool = 'hidden-source-map';
+   560→    
+   561→    return config;
+   562→  },
+   563→  
+   564→  // Disable X-Powered-By header for security
+   565→  poweredByHeader: false,
+   566→  
+   567→  // TypeScript configuration
+   568→  typescript: {
+   569→    ignoreBuildErrors: false,
+   570→  },
+   571→};
+   572→
+   573→export default nextConfig;
+   574→
+   575→// ============================================================
+   576→// SERVER-SIDE CACHE HELPERS
+   577→// ============================================================
+   578→
+   579→/**
+   580→ * Generate complete cache control headers based on route configuration
+   581→ */
+   582→export function getCacheHeaders(route: string): Record<string, string> {
+   583→  const routeConfig = RouteCacheConfig[route as keyof typeof RouteCacheConfig];
+   584→  
+   585→  if (!routeConfig) {
+   586→    return { 'Cache-Control': CacheConfig.HEADERS.API_PRIVATE };
+   587→  }
+   588→  
+   589→  // Explicitly set headers
+   590→  if ('headers' in routeConfig && routeConfig.headers) {
+   591→    const headers: Record<string, string> = { 'Cache-Control': routeConfig.headers };
+   592→    
+   593→    // Add CDN headers for cacheable routes
+   594→    if (routeConfig.cache === 'ISR' || routeConfig.cache === 'EDGE') {
+   595→      headers['CDN-Cache-Control'] = getCDNCacheControl(routeConfig);
+   596→      headers['Vercel-CDN-Cache-Control'] = getCDNCacheControl(routeConfig);
+   597→    }
+   598→    
+   599→    return headers;
+   600→  }
+   601→  
+   602→  // ISR routes
+   603→  if (routeConfig.cache === 'ISR' && 'revalidate' in routeConfig) {
+   604→    const revalidate = (routeConfig as any).revalidate || CacheConfig.TTL.ISR_REVALIDATION.DASHBOARD;
+   605→    const swr = 'swr' in routeConfig ? (routeConfig as any).swr : CacheConfig.TTL.SWR.DEFAULT;
+   606→    
+   607→    return {
+   608→      'Cache-Control': `s-maxage=${revalidate}, stale-while-revalidate=${swr}`,
+   609→      'CDN-Cache-Control': `public, s-maxage=${revalidate}, stale-while-revalidate=${swr}`,
+   610→      'Vercel-CDN-Cache-Control': `public, s-maxage=${revalidate}, stale-while-revalidate=${swr}`,
+   611→    };
+   612→  }
+   613→  
+   614→  // EDGE cache routes
+   615→  if (routeConfig.cache === 'EDGE' && 'ttl' in routeConfig) {
+   616→    const ttl = (routeConfig as any).ttl || 60;
+   617→    return {
+   618→      'Cache-Control': `public, s-maxage=${ttl}, stale-while-revalidate=${ttl * 2}`,
+   619→      'CDN-Cache-Control': `public, s-maxage=${ttl}, stale-while-revalidate=${ttl * 2}`,
+   620→    };
+   621→  }
+   622→  
+   623→  // Default: no caching
+   624→  return { 'Cache-Control': CacheConfig.HEADERS.API_PRIVATE };
+   625→}
+   626→
+   627→/**
+   628→ * Get CDN-specific cache control header
+   629→ */
+   630→function getCDNCacheControl(routeConfig: any): string {
+   631→  const ttl = routeConfig.revalidate || routeConfig.ttl || 60;
+   632→  const swr = routeConfig.swr || CacheConfig.TTL.SWR.DEFAULT;
+   633→  return `public, s-maxage=${ttl}, stale-while-revalidate=${swr}`;
+   634→}
+   635→
+   636→/**
+   637→ * Check if a route should use ISR caching
+   638→ */
+   639→export function shouldUseISR(route: string): boolean {
+   640→  const routeConfig = RouteCacheConfig[route as keyof typeof RouteCacheConfig];
+   641→  return routeConfig?.cache === 'ISR';
+   642→}
+   643→
+   644→/**
+   645→ * Check if a route should be served from edge cache
+   646→ */
+   647→export function shouldUseEdgeCache(route: string): boolean {
+   648→  const routeConfig = RouteCacheConfig[route as keyof typeof RouteCacheConfig];
+   649→  return routeConfig?.cache === 'EDGE';
+   650→}
+   651→
+   652→/**
+   653→ * Get revalidation time for a route
+   654→ */
+   655→export function getRevalidationTime(route: string): number | false {
+   656→  const routeConfig = RouteCacheConfig[route as keyof typeof RouteCacheConfig];
+   657→  return (routeConfig as any)?.revalidate ?? false;
+   658→}
+   659→
+   660→/**
+   661→ * Get TTL for a specific route
+   662→ */
+   663→export function getRouteTTL(route: string): number {
+   664→  const routeConfig = RouteCacheConfig[route as keyof typeof RouteCacheConfig];
+   665→  return (routeConfig as any)?.revalidate || (routeConfig as any)?.ttl || 0;
+   666→}
+   667→
+   668→// ============================================================
+   669→// CLIENT-SIDE CACHE UTILITIES
+   670→// ============================================================
+   671→
+   672→/**
+   673→ * Service Worker cache strategy constants
+   674→ */
+   675→export const SW_CACHE_STRATEGIES = {
+   676→  CACHE_NAMES: {
+   677→    STATIC: 'djezzy-soc-static-v2',
+   678→    DYNAMIC: 'djezzy-soc-dynamic-v2',
+   679→    API: 'djezzy-soc-api-v2',
+   680→    IMAGES: 'djezzy-soc-images-v2',
+   681→    FONTS: 'djezzy-soc-fonts-v2',
+   682→  },
+   683→  
+   684→  STRATEGIES: {
+   685→    // Cache first, network fallback for static assets
+   686→    CACHE_FIRST: 'cache-first',
+   687→    
+   688→    // Network first, cache fallback for dynamic data
+   689→    NETWORK_FIRST: 'network-first',
+   690→    
+   691→    // Stale while revalidate for near-real-time data
+   692→    STALE_WHILE_REVALIDATE: 'swr',
+   693→    
+   694→    // Network only for sensitive operations
+   695→    NETWORK_ONLY: 'network-only',
+   696→    
+   697→    // Cache only for offline-first content
+   698→    CACHE_ONLY: 'cache-only',
+   699→  },
+   700→};
+   701→
+   702→/**
+   703→ * Determine cache strategy for a request URL
+   704→ * Used by Service Worker for client-side caching decisions
+   705→ */
+   706→export function getCacheStrategy(url: string): string {
+   707→  // Static assets - cache first
+   708→  if (url.match(/\.(js|css|woff2?|ttf|otf|eot)$/)) {
+   709→    return SW_CACHE_STRATEGIES.STRATEGIES.CACHE_FIRST;
+   710→  }
+   711→  
+   712→  // Images - cache first
+   713→  if (url.match(/\.(png|jpg|jpeg|gif|svg|webp|avif|ico)$/)) {
+   714→    return SW_CACHE_STRATEGIES.STRATEGIES.CACHE_FIRST;
+   715→  }
+   716→  
+   717→  // Metrics and dashboard data - stale while revalidate
+   718→  if (
+   719→    url.startsWith('/api/metrics') ||
+   720→    url.startsWith('/api/dashboard') ||
+   721→    url.startsWith('/api/kpi')
+   722→  ) {
+   723→    return SW_CACHE_STRATEGIES.STRATEGIES.STALE_WHILE_REVALIDATE;
+   724→  }
+   725→  
+   726→  // Alerts - short SWR for near-realtime
+   727→  if (url.startsWith('/api/alerts')) {
+   728→    return SW_CACHE_STRATEGIES.STRATEGIES.STALE_WHILE_REVALIDATE;
+   729→  }
+   730→  
+   731→  // Authentication - never cache
+   732→  if (url.startsWith('/api/auth') || url.includes('/login')) {
+   733→    return SW_CACHE_STRATEGIES.STRATEGIES.NETWORK_ONLY;
+   734→  }
+   735→  
+   736→  // Event ingestion - network only
+   737→  if (url.includes('/events') && !url.includes('stream')) {
+   738→    return SW_CACHE_STRATEGIES.STRATEGIES.NETWORK_ONLY;
+   739→  }
+   740→  
+   741→  // Other API endpoints - network first with cache fallback
+   742→  if (url.startsWith('/api/')) {
+   743→    return SW_CACHE_STRATEGIES.STRATEGIES.NETWORK_FIRST;
+   744→  }
+   745→  
+   746→  // Pages - network first
+   747→  return SW_CACHE_STRATEGIES.STRATEGIES.NETWORK_FIRST;
+   748→}
+   749→
+   750→/**
+   751→ * Get appropriate cache name for a URL
+   752→ */
+   753→export function getCacheName(url: string): string {
+   754→  if (url.match(/\.(js|css|woff2?|ttf|otf|eot)$/)) {
+   755→    return SW_CACHE_STRATEGIES.CACHE_NAMES.STATIC;
+   756→  }
+   757→  if (url.match(/\.(png|jpg|jpeg|gif|svg|webp|avif|ico)$/)) {
+   758→    return SW_CACHE_STRATEGIES.CACHE_NAMES.IMAGES;
+   759→  }
+   760→  if (url.match(/fonts/i)) {
+   761→    return SW_CACHE_STRATEGIES.CACHE_NAMES.FONTS;
+   762→  }
+   763→  if (url.startsWith('/api/')) {
+   764→    return SW_CACHE_STRATEGIES.CACHE_NAMES.API;
+   765→  }
+   766→  return SW_CACHE_STRATEGIES.CACHE_NAMES.DYNAMIC;
+   767→}
+   768→

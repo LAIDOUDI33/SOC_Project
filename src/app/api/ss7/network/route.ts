@@ -108,7 +108,7 @@ function generateTopology() {
 
 // Generate link status data
 function generateLinkStatuses(status?: string) {
-  const links = [];
+  const links: any[] = [];
   
   // Internal links between major nodes
   const internalLinks = [
@@ -388,8 +388,9 @@ async function handleGetNetworkOverview() {
                      topology.pools.smsc.elements.length + 
                      topology.pools.scp.elements.length + 2, // +2 STPs
         
-        operationalElements: [...Object.values(topology.pools).flatMap(p => p.elements)]
-          .filter(e => e.status === 'operational').length + 2, // Both STPs operational
+        operationalElements: ((Object.values(topology.pools) as any[])
+          .flatMap((p: any) => p.elements)
+          .filter((e: any) => e.status === 'operational').length) + 2, // Both STPs operational
         
         alertCount: congestion.congestedPoints.length,
         highestCongestionScore: Math.max(...congestedPoints.map(p => p.score), 0),

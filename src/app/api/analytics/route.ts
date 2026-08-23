@@ -11,7 +11,7 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@/lib/db';
-import { withAuth, requireAuth, requireAnalyst } from '@/lib/auth/middleware';
+import { withAuth, requireAuth, requireAnalyst, authenticateRequest } from '@/lib/auth/middleware';
 
 // Import analytics modules (lazy loading for performance)
 const getAnomalyDetection = () => import('@/lib/analytics/ml/anomaly-detection');
@@ -78,7 +78,15 @@ export async function GET(request: NextRequest) {
   const action = searchParams.get('action');
 
   // Authentication check for most endpoints
-  const authResult = await withAuth(requireAnalyst)(request);
+  const authResult = await authenticateRequest(request);
+  
+  // For now, allow health check without auth (public endpoint)
+  if (action !== 'health' && (!authResult.authenticated || !authResult.user)) {
+    return NextResponse.json(
+      { success: false, error: authResult.error || 'Authentication required' },
+      { status: 401 }
+    );
+  }
   
   switch (action) {
     case 'health':
@@ -94,7 +102,6 @@ export async function GET(request: NextRequest) {
       return getAvailableMetrics();
     
     default:
-      if (authResult.response) return authResult.response;
       return NextResponse.json(
         { success: false, error: 'Invalid action. Use: health, stats, rules, metrics' },
         { status: 400 }
@@ -104,8 +111,13 @@ export async function GET(request: NextRequest) {
 
 export async function POST(request: NextRequest) {
   // Authenticate all POST requests
-  const authResult = await withAuth(requireAnalyst)(request);
-  if (authResult.response) return authResult.response;
+  const authResult = await authenticateRequest(request);
+  if (!authResult.authenticated || !authResult.user) {
+    return NextResponse.json(
+      { success: false, error: authResult.error || 'Authentication required' },
+      { status: 401 }
+    );
+  }
 
   try {
     const body = await request.json();

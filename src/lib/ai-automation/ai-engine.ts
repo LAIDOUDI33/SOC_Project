@@ -18,6 +18,7 @@ export interface AITask {
   dependencies: string[]
   estimatedDuration: number // seconds
   actualDuration?: number
+  config?: Record<string, any> // Optional configuration for task execution
 }
 
 export interface AIModel {

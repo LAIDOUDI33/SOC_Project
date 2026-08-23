@@ -11,14 +11,25 @@
  * AUTHENTICATION REQUIRED for all endpoints
  */
 
-import { NextResponse } from "next/server";
+import { NextResponse, NextRequest } from "next/server";
 import { db } from "@/lib/db";
 import { IncidentSeverity, IncidentStatus, IncidentPhase, IncidentType, TaskStatus } from "@prisma/client";
-import { withAuth } from '@/lib/auth/api-auth';
+import { withAuth, authenticateRequest } from '@/lib/auth/api-auth';
 import { requireAnalyst } from '@/lib/auth/middleware';
 
 // GET /api/incidents - Fetch incidents with filtering (AUTH REQUIRED)
-export const GET = withAuth(async (request: Request, user) => {
+export async function GET(request: Request) {
+  // Authenticate request
+  const authResult = await authenticateRequest(request as NextRequest);
+  
+  if (!authResult.success || !authResult.user) {
+    return NextResponse.json(
+      { success: false, error: authResult.error, errorCode: authResult.errorCode },
+      { status: 401 }
+    );
+  }
+  
+  // user is available but not needed for GET (read-only)
   try {
     const { searchParams } = new URL(request.url);
     const severity = searchParams.get("severity") as IncidentSeverity | null;
@@ -139,7 +150,7 @@ export const GET = withAuth(async (request: Request, user) => {
           phase: update.phase?.toLowerCase(),
           isInternal: update.isInternal,
           createdAt: update.createdAt,
-          author: update.author
+          author: 'author' in update ? update.author : null
         })),
         tasks: incident.tasks,
         evidence: incident.evidence,
@@ -160,7 +171,7 @@ export const GET = withAuth(async (request: Request, user) => {
           }
         }), {} as Record<string, any>),
         totalActive: incidents.filter(i => 
-          ![IncidentStatus.RESOLVED, IncidentStatus.CLOSED].includes(i.status)
+          !([IncidentStatus.RESOLVED, IncidentStatus.CLOSED] as IncidentStatus[]).includes(i.status)
         ).length,
       },
       timestamp: new Date().toISOString(),
@@ -175,7 +186,19 @@ export const GET = withAuth(async (request: Request, user) => {
 }
 
 // POST /api/incidents - Create or update incidents (AUTH REQUIRED)
-export const POST = withAuth(async (request: Request, user) => {
+export async function POST(request: Request) {
+  // Authenticate request
+  const authResult = await authenticateRequest(request as NextRequest);
+  
+  if (!authResult.success || !authResult.user) {
+    return NextResponse.json(
+      { success: false, error: authResult.error, errorCode: authResult.errorCode },
+      { status: 401 }
+    );
+  }
+  
+  const user = authResult.user;
+  
   try {
     const body = await request.json();
     const { action, id, ...incidentData } = body;
@@ -211,7 +234,6 @@ export const POST = withAuth(async (request: Request, user) => {
           impactScore: incidentData.impactScore || 5.0,
         },
         include: {
-          assignedTo: { select: { id: true, name: true, email: true } },
           alerts: { take: 5, orderBy: { firstSeen: 'desc' } }
         }
       });
@@ -253,9 +275,6 @@ export const POST = withAuth(async (request: Request, user) => {
       const updatedIncident = await db.incident.update({
         where: { id },
         data: updateData,
-        include: {
-          assignedTo: { select: { id: true, name: true } }
-        }
       });
 
       // Add update log entry

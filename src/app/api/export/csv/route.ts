@@ -166,7 +166,7 @@ async function handleExport(config: ExportRequest, limit: number): Promise<NextR
     : defaultColumns
 
   // Generate CSV content
-  const csvContent = generateCSV(data, columns, config.includeHeaders, config.delimiter)
+  const csvContent = generateCSV(data, columns, config.includeHeaders ?? true, config.delimiter ?? ',')
 
   // Calculate file size
   const buffer = Buffer.from(csvContent, 'utf-8')

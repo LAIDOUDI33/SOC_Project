@@ -224,10 +224,9 @@ async function getAssessments(searchParams: URLSearchParams) {
     where,
     include: {
       framework: true,
-      assessedByUser: { select: { id: true, name: true, email: true } },
       _count: { select: { controlAssessments: true } }
     },
-    orderBy: { createdAt: 'desc' },
+    orderBy: { startDate: 'desc' },
     take: limit
   });
 
@@ -304,11 +303,6 @@ async function handleMetrics() {
 
 async function getArtpSubmissions() {
   const submissions = await db.artpSubmission.findMany({
-    include: {
-      incident: { select: { id: true, title: true } },
-      fraudCase: { select: { id: true, caseNumber: true, type: true } },
-      assessment: { select: { id: true, overallScore: true } }
-    },
     orderBy: { createdAt: 'desc' },
     take: 50
   });

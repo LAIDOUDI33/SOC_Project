@@ -210,7 +210,8 @@ async function pollForAlertChanges(
     alertState.lastAlertId = latestAlert.id;
 
     // Check if it's critical/high priority
-    if ([AlertSeverity.CRITICAL, AlertSeverity.HIGH].includes(latestAlert.severity)) {
+    const highSeverities: AlertSeverity[] = [AlertSeverity.CRITICAL, AlertSeverity.HIGH];
+    if (highSeverities.includes(latestAlert.severity)) {
       sendEvent(controller, {
         event: 'alert:urgent',
         data: {

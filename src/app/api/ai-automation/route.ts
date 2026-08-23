@@ -358,6 +358,7 @@ export async function POST(request: NextRequest) {
           name: `Retrain Model: ${modelId}`,
           type: 'learning',
           priority: 'low',
+          status: 'pending',
           confidence: 0,
           dependencies: [],
           estimatedDuration: 86400, // 24 hours in production
@@ -463,8 +464,26 @@ export async function POST(request: NextRequest) {
 }
 
 // Helper function to generate recent activity mock data
-function generateRecentActivity(): any[] {
-  const activities = []
+function generateRecentActivity(): Array<{
+  id: string;
+  timestamp: Date;
+  type: string;
+  description: string;
+  icon: string;
+  severity: string;
+  duration: number;
+  automated: boolean;
+}> {
+  const activities: Array<{
+    id: string;
+    timestamp: Date;
+    type: string;
+    description: string;
+    icon: string;
+    severity: string;
+    duration: number;
+    automated: boolean;
+  }> = []
   const actionTypes = [
     { type: 'prediction', desc: 'Threat classification completed', icon: 'brain' },
     { type: 'response', desc: 'DDoS mitigation playbook executed', icon: 'shield' },

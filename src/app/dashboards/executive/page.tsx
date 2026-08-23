@@ -336,78 +336,60 @@ function TrendChart({ period, data }: { period: number; data: TrendDataPoint[] }
         </div>
       </CardHeader>
       <CardContent>
-        <ChartContainer config={trendChartConfig} className="h-[300px] w-full">
-          {viewMode === 'line' && (
-            <LineChart data={displayData}>
-              <CartesianGrid strokeDasharray="3 3" stroke="#334155" />
-              <XAxis 
-                dataKey="date" 
-                tick={{ fill: '#94a3b8', fontSize: 12 }}
-                tickFormatter={(value) => value.slice(5)}
-              />
-              <YAxis tick={{ fill: '#94a3b8', fontSize: 12 }} />
-              <ChartTooltip content={<ChartTooltipContent />} />
-              <LegendWrapper />
-              <Line 
-                type="monotone" 
-                dataKey="alerts" 
-                stroke="#06b6d4" 
-                strokeWidth={2}
-                dot={false}
-                activeDot={{ r: 4 }}
-              />
-              <Line 
-                type="monotone" 
-                dataKey="incidents" 
-                stroke="#f87171" 
-                strokeWidth={2}
-                dot={false}
-                activeDot={{ r: 4 }}
-              />
-              <Line 
-                type="monotone" 
-                dataKey="resolved" 
-                stroke="#4ade80" 
-                strokeWidth={2}
-                dot={false}
-                activeDot={{ r: 4 }}
-              />
-            </LineChart>
-          )}
-          {viewMode === 'bar' && (
-            <BarChart data={displayData}>
-              <CartesianGrid strokeDasharray="3 3" stroke="#334155" />
-              <XAxis 
-                dataKey="date" 
-                tick={{ fill: '#94a3b8', fontSize: 12 }}
-                tickFormatter={(value) => value.slice(5)}
-              />
-              <YAxis tick={{ fill: '#94a3b8', fontSize: 12 }} />
-              <ChartTooltip content={<ChartTooltipContent />} />
-              <LegendWrapper />
-              <Bar dataKey="alerts" fill="#06b6d4" radius={[4, 4, 0, 0]} />
-              <Bar dataKey="incidents" fill="#f87171" radius={[4, 4, 0, 0]} />
-              <Bar dataKey="resolved" fill="#4ade80" radius={[4, 4, 0, 0]} />
-            </BarChart>
-          )}
-          {viewMode === 'area' && (
-            <AreaChart data={displayData}>
-              <CartesianGrid strokeDasharray="3 3" stroke="#334155" />
-              <XAxis 
-                dataKey="date" 
-                tick={{ fill: '#94a3b8', fontSize: 12 }}
-                tickFormatter={(value) => value.slice(5)}
-              />
-              <YAxis tick={{ fill: '#94a3b8', fontSize: 12 }} />
-              <ChartTooltip content={<ChartTooltipContent />} />
-              <LegendWrapper />
+        <div className="h-[300px] w-full">
+        <ResponsiveContainer width="100%" height={300}>
+          <LineChart data={displayData}>
+            <CartesianGrid strokeDasharray="3 3" stroke="#334155" />
+            <XAxis 
+              dataKey="date" 
+              tick={{ fill: '#94a3b8', fontSize: 12 }}
+              tickFormatter={(value) => value.slice(5)}
+            />
+            <YAxis tick={{ fill: '#94a3b8', fontSize: 12 }} />
+            <ChartTooltip content={<ChartTooltipContent />} />
+            <LegendWrapper />
+            <Line 
+              type="monotone" 
+              dataKey="alerts" 
+              stroke="#06b6d4" 
+              strokeWidth={2}
+              dot={false}
+              activeDot={{ r: 4 }}
+            />
+            <Line 
+              type="monotone" 
+              dataKey="incidents" 
+              stroke="#f87171" 
+              strokeWidth={2}
+              dot={false}
+              activeDot={{ r: 4 }}
+            />
+            <Line 
+              type="monotone" 
+              dataKey="resolved" 
+              stroke="#4ade80" 
+              strokeWidth={2}
+              dot={false}
+              activeDot={{ r: 4 }}
+            />
+            {viewMode === 'area' && (
               <Area 
-                type="monotone" 
-                dataKey="alerts" 
-                stroke="#06b6d4" 
+                type="monotone"
+                dataKey="alerts"
+                stroke="#06b6d4"
                 fill="#06b6d440"
+                fillOpacity={0.3}
                 strokeWidth={2}
               />
+            )}
+            {viewMode === 'bar' && (
+              <>
+                <Bar dataKey="alerts" fill="#06b6d4" radius={[4, 4, 0, 0]} />
+                <Bar dataKey="incidents" fill="#f87171" radius={[4, 4, 0, 0]} />
+                <Bar dataKey="resolved" fill="#4ade80" radius={[4, 4, 0, 0]} />
+              </>
+            )}
+            {viewMode === 'area' && (
               <Area 
                 type="monotone" 
                 dataKey="riskScore" 
@@ -415,9 +397,10 @@ function TrendChart({ period, data }: { period: number; data: TrendDataPoint[] }
                 fill="#fbbf2440"
                 strokeWidth={2}
               />
-            </AreaChart>
-          )}
-        </ChartContainer>
+            )}
+          </LineChart>
+        </ResponsiveContainer>
+        </div>
       </CardContent>
     </Card>
   )

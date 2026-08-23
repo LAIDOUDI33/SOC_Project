@@ -830,7 +830,7 @@ export default function ComplianceDashboard() {
               </Button>
               <DataExporter 
                 onExport={(format) => console.log(`Exporting as ${format}`)}
-                formats={['pdf', 'csv', 'excel']} 
+                formats={['pdf', 'csv']} 
               />
               <Button 
                 variant="outline" 
@@ -866,14 +866,12 @@ export default function ComplianceDashboard() {
             trend={-2.1}
             label="Control Operation"
             subtitle="average effectiveness"
-            inverseColors
           />
           <ComplianceScoreCard
             score={100 - ((findings.filter(f => f.status === 'open').length / findings.length) * 100)}
             trend={-5.3}
             label="Audit Health"
             subtitle={`${findings.filter(f => f.status === 'open').length} open findings`}
-            inverseColors
           />
         </div>
 

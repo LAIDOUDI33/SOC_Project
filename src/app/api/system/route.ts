@@ -203,11 +203,6 @@ async function getReports() {
   const reports = await db.report.findMany({
     orderBy: { createdAt: 'desc' },
     take: 20,
-    include: {
-      generatedByUser: {
-        select: { id: true, name: true }
-      }
-    }
   });
 
   return NextResponse.json({
@@ -224,7 +219,7 @@ async function getReports() {
         filePath: report.filePath,
         fileSize: report.fileSize,
         generatedAt: report.completedAt || report.createdAt,
-        generatedBy: report.generatedByUser?.name
+        generatedBy: report.generatedBy
       }))
     },
     timestamp: new Date().toISOString()
@@ -237,12 +232,6 @@ async function getUsers() {
     where: { isActive: true },
     include: {
       role: { select: { name: true, description: true } },
-      _count: {
-        select: {
-          incidents: { where: { status: { notIn: ['RESOLVED', 'CLOSED'] } } },
-          tasks: { where: { status: 'PENDING' } }
-        }
-      }
     },
     orderBy: { name: 'asc' }
   });
@@ -259,9 +248,7 @@ async function getUsers() {
         role: user.role.name,
         roleDescription: user.role.description,
         isMfaEnabled: user.isMfaEnabled,
-        lastLogin: user.lastLoginAt,
-        activeIncidents: user._count.incidents,
-        pendingTasks: user._count.tasks
+        lastLogin: user.lastLoginAt
       })),
       totalUsers: users.length
     },

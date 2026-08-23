@@ -39,7 +39,7 @@ export async function GET(request: NextRequest) {
   }
 }
 
-async function handleGetMetadata(): NextResponse {
+async function handleGetMetadata(): Promise<NextResponse> {
   try {
     const metadata = getMetadata();
     
@@ -59,7 +59,7 @@ async function handleGetMetadata(): NextResponse {
   }
 }
 
-async function handleGetIdPs(): NextResponse {
+async function handleGetIdPs(): Promise<NextResponse> {
   try {
     const idps = getIdPDiscoveryInfo();
     
@@ -352,12 +352,11 @@ async function logSAMLEvent(
       data: {
         userId,
         action: `AUTH_SAML_${eventType}`,
-        entityType: 'sso_authentication',
-        outcome,
+        resource: 'sso_authentication',
+        outcome: (outcome === 'success' ? 'SUCCESS' : outcome === 'failure' ? 'FAILURE' : 'SUCCESS') as any,
         ipAddress: '',
         userAgent: '',
-        details: JSON.stringify(metadata || {}),
-        timestamp: new Date(),
+        metadata: JSON.stringify(metadata || {}),
       }
     });
   } catch (error) {

@@ -679,7 +679,7 @@ async function checkAuthHealth(): Promise<NextResponse> {
         ldap: {
           status: ldapHealth.status,
           latencyMs: ldapHealth.latencyMs,
-          serverCount: ldapHealth.serverCount,
+          serverCount: 'serverCount' in ldapHealth ? ldapHealth.serverCount : 0,
         },
         saml: {
           status: process.env.SAML_IDP_SSO_URL ? 'configured' : 'not_configured',
@@ -709,12 +709,11 @@ async function logAuthEvent(
       data: {
         userId: userId || undefined,
         action: `AUTH_${eventType}`,
-        entityType: 'authentication',
-        outcome,
+        resource: 'authentication',
+        outcome: (outcome === 'success' ? 'SUCCESS' : outcome === 'failure' ? 'FAILURE' : 'SUCCESS') as any,
         ipAddress: metadata?.ipAddress || '',
         userAgent: metadata?.userAgent || '',
-        details: JSON.stringify(metadata || {}),
-        timestamp: new Date(),
+        metadata: JSON.stringify(metadata || {}),
       }
     });
   } catch (error) {

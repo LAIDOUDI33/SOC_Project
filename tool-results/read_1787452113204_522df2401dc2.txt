@@ -1,0 +1,1258 @@
+     1→/**
+     2→ * ARTP (Autorité de Régulation de la Poste et des Télécommunications) 
+     3→ * Compliance Framework Configuration for Djezzy Algeria
+     4→ * 
+     5→ * This module defines the complete ARTP regulatory requirements for:
+     6→ * - Cybersecurity incident reporting
+     7→ * - Data protection and privacy
+     8→ * - Network security and integrity
+     9→ * - Fraud prevention and reporting
+    10→ * - Subscriber data protection
+    11→ * - Interception lawful compliance
+    12→ * 
+    13→ * @version 1.0.0
+    14→ * @module compliance/artp-framework
+    15→ */
+    16→
+    17→import { 
+    18→  FrameworkType, 
+    19→  FrameworkStatus, 
+    20→  ReviewFrequency,
+    21→  ControlCriticality,
+    22→  ControlStatus,
+    23→  AnssiDomain
+    24→} from '@prisma/client';
+    25→
+    26→// ============================================================
+    27→// ARTP Framework Definition
+    28→// ============================================================
+    29→
+    30→export const ARTP_FRAMEWORK = {
+    31→  // Framework Metadata
+    32→  id: 'artp-algeria-2024',
+    33→  name: 'artp-telecom-dz',
+    34→  displayName: 'ARTP Telecom Security Framework - Algeria',
+    35→  description: 'Algerian Telecommunications Regulatory Authority (ARTP) cybersecurity and operational security requirements for telecom operators including mandatory incident reporting, data protection, network security, and fraud prevention.',
+    36→  version: '2024.1',
+    37→  frameworkType: FrameworkType.REGULATORY as const,
+    38→  jurisdiction: 'DZ',
+    39→  issuingBody: 'ARTP - Autorité de Régulation de la Poste et des Télécommunications',
+    40→  effectiveDate: new Date('2024-01-01'),
+    41→  reviewFrequency: ReviewFrequency.ANNUAL as const,
+    42→  status: FrameworkStatus.ACTIVE as const,
+    43→  
+    44→  // Contact Information
+    45→  contactEmail: 'securite@artp.dz',
+    46→  documentationUrl: 'https://www.artp.dz/reglementation/securite',
+    47→  
+    48→  // Control Categories (ARTP Domains)
+    49→  controlCategories: [
+    50→    { id: 'INCIDENT_MGMT', name: 'Incident Management', icon: '🚨' },
+    51→    { id: 'DATA_PROTECTION', name: 'Data Protection & Privacy', icon: '🔒' },
+    52→    { id: 'NETWORK_SECURITY', name: 'Network Infrastructure Security', icon: '🌐' },
+    53→    { id: 'FRAUD_PREVENTION', name: 'Fraud Prevention & Detection', icon: '💳' },
+    54→    { id: 'SUBSCRIBER_PROTECTION', name: 'Subscriber Protection', icon: '👥' },
+    55→    { id: 'LAWFUL_INTERCEPTION', name: 'Lawful Interception Compliance', icon: '⚖️' },
+    56→    { id: 'BUSINESS_CONTINUITY', name: 'Business Continuity', icon: '🔄' },
+    57→    { id: 'REPORTING_COMPLIANCE', name: 'Reporting & Documentation', icon: '📋' }
+    58→  ],
+    59→
+    60→  // Scoring Methodology
+    61→  scoringMethodology: {
+    62→    weights: {
+    63→      critical: 5,
+    64→      high: 4,
+    65→      medium: 3,
+    66→      low: 2,
+    67→      informational: 1
+    68→    },
+    69→    thresholds: {
+    70→      compliant: 100,
+    71→      partiallyCompliant: 50,
+    72→      nonCompliant: 0
+    73→    },
+    74→    overallCalculation: 'weighted_average'
+    75→  }
+    76→};
+    77→
+    78→// ============================================================
+    79→// ARTP Control Definitions
+    80→// ============================================================
+    81→
+    82→export interface ArtpControlDefinition {
+    83→  controlId: string;
+    84→  controlRef: string;
+    85→  name: string;
+    86→  description: string;
+    87→  category: string;
+    88→  family: string;
+    89→  criticality: ControlCriticality;
+    90→  priority: number;
+    91→  requirements: string;
+    92→  implementationGuidance: string;
+    93→  evidenceRequirements: string[];
+    94→  testingProcedures: string;
+    95→  reportingDeadline: string; // ARTP-specific deadline
+    96→  anssiMapping?: {
+    97→    domain: AnssiDomain;
+    98→    reference: string;
+    99→    strength: 'FULL' | 'SUBSTANTIAL' | 'PARTIAL' | 'MINIMAL';
+   100→  };
+   101→  mitreTechniques?: string[];
+   102→}
+   103→
+   104→export const ARTP_CONTROLS: ArtpControlDefinition[] = [
+   105→  // ========================================
+   106→  // DOMAIN 1: INCIDENT MANAGEMENT (8 controls)
+   107→  // ========================================
+   108→  {
+   109→    controlId: 'ARTP-IM-001',
+   110→    controlRef: 'JORT-2023-45-Art-12',
+   111→    name: 'Security Incident Detection Capability',
+   112→    description: 'Telecom operators must maintain a 24/7 Security Operations Center (SOC) capable of detecting cybersecurity incidents affecting network infrastructure and subscriber data within 15 minutes of occurrence.',
+   113→    category: 'INCIDENT_MGMT',
+   114→    family: 'Detection & Monitoring',
+   115→    criticality: ControlCriticality.CRITICAL,
+   116→    priority: 1,
+   117→    requirements: 'Implement real-time monitoring of all network elements, security devices, and critical systems. Maintain SIEM platform with correlation rules covering all ARTP-defined incident categories. Achieve Mean Time to Detect (MTTD) ≤ 15 minutes for critical incidents.',
+   118→    implementationGuidance: 'Deploy enterprise SIEM solution (e.g., Splunk, QRadar, or ELK Stack). Integrate all network elements (HLR/HSS, MSC, SGSN, GGSN/PGW, CSCF). Configure alerting based on ARTP severity classifications. Implement 24/7 SOC staffing with defined escalation procedures.',
+   119→    evidenceRequirements: [
+   120→      'SOC operational procedures document',
+   121→      'SIEM configuration screenshots',
+   122→      'MTTD metrics report (last quarter)',
+   123→      '24/7 staffing roster',
+   124→      'Alert correlation rule definitions'
+   125→    ],
+   126→    testingProcedures: 'Simulate critical security incident and measure detection time. Verify all critical systems are sending logs to SIEM. Test alert escalation paths. Document results in test report.',
+   127→    reportingDeadline: 'Immediate detection required'
+   128→  },
+   129→  {
+   130→    controlId: 'ARTP-IM-002',
+   131→    controlRef: 'JORT-2023-45-Art-13',
+   132→    name: 'Mandatory Incident Reporting to ARTP',
+   133→    description: 'Report all qualifying security incidents to ARTP within mandated timeframes: Critical incidents within 2 hours, High severity within 24 hours, Medium within 72 hours, with detailed technical information.',
+   134→    category: 'INCIDENT_MGMT',
+   135→    family: 'Regulatory Reporting',
+   136→    criticality: ControlCriticality.CRITICAL,
+   137→    priority: 1,
+   138→    requirements: 'Establish secure communication channel with ARTP CSIRT. Define incident classification criteria aligned with ARTP guidelines. Implement automated report generation capability. Maintain trained personnel for ARTP communications.',
+   139→    implementationGuidance: 'Integrate ARTP reporting into incident response workflow. Pre-authorize templates for each incident type. Establish PGP/GPG encrypted email channel with ARTP. Designate primary and backup ARTP liaisons. Conduct quarterly reporting drills.',
+   140→    evidenceRequirements: [
+   141→      'ARTP communication channel setup confirmation',
+   142→      'Incident classification procedure',
+   143→      'Report templates (critical/high/medium)',
+   144→      'Training records for ARTP liaisons',
+   145→      'Drill execution logs'
+   146→    ],
+   147→    testingProcedures: 'Conduct tabletop exercise simulating ARTP-required report. Verify template completeness against ARTP specifications. Test encryption channel functionality. Measure time from incident declaration to report submission readiness.',
+   148→    reportingDeadline: 'Critical: 2h | High: 24h | Medium: 72h',
+   149→    anssiMapping: { domain: AnssiDomain.RESPONSE, reference: 'RESP-003', strength: 'FULL' }
+   150→  },
+   151→  {
+   152→    controlId: 'ARTP-IM-003',
+   153→    controlRef: 'JORT-2023-45-Art-14',
+   154→    name: 'Incident Response Team (IRT) Establishment',
+   155→    description: 'Maintain a dedicated Incident Response Team with defined roles, responsibilities, and 24/7 availability for handling security incidents affecting telecom infrastructure.',
+   156→    category: 'INCIDENT_MGMT',
+   157→    family: 'Organization & Roles',
+   158→    criticality: ControlCriticality.CRITICAL,
+   159→    priority: 2,
+   160→    requirements: 'Define IRT organizational structure with clear RACI matrix. Ensure minimum team size of 6 qualified members. Maintain on-call rotation covering all hours. Establish backup/secondary team for surge capacity.',
+   161→    implementationGuidance: 'Create formal charter documenting IRT authority and scope. Define roles: Team Lead, Technical Lead, Communications Lead, Legal Liaison, Forensics Specialist, Business Liaison. Implement on-call management system. Cross-train team members. Conduct monthly team exercises.',
+   162→    evidenceRequirements: [
+   163→      'IRT charter document',
+   164→      'RACI matrix',
+   165→      'Team member qualifications list',
+   166→      'On-call schedule (current month)',
+   167→      'Training certificates',
+   168→      'Exercise records (last 6 months)'
+   169→    ],
+   170→    testingProcedures: 'Verify IRT roster is current. Confirm on-call system operational. Interview random team member on role knowledge. Review exercise frequency and participation rates.',
+   171→    reportingDeadline: 'N/A - Organizational requirement'
+   172→  },
+   173→  {
+   174→    controlId: 'ARTP-IM-004',
+   175→    controlRef: 'JORT-2023-45-Art-15',
+   176→    name: 'Incident Classification and Triage',
+   177→    description: 'Implement standardized incident classification methodology aligned with ARTP categories: Network Intrusion, Data Breach, Service Disruption, Fraud, Subscriber Impact, with consistent severity assignment.',
+   178→    category: 'INCIDENT_MGMT',
+   179→    family: 'Classification & Triage',
+   180→    criticality: ControlCriticality.HIGH,
+   181→    priority: 2,
+   182→    requirements: 'Adopt ARTP incident taxonomy. Define severity criteria for each category. Train all SOC analysts on classification. Achieve ≥95% classification consistency in peer reviews. Document all classification decisions.',
+   183→    implementationGuidance: 'Develop decision tree/classification flowchart. Integrate into ticketing system with mandatory fields. Create reference guide with examples. Implement peer review process for high/critical classifications. Monthly calibration sessions.',
+   184→    evidenceRequirements: [
+   185→      'Classification procedure document',
+   186→      'Severity criteria matrix',
+   187→      'Decision tree/flowchart',
+   188→      'Analyst training records',
+   189→      'Peer review statistics (consistency rate)',
+   190→      'Calibration session minutes'
+   191→    ],
+   192→    testingProcedures: 'Present analysts with 20 sample scenarios. Measure classification accuracy against gold standard. Calculate inter-rater reliability. Identify areas of inconsistency requiring additional training.',
+   193→    reportingDeadline: 'N/A - Process requirement'
+   194→  },
+   195→  {
+   196→    controlId: 'ARTP-IM-005',
+   197→    controlRef: 'JORT-2023-45-Art-16',
+   198→    name: 'Forensic Evidence Preservation',
+   199→    description: 'Maintain capability to preserve forensic evidence from all network elements and systems according to chain-of-custody requirements for potential legal proceedings and ARTP investigations.',
+   200→    category: 'INCIDENT_MGMT',
+   201→    family: 'Digital Forensics',
+   202→    criticality: ControlCriticality.HIGH,
+   203→    priority: 3,
+   204→    requirements: 'Define evidence types to be preserved per incident category. Establish collection procedures maintaining chain of custody. Secure storage with access logging. Retention period minimum 3 years or per legal hold requirements.',
+   205→    implementationGuidance: 'Deploy forensic workstations with write-blockers. Train designated forensics personnel. Implement evidence management system. Define preservation triggers for each incident type. Partner with certified digital forensics provider for complex cases.',
+   206→    evidenceRequirements: [
+   207→      'Evidence preservation procedure',
+   208→      'Chain of custody forms/templates',
+   209→      'Forensic toolkit inventory',
+   210→      'Personnel certifications',
+   211→      'Storage system access logs',
+   212→      'Retention policy document'
+   213→    ],
+   214→    testingProcedures: 'Conduct evidence preservation drill using simulated incident. Verify chain of custody documentation completeness. Test storage access controls. Validate retention enforcement mechanisms.',
+   215→    reportingDeadline: 'Preserve immediately upon incident detection'
+   216→  },
+   217→  {
+   218→    controlId: 'ARTP-IM-006',
+   219→    controlRef: 'JORT-2023-45-Art-17',
+   220→    name: 'Post-Incident Analysis and Lessons Learned',
+   221→    description: 'Conduct thorough post-incident analysis for all High and Critical severity incidents within 30 days, documenting root causes, corrective actions, and lessons learned for continuous improvement.',
+   222→    category: 'INCIDENT_MGMT',
+   223→    family: 'Continuous Improvement',
+   224→    criticality: ControlCriticality.HIGH,
+   225→    priority: 3,
+   226→    requirements: 'Complete root cause analysis (RCA) using structured methodology (5-Why, Fishbone, etc.). Identify contributing factors across people, process, technology. Develop SMART corrective actions. Track action completion. Share anonymized learnings with industry (via ARTP if requested).',
+   227→    implementationGuidance: 'Standardize RCA template and methodology. Assign RCA owner within 24h of incident closure. Schedule RCA meeting within 2 weeks. Present findings to security leadership. Integrate actions into risk register and project backlog.',
+   228→    evidenceRequirements: [
+   229→      'RCA methodology document',
+   230→      'RCA templates',
+   231→      'Completed RCAs (anonymized samples)',
+   232→      'Corrective action tracking log',
+   233→      'Leadership presentation materials',
+   234→      'Lessons learned repository structure'
+   235→    ],
+   236→    testingProcedures: 'Review last 3 High/Critical incident RCAs for quality and timeliness. Verify corrective action completion status. Assess whether similar incidents recurred after RCA completion.',
+   237→    reportingDeadline: 'Within 30 days of incident closure'
+   238→  },
+   239→  {
+   240→    controlId: 'ARTP-IM-007',
+   241→    controlRef: 'JORT-2023-45-Art-18',
+   242→    name: 'Subscriber Notification Requirements',
+   243→    description: 'Notify affected subscribers of data breaches or security incidents impacting their personal data within 72 hours, with clear explanation of impact and recommended protective actions.',
+   244→    category: 'INCIDENT_MGMT',
+   245→    family: 'Stakeholder Communication',
+   246→    criticality: ControlCriticality.CRITICAL,
+   247→    priority: 1,
+   248→    requirements: 'Define breach notification triggers per ARTP definition. Prepare notification templates in Arabic and French. Establish multi-channel delivery (SMS, email, app notification). Maintain call center script for subscriber inquiries. Document notification audit trail.',
+   249→    implementationGuidance: 'Integrate breach assessment workflow with legal/compliance team. Pre-translate and pre-approve notification templates. Automate subscriber extraction from affected systems. Coordinate with PR/Communications for media response. Test notification system quarterly.',
+   250→    evidenceRequirements: [
+   251→      'Notification trigger criteria',
+   252→      'Approved notification templates (AR/FR)',
+   253→      'Notification workflow procedure',
+   254→      'Call center Q&A script',
+   255→      'Delivery system test results',
+   256→      'Notification audit log (sample)'
+   257→    ],
+   258→    testingProcedures: 'Execute full notification drill with test subscriber list. Measure time from breach confirmation to first notification delivery. Verify message content accuracy. Test call center script effectiveness.',
+   259→    reportingDeadline: 'Within 72 hours of breach confirmation'
+   260→  },
+   261→  {
+   262→    controlId: 'ARTP-IM-008',
+   263→    controlRef: 'JORT-2023-45-Art-19',
+   264→    name: 'Coordination with National CSIRT',
+   265→    description: 'Maintain active coordination with Algerian National Computer Emergency Response Team (CERT-DZ / CNI) for threat intelligence sharing and major incident support.',
+   266→    category: 'INCIDENT_MGMT',
+   267→    family: 'External Coordination',
+   268→    criticality: ControlCriticality.HIGH,
+   269→    priority: 2,
+   270→    requirements: 'Establish formal coordination agreement with CERT-DZ. Participate in regular information sharing sessions. Report indicators of compromise (IOCs) to national database. Request assistance for major incidents per agreed protocols.',
+   271→    implementationGuidance: 'Sign MoU with CERT-DZ defining information exchange scope. Designate primary/backup points of contact. Attend quarterly coordination meetings. Integrate national IOC feed into security infrastructure. Document all exchanges.',
+   272→    evidenceRequirements: [
+   273→      'MoU/coordination agreement with CERT-DZ',
+   274→      'PoC designations and contact info',
+   275→      'Meeting attendance records',
+   276→      'IOC contribution logs',
+   277→      'Assistance request history',
+   278→      'Threat intelligence integration proof'
+   279→    ],
+   280→    testingProcedures: 'Verify current MoU validity. Confirm PoC accessibility. Review recent coordination activities. Test IOC feed integration. Exercise assistance request procedure.',
+   281→    reportingDeadline: 'As needed / Per agreement'
+   282→  },
+   283→
+   284→  // ========================================
+   285→  // DOMAIN 2: DATA PROTECTION & PRIVACY (8 controls)
+   286→  // ========================================
+   287→  {
+   288→    controlId: 'ARTP-DP-001',
+   289→    controlRef: 'JORT-2018-44-Art-45',
+   290→    name: 'Personal Data Processing Registry',
+   291→    description: 'Maintain comprehensive registry of all personal data processing activities, including purposes, legal basis, data categories, retention periods, and third-party disclosures as required by Algerian Data Protection Law.',
+   292→    category: 'DATA_PROTECTION',
+   293→    family: 'Data Governance',
+   294→    criticality: ControlCriticality.CRITICAL,
+   295→    priority: 1,
+   296→    requirements: 'Document every processing activity involving subscriber/personal data. Include: data controller identity, processing purpose, categories of data subjects, data recipients, international transfers (if any), retention schedule, security measures. Update registry within 30 days of any change.',
+   297→    implementationGuidance: 'Deploy data mapping tool or maintain centralized registry spreadsheet. Assign data stewards for each business area. Conduct annual processing audit. Integrate with privacy impact assessment (PIA) process. Make registry available to DPO and auditors.',
+   298→    evidenceRequirements: [
+   299→      'Data processing registry (complete)',
+   300→      'Registry update procedure',
+   301→      'Data steward assignments',
+   302→      'Annual audit reports',
+   303→      'PIA integration documentation'
+   304→    ],
+   305→    testingProcedures: 'Select random processing activities and verify registry accuracy. Check update timestamps for recent changes. Interview data stewards on registry maintenance process.',
+   306→    reportingDeadline: 'Continuous - Registry always current'
+   307→  },
+   308→  {
+   309→    controlId: 'ARTP-DP-002',
+   310→    controlRef: 'JORT-2018-44-Art-46',
+   311→    name: 'Subscriber Consent Management',
+   312→    description: 'Obtain and manage valid consent for personal data processing, marketing communications, and data sharing with third parties, with ability for subscribers to withdraw consent at any time.',
+   313→    category: 'DATA_PROTECTION',
+   314→    family: 'Consent & Rights',
+   315→    criticality: ControlCriticality.CRITICAL,
+   316→    priority: 1,
+   317→    requirements: 'Capture consent at point of collection with specific purpose granularity. Store consent records with timestamp and channel. Honor withdrawal requests within 48 hours. Re-consent for material purpose changes. Maintain consent audit trail for 3 years minimum.',
+   318→    implementationGuidance: 'Implement consent management platform (CMP). Design user-friendly consent interfaces (app, web, retail). Integrate consent status into all downstream systems. Automate preference synchronization. Provide easy withdrawal mechanism (USSD, app, call center).',
+   319→    evidenceRequirements: [
+   320→      'Consent capture interfaces (screenshots)',
+   321→      'Consent text (approved legal wording)',
+   322→      'Consent database schema',
+   323→      'Withdrawal processing procedure',
+   324→      'Preference sync architecture',
+   325→      'Sample consent audit trail'
+   326→    ],
+   327→    testingProcedures: 'Test consent capture flow end-to-end. Verify consent recorded correctly. Execute withdrawal and confirm propagation. Audit consent records for completeness.',
+   328→    reportingDeadline: 'Honor withdrawal within 48 hours'
+   329→  },
+   330→  {
+   331→    controlId: 'ARTP-DP-003',
+   332→    controlRef: 'JORT-2018-44-Art-47',
+   333→    name: 'Data Subject Rights Fulfillment',
+   334→    description: 'Enable subscribers to exercise their rights: access their data, rectify inaccuracies, erase data (right to be forgotten), restrict processing, and data portability, within legally mandated timeframes.',
+   335→    category: 'DATA_PROTECTION',
+   336→    family: 'Consent & Rights',
+   337→    criticality: ControlCriticality.HIGH,
+   338→    priority: 2,
+   339→    requirements: 'Provide multiple channels for rights requests (app, website, call center, written). Acknowledge requests within 5 business days. Complete access/rectification within 30 days. Process erasure requests within 15 days (subject to legal holds). Log all requests and outcomes.',
+   340→    implementationGuidance: 'Build self-service data portal for subscribers. Automate data export generation. Implement verification process to prevent unauthorized disclosure. Train call center staff on request handling. Escalate complex requests to DPO.',
+   341→    evidenceRequirements: [
+   342→      'Rights request channels (documentation)',
+   343→      'Request acknowledgment SLA proof',
+   344→      'Self-service portal demonstration',
+   345→      'Verification procedure',
+   346→      'Staff training records',
+   347→      'Request fulfillment logs (sample)'
+   348→    ],
+   349→    testingProcedures: 'Submit test request via each channel. Measure acknowledgment time. Verify data package completeness. Test erasure execution (in non-production). Check logging accuracy.',
+   350→    reportingDeadline: 'Ack: 5 days | Access: 30 days | Erasure: 15 days'
+   351→  },
+   352→  {
+   353→    controlId: 'ARTP-DP-004',
+   354→    controlRef: 'JORT-2018-44-Art-48',
+   355→    name: 'Data Minimization and Purpose Limitation',
+   356→    description: 'Collect and process only personal data necessary for specified purposes, retain only for required duration, and prevent repurposing without additional consent.',
+   357→    category: 'DATA_PROTECTION',
+   358→    family: 'Data Governance',
+   359→    criticality: ControlCriticality.HIGH,
+   360→    priority: 2,
+   361→    requirements: 'Define data retention schedules per category. Implement automated deletion/expiry processes. Review data holdings annually for necessity. Justify any data kept beyond standard retention. Prevent unauthorized secondary use through access controls.',
+   362→    implementationGuidance: 'Classify all data assets by sensitivity and retention tier. Deploy data lifecycle management tools. Implement privacy-by-design in new projects. Conduct Privacy Impact Assessments (PIA) for new processing. Regular data discovery scans.',
+   363→    evidenceRequirements: [
+   364→      'Data retention schedule matrix',
+   365→      'Automated deletion job configurations',
+   366→      'Annual data review reports',
+   367→      'Exception justification records',
+   368→      'PIA templates and completed assessments',
+   369→      'Data discovery scan results'
+   370→    ],
+   371→    testingProcedures: 'Verify automated deletion jobs running correctly. Sample data holdings against retention schedule. Review recent PIAs for quality. Test access controls preventing unauthorized use.',
+   372→    reportingDeadline: 'Continuous - Automated enforcement'
+   373→  },
+   374→  {
+   375→    controlId: 'ARTP-DP-005',
+   376→    controlRef: 'JORT-2018-44-Art-49',
+   377→    name: 'Cross-Border Data Transfer Controls',
+   378→    description: 'Ensure international transfers of personal data occur only to jurisdictions with adequate protection or with appropriate safeguards (contractual clauses, BCRs, or explicit consent).',
+   379→    category: 'DATA_PROTECTION',
+   380→    family: 'International Transfers',
+   381→    criticality: ControlCriticality.HIGH,
+   382→    priority: 2,
+   383→    requirements: 'Inventory all international data flows. Assess destination country adequacy. Implement appropriate transfer mechanisms for inadequate jurisdictions. Monitor vendor locations for cloud services. Document legal basis for each transfer.',
+   384→    implementationGuidance: 'Map all data flows crossing borders. Classify destinations by adequacy status. Prepare Standard Contractual Clauses (SCCs) for vendor agreements. Obtain DPO approval before new international transfers. Annual transfer impact assessment.',
+   385→    evidenceRequirements: [
+   386→      'International data flow inventory',
+   387→      'Country adequacy assessment',
+   388→      'SCC templates and executed agreements',
+   389→      'Vendor location audit results',
+   390→      'DPO approval records',
+   391→      'Transfer impact assessments'
+   392→    ],
+   393→    testingProcedures: 'Trace sample data flows to verify transfer documentation. Check vendor contracts for SCCs. Verify cloud service data residency. Test data localization where applicable.',
+   394→    reportingDeadline: 'Pre-transfer authorization required'
+   395→  },
+   396→  {
+   397→    controlId: 'ARTP-DP-006',
+   398→    controlRef: 'JORT-2018-44-Art-50',
+   399→    name: 'Data Protection Officer (DPO) Appointment',
+   400→    description: 'Appoint a qualified Data Protection Officer responsible for monitoring compliance, advising on DPIAs, serving as authority contact point, and maintaining accountability.',
+   401→    category: 'DATA_PROTECTION',
+   402→    family: 'Governance & Accountability',
+   403→    criticality: ControlCriticality.CRITICAL,
+   404→    priority: 1,
+   405→    requirements: 'Designate DPO with appropriate expertise and authority. Ensure independence from operations. Provide adequate resources. Publish DPO contact details. Document DPO responsibilities and reporting line. Support ongoing professional development.',
+   406→    implementationGuidance: 'Appoint DPO at senior level (reporting to CEO/Board). Define DPO job description and KPIs. Allocate budget for tools and training. Establish direct reporting channel to board. Register DPO with ARTP if required.',
+   407→    evidenceRequirements: [
+   408→      'DPO appointment letter',
+   409→      'Job description and qualifications',
+   410→      'Organizational chart showing independence',
+   411→      'Resource allocation/budget',
+   412→      'Published contact details',
+   413→      'Training/professional development records'
+   414→    ],
+   415→    testingProcedures: 'Verify DPO appointment documentation. Confirm independence in org chart. Check resource adequacy. Test contact channel responsiveness. Review recent DPO activities/reports.',
+   416→    reportingDeadline: 'Continuous role'
+   417→  },
+   418→  {
+   419→    controlId: 'ARTP-DP-007',
+   420→    controlRef: 'JORT-2018-44-Art-51',
+   421→    name: 'Data Breach Notification to Authority',
+   422→    description: 'Notify ARTP of personal data breaches within 72 hours of becoming aware, unless breach is unlikely to result in risk to subscriber rights and freedoms.',
+   423→    category: 'DATA_PROTECTION',
+   424→    family: 'Breach Management',
+   425→    criticality: ControlCriticality.CRITICAL,
+   426→    priority: 1,
+   427→    requirements: 'Define breach assessment criteria. Establish 24/7 breach detection capability. Prepare notification content requirements. Designate authority notification responsibility. Document risk assessment methodology. Maintain notification templates.',
+   428→    implementationGuidance: 'Integrate DPO into incident response for potential breaches. Create breach risk assessment decision tree. Pre-draft notification templates. Establish secure submission channel to ARTP. Practice notification in incident exercises.',
+   429→    evidenceRequirements: [
+   430→      'Breach assessment criteria document',
+   431→      'Risk assessment methodology',
+   432→      'Notification templates',
+   433→      'Secure submission channel setup',
+   434→      'DPO involvement procedure',
+   435→      'Exercise/drill records including notification'
+   436→    ],
+   437→    testingProcedures: 'Simulate breach scenario requiring notification. Time assessment and notification preparation. Verify template completeness. Test submission channel. Measure total time against 72-hour deadline.',
+   438→    reportingDeadline: 'Within 72 hours of awareness'
+   439→  },
+   440→  {
+   441→    controlId: 'ARTP-DP-008',
+   442→    controlRef: 'JORT-2018-44-Art-52',
+   443→    name: 'Privacy by Design and Default',
+   444→    description: 'Embed data protection principles into system design from inception, implementing technical and organizational measures ensuring default privacy-protective settings.',
+   445→    category: 'DATA_PROTECTION',
+   446→    family: 'System Design',
+   447→    criticality: ControlCriticality.MEDIUM,
+   448→    priority: 3,
+   449→    requirements: 'Conduct Privacy Impact Assessment (PIA) for new systems/processes. Implement privacy-protective defaults (data minimization, pseudonymization). Integrate privacy requirements into SDLC. Train development teams on privacy patterns. Review existing systems for privacy gaps.',
+   450→    implementationGuidance: 'Add PIA gate to project methodology. Build privacy component library (encryption, access control, masking). Include privacy requirements in user stories. Conduct code reviews for privacy issues. Annual privacy audit of production systems.',
+   451→    evidenceRequirements: [
+   452→      'PIA methodology and templates',
+   453→      'SDLC privacy gate documentation',
+   454→      'Privacy pattern library',
+   455→      'Developer training curriculum',
+   456→      'Completed PIAs (samples)',
+   457→      'Privacy audit reports'
+   458→    ],
+   459→    testingProcedures: 'Review recent project PIAs for thoroughness. Verify privacy patterns used in new features. Interview developers on privacy awareness. Check production system settings for privacy defaults.',
+   460→    reportingDeadline: 'Before system deployment'
+   461→  },
+   462→
+   463→  // ========================================
+   464→  // DOMAIN 3: NETWORK INFRASTRUCTURE SECURITY (8 controls)
+   465→  // ========================================
+   466→  {
+   467→    controlId: 'ARTP-NS-001',
+   468→    controlRef: 'JORT-2023-45-Art-25',
+   469→    name: 'Network Element Security Hardening',
+   470→    description: 'Apply security hardening baselines to all network elements (HLR/HSS, MSC, SGSN, GGSN/PGW, CSCF, MME) following vendor best practices and ARTP guidelines, with documented exception process.',
+   471→    category: 'NETWORK_SECURITY',
+   472→    family: 'Hardening & Configuration',
+   473→    criticality: ControlCriticality.CRITICAL,
+   474→    priority: 1,
+   475→    requirements: 'Maintain hardened configuration baseline per NE type. Apply CIS benchmarks or vendor hardening guides. Disable unused services/ports. Implement secure management protocols (SSHv2, SNMPv3). Enforce strong authentication. Scan quarterly for drift. Document and approve exceptions.',
+   476→    implementationGuidance: 'Develop baseline configurations for each NE type. Use configuration management (CMDB) to track. Deploy configuration compliance scanner (NCCM, SolarWinds). Automate remediation where possible. Change Advisory Board (CAB) for exceptions.',
+   477→    evidenceRequirements: [
+   478→      'Hardened baseline configs (per NE type)',
+   479→      'CIS/vendor benchmark references',
+   480→      'Configuration compliance scan results',
+   481→      'Exception requests and approvals',
+   482→      'Remediation tickets',
+   483→      'CMDB configuration snapshots'
+   484→    ],
+   485→    testingProcedures: 'Run compliance scan against production NEs. Verify exception approvals are current. Test baseline restoration procedure. Check for configuration drift since last scan.',
+   486→    reportingDeadline: 'Quarterly scanning | Continuous monitoring'
+   487→  },
+   488→  {
+   489→    controlId: 'ARTP-NS-002',
+   490→    controlRef: 'JORT-2023-45-Art-26',
+   491→    name: 'Network Segmentation and Access Control',
+   492→    description: 'Segment telecom network into security zones (O&M, signaling, bearer, subscriber data) with strictly enforced access controls between zones, following defense-in-depth principles.',
+   493→    category: 'NETWORK_SECURITY',
+   494→    family: 'Network Architecture',
+   495→    criticality: ControlCriticality.CRITICAL,
+   496→    priority: 1,
+   497→    requirements: 'Define security zone architecture. Implement firewalls at zone boundaries. Enforce least-privilege access between zones. Monitor and log all cross-zone traffic. Regularly review firewall rules for necessity. Protect subscriber data zone with enhanced controls.',
+   498→    implementationGuidance: 'Design zone architecture diagram (TOGAF style). Deploy next-gen firewalls at boundaries. Implement micro-segmentation in data centers. Use Software-Defined Networking (SDN) policies. Quarterly firewall rule review. Network detection and response (NDR) for east-west traffic.',
+   499→    evidenceRequirements: [
+   500→      'Security zone architecture diagram',
+   501→      'Firewall rule sets (sanitized)',
+   502→      'Zone boundary device inventory',
+   503→      'Traffic analysis reports',
+   504→      'Firewall rule review records',
+   505→      'Access control matrices'
+   506→    ],
+   507→    testingProcedures: 'Verify zone isolation with penetration testing. Test firewall rule effectiveness. Review recent rule changes for appropriateness. Simulate lateral movement attempt and detect.',
+   508→    reportingDeadline: 'Architecture: Initial + Changes | Rules: Quarterly review'
+   509→  },
+   510→  {
+   511→    controlId: 'ARTP-NS-003',
+   512→    controlRef: 'JORT-2023-45-Art-27',
+   513→    name: 'Signaling Protocol Security (SS7/Diameter/SIP)',
+   514→    description: 'Protect signaling protocols (SS7, Diameter, SIP) from interception, fraud, and denial-of-service attacks using firewalls, encryption, and anomaly detection.',
+   515→    category: 'NETWORK_SECURITY',
+   516→    family: 'Protocol Security',
+   517→    criticality: ControlCriticality.CRITICAL,
+   518→    priority: 1,
+   519→    requirements: 'Deploy signaling firewalls (STP inspection, Diameter agent, SBC). Detect and block known attack signatures. Encrypt signaling where possible (IPsec, TLS/SRTP). Monitor for abnormal patterns (location tracking, call hijacking). Correlate signaling events with fraud detection.',
+   520→    implementationGuidance: 'Install dedicated signaling security platforms (Mobileum, Mahindra, Symantec). Configure detection rules for SS7 attacks (SRI bypass, USSD fraud). Implement SIP security (SBC registration hardening, RTP encryption). Integrate with fraud management system.',
+   521→    evidenceRequirements: [
+   522→      'Signaling security architecture',
+   523→      'Firewall/detection rule configurations',
+   524→      'Attack signature detection logs',
+   525→      'Encryption deployment status',
+   526→      'Anomaly alerts and responses',
+   527→      'Fraud correlation examples'
+   528→    ],
+   529→    testingProcedures: 'Run signaling vulnerability assessment. Test known attack detection capabilities. Verify encryption status on links. Simulate signaling attack scenario and validate detection.',
+   530→    reportingDeadline: 'Continuous monitoring | Assessment: Semi-annual'
+   531→  },
+   532→  {
+   533→    controlId: 'ARTP-NS-004',
+   534→    controlRef: 'JORT-2023-45-Art-28',
+   535→    name: 'SS7 and Diameter Interconnect Security',
+   536→    description: 'Secure intercarrier SS7 and Diameter connections against roaming partner threats, implementing screening, whitelisting, and real-time monitoring.',
+   537→    category: 'NETWORK_SECURITY',
+   538→    family: 'Interconnect Security',
+   539→    criticality: ControlCriticality.CRITICAL,
+   540→    priority: 1,
+   541→    requirements: 'Validate all incoming interconnect messages against allowed ranges. Screen GT translations for IMSI catcher prevention. Monitor roaming partner behavior for anomalies. Maintain up-to-date whitelist of legitimate routes. Respond to detected abuse within 15 minutes.',
+   542→    implementationGuidance: 'Deploy STP/firewall at interconnect border. Configure IMSI range validation per partner agreement. Implement diameter routing rule enforcement. Real-time dashboard for interconnect health. Partner security SLA in interconnect agreements.',
+   543→    evidenceRequirements: [
+   544→      'Interconnect security architecture',
+   545→      'Screening rule configurations',
+   546→      'Partner whitelist (sanitized)',
+   547→      'Anomaly detection dashboards',
+   548→      'Partner SLA excerpts',
+   549→      'Incident response examples'
+   550→    ],
+   551→    testingProcedures: 'Test screening with out-of-range values. Verify whitelist currency. Simulate partner-originated attack. Measure detection-to-response time.',
+   552→    reportingDeadline: 'Response within 15 minutes'
+   553→  },
+   554→  {
+   555→    controlId: 'ARTP-NS-005',
+   556→    controlRef: 'JORT-2023-45-Art-29',
+   557→    name: 'Radio Access Network (RAN) Security',
+   558→    description: 'Secure radio access network components (NodeB/eNodeB/gNodeB, RNC, BTS) against physical and logical attacks, including rogue base station detection.',
+   559→    category: 'NETWORK_SECURITY',
+   560→    family: 'Access Network',
+   561→    criticality: ControlCriticality.HIGH,
+   562→    priority: 2,
+   563→    requirements: 'Physically secure cell sites (fencing, locks, alarms). Authenticate and encrypt backhaul connections. Detect rogue/IMSICatcher base stations. Manage remote access securely. Monitor RAN performance for security anomalies.',
+   564→    implementationGuidance: 'Implement site security standards (per risk tier). Deploy IPsec/GRE tunnels for backhaul. Use IMSI catcher detection system (cell site analyzer, network-based). Secure O&M access with jump servers. Physical security audits for high-risk sites.',
+   565→    evidenceRequirements: [
+   566→      'Site security standards',
+   567→      'Backhaul encryption configuration',
+   568→      'IMSICatcher detection system specs',
+   569→      'Remote access procedure',
+   570→      'Physical security audit reports',
+   571→      'Anomaly detection examples'
+   572→    ],
+   573→    testingProcedures: 'Verify backhaul encryption status. Test remote access security controls. Review physical security audit findings. Validate IMSICatcher detection capability.',
+   574→    reportingDeadline: 'Site audits: Annual | Encryption: Continuous'
+   575→  },
+   576→  {
+   577→    controlId: 'ARTP-NS-006',
+   578→    controlRef: 'JORT-2023-45-Art-30',
+   579→    name: 'Core Network Element Protection',
+   580→    description: 'Implement defense-in-depth for core network elements (HLR/HSS, EPC, IMS) including redundancy, access control, change management, and continuous monitoring.',
+   581→    category: 'NETWORK_SECURITY',
+   582→    family: 'Core Protection',
+   583→    criticality: ControlCriticality.CRITICAL,
+   584→    priority: 1,
+   585→    requirements: 'Cluster core NEs for high availability. Restrict administrative access (break-glass procedure). Enforce change management with rollback capability. Monitor privileged operations. Maintain disaster recovery capability (RPO/RTO targets).',
+   586→    implementationGuidance: 'Deploy active-active or active-standby clustering. Implement PAM (Privileged Access Management) for admin access. ITSM-integrated change management. Database activity monitoring (DAM) for HLR/HSS. Annual DR testing with documented results.',
+   587→    evidenceRequirements: [
+   588→      'High availability architecture',
+   589→      'PAM configuration and policies',
+   590→      'Change management procedure',
+   591→      'Privileged activity monitoring logs',
+   592→      'DR plan and test results',
+   593→      'RPO/RTO achievement metrics'
+   594→    ],
+   595→    testingProcedures: 'Verify HA status of core NEs. Test break-glass access procedure. Review change success rate. Validate DR test recency and results.',
+   596→    reportingDeadline: 'HA: Continuous | DR Testing: Annual'
+   597→  },
+   598→  {
+   599→    controlId: 'ARTP-NS-007',
+   600→    controlRef: 'JORT-2023-45-Art-31',
+   601→    name: 'Network Intrusion Detection and Prevention',
+   602→    description: 'Deploy IDS/IPS solutions at critical network points to detect and block unauthorized access, malware propagation, and attack patterns in real-time.',
+   603→    category: 'NETWORK_SECURITY',
+   604→    family: 'Detection & Prevention',
+   605→    criticality: ControlCriticality.HIGH,
+   606→    priority: 2,
+   607→    requirements: 'Cover all network segments with IDS/IPS sensors. Maintain current signature/threat feeds. Tune alerts to reduce false positives. Enable blocking for high-confidence threats. 24/7 monitoring of IDS alerts. Integrate with SIEM for correlation.',
+   608→    implementationGuidance: 'Deploy NIDS at perimeter and segment boundaries. Host-based IDS (HIDS) on critical servers. Use threat intelligence-fed rules. SOC-led tuning program (weekly reviews). Automated playbooks for common alerts.',
+   609→    evidenceRequirements: [
+   610→      'IDS/IPS deployment map',
+   611→      'Signature update status',
+   612→      'Alert tuning metrics (FP rate)',
+   613→      'Blocking rule configuration',
+   614→      'SIEM integration proof',
+   615→      'Alert response procedures'
+   616→    ],
+   617→    testingProcedures: 'Verify sensor coverage and signature freshness. Test alert detection with benign penetration attempts. Measure MTTR for IDS-triggered incidents. Review tuning effectiveness.',
+   618→    reportingDeadline: 'Signature updates: Daily | Tuning: Weekly'
+   619→  },
+   620→  {
+   621→    controlId: 'ARTP-NS-008',
+   622→    controlRef: 'JORT-2023-45-Art-32',
+   623→    name: 'Vulnerability Management Program',
+   624→    description: 'Maintain systematic vulnerability identification, prioritization, and remediation for all network infrastructure, applications, and systems.',
+   625→    category: 'NETWORK_SECURITY',
+   626→    family: 'Vulnerability Management',
+   627→    criticality: ControlCriticality.HIGH,
+   628→    priority: 2,
+   629→    requirements: 'Scan all assets weekly (authenticated where possible). Prioritize by CVSS and asset criticality. Remediate Critical: 7 days, High: 30 days, Medium: 90 days. Maintain exception process with risk acceptance. Track and report metrics.',
+   630→    implementationQualitativeGuidance: 'Deploy VM platform (Qualys, Rapid7, Tenable). Integrate with CMDB for coverage. Risk-based prioritization formula. Patch management integration. Executive dashboard with aging metrics. Exception approval by CISO.',
+   631→    evidenceRequirements: [
+   632→      'VM program documentation',
+   633→      'Scan coverage report',
+   634→      'SLA definitions (by severity)',
+   635→      'Remediation aging report',
+   636→      'Exception requests and approvals',
+   637→      'Executive metrics dashboard'
+   638→    ],
+   639→    testingProcedures: 'Verify scan coverage percentage. Check remediation SLA compliance. Review exception justifications. Validate metric accuracy.',
+   640→    reportingDeadline: 'Scanning: Weekly | Critical: 7d | High: 30d | Medium: 90d'
+   641→  },
+   642→
+   643→  // ========================================
+   644→  // DOMAIN 4: FRAUD PREVENTION & DETECTION (6 controls)
+   645→  // ========================================
+   646→  {
+   647→    controlId: 'ARTP-FP-001',
+   648→    controlRef: 'JORT-2022-38-Art-15',
+   649→    name: 'Real-Time Fraud Detection System',
+   650→    description: 'Operate real-time fraud detection system capable of identifying SIM swap fraud, IRSF (International Revenue Share Fraud), Wangiri, PBX hacking, and subscription fraud with < 5 minute detection time.',
+   651→    category: 'FRAUD_PREVENTION',
+   652→    family: 'Detection Systems',
+   653→    criticality: ControlCriticality.CRITICAL,
+   654→    priority: 1,
+   655→    requirements: 'Deploy FMS (Fraud Management System) with real-time scoring. Cover all major fraud types relevant to Algeria market. Integrate with network probes for signaling analysis. Achieve detection time < 5 minutes for high-value fraud. False positive rate < 2%.',
+   656→    implementationGuidance: 'Select enterprise FMS (Subex, Mobileum, WeDo Technologies). Integrate with CDR mediation, signaling probes, and subscriber database. Machine learning models for emerging patterns. Real-time dashboards for fraud analysts. Integration with ARTP reporting for mandatory fraud types.',
+   657→    evidenceRequirements: [
+   658→      'FMS architecture and capabilities',
+   659→      'Detection rule configurations',
+   660→      'Detection time metrics (MTTD)',
+   661→      'False positive rate statistics',
+   662→      'Integration points documentation',
+   663→      'Analyst procedures and training'
+   664→    ],
+   665→    testingProcedures: 'Inject test fraud scenarios and measure detection time. Verify alert generation for each fraud type. Check false positive rate calculation. Test analyst response procedures.',
+   666→    reportingDeadline: 'Detection: < 5 minutes | Reporting: Per ARTP requirements'
+   667→  },
+   668→  {
+   669→    controlId: 'ARTP-FP-002',
+   670→    controlRef: 'JORT-2022-38-Art-16',
+   671→    name: 'SIM Swap Fraud Prevention',
+   672→    description: 'Implement robust SIM swap fraud prevention including identity verification, cooling-off periods, dual-notification, and subscriber verification before SIM reissuance.',
+   673→    category: 'FRAUD_PREVENTION',
+   674→    family: 'Subscription Fraud',
+   675→    criticality: ControlCriticality.CRITICAL,
+   676→    priority: 1,
+   677→    requirements: 'Verify subscriber identity with ≥2 factors before SIM swap. Implement 24-hour cooling-off period for new SIM activation post-swap. Notify old SIM number of swap request. Limit SIM swaps per subscriber per year (max 3). Flag suspicious patterns for investigation.',
+   678→    implementationGuidance: 'Enhance POS/dealer workflow with ID verification (national ID check). SMS notification to existing SIM before swap completion. Backend rules engine for velocity checks. Dealer training on social engineering red flags. Investigation queue for flagged swaps.',
+   679→    evidenceRequirements: [
+   680→      'SIM swap procedure document',
+   681→      'ID verification integration',
+   682→      'Cooling-off period configuration',
+   683→      'Notification template and flow',
+   684→      'Velocity limit rules',
+   685→      'Investigation queue examples'
+   686→    ],
+   687→    testingProcedures: 'Attempt SIM swap with insufficient verification (should fail). Complete valid swap and verify notifications sent. Test velocity limit enforcement. Review investigation queue handling.',
+   688→    reportingDeadline: 'Prevention: Real-time | Investigation: < 24h'
+   689→  },
+   690→  {
+   691→    controlId: 'ARTP-FP-003',
+   692→    controlRef: 'JORT-2022-38-Art-17',
+   693→    name: 'IRSF (International Revenue Share Fraud) Detection',
+   694→    description: 'Detect and block International Premium Rate Number (IPRN) fraud and revenue share schemes targeting international destinations with unusual calling patterns.',
+   695→    category: 'FRAUD_PREVENTION',
+   696→    family: 'Revenue Fraud',
+   697→    criticality: ControlCriticality.HIGH,
+   698→    priority: 2,
+   699→    requirements: 'Monitor international call patterns for anomalies (volume, duration, destination, time). Block known fraudulent IPRN ranges in real-time. Detect Wangiri callback patterns. Investigate high-risk destinations weekly. Share intelligence with international fraud forums.',
+   700→    implementationGuidance: 'Configure FMS rules for IRSF detection (high-cost destination spikes, after-hours international). Auto-block confirmed fraud ranges. Manual review for borderline cases. Participation in CFM-ATF (Communications Fraud Management Association). Roaming partner coordination.',
+   701→    evidenceRequirements: [
+   702→      'IRSF detection rule set',
+   703→      'Blocked range list (sample)',
+   704→      'Weekly investigation reports',
+   705→      'CFM-ATF membership/participation',
+   706→      'Partner coordination records',
+   707→      'Case studies (anonymized)'
+   708→    ],
+   709→    testingProcedures: 'Simulate IRSF pattern and verify detection/blocking. Check blocked range update frequency. Review investigation quality. Test partner notification process.',
+   710→    reportingDeadline: 'Blocking: Real-time | Investigation: Weekly'
+   711→  },
+   712→  {
+   713→    controlId: 'ARTP-FP-004',
+   714→    controlRef: 'JORT-2022-38-Art-18',
+   715→    name: 'Fraud Reporting to ARTP',
+   716→    description: 'Report fraud cases to ARTP as required: confirmed fraud > 500,000 DZD within 24 hours, organized crime indicators immediately, monthly statistical summary.',
+   717→    category: 'FRAUD_PREVENTION',
+   718→    family: 'Regulatory Reporting',
+   719→    criticality: ControlCriticality.HIGH,
+   720→    priority: 2,
+   721→    requirements: 'Define ARTP-reportable fraud thresholds. Automate report generation from FMS. Submit individual case reports within SLA. Monthly aggregate statistics submission. Maintain audit trail of all submissions.',
+   722→    implementationGuidance: 'Integrate ARTP reporting into fraud case workflow. Pre-populate report templates from case data. Secure submission channel. Designated fraud analyst for ARTP liaison. Monthly reconciliation of reported vs. actual cases.',
+   723→    evidenceRequirements: [
+   724→      'Reporting threshold definitions',
+   725→      'Automated report templates',
+   726→      'Submission channel configuration',
+   727→      'Individual case submissions (sample)',
+   728→      'Monthly summary reports',
+   729→      'Reconciliation records'
+   730→    ],
+   731→    testingProcedures: 'Generate test report from sample case. Verify template completeness. Test submission channel. Compare submitted cases against FMS data for accuracy.',
+   732→    reportingDeadline: '>500k DZD: 24h | Organized crime: Immediate | Summary: Monthly'
+   733→  },
+   734→  {
+   735→    controlId: 'ARTP-FP-005',
+   736→    controlRef: 'JORT-2022-38-Art-19',
+   737→    name: 'Dealer and Channel Fraud Prevention',
+   738→    description: 'Prevent fraud originating from dealer and distribution channels including unauthorized activations, commission manipulation, and identity fraud at point of sale.',
+   739→    category: 'FRAUD_PREVENTION',
+   740→    family: 'Channel Security',
+   741→    criticality: ControlCriticality.HIGH,
+   742→    priority: 2,
+   743→    requirements: 'Background check dealers before authorization. Limit activation permissions per dealer tier. Monitor dealer transaction patterns for anomalies. Regular dealer audits (risk-based). Immediate suspension capability for suspected fraud. Commission clawback provisions.',
+   744→    implementationGuidance: 'Dealer due diligence process. Role-based access in dealer portal. Dealer scorecard with fraud KPIs. Unannounced audit program. Dealer fraud investigation unit. Contract terms enabling rapid action.',
+   745→    evidenceRequirements: [
+   746→      'Dealer authorization procedure',
+   747→      'Dealer tier and permission matrix',
+   748→      'Monitoring dashboard (anonymized)',
+   749→      'Audit schedule and results',
+   750→      'Suspension procedure',
+   751→      'Contract clauses (fraud-related)'
+   752→    ],
+   753→    testingProcedures: 'Review dealer onboarding for due diligence. Verify permission limits enforced. Check monitoring alert generation. Audit suspension procedure execution.',
+   754→    reportingDeadline: 'Audits: Risk-based | Suspension: Immediate upon suspicion'
+   755→  },
+   756→  {
+   757→    controlId: 'ARTP-FP-006',
+   758→    controlRef: 'JORT-2022-38-Art-20',
+   759→    name: 'Internal Fraud Controls',
+   760→    description: 'Prevent and detect insider fraud through segregation of duties, access controls, transaction monitoring, and whistleblower mechanisms.',
+   761→    category: 'FRAUD_PREVENTION',
+   762→    family: 'Insider Threat',
+   763→    criticality: ControlCriticality.HIGH,
+   764→    priority: 2,
+   765→    requirements: 'Segregate conflicting duties (provisioning vs. approval, credit vs. collection). Implement SoD matrix in access management. Monitor privileged user transactions. Anonymous reporting channel (whistleblower). Background checks for sensitive roles. Regular access recertification.',
+   766→    implementationGuidance: 'Role-based access control with SoD engine. Privileged activity monitoring (PAM integration). Third-party ethics hotline. Pre-employment screening policy. Quarterly access certification campaign. Investigative capacity for insider cases.',
+   767→    evidenceRequirements: [
+   768→      'SoD matrix and conflicts',
+   769→      'Access control configuration',
+   770→      'Privileged activity reports',
+   771→      'Whistleblower channel info',
+   772→      'Screening policy and vendor',
+   773→      'Recertification campaign results'
+   774→    ],
+   775→    testingProcedures: 'Test SoD conflict prevention. Verify privileged monitoring coverage. Check whistleblower channel accessibility. Review recertification completion rate.',
+   776→    reportingDeadline: 'Recertification: Quarterly | Monitoring: Continuous'
+   777→  },
+   778→
+   779→  // ========================================
+   780→  // DOMAIN 5: SUBSCRIBER PROTECTION (5 controls)
+   781→  // ========================================
+   782→  {
+   783→    controlId: 'ARTP-SP-001',
+   784→    controlRef: 'JORT-2020-22-Art-08',
+   785→    name: 'Subscriber Identity Protection',
+   786→    description: 'Protect subscriber identity information (IMSI, IMEI, MSISDN) from unauthorized access, use, or disclosure throughout its lifecycle.',
+   787→    category: 'SUBSCRIBER_PROTECTION',
+   788→    family: 'Identity Protection',
+   789→    criticality: ControlCriticality.CRITICAL,
+   790→    priority: 1,
+   791→    requirements: 'Encrypt subscriber data at rest and in transit. Mask/hide full identifiers in non-essential systems. Strict access control to subscriber database. Audit all access to subscriber identity data. Pseudonymize where possible for analytics.',
+   792→    implementationGuidance: 'Database encryption (TDE or application-level). Dynamic data masking in reporting/analytics. RBAC with need-to-know principle. Database activity monitoring (DAM). Tokenization/pseudonymization for big data. Annual access review.',
+   793→    evidenceRequirements: [
+   794→      'Encryption configuration',
+   795→      'Masking rules definition',
+   796→      'Access control matrix',
+   797→      'DAM reports (sample)',
+   798→      'Pseudonymization architecture',
+   799→      'Access review records'
+   800→    ],
+   801→    testingProcedures: 'Verify encryption status of subscriber tables. Test masking in reports. Attempt unauthorized access (should fail). Review DAM alerts for suspicious queries.',
+   802→    reportingDeadline: 'Protection: Continuous | Review: Quarterly'
+   803→  },
+   804→  {
+   805→    controlId: 'ARTP-SP-002',
+   806→    controlRef: 'JORT-2020-22-Art-09',
+   807→    name: 'Communication Confidentiality',
+   808→    description: 'Protect confidentiality of subscriber communications (voice, SMS, data) from interception, eavesdropping, and unauthorized disclosure.',
+   809→    category: 'SUBSCRIBER_PROTECTION',
+   810→    family: 'Communication Privacy',
+   811→    criticality: ControlCriticality.CRITICAL,
+   812→    priority: 1,
+   813→    requirements: 'Encrypt radio interface (2G/3G/4G/5G as available). Implement network-side encryption for core transport. Secure voice (SRTP/VoLTE encryption). Prevent lawful interception access abuse. Monitor for interception anomalies.',
+   814→    implementationGuidance: 'Enable A5/3-4 for 2G/3G, AES for 4G, 256-bit for 5G. IPsec for backhaul. SRTP for VoLTE calls. Dual-control for LI access. LI access logging and regular audit.',
+   815→    evidenceRequirements: [
+   816→      'Radio encryption configuration',
+   817→      'Backhaul encryption status',
+   818→      'VoLTE/SRTP deployment proof',
+   819→      'LI access control procedure',
+   820→      'LI access audit logs',
+   821→      'Anomaly detection configuration'
+   822→    ],
+   823→    testingProcedures: 'Verify radio encryption enabled. Test IPsec tunnel status. Validate SRTP negotiation. Review LI access logs for anomalies.',
+   824→    reportingDeadline: 'Encryption: Always-on | LI audit: Monthly'
+   825→  },
+   826→  {
+   827→    controlId: 'ARTP-SP-003',
+   828→    controlRef: 'JORT-2020-22-Art-10',
+   829→    name: 'Location Privacy Protection',
+   830→    description: 'Protect subscriber location information from unauthorized access, excessive collection, and misuse while enabling lawful location-based services.',
+   831→    category: 'SUBSCRIBER_PROTECTION',
+   832→    family: 'Location Privacy',
+   833→    criticality: ControlCriticality.HIGH,
+   834→    priority: 2,
+   835→    requirements: 'Collect location data only when necessary for service or legal requirement. Obtain consent for LBS (Location-Based Services). Restrict location API access. Anonymize/aggregate location data for analytics. Retention per legal maximum (typically 12 months).',
+   836→    implementationGuidance: 'Location data classification as sensitive. Consent capture in app settings. API gateway with authentication/rate limiting. Location data retention job. Differential privacy for analytics. Legal hold for investigations.',
+   837→    evidenceRequirements: [
+   838→      'Location data classification',
+   839→      'LBS consent flow',
+   840→      'API access controls',
+   841→      'Retention/deletion job config',
+   842→      'Anonymization approach',
+   843→      'Legal hold procedure'
+   844→    ],
+   845→    testingProcedures: 'Verify location access requires proper auth. Test consent flow for LBS. Check retention job execution. Validate anonymization effectiveness.',
+   846→    reportingDeadline: 'Collection: Consent-based | Retention: Per legal max'
+   847→  },
+   848→  {
+   849→    controlId: 'ARTP-SP-004',
+   850→    controlRef: 'JORT-2020-22-Art-11',
+   851→    name: 'Spam and Unsolicited Communication Protection',
+   852→    description: 'Protect subscribers from spam SMS/USSD, robocalls, and unsolicited commercial communications through filtering, opt-out mechanisms, and sender verification.',
+   853→    category: 'SUBSCRIBER_PROTECTION',
+   854→    family: 'Spam Protection',
+   855→    criticality: ControlCriticality.MEDIUM,
+   856→    priority: 3,
+   857→    requirements: 'Operate SMS spam filter with < 0.1% false positive rate. Provide easy opt-out (STOP service). Verify commercial sender registration (opt-in only). Block known spammers. Report spam sources to authorities. Monitor filtering effectiveness.',
+   858→    implementationGuidance: 'Deploy SMS firewall (content + behavioral filtering). STOP shortcode service. Sender ID registration for A2P. Blacklist management. Analytics on spam trends. Coordination with GSMA Spam Reporting Service.',
+   859→    evidenceRequirements: [
+   860→      'SMS firewall configuration',
+   861→      'Opt-out service documentation',
+   862→      'Sender registration process',
+   863→      'Blacklist management procedure',
+   864→      'Filtering effectiveness metrics',
+   865→      'Authority reporting records'
+   866→    ],
+   867→    testingProcedures: 'Test spam filter with sample messages. Verify STOP service works. Check sender registration enforcement. Review false positive/negative rates.',
+   868→    reportingDeadline: 'Filtering: Real-time | Opt-out: Immediate'
+   869→  },
+   870→  {
+   871→    controlId: 'ARTP-SP-005',
+   872→    controlRef: 'JORT-2020-22-Art-12',
+   873→    name: 'Vulnerable Subscriber Protection',
+   874→    description: 'Implement special protections for vulnerable subscriber groups (minors, elderly, persons with disabilities) including age verification, parental controls, and accessible complaint mechanisms.',
+   875→    category: 'SUBSCRIBER_PROTECTION',
+   876→    family: 'Vulnerable Groups',
+   877→    criticality: ControlCriticality.MEDIUM,
+   878→    priority: 3,
+   879→    requirements: 'Age verification for adult content/services. Parental control options (content filtering, spending limits, time restrictions). Accessible customer service for vulnerable persons. Staff training on vulnerable person interactions. Special handling procedures for complaints from vulnerable groups.',
+   880→    implementationGuidance: 'ID-based age verification at point of sale/app. Parental control feature suite in self-care app. Priority queue for elderly/disabled calls. Training module for CS agents. Escalation path for vulnerable person concerns.',
+   881→    evidenceRequirements: [
+   882→      'Age verification procedure',
+   883→      'Parental control features list',
+   884→      'Accessibility accommodations',
+   885→      'CS training curriculum',
+   886→      'Special handling procedure',
+   887→      'Complaint handling examples'
+   888→    ],
+   889→    testingProcedures: 'Test age verification flow. Verify parental control functionality. Check accessibility features. Review training completion rates.',
+   890→    reportingDeadline: 'Controls: Available at all times | Training: Onboarding + Annual'
+   891→  },
+   892→
+   893→  // ========================================
+   894→  // DOMAIN 6: LAWFUL INTERCEPTION COMPLIANCE (5 controls)
+   895→  // ========================================
+   896→  {
+   897→    controlId: 'ARTP-LI-001',
+   898→    controlRef: 'JORT-2021-33-Art-05',
+   899→    name: 'Lawful Interception Capability',
+   900→    description: 'Maintain technical capability for lawful interception (LI) of communications as authorized by Algerian law, meeting ARTP handover interface standards and delivery requirements.',
+   901→    category: 'LAWFUL_INTERCEPTION',
+   902→    family: 'Technical Capability',
+   903→    criticality: ControlCriticality.CRITICAL,
+   904→    priority: 1,
+   905→    requirements: 'Deploy LI solution (CA/ADM/DF2/DF3 architecture) per ARTP standards. Support simultaneous intercepts (capacity per license). Handover interfaces compliant with ARTP specs. IRF (Intercept Related Information) and CC (Content of Communication) delivery. Encrypted delivery to LEA (Law Enforcement Agency).',
+   906→    implementationGuidance: 'Select ARTP-approved LI vendor. Integrate with all network elements (circuit and packet). Maintain capacity for peak concurrent intercepts. Regular testing with authorized agencies. Chain of custody for delivered data. LI administration security (dual control).',
+   907→    evidenceRequirements: [
+   908→      'LI architecture diagram (sanitized)',
+   909→      'ARTP approval/certification',
+   910→      'Capacity planning document',
+   911→      'Interface compliance certificate',
+   912→      'Testing records with agencies',
+   913→      'Dual-control procedure'
+   914→    ],
+   915→    testingProcedures: 'Conduct authorized LI test with participating agency. Verify IRF/CC delivery completeness. Test capacity under load. Validate encryption of delivery.',
+   916→    reportingDeadline: 'Capability: Always available | Testing: Semi-annual'
+   917→  },
+   918→  {
+   919→    controlId: 'ARTP-LI-002',
+   920→    controlRef: 'JORT-2021-33-Art-06',
+   921→    name: 'Authorization and Warrant Management',
+   922→    description: 'Process interception requests only upon valid judicial authorization, maintaining strict warrant validation, logging, and confidentiality.',
+   923→    category: 'LAWFUL_INTERCEPTION',
+   924→    family: 'Authorization',
+   925→    criticality: ControlCriticality.CRITICAL,
+   926→    priority: 1,
+   927→    requirements: 'Accept interception orders only from authorized judicial authorities. Validate warrant authenticity (signature, seal, scope). Log all requests and actions immutably. Destroy records per legal timeline. Maintain confidentiality (need-to-know). No interception without valid warrant.',
+   928→    implementationGuidance: 'Secure warrant receipt process (physical/digital). Validation checklist with legal review. Immutable audit log (blockchain/WORM). Compartmentalized LI team. Legal sign-off before activation. Secure destruction procedure.',
+   929→    evidenceRequirements: [
+   930→      'Warrant acceptance procedure',
+   931→      'Validation checklist',
+   932→      'Audit log configuration',
+   933→      'Confidentiality agreement (LI team)',
+   934→      'Legal review process',
+   935→      'Destruction procedure'
+   936→    ],
+   937→    testingProcedures: 'Review warrant validation checklist. Verify audit log immutability. Test confidentiality measures. Check destruction procedure compliance.',
+   938→    reportingDeadline: 'Validation: Before each activation | Logging: Immutable'
+   939→  },
+   940→  {
+   941→    controlId: 'ARTP-LI-003',
+   942→    controlRef: 'JORT-2021-33-Art-07',
+   943→    name: 'LI System Security and Access Control',
+   944→    description: 'Protect LI administration systems with highest security controls, strict access limitation, dual-control for sensitive actions, and comprehensive audit logging.',
+   945→    category: 'LAWFUL_INTERCEPTION',
+   946→    family: 'System Security',
+   947→    criticality: ControlCriticality.CRITICAL,
+   948→    priority: 1,
+   949→    requirements: 'Restrict LI admin access to designated personnel only (minimum 2). Two-person rule for target activation. MFA mandatory for all LI system access. Real-time alerting for LI system access. Penetration testing annually. Air-gapped or highly isolated LI network segment.',
+   950→    implementationGuidance: 'Dedicated LI administration workstation(s). Background check for all LI personnel. PKI-based authentication. Video recording of sensitive operations. Separate network VLAN for LI. Red team exercise including LI systems.',
+   951→    evidenceRequirements: [
+   952→      'LI personnel list (role only)',
+   953→      'Access control policy (LI)',
+   954→      'Two-person rule procedure',
+   955→      'MFA configuration proof',
+   956→      'Network isolation diagram',
+   957→      'Penetration test results (exec summary)'
+   958→    ],
+   959→    testingProcedures: 'Verify two-person rule enforcement. Test MFA on LI systems. Check network isolation. Review penetration test findings closure.',
+   960→    reportingDeadline: 'Controls: Always active | Pentest: Annual'
+   961→  },
+   962→  {
+   963→    controlId: 'ARTP-LI-004',
+   964→    controlRef: 'JORT-2021-33-Art-08',
+   965→    name: 'Data Delivery Integrity and Confidentiality',
+   966→    description: 'Ensure intercepted data is delivered to LEA with integrity protection, encryption, and complete chain of custody, without alteration or leakage.',
+   967→    category: 'LAWFUL_INTERCEPTION',
+   968→    family: 'Data Handling',
+   969→    criticality: ControlCriticality.CRITICAL,
+   970→    priority: 1,
+   971→    requirements: 'Encrypt LI data in transit (minimum AES-256). Digital signatures for integrity. Timestamped delivery receipts. No storage beyond delivery (unless required). Anti-tamper protection. Secure delivery channel (dedicated link or VPN).',
+   972→    implementationGuidance: 'TLS 1.3 for delivery channel. Hash-based integrity verification. Atomic delivery confirmation. Automatic purge after successful delivery. Hardware security module (HSM) for keys. Dedicated MPLS or secured Internet VPN to LEA.',
+   973→    evidenceRequirements: [
+   974→      'Encryption configuration',
+   975→      'Integrity verification method',
+   976→      'Delivery receipt format',
+   977→      'Data retention policy (LI)',
+   978→      'Anti-tamper measures',
+   979→      'Channel security specification'
+   980→    ],
+   981→    testingProcedures: 'Verify encryption in transit. Test integrity check on delivery. Confirm automatic purge. Validate channel security.',
+   982→    reportingDeadline: 'Protection: For each delivery | Purge: Post-delivery'
+   983→  },
+   984→  {
+   985→    controlId: 'ARTP-LI-005',
+   986→    controlRef: 'JORT-2021-33-Art-09',
+   987→    name: 'LI Audit and Compliance Reporting',
+   988→    description: 'Maintain comprehensive audit trail of all LI activities and submit periodic compliance reports to ARTP demonstrating adherence to LI requirements.',
+   989→    category: 'LAWFUL_INTERCEPTION',
+   990→    family: 'Audit & Reporting',
+   991→    criticality: ControlCriticality.HIGH,
+   992→    priority: 2,
+   993→    requirements: 'Log all LI system accesses, warrant validations, target activations, and deliveries. Generate monthly internal LI audit. Submit semi-annual compliance report to ARTP. Preserve audit logs per legal requirement (minimum 5 years). Independent annual LI audit.',
+   994→    implementationGuidance: 'SIEM integration for LI logs. Automated monthly audit report generation. ARTP-compliant compliance report template. WORM storage for LI audit logs. External auditor engagement for annual assessment. Board-level LI oversight committee.',
+   995→    evidenceRequirements: [
+   996→      'Audit log schema (LI)',
+   997→      'Monthly audit report template',
+   998→      'ARTP compliance report format',
+   999→      'Log retention configuration',
+  1000→      'External audit engagement letter',
+  1001→      'Oversight committee charter'
+  1002→    ],
+  1003→    testingProcedures: 'Review sample audit logs for completeness. Verify monthly report generation. Check log retention enforcement. Validate external audit scope.',
+  1004→    reportingDeadline: 'Monthly internal | Semi-annual ARTP | External: Annual'
+  1005→  },
+  1006→
+  1007→  // ========================================
+  1008→  // DOMAIN 7: BUSINESS CONTINUITY (4 controls)
+  1009→  // ========================================
+  1010→  {
+  1011→    controlId: 'ARTP-BC-001',
+  1012→    controlRef: 'JORT-2023-45-Art-35',
+  1013→    name: 'Business Continuity Plan (BCP) Maintenance',
+  1014→    description: 'Maintain current Business Continuity Plan covering all critical telecom services with defined RTO/RPA objectives, recovery procedures, and tested failover capabilities.',
+  1015→    category: 'BUSINESS_CONTINUITY',
+  1016→    family: 'Planning',
+  1017→    criticality: ControlCriticality.HIGH,
+  1018→    priority: 2,
+  1019→    requirements: 'Document BCP for all critical services (voice, data, SMS, signaling). Define RTO/RPO per service (voice: RTO<2h, RPO<15min). Identify critical dependencies. Update BCP annually or after significant changes. Executive approval of BCP.',
+  1020→    implementationGuidance: 'Business Impact Analysis (BIA) to prioritize services. Recovery strategies per tier (hot/warm/cold). Detailed runbooks for recovery procedures. Crisis management team definition. Communication templates. Annual BCP review cycle.',
+  1021→    evidenceRequirements: [
+  1022→      'BCP document (current version)',
+  1023→      'BIA results',
+  1024→      'RTO/RPO matrix',
+  1025→      'Recovery runbooks',
+  1026→      'Crisis team structure',
+  1027→      'Executive approval record'
+  1028→    ],
+  1029→    testingProcedures: 'Verify BCP version currency. Check RTO/RPO alignment with business expectations. Review runbook detail. Confirm executive approval date.',
+  1030→    reportingDeadline: 'Document: Current | Review: Annual | Approval: Post-update'
+  1031→  },
+  1032→  {
+  1033→    controlId: 'ARTP-BC-002',
+  1034→    controlRef: 'JORT-2023-45-Art-36',
+  1035→    name: 'Disaster Recovery Testing',
+  1036→    description: 'Conduct regular disaster recovery tests including table-top exercises, technical failovers, and full-scale simulations to validate recovery capabilities.',
+  1037→    category: 'BUSINESS_CONTINUITY',
+  1038→    family: 'Testing & Validation',
+  1039→    criticality: ControlCriticality.HIGH,
+  1040→    priority: 2,
+  1041→    requirements: 'Tabletop exercise: Quarterly. Technical failover: Semi-annual (per critical system). Full-scale simulation: Annually. Document test results including gaps found. Track remediation of identified gaps. Report test results to governance.',
+  1042→    implementationGuidance: 'Test calendar with realistic scenarios. Scenario library (natural disaster, cyberattack, sabotage). Observer/evaluator team. Post-test debrief and report. Gap tracking in issue tracker. Escalation of critical gaps to CISO/CTO.',
+  1043→    evidenceRequirements: [
+  1044→      'Test calendar (current year)',
+  1045→      'Scenario library',
+  1046→      'Test execution reports',
+  1047→      'Gap findings log',
+  1048→      'Remediation tracking',
+  1049→      'Governance reporting'
+  1050→    ],
+  1051→    testingProcedures: 'Verify test schedule adherence. Review recent test report quality. Check gap remediation progress. Validate governance reporting.',
+  1052→    reportingDeadline: 'TTE: Quarterly | Failover: Semi-annual | Full: Annual'
+  1053→  },
+  1054→  {
+  1055→    controlId: 'ARTP-BC-003',
+  1056→    controlRef: 'JORT-2023-45-Art-37',
+  1057→    name: 'Backup and Recovery Operations',
+  1058→    description: 'Maintain reliable backup operations for all critical data and configurations with verified restore capability, offsite storage, and encryption protection.',
+  1059→    category: 'BUSINESS_CONTINUITY',
+  1060→    family: 'Backup Operations',
+  1061→    criticality: ControlCriticality.HIGH,
+  1062→    priority: 2,
+  1063→    requirements: 'Daily incremental backups, weekly full backups. Offsite replication (distance > 50km). Backup encryption (AES-256 minimum). Restore test: Monthly (random selection). RPO verification. Backup success monitoring and alerting.',
+  1064→    implementationGuidance: 'Enterprise backup solution (Commvault, Veritas, Veeam). 3-2-1 backup strategy (3 copies, 2 media, 1 offsite). Immutable/worm backup for ransomware protection. Backup as a service (BaaS) for offsite. Automated restore testing.',
+  1065→    evidenceRequirements: [
+  1066→      'Backup policy and schedule',
+  1067→      'Backup success reports',
+  1068→      'Offsite storage arrangement',
+  1069→      'Encryption configuration',
+  1070→      'Restore test results',
+  1071→      'Monitoring and alerting config'
+  1072→    ],
+  1073→    testingProcedures: 'Verify backup success rate. Test restore from backup (surprise exercise). Check offsite replication status. Validate encryption.',
+  1074→    reportingDeadline: 'Backup: Daily | Restore test: Monthly | Offsite: Continuous'
+  1075→  },
+  1076→  {
+  1077→    controlId: 'ARTP-BC-004',
+  1078→    controlRef: 'JORT-2023-45-Art-38',
+  1079→    name: 'Crisis Management Organization',
+  1080→    description: 'Maintain structured crisis management organization with defined roles, escalation procedures, communication plans, and decision-making authority for major disruptions.',
+  1081→    category: 'BUSINESS_CONTINUITY',
+  1082→    family: 'Crisis Management',
+  1083→    criticality: ControlCriticality.HIGH,
+  1084→    priority: 2,
+  1085→    requirements: 'Define Crisis Management Team (CMT) with alternates. Establish crisis levels (1-3) with triggers. Decision authority matrix. Internal/external communication plans. Media response procedure. Regular CMT exercises. Crisis room facilities.',
+  1086→    implementationGuidance: 'CMT charter with clear authority. Crisis playbook per scenario. Pre-approved communication templates. Media training for spokespersons. War room setup (physical and virtual). Quarterly CMT meetings. Annual crisis simulation.',
+  1087→    evidenceRequirements: [
+  1088→      'CMT charter and roster',
+  1089→      'Crisis level definitions',
+  1090→      'Decision authority matrix',
+  1091→      'Communication templates',
+  1092→      'Media training records',
+  1093→      'Exercise records'
+  1094→    ],
+  1095→    testingProcedures: 'Verify CMT roster currency. Test war room readiness. Review communication templates. Check exercise frequency.',
+  1096→    reportingDeadline: 'Organization: Always ready | Exercises: Quarterly'
+  1097→  },
+  1098→
+  1099→  // ========================================
+  1100→  // DOMAIN 8: REPORTING & DOCUMENTATION (6 controls)
+  1101→  // ========================================
+  1102→  {
+  1103→    controlId: 'ARTP-RD-001',
+  1104→    controlRef: 'JORT-2023-45-Art-40',
+  1105→    name: 'Security Documentation Maintenance',
+  1106→    description: 'Maintain comprehensive, current documentation of all security policies, procedures, configurations, and network diagrams required for ARTP inspections and audits.',
+  1107→    category: 'REPORTING_COMPLIANCE',
+  1108→    family: 'Documentation',
+  1109→    criticality: ControlCriticality.HIGH,
+  1110→    priority: 2,
+  1111→    requirements: 'Documented Information Security Management System (ISMS). Policy review cycle (annual minimum). Procedure documents for all security processes. Network architecture diagrams (current). Configuration baseline documentation. Document version control. Readily accessible for ARTP inspection.',
+  1112→    implementationGuidance: 'Centralized document management system (DMS). Document owner assignment. Review reminder workflow. Version control with change history. Classification marking. ARTP-specific document index. Annual document audit.',
+  1113→    evidenceRequirements: [
+  1114→      'ISMS document index',
+  1115→      'Policy review schedule',
+  1116→      'Sample policy documents',
+  1117→      'Network diagrams (sanitized)',
+  1118→      'Configuration baseline docs',
+  1119→      'DMS access proof'
+  1120→    ],
+  1121→    testingProcedures: 'Verify document currency. Check review dates. Validate version control. Test ARTP document retrieval speed.',
+  1122→    reportingDeadline: 'Documents: Always current | Review: Annual'
+  1123→  },
+  1124→  {
+  1125→    controlId: 'ARTP-RD-002',
+  1126→    controlRef: 'JORT-2023-45-Art-41',
+  1127→    name: 'Security Metrics and KPI Reporting',
+  1128→    description: 'Track, analyze, and report key security metrics and KPIs to demonstrate security posture, identify trends, and support decision-making for ARTP and internal stakeholders.',
+  1129→    category: 'REPORTING_COMPLIANCE',
+  1130→    family: 'Metrics & Reporting',
+  1131→    criticality: ControlCriticality.MEDIUM,
+  1132→    priority: 3,
+  1133→    requirements: 'Defined security KPI framework (aligned with ARTP interests). Automated data collection where possible. Monthly metric calculation and trend analysis. Dashboard for real-time visibility. Quarterly executive report. Annual security posture assessment. ARTP-mandated metrics inclusion.',
+  1134→    implementationGuidance: 'KPI definition: MTTD, MTTR, patch compliance, phishing click rate, training completion, etc. Data sources: SIEM, VM, phishing tool, LMS. BI tool for visualization (PowerBI, Tableau). Threshold-based alerting for KPI degradation. Benchmark against industry peers.',
+  1135→    evidenceRequirements: [
+  1136→      'KPI framework document',
+  1137→      'Metric definitions and sources',
+  1138→      'Dashboard screenshots',
+  1139→      'Monthly/quarterly reports',
+  1140→      'Trend analysis examples',
+  1141→      'Benchmark comparisons'
+  1142→    ],
+  1143→    testingProcedures: 'Verify KPI calculation accuracy. Check data source integration. Validate dashboard freshness. Review trend analysis methodology.',
+  1144→    reportingDeadline: 'Metrics: Monthly | Dashboard: Real-time | Executive: Quarterly'
+  1145→  },
+  1146→  {
+  1147→    controlId: 'ARTP-RD-003',
+  1148→    controlRef: 'JORT-2023-45-Art-42',
+  1149→    name: 'Audit Facilitation and Evidence Provision',
+  1150→    description: 'Facilitate ARTP audits and inspections by providing timely access to systems, documentation, evidence, and personnel as required.',
+  1151→    category: 'REPORTING_COMPLIANCE',
+  1152→    family: 'Audit Support',
+  1153→    criticality: ControlCriticality.HIGH,
+  1154→    priority: 2,
+  1155→    requirements: 'Designated audit coordinator. Audit evidence repository (pre-collected). Remote access capability for ARTP auditors (secure). Personnel availability commitment. Finding response process (remediation plans within 30 days). Previous finding closure tracking.',
+  1156→    implementationGuidance: 'Audit readiness program (continuous readiness). Evidence collection automation. Secure auditor workspace (physical/network). Audit response playbooks. Finding lifecycle management. Regular mock audits.',
+  1157→    evidenceRequirements: [
+  1158→      'Audit coordinator designation',
+  1159→      'Evidence repository structure',
+  1160→      'Remote access procedure',
+  1161→      'Personnel availability policy',
+  1162→      'Finding response procedure',
+  1163→      'Mock audit records'
+  1164→    ],
+  1165→    testingProcedures: 'Test evidence retrieval speed. Verify remote access security. Review finding response timeliness. Check previous finding closure rate.',
+  1166→    reportingDeadline: 'Readiness: Continuous | Response: Within 30 days'
+  1167→  },
+  1168→  {
+  1169→    controlId: 'ARTP-RD-004',
+  1170→    controlRef: 'JORT-2023-45-Art-43',
+  1171→    name: 'Records Retention and Archival',
+  1172→    description: 'Maintain security-relevant records for legally mandated periods with secure archival, retrieval capability, and proper disposal.',
+  1173→    category: 'REPORTING_COMPLIANCE',
+  1174→    family: 'Records Management',
+  1175→    criticality: ControlCriticality.MEDIUM,
+  1176→    priority: 3,
+  1177→    requirements: 'Records retention schedule per regulation (security logs: 3 years, audit records: 7 years, etc.). Secure archival storage (immutable preferred). Indexed retrieval capability. Secure disposal (shredding, degaussing). Legal hold procedure. Retention exception documentation.',
+  1178→    implementationGuidance: 'Records management policy with schedule. Archive system (WORM storage). Indexing/metadata for searchability. Disposal vendor with certificate of destruction. Legal hold coordination with Legal department. Annual retention compliance review.',
+  1179→    evidenceRequirements: [
+  1180→      'Retention schedule',
+  1181→      'Archive system configuration',
+  1182→      'Retrieval capability demo',
+  1183→      'Disposal certificates',
+  1184→      'Legal hold procedure',
+  1185→      'Compliance review records'
+  1186→    ],
+  1187→    testingProcedures: 'Test retrieval of archived record. Verify disposal certificate existence. Check legal hold process. Review retention compliance.',
+  1188→    reportingDeadline: 'Per schedule (varies by record type)'
+  1189→  },
+  1190→  {
+  1191→    controlId: 'ARTP-RD-005',
+  1192→    controlRef: 'JORT-2023-45-Art-44',
+  1193→    name: 'Security Awareness Training Records',
+  1194→    description: 'Maintain comprehensive records of security awareness training completion for all employees and contractors, demonstrating compliance with ARTP training requirements.',
+  1195→    category: 'REPORTING_COMPLIANCE',
+  1196→    family: 'Training Records',
+  1197→    criticality: ControlCriticality.MEDIUM,
+  1198→    priority: 3,
+  1199→    requirements: 'Training completion records for all personnel. Curriculum content documentation. Assessment scores (where applicable). Refresher training schedule (annual). Role-based specialized training records. Contractor training verification. Completion rate reporting.',
+  1200→    implementationGuidance: 'Learning Management System (LMS) integration. Automated enrollment and reminders. Completion tracking dashboard. Manager visibility into team completion. Export capability for audit. Annual training needs assessment.',
+  1201→    evidenceRequirements: [
+  1202→      'LMS configuration',
+  1203→      'Training curriculum outline',
+  1204→      'Completion reports (aggregate)',
+  1205→      'Assessment pass rates',
+  1206→      'Specialized training list',
+  1207→      'Contractor verification process'
+  1208→    ],
+  1209→    testingProcedures: 'Verify LMS data accuracy. Check completion rate calculation. Test export functionality. Review curriculum currency.',
+  1210→    reportingDeadline: 'Tracking: Continuous | Annual training: Per employee anniversary'
+  1211→  },
+  1212→  {
+  1213→    controlId: 'ARTP-RD-006',
+  1214→    controlRef: 'JORT-2023-45-Art-45',
+  1215→    name: 'Continuous Improvement Documentation',
+  1216→    description: 'Document security improvements, lessons learned, and optimization initiatives to demonstrate mature security program evolution to ARTP.',
+  1217→    category: 'REPORTING_COMPLIANCE',
+  1218→    family: 'Improvement Tracking',
+  1219→    criticality: ControlCriticality.LOW,
+  1220→    priority: 4,
+  1221→    requirements: 'Security improvement roadmap. Initiative tracking with status. Lessons learned repository. Industry benchmarking participation. Best practice adoption log. maturity model assessments (annual). Investment justification for security projects.',
+  1222→    implementationGuidance: 'Project portfolio for security initiatives. Lessons learned database (post-incident, post-exercise). Participation in industry forums (GSMA, FTSA-CFI). Maturity assessment using CMMI or custom model. Business case templates for security investments.',
+  1223→    evidenceRequirements: [
+  1224→      'Improvement roadmap',
+  1225→      'Initiative tracker',
+  1226→      'Lessons learned entries',
+  1227→      'Forum participation records',
+  1228→      'Maturity assessment results',
+  1229→      'Business case examples'
+  1230→    ],
+  1231→    testingProcedures: 'Verify initiative tracking currency. Review lessons learned quality. Check maturity assessment recency. Validate roadmap alignment with strategy.',
+  1232→    reportingDeadline: 'Roadmap: Annual refresh | Tracking: Continuous'
+  1233→  }
+  1234→];
+  1235→
+  1236→// Total: 50 ARTP controls across 8 domains
+  1237→
+  1238→// Helper functions
+  1239→export function getArtpControlById(controlId: string): ArtpControlDefinition | undefined {
+  1240→  return ARTP_CONTROLS.find(c => c.controlId === controlId);
+  1241→}
+  1242→
+  1243→export function getArtpControlsByCategory(category: string): ArtpControlDefinition[] {
+  1244→  return ARTP_CONTROLS.filter(c => c.category === category);
+  1245→}
+  1246→
+  1247→export function getArtpControlsByCriticality(criticality: ControlCriticality): ArtpControlDefinition[] {
+  1248→  return ARTP_CONTROLS.filter(c => c.criticality === criticality);
+  1249→}
+  1250→
+  1251→export function getArtpControlCount(): number {
+  1252→  return ARTP_CONTROLS.length;
+  1253→}
+  1254→
+  1255→export function getArtpCategories(): string[] {
+  1256→  return [...new Set(ARTP_CONTROLS.map(c => c.category))];
+  1257→}
+  1258→

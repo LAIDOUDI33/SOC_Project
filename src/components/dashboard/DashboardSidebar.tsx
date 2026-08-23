@@ -48,7 +48,7 @@ const StatusBadge = ({ status }: { status: Module['status'] }) => {
   )
 }
 
-const PhaseBadge = ({ phase }: { phase: number }) => (
+export const PhaseBadge = ({ phase }: { phase: number }) => (
   <span className="px-2 py-0.5 rounded text-xs bg-cyan-500/20 text-cyan-400 border border-cyan-500/30">
     Phase {phase}
   </span>

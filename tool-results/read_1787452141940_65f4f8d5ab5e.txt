@@ -1,0 +1,823 @@
+     1→/**
+     2→ * Djezzy National SOC Platform - Redis-Backed Rate Limit Store
+     3→ * 
+     4→ * Production-ready rate limiting store using Redis for:
+     5→ * - Multi-instance deployment support
+     6→ * - Distributed rate limiting
+     7→ * - Atomic operations for accuracy
+     8→ * - Multiple algorithm implementations
+     9→ * - Batch operations for performance
+    10→ * 
+    11→ * Supported Algorithms:
+    12→ * - Sliding Window Log: Accurate, uses more memory
+    13→ * - Fixed Window Counter: Simple, allows bursts at boundaries
+    14→ * - Token Bucket: Good for bursty traffic
+    15→ * 
+    16→ * ANRT Compliance:
+    17→ * - All rate limit data stored within Algeria
+    18→ * - Automatic data expiration (TTL)
+    19→ * - Audit logging of violations
+    20→ * 
+    21→ * @module lib/cache/rate-limit-store
+    22→ * @version 2.0.0
+    23→ */
+    24→
+    25→import { getRedis, safeRedisCommand, redisClient } from './redis-client';
+    26→import { Redis } from 'ioredis';
+    27→import crypto from 'crypto';
+    28→
+    29→// ============================================================================
+    30→// Types and Interfaces
+    31→// ============================================================================
+    32→
+    33→export type RateLimitAlgorithm = 'sliding-window' | 'fixed-window' | 'token-bucket';
+    34→
+    35→export interface RateLimitStoreOptions {
+    36→  /** Maximum requests allowed */
+    37→  points: number;
+    38→  /** Window duration in seconds */
+    39→  windowSeconds: number;
+    40→  /** Algorithm to use (default: sliding-window) */
+    41→  algorithm?: RateLimitAlgorithm;
+    42→  /** Key prefix for this limiter (default: 'rl') */
+    43→  prefix?: string;
+    44→  /** Whether to block on first violation */
+    45→  blockDuration?: number; // seconds, 0 = no block
+    46→}
+    47→
+    48→export interface RateLimitCheckResult {
+    49→  /** Whether request is allowed */
+    50→  allowed: boolean;
+    51→  /** Remaining requests in current window */
+    52→  remaining: number;
+    53→  /** Total limit */
+    54→  limit: number;
+    55→  /** Current count in window */
+    56→  current: number;
+    57→  /** When limit resets (Unix timestamp ms) */
+    58→  resetTimeMs: number;
+    59→  /** Time until retry if blocked (ms) */
+    60→  retryAfterMs?: number;
+    61→  /** Reason for denial */
+    62→  reason?: string;
+    63→  /** Algorithm used */
+    64→  algorithm: RateLimitAlgorithm;
+    65→}
+    66→
+    67→export interface BatchRateLimitEntry {
+    68→  /** Unique key identifier */
+    69→  key: string;
+    70→  /** Options for this entry (uses defaults if not provided) */
+    71→  options?: Partial<RateLimitStoreOptions>;
+    72→}
+    73→
+    74→export interface BatchRateLimitResult {
+    75→  results: Map<string, RateLimitCheckResult>;
+    76→  /** All entries allowed? */
+    77→  allAllowed: boolean;
+    78→  /** Timestamp of batch check */
+    79→  checkedAt: Date;
+    80→}
+    81→
+    82→export interface RateLimitStats {
+    83→  /** Total keys currently being tracked */
+    84→  totalKeys: number;
+    85→  /** Keys currently at or over limit */
+    86→  limitedKeys: number;
+    87→  /** Memory usage estimate (bytes) */
+    88→  estimatedMemoryBytes: number;
+    89→  /** Most active keys (top N) */
+    90→  topKeys: Array<{
+    91→    key: string;
+    92→    count: number;
+    93→    lastRequest: Date;
+    94→  }>;
+    95→}
+    96→
+    97→// ============================================================================
+    98→// Default Configuration
+    99→// ============================================================================
+   100→
+   101→const DEFAULT_OPTIONS: Required<Omit<RateLimitStoreOptions, 'blockDuration'>> & { blockDuration: number } = {
+   102→  points: 100,
+   103→  windowSeconds: 60,
+   104→  algorithm: 'sliding-window',
+   105→  prefix: 'rl',
+   106→  blockDuration: 0,
+   107→};
+   108→
+   109→// ============================================================================
+   110→// Lua Scripts (Atomic Operations)
+   111→// ============================================================================
+   112→
+   113→/**
+   114→ * Sliding Window Lua Script
+   115→ * Atomically checks and increments sliding window counter
+   116→ * Uses sorted set with timestamps as scores
+   117→ */
+   118→const SLIDING_WINDOW_SCRIPT = `
+   119→local key = KEYS[1]
+   120→local now = tonumber(ARGV[1])
+   121→local window = tonumber(ARGV[2])
+   122→local maxPoints = tonumber(ARGV[3])
+   123→local requestId = ARGV[4]
+   124→
+   125→-- Remove old entries outside window
+   126→local windowStart = now - (window * 1000)
+   127→redis.call('ZREMRANGEBYSCORE', key, 0, windowStart)
+   128→
+   129→-- Count current entries in window
+   130→local current = redis.call('ZCARD', key)
+   131→
+   132→if current < maxPoints then
+   133→  -- Add new entry
+   134→  redis.call('ZADD', key, now, requestId)
+   135→  redis.call('EXPIRE', key, window + 1)
+   136→  return {0, current + 1, maxPoints - current - 1}
+   137→else
+   138→  -- Get oldest entry time for retry-after calculation
+   139→  local oldest = redis.call('ZRANGE', key, 0, 0, 'WITHSCORES')
+   140→  local oldestTime = #oldest > 1 and tonumber(oldest[2]) or now
+   141→  local retryAfter = math.ceil((oldestTime + (window * 1000) - now) / 1000) * 1000
+   142→  return {1, current, 0, retryAfter}
+   143→end
+   144→`;
+   145→
+   146→/**
+   147→ * Fixed Window Lua Script
+   148→ * Atomically checks and increments fixed window counter
+   149→ */
+   150→const FIXED_WINDOW_SCRIPT = `
+   151→local key = KEYS[1]
+   152→local window = tonumber(ARGV[1])
+   153→local maxPoints = tonumber(ARGV[2])
+   154→local blockDuration = tonumber(ARGV[3])
+   155→
+   156→-- Check if blocked
+   157→local blockKey = key .. ':blocked'
+   158→local blockedUntil = redis.call('GET', blockKey)
+   159→if blockedUntil then
+   160→  local now = tonumber(ARGV[4]) or 0
+   161→  local blockedUntilNum = tonumber(blockedUntil)
+   162→  if blockedUntilNum and now < blockedUntilNum then
+   163→    return {2, maxPoints, 0, blockedUntilNum - now}
+   164→  end
+   165→  redis.call('DEL', blockKey)
+   166→end
+   167→
+   168→-- Increment counter
+   169→local current = redis.call('INCR', key)
+   170→
+   171→-- Set expiry on first request
+   172→if current == 1 then
+   173→  redis.call('EXPIRE', key, window)
+   174→end
+   175→
+   176→if current <= maxPoints then
+   177→  local ttl = redis.call('TTL', key)
+   178→  return {0, current, maxPoints - current, (ttl > 0 and ttl or window) * 1000}
+   179→else
+   180→  -- Apply block if configured
+   181→  if blockDuration > 0 then
+   182→    local now = tonumber(ARGV[4]) or 0
+   183→    redis.call('SET', blockKey, now + (blockDuration * 1000), 'EX', blockDuration)
+   184→    return {3, current, 0, blockDuration * 1000}
+   185→  end
+   186→  local ttl = redis.call('TTL', key)
+   187→  return {1, current, 0, (ttl > 0 and ttl or window) * 1000}
+   188→end
+   189→`;
+   190→
+   191→/**
+   192→ * Token Bucket Lua Script
+   193→ * Atomically manages token bucket state
+   194→ */
+   195→const TOKEN_BUCKET_SCRIPT = `
+   196→local key = KEYS[1]
+   197→local now = tonumber(ARGV[1])
+   198→local window = tonumber(ARGV[2])
+   199→local maxTokens = tonumber(ARGV[3])
+   200→
+   201→-- Get current state
+   202→local tokens = tonumber(redis.call('HGET', key, 'tokens') or maxTokens)
+   203→local lastRefill = tonumber(redis.call('HGET', key, 'last_refill') or now)
+   204→
+   205→-- Calculate tokens to add based on elapsed time
+   206→local elapsed = (now - lastRefill) / 1000
+   207→local refillRate = maxTokens / window
+   208→local tokensToAdd = elapsed * refillRate
+   209→
+   210→tokens = math.min(maxTokens, tokens + tokensToAdd)
+   211→lastRefill = now
+   212→
+   213→if tokens >= 1 then
+   214→  tokens = tokens - 1
+   215→  redis.call('HMSET', key, 'tokens', tokens, 'last_refill', lastRefill)
+   216→  redis.call('EXPIRE', key, window * 2)
+   217→  
+   218→  local timeToRefill = (maxTokens - tokens) / refillRate * 1000
+   219→  return {0, math.ceil(maxTokens - tokens), math.floor(tokens), timeToRefill}
+   220→else
+   221→  redis.call('HMSET', key, 'tokens', tokens, 'last_refill', lastRefill)
+   222→  redis.call('EXPIRE', key, window * 2)
+   223→  
+   224→  local timeToOneToken = (1 - tokens) / refillRate * 1000
+   225→  return {1, 0, math.floor(tokens), timeToOneToken}
+   226→end
+   227→`;
+   228→
+   229→// ============================================================================
+   230→// Rate Limit Store Class
+   231→// ============================================================================
+   232→
+   233→/**
+   234→ * Redis-backed rate limiting store.
+   235→ * Thread-safe, atomic operations using Lua scripts.
+   236→ * 
+   237→ * @example
+   238→ * ```typescript
+   239→ * import { RateLimitStore } from '@/lib/cache/rate-limit-store';
+   240→ * 
+   241→ * const store = new RateLimitStore({ points: 100, windowSeconds: 60 });
+   242→ * 
+   243→ * // Check a single key
+   244→ * const result = await store.check('user:123');
+   245→ * if (!result.allowed) {
+   246→ *   console.log(`Rate limited. Retry after ${result.retryAfterMs}ms`);
+   247→ * }
+   248→ * ```
+   249→ */
+   250→export class RateLimitStore {
+   251→  private options: Required<RateLimitStoreOptions>;
+   252→  private luaScripts: {
+   253→    slidingWindow: string;
+   254→    fixedWindow: string;
+   255→    tokenBucket: string;
+   256→  };
+   257→
+   258→  constructor(options: Partial<RateLimitStoreOptions> = {}) {
+   259→    this.options = {
+   260→      ...DEFAULT_OPTIONS,
+   261→      ...options,
+   262→    };
+   263→    
+   264→    this.luaScripts = {
+   265→      slidingWindow: SLIDING_WINDOW_SCRIPT,
+   266→      fixedWindow: FIXED_WINDOW_SCRIPT,
+   267→      tokenBucket: TOKEN_BUCKET_SCRIPT,
+   268→    };
+   269→  }
+   270→
+   271→  /**
+   272→   * Check rate limit for a key
+   273→   */
+   274→  async check(key: string): Promise<RateLimitCheckResult> {
+   275→    const client = await getRedis();
+   276→    
+   277→    if (!client || client instanceof (require('ioredis').Cluster)) {
+   278→      // Fallback to non-atomic implementation for cluster or unavailable Redis
+   279→      return this.fallbackCheck(key);
+   280→    }
+   281→
+   282→    const fullKey = `${this.options.prefix}:${key}`;
+   283→    const now = Date.now();
+   284→    const requestId = `${now}-${crypto.randomBytes(4).toString('hex')}`;
+   285→
+   286→    try {
+   287→      switch (this.options.algorithm) {
+   288→        case 'sliding-window':
+   289→          return await this.executeSlidingWindow(client, fullKey, now, requestId);
+   290→        case 'fixed-window':
+   291→          return await this.executeFixedWindow(client, fullKey, now);
+   292→        case 'token-bucket':
+   293→          return await this.executeTokenBucket(client, fullKey, now);
+   294→        default:
+   295→          throw new Error(`Unknown algorithm: ${this.options.algorithm}`);
+   296→      }
+   297→    } catch (error) {
+   298→      console.error('[RateLimitStore] Error checking rate limit:', error);
+   299→      // Return allow on error (fail-open)
+   300→      return {
+   301→        allowed: true,
+   302→        remaining: this.options.points,
+   303→        limit: this.options.points,
+   304→        current: 0,
+   305→        resetTimeMs: now + (this.options.windowSeconds * 1000),
+   306→        algorithm: this.options.algorithm,
+   307→      };
+   308→    }
+   309→  }
+   310→
+   311→  /**
+   312→   * Check multiple keys in batch (more efficient than individual calls)
+   313→   */
+   314→  async batchCheck(entries: BatchRateLimitEntry[]): Promise<BatchRateLimitResult> {
+   315→    const results = new Map<string, RateLimitCheckResult>();
+   316→    let allAllowed = true;
+   317→
+   318→    // Execute all checks concurrently
+   319→    const promises = entries.map(async (entry) => {
+   320→      const options = entry.options ? { ...this.options, ...entry.options } : this.options;
+   321→      const store = new RateLimitStore(options);
+   322→      const result = await store.check(entry.key);
+   323→      return { key: entry.key, result };
+   324→    });
+   325→
+   326→    const settledResults = await Promise.allSettled(promises);
+   327→
+   328→    for (const settled of settledResults) {
+   329→      if (settled.status === 'fulfilled') {
+   330→        results.set(settled.value.key, settled.value.result);
+   331→        if (!settled.value.result.allowed) {
+   332→          allAllowed = false;
+   333→        }
+   334→      } else {
+   335→        // On error, allow the request
+   336→        results.set(
+   337→          entries[settledResults.indexOf(settled)]?.key || 'unknown',
+   338→          {
+   339→            allowed: true,
+   340→            remaining: this.options.points,
+   341→            limit: this.options.points,
+   342→            current: 0,
+   343→            resetTimeMs: Date.now() + (this.options.windowSeconds * 1000),
+   344→            algorithm: this.options.algorithm,
+   345→            reason: 'Error checking rate limit',
+   346→          }
+   347→        );
+   348→      }
+   349→    }
+   350→
+   351→    return {
+   352→      results,
+   353→      allAllowed,
+   354→      checkedAt: new Date(),
+   355→    };
+   356→  }
+   357→
+   358→  /**
+   359→   * Reset rate limit for a specific key
+   360→   */
+   361→  async reset(key: string): Promise<boolean> {
+   362→    return safeRedisCommand(async (client: Redis) => {
+   363→      const fullKey = `${this.options.prefix}:${key}`;
+   364→      
+   365→      // Delete main key and any block key
+   366→      await client.del(fullKey, `${fullKey}:blocked`);
+   367→      return true;
+   368→    }, false);
+   369→  }
+   370→
+   371→  /**
+   372→   * Get current status without incrementing
+   373→   */
+   374→  async getStatus(key: string): Promise<Omit<RateLimitCheckResult, 'allowed'>> {
+   375→    const client = await getRedis();
+   376→    
+   377→    if (!client) {
+   378→      return {
+   379→        remaining: this.options.points,
+   380→        limit: this.options.points,
+   381→        current: 0,
+   382→        resetTimeMs: Date.now() + (this.options.windowSeconds * 1000),
+   383→        algorithm: this.options.algorithm,
+   384→      };
+   385→    }
+   386→
+   387→    const fullKey = `${this.options.prefix}:${key}`;
+   388→    const now = Date.now();
+   389→
+   390→    try {
+   391→      switch (this.options.algorithm) {
+   392→        case 'sliding-window': {
+   393→          const windowStart = now - (this.options.windowSeconds * 1000);
+   394→          const members = await (client as Redis).zrangebyscore(fullKey, windowStart, Infinity);
+   395→          const current = members.length;
+   396→          
+   397→          return {
+   398→            remaining: Math.max(0, this.options.points - current),
+   399→            limit: this.options.points,
+   400→            current,
+   401→            resetTimeMs: now + (this.options.windowSeconds * 1000),
+   402→            algorithm: this.options.algorithm,
+   403→          };
+   404→        }
+   405→        
+   406→        case 'fixed-window': {
+   407→          const ttl = await (client as Redis).ttl(fullKey);
+   408→          const currentStr = await (client as Redis).get(fullKey);
+   409→          const current = parseInt(currentStr || '0', 10);
+   410→          
+   411→          return {
+   412→            remaining: Math.max(0, this.options.points - current),
+   413→            limit: this.options.points,
+   414→            current,
+   415→            resetTimeMs: ttl > 0 ? Date.now() + (ttl * 1000) : 0,
+   416→            algorithm: this.options.algorithm,
+   417→          };
+   418→        }
+   419→        
+   420→        case 'token-bucket': {
+   421→          const hashData = await (client as Redis).hgetall(fullKey);
+   422→          const tokens = parseFloat(hashData.tokens || this.options.points.toString());
+   423→          
+   424→          return {
+   425→            remaining: Math.floor(tokens),
+   426→            limit: this.options.points,
+   427→            current: Math.ceil(this.options.points - tokens),
+   428→            resetTimeMs: now + ((this.options.points - tokens) / (this.options.points / this.options.windowSeconds) * 1000),
+   429→            algorithm: this.options.algorithm,
+   430→          };
+   431→        }
+   432→        
+   433→        default:
+   434→          throw new Error(`Unknown algorithm: ${this.options.algorithm}`);
+   435→      }
+   436→    } catch (error) {
+   437→      console.error('[RateLimitStore] Error getting status:', error);
+   438→      return {
+   439→        remaining: this.options.points,
+   440→        limit: this.options.points,
+   441→        current: 0,
+   442→        resetTimeMs: now + (this.options.windowSeconds * 1000),
+   443→        algorithm: this.options.algorithm,
+   444→      };
+   445→    }
+   446→  }
+   447→
+   448→  /**
+   449→   * Get statistics about rate limiting
+   450→   */
+   451→  async getStats(pattern?: string): Promise<RateLimitStats> {
+   452→    return safeRedisCommand(async (client: Redis) => {
+   453→      const searchPattern = pattern || `${this.options.prefix}:*`;
+   454→      const keys = await client.keys(searchPattern);
+   455→      
+   456→      let totalKeys = 0;
+   457→      let limitedKeys = 0;
+   458→      let estimatedMemory = 0;
+   459→      const topKeys: RateLimitStats['topKeys'] = [];
+   460→
+   461→      // Process keys in batches to avoid blocking
+   462→      const batchSize = 100;
+   463→      for (let i = 0; i < keys.length; i += batchSize) {
+   464→        const batch = keys.slice(i, i + batchSize);
+   465→        
+   466→        // Use pipeline for efficiency
+   467→        const pipeline = client.pipeline();
+   468→        for (const key of batch) {
+   469→          switch (this.options.algorithm) {
+   470→            case 'sliding-window':
+   471→              pipeline.zcard(key);
+   472→              break;
+   473→            case 'fixed-window':
+   474→              pipeline.get(key);
+   475→              break;
+   476→            case 'token-bucket':
+   477→              pipeline.hget(key, 'tokens');
+   478→              break;
+   479→          }
+   480→          pipeline.debug_object(key);
+   481→        }
+   482→        
+   483→        const results = await pipeline.exec();
+   484→        
+   485→        for (let j = 0; j < batch.length; j++) {
+   486→          const keyIndex = j * 2;
+   487→          const memIndex = j * 2 + 1;
+   488→          
+   489→          if (results && results[keyIndex] && !results[keyIndex][0]) {
+   490→            const value = results[keyIndex][1];
+   491→            const count = typeof value === 'number' ? value : parseInt(value || '0', 10);
+   492→            
+   493→            totalKeys++;
+   494→            if (count >= this.options.points) {
+   495→              limitedKeys++;
+   496→            }
+   497→            
+   498→            // Track top keys
+   499→            if (topKeys.length < 10 || count > (topKeys[topKeys.length - 1]?.count || 0)) {
+   500→              topKeys.push({
+   501→                key: batch[j].replace(`${this.options.prefix}:`, ''),
+   502→                count,
+   503→                lastRequest: new Date(),
+   504→              });
+   505→              topKeys.sort((a, b) => b.count - a.count);
+   506→              if (topKeys.length > 10) topKeys.pop();
+   507→            }
+   508→          }
+   509→          
+   510→          // Memory estimation from debug object
+   511→          if (results && results[memIndex] && !results[memIndex][0]) {
+   512→            const debugInfo = results[memIndex][1];
+   513→            if (typeof debugInfo === 'string' && debugInfo.includes('serializedlength')) {
+   514→              const match = debugInfo.match(/serializedlength:(\d+)/);
+   515→              if (match) {
+   516→                estimatedMemory += parseInt(match[1], 10);
+   517→              }
+   518→            }
+   519→          }
+   520→        }
+   521→      }
+   522→
+   523→      return {
+   524→        totalKeys,
+   525→        limitedKeys,
+   526→        estimatedMemoryBytes: estimatedMemory,
+   527→        topKeys,
+   528→      };
+   529→    }, {
+   530→      totalKeys: 0,
+   531→      limitedKeys: 0,
+   532→      estimatedMemoryBytes: 0,
+   533→      topKeys: [],
+   534→    });
+   535→  }
+   536→
+   537→  /**
+   538→   * Clean up expired entries
+   539→   */
+   540→  async cleanup(): Promise<number> {
+   541→    return safeRedisCommand(async (client: Redis) => {
+   542→      // Redis auto-expires keys with TTL, but we can force cleanup of any orphaned data
+   543→      const pattern = `${this.options.prefix}:*:blocked`;
+   544→      const blockedKeys = await client.keys(pattern);
+   545→      
+   546→      let cleaned = 0;
+   547→      for (const key of blockedKeys) {
+   548→        const mainKey = key.replace(':blocked', '');
+   549→        const exists = await client.exists(mainKey);
+   550→        if (!exists) {
+   551→          await client.del(key);
+   552→          cleaned++;
+   553→        }
+   554→      }
+   555→      
+   556→      return cleaned;
+   557→    }, 0);
+   558→  }
+   559→
+   560→  // ============================================================================
+   561→  // Private Methods - Algorithm Implementations
+   562→  // ============================================================================
+   563→
+   564→  private async executeSlidingWindow(
+   565→    client: Redis,
+   566→    key: string,
+   567→    now: number,
+   568→    requestId: string
+   569→  ): Promise<RateLimitCheckResult> {
+   570→    const result = await client.eval(
+   571→      this.luaScripts.slidingWindow,
+   572→      1,
+   573→      key,
+   574→      now.toString(),
+   575→      this.options.windowSeconds.toString(),
+   576→      this.options.points.toString(),
+   577→      requestId
+   578→    ) as number[];
+   579→
+   580→    const [allowed, current, remaining, retryAfter] = result;
+   581→
+   582→    if (allowed === 0) {
+   583→      return {
+   584→        allowed: true,
+   585→        remaining: remaining as number,
+   586→        limit: this.options.points,
+   587→        current: current as number,
+   588→        resetTimeMs: now + (this.options.windowSeconds * 1000),
+   589→        algorithm: 'sliding-window',
+   590→      };
+   591→    } else {
+   592→      const result: RateLimitCheckResult = {
+   593→        allowed: false,
+   594→        remaining: 0,
+   595→        limit: this.options.points,
+   596→        current: current as number,
+   597→        resetTimeMs: now + (retryAfter as number || this.options.windowSeconds * 1000),
+   598→        retryAfterMs: retryAfter as number || undefined,
+   599→        reason: 'Sliding window limit exceeded',
+   600→        algorithm: 'sliding-window',
+   601→      };
+   602→
+   603→      // Apply block if configured
+   604→      if (this.options.blockDuration > 0) {
+   605→        await this.applyBlock(client, key, this.options.blockDuration);
+   606→      }
+   607→
+   608→      return result;
+   609→    }
+   610→  }
+   611→
+   612→  private async executeFixedWindow(
+   613→    client: Redis,
+   614→    key: string,
+   615→    now: number
+   616→  ): Promise<RateLimitCheckResult> {
+   617→    const result = await client.eval(
+   618→      this.luaScripts.fixedWindow,
+   619→      1,
+   620→      key,
+   621→      this.options.windowSeconds.toString(),
+   622→      this.options.points.toString(),
+   623→      this.options.blockDuration.toString(),
+   624→      now.toString()
+   625→    ) as number[];
+   626→
+   627→    const [status, current, remaining, resetOrRetry] = result;
+   628→
+   629→    switch (status) {
+   630→      case 0: // Allowed
+   631→        return {
+   632→          allowed: true,
+   633→          remaining: remaining as number,
+   634→          limit: this.options.points,
+   635→          current: current as number,
+   636→          resetTimeMs: now + (resetOrRetry as number),
+   637→          algorithm: 'fixed-window',
+   638→        };
+   639→      
+   640→      case 1: // Over limit
+   641→        return {
+   642→          allowed: false,
+   643→          remaining: 0,
+   644→          limit: this.options.points,
+   645→          current: current as number,
+   646→          resetTimeMs: now + (resetOrRetry as number),
+   647→          retryAfterMs: resetOrRetry as number,
+   648→          reason: 'Fixed window limit exceeded',
+   649→          algorithm: 'fixed-window',
+   650→        };
+   651→      
+   652→      case 2: // Blocked
+   653→        return {
+   654→          allowed: false,
+   655→          remaining: 0,
+   656→          limit: this.options.points,
+   657→          current: this.options.points,
+   658→          resetTimeMs: now + (resetOrRetry as number),
+   659→          retryAfterMs: resetOrRetry as number,
+   660→          reason: 'Temporarily blocked due to repeated violations',
+   661→          algorithm: 'fixed-window',
+   662→        };
+   663→      
+   664→      case 3: // Just blocked
+   665→        return {
+   666→          allowed: false,
+   667→          remaining: 0,
+   668→          limit: this.options.points,
+   669→          current: current as number,
+   670→          resetTimeMs: now + (resetOrRetry as number),
+   671→          retryAfterMs: resetOrRetry as number,
+   672→          reason: 'Blocked due to violation',
+   673→          algorithm: 'fixed-window',
+   674→        };
+   675→      
+   676→      default:
+   677→        throw new Error(`Unexpected fixed window status: ${status}`);
+   678→    }
+   679→  }
+   680→
+   681→  private async executeTokenBucket(
+   682→    client: Redis,
+   683→    key: string,
+   684→    now: number
+   685→  ): Promise<RateLimitCheckResult> {
+   686→    const result = await client.eval(
+   687→      this.luaScripts.tokenBucket,
+   688→      1,
+   689→      key,
+   690→      now.toString(),
+   691→      this.options.windowSeconds.toString(),
+   692→      this.options.points.toString()
+   693→    ) as number[];
+   694→
+   695→    const [allowed, used, remaining, retryAfter] = result;
+   696→
+   697→    if (allowed === 0) {
+   698→      return {
+   699→        allowed: true,
+   700→        remaining: remaining as number,
+   701→        limit: this.options.points,
+   702→        current: used as number,
+   703→        resetTimeMs: now + (retryAfter as number || this.options.windowSeconds * 1000),
+   704→        algorithm: 'token-bucket',
+   705→      };
+   706→    } else {
+   707→      return {
+   708→        allowed: false,
+   709→        remaining: 0,
+   710→        limit: this.options.points,
+   711→        current: used as number,
+   712→        resetTimeMs: now + (retryAfter as number || this.options.windowSeconds * 1000),
+   713→        retryAfterMs: retryAfter as number || undefined,
+   714→        reason: 'Token bucket exhausted',
+   715→        algorithm: 'token-bucket',
+   716→      };
+   717→    }
+   718→  }
+   719→
+   720→  private async applyBlock(client: Redis, key: string, durationSeconds: number): Promise<void> {
+   721→    const blockKey = `${key}:blocked`;
+   722→    const until = Date.now() + (durationSeconds * 1000);
+   723→    await client.set(blockKey, until.toString(), 'EX', durationSeconds);
+   724→  }
+   725→
+   726→  private async fallbackCheck(key: string): Promise<RateLimitCheckResult> {
+   727→    // In-memory fallback when Redis is not available
+   728→    // This is less accurate but allows the application to function
+   729→    
+   730→    const now = Date.now();
+   731→    const windowStart = now - (this.options.windowSeconds * 1000);
+   732→    
+   733→    // Use a simple in-memory approach (not distributed!)
+   734→    const store = (globalThis as Record<string, unknown>).__rateLimitFallbackStore as Map<string, number[]> || 
+   735→                  new Map<string, number[]>();
+   736→    
+   737→    if (!(globalThis as Record<string, unknown>).__rateLimitFallbackStore) {
+   738→      (globalThis as Record<string, unknown>).__rateLimitFallbackStore = store;
+   739→    }
+   740→    
+   741→    const timestamps = store.get(key) || [];
+   742→    const validTimestamps = timestamps.filter(t => t > windowStart);
+   743→    
+   744→    if (validTimestamps.length < this.options.points) {
+   745→      validTimestamps.push(now);
+   746→      store.set(key, validTimestamps);
+   747→      
+   748→      return {
+   749→        allowed: true,
+   750→        remaining: this.options.points - validTimestamps.length,
+   751→        limit: this.options.points,
+   752→        current: validTimestamps.length,
+   753→        resetTimeMs: now + (this.options.windowSeconds * 1000),
+   754→        algorithm: this.options.algorithm,
+   755→        reason: 'Using in-memory fallback (Redis unavailable)',
+   756→      };
+   757→    }
+   758→    
+   759→    return {
+   760→      allowed: false,
+   761→      remaining: 0,
+   762→      limit: this.options.points,
+   763→      current: validTimestamps.length,
+   764→      resetTimeMs: now + (this.options.windowSeconds * 1000),
+   765→      retryAfterMs: this.options.windowSeconds * 1000,
+   766→      reason: 'Rate limited (in-memory fallback)',
+   767→      algorithm: this.options.algorithm,
+   768→    };
+   769→  }
+   770→}
+   771→
+   772→// ============================================================================
+   773→// Pre-configured Store Instances
+   774→// ============================================================================
+   775→
+   776→/** Strict rate limiter for authentication endpoints */
+   777→export const authRateLimitStore = new RateLimitStore({
+   778→  points: 5,
+   779→  windowSeconds: 900, // 15 minutes
+   780→  algorithm: 'fixed-window',
+   781→  prefix: 'rl:auth',
+   782→  blockDuration: 1800, // 30 min block
+   783→});
+   784→
+   785→/** Standard API rate limiter */
+   786→export const apiRateLimitStore = new RateLimitStore({
+   787→  points: 100,
+   788→  windowSeconds: 60,
+   789→  algorithm: 'sliding-window',
+   790→  prefix: 'rl:api',
+   791→});
+   792→
+   793→/** Sensitive operations rate limiter */
+   794→export const sensitiveRateLimitStore = new RateLimitStore({
+   795→  points: 10,
+   796→  windowSeconds: 60,
+   797→  algorithm: 'fixed-window',
+   798→  prefix: 'rl:sensitive',
+   799→  blockDuration: 300,
+   800→});
+   801→
+   802→/** Export/download rate limiter */
+   803→export const exportRateLimitStore = new RateLimitStore({
+   804→  points: 3,
+   805→  windowSeconds: 3600,
+   806→  algorithm: 'fixed-window',
+   807→  prefix: 'rl:export',
+   808→});
+   809→
+   810→/** Streaming/SSE rate limiter */
+   811→export const streamingRateLimitStore = new RateLimitStore({
+   812→  points: 5,
+   813→  windowSeconds: 60,
+   814→  algorithm: 'token-bucket',
+   815→  prefix: 'rl:stream',
+   816→});
+   817→
+   818→// ============================================================================
+   819→// Exports
+   820→// ============================================================================
+   821→
+   822→export default RateLimitStore;
+   823→

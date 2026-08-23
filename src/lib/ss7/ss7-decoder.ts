@@ -45,6 +45,9 @@ import {
   SCTP_CHUNK_NAMES,
 } from './ss7-formats';
 
+// Re-export types for convenience
+export { SS7ProtocolLayer } from './ss7-formats';
+
 // ============================================================
 // DECODER RESULT TYPES
 // ============================================================

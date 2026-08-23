@@ -17,7 +17,7 @@ import {
   checkLDAPHealth,
   getConnectionPool,
 } from '@/lib/auth/ldap';
-import { withAuth, requireAdmin } from '@/lib/auth/middleware';
+import { withAuth, requireAdmin, authenticateRequest } from '@/lib/auth/middleware';
 
 // ============================================================
 // HEALTH CHECK
@@ -103,10 +103,13 @@ async function handleGetUser(username: string | null): Promise<NextResponse> {
   }
 
   // Require authentication and admin role for this endpoint
-  const authResult = await withAuth(requireAdmin)(new NextRequest('http://localhost/api/auth/ldap?user=' + username));
+  const authResult = await authenticateRequest(new NextRequest('http://localhost/api/auth/ldap?user=' + username));
   
-  if (authResult.response) {
-    return authResult.response;
+  if (!authResult.authenticated) {
+    return NextResponse.json(
+      { success: false, error: authResult.error || 'Authentication required' },
+      { status: 401 }
+    );
   }
 
   try {
@@ -167,10 +170,13 @@ async function handleGetConfig(): Promise<NextResponse> {
 
 async function handleBulkSync(): Promise<NextResponse> {
   // Require admin role
-  const authResult = await withAuth(requireAdmin)(new NextRequest('http://localhost/api/auth/ldap?sync'));
+  const authResult = await authenticateRequest(new NextRequest('http://localhost/api/auth/ldap?sync'));
   
-  if (authResult.response) {
-    return authResult.response;
+  if (!authResult.authenticated) {
+    return NextResponse.json(
+      { success: false, error: authResult.error || 'Authentication required' },
+      { status: 401 }
+    );
   }
 
   try {
@@ -200,10 +206,13 @@ async function handleBulkSync(): Promise<NextResponse> {
 
 async function handleTestAuth(request: NextRequest): Promise<NextResponse> {
   // Requires admin to test other users' auth
-  const authResult = await withAuth(requireAdmin)(request);
+  const authResult = await authenticateRequest(request);
   
-  if (authResult.response) {
-    return authResult.response;
+  if (!authResult.authenticated) {
+    return NextResponse.json(
+      { success: false, error: authResult.error || 'Authentication required' },
+      { status: 401 }
+    );
   }
 
   try {

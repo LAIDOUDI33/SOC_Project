@@ -14,7 +14,7 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 import { decodeSS7Message, SS7ProtocolLayer } from '@/lib/ss7/ss7-decoder';
-import { withAuth } from '@/lib/auth/api-auth';
+import { withAuth, authenticateRequest } from '@/lib/auth/api-auth';
 import { requireAnalyst } from '@/lib/auth/middleware';
 
 // Sample messages database (in production, this would query a real DB)
@@ -211,7 +211,17 @@ function generatePCAPData(messages: any[]): string {
 }
 
 // GET handler (AUTH REQUIRED - Analyst or higher)
-export const GET = withAuth(async (request: NextRequest, user) => {
+export async function GET(request: NextRequest) {
+  // Authenticate request
+  const authResult = await authenticateRequest(request);
+  
+  if (!authResult.success || !authResult.user) {
+    return NextResponse.json(
+      { success: false, error: authResult.error, errorCode: authResult.errorCode },
+      { status: 401 }
+    );
+  }
+  
   try {
     const { searchParams } = new URL(request.url);
     const action = searchParams.get('action');
@@ -252,7 +262,17 @@ export const GET = withAuth(async (request: NextRequest, user) => {
 }
 
 // POST handler (AUTH REQUIRED - Analyst or higher)
-export const POST = withAuth(async (request: NextRequest, user) => {
+export async function POST(request: NextRequest) {
+  // Authenticate request
+  const authResult = await authenticateRequest(request);
+  
+  if (!authResult.success || !authResult.user) {
+    return NextResponse.json(
+      { success: false, error: authResult.error, errorCode: authResult.errorCode },
+      { status: 401 }
+    );
+  }
+  
   try {
     const body = await request.json();
     const { searchParams } = new URL(request.url);
