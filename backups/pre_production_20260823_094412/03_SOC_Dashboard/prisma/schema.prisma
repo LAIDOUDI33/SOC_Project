@@ -1,0 +1,426 @@
+// Prisma Schema for National SOC Dashboard - Algeria
+// Open Source Stack: Wazuh SIEM, TheHive SOAR, MISP TIP
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = "file:./soc.db"
+}
+
+// ==================== USER MANAGEMENT ====================
+
+model User {
+  id            String    @id @default(cuid())
+  email         String    @unique
+  name          String
+  passwordHash  String
+  role          UserRole  @default(ANALYST)
+  avatar        String?
+  department    String?
+  isActive      Boolean   @default(true)
+  lastLoginAt   DateTime?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+  
+  // Relations
+  incidents     Incident[] @relation("AssignedAnalyst")
+  auditLogs     AuditLog[]
+  
+  @@index([email])
+  @@index([role])
+}
+
+enum UserRole {
+  VIEWER       // Read-only access
+  ANALYST      // Standard SOC analyst
+  SUPERVISOR   // Team lead / shift supervisor
+  ADMIN        // Full system administration
+}
+
+// ==================== SECURITY ALERTS ====================
+
+model Alert {
+  id              String        @id @default(cuid())
+  alertId         String        @unique // ALT-2026-00147
+  timestamp       DateTime
+  severity        AlertSeverity
+  status          AlertStatus    @default(NEW)
+  source          String         // Wazuh SIEM, MISP TIP, Suricata, etc.
+  title           String
+  description     String
+  endpoint        String?       // Hostname or IP
+  rawLog          String?       // Original log data
+  category        String?       // Malware, Phishing, DDoS, etc.
+  mitreTactic     String?       // MITRE ATT&CK tactic ID
+  mitreTechnique  String?       // MITRE ATT&CK technique ID
+  
+  // Relations
+  incidentId      String?
+  incident        Incident?     @relation("AlertIncident", fields: [incidentId], references: [id])
+  
+  // Timestamps
+  acknowledgedAt DateTime?
+  resolvedAt      DateTime?
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+  
+  @@index([severity])
+  @@index([status])
+  @@index([timestamp])
+  @@index([source])
+  @@index([incidentId])
+}
+
+enum AlertSeverity {
+  CRITICAL
+  HIGH
+  MEDIUM
+  LOW
+  INFO
+}
+
+enum AlertStatus {
+  NEW
+  ACKNOWLEDGED
+  INVESTIGATING
+  RESOLVED
+  FALSE_POSITIVE
+}
+
+// ==================== INCIDENT MANAGEMENT ====================
+
+model Incident {
+  id              String          @id @default(cuid())
+  incidentId      String          @unique // INC-2026-0023
+  title           String
+  description     String
+  severity        IncidentPriority
+  status          IncidentStatus  @default(OPEN)
+  category        String          // Malware, Unauthorized Access, Data Breach, etc.
+  
+  // Assignment
+  assigneeId      String?
+  assignee        User?           @relation("AssignedAnalyst", fields: [assigneeId], references: [id])
+  
+  // Timeline
+  detectedAt      DateTime
+  containedAt     DateTime?
+  eradicatedAt    DateTime?
+  recoveredAt     DateTime?
+  closedAt        DateTime?
+  
+  // Metrics
+  mttrHours       Float?          // Mean Time To Resolve in hours
+  actionsTaken    Int             @default(0)
+  
+  // Impact Assessment
+  affectedSystems Int             @default(0)
+  dataBreach      Boolean         @default(false)
+  publicImpact    Boolean         @default(false)
+  
+  // Resolution
+  resolution      String?
+  lessonsLearned  String?
+  
+  // Relations
+  alerts          Alert[]         @relation("AlertIncident")
+  
+  // Timestamps
+  createdAt       DateTime        @default(now())
+  updatedAt       DateTime        @updatedAt
+  
+  @@index([status])
+  @@index([severity])
+  @@index([assigneeId])
+}
+
+enum IncidentPriority {
+  P1  // Critical - Immediate response required
+  P2  // High - Response within 1 hour
+  P3  // Medium - Response within 4 hours
+  P4  // Low - Response within 24 hours
+}
+
+enum IncidentStatus {
+  OPEN            // Detected, initial response
+  CONTAINED       // Threat isolated
+  ERADICATED      // Root cause removed
+  RECOVERED       // Systems restored
+  CLOSED          // Post-incident review complete
+}
+
+// ==================== THREAT INTELLIGENCE ====================
+
+model ThreatActor {
+  id              String        @id @default(cuid())
+  name            String        @unique // APT28, Lazarus Group, etc.
+  aliases         String?       // Fancy Bear, etc.
+  country         String?       // Origin country
+  capability      ThreatCapability
+  activityStatus  ThreatActivity @default(ACTIVE)
+  
+  // Targeting
+  targetSectors   String        // JSON array of targeted sectors
+  targetRegions   String?       // JSON array of targeted regions
+  motivation      String?       // Espionage, Financial, Political
+  
+  // Tracking
+  confidence      Int           @default(0) // 0-100
+  lastSeen        DateTime?
+  firstSeen       DateTime      @default(now())
+  
+  // Description
+  description     String?
+  ttps            String?       // MITRE ATT&CK techniques used
+  references      String?       // External links/reports
+  
+  // Relations
+  iocs            IOC[]
+  
+  // Timestamps
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+  
+  @@index([country])
+  @@index([capability])
+  @@index([activityStatus])
+}
+
+enum ThreatCapability {
+  ADVANCED        // APT-level capabilities
+  MODERATE        // Skilled threat group
+  BASIC           // Low sophistication
+}
+
+enum ThreatActivity {
+  ACTIVE
+  DORMANT
+  UNKNOWN
+  DISRUPTED
+}
+
+model IOC {
+  id              String        @id @default(cuid())
+  type            IOCType
+  value           String
+  threatLevel     IOCThreatLevel
+  
+  // Source
+  source          String        // MISP Community, VirusTotal, AlienVault, etc.
+  sourceUrl       String?
+  
+  // Context
+  description     String?
+  tags            String?       // JSON array of tags
+  malwareFamily   String?
+  campaign        String?
+  
+  // Actor Association
+  threatActorId   String?
+  threatActor     ThreatActor?  @relation(fields: [threatActorId], references: [id])
+  
+  // Validity
+  validFrom       DateTime      @default(now())
+  validUntil      DateTime?
+  isExpired       Boolean       @default(false)
+  
+  // Statistics
+  detectionCount  Int           @default(0)
+  lastDetected    DateTime?
+  
+  // Timestamps
+  firstSeen       DateTime      @default(now())
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+  
+  @@index([type])
+  @@index([threatLevel])
+  @@index([value])
+}
+
+enum IOCType {
+  IP
+  DOMAIN
+  URL
+  HASH_MD5
+  HASH_SHA1
+  HASH_SHA256
+  EMAIL
+  FILENAME
+  REGISTRY_KEY
+}
+
+enum IOCThreatLevel {
+  CRITICAL
+  HIGH
+  MEDIUM
+  LOW
+}
+
+// ==================== SYSTEM HEALTH MONITORING ====================
+
+model SystemComponent {
+  id              String            @id @default(cuid())
+  name            String            @unique // Wazuh SIEM Cluster, TheHive SOAR, etc.
+  type            ComponentType
+  status          ComponentStatus   @default(HEALTHY)
+  
+  // Performance Metrics
+  uptime          Float             @default(99.99) // Percentage
+  cpuUsage        Float             @default(0)    // Percentage
+  memoryUsage     Float             @default(0)    // Percentage
+  diskUsage       Float             @default(0)    // Percentage
+  
+  // Health Checks
+  lastCheck       DateTime          @default(now())
+  responseTimeMs  Int               @default(0)
+  errorRate       Float             @default(0)    // Percentage
+  
+  // Configuration
+  hostname        String?
+  ipAddress       String?
+  port            Int?
+  version         String?
+  
+  // Incidents
+  incidentCount   Int               @default(0)
+  lastIncident    DateTime?
+  
+  // Timestamps
+  createdAt       DateTime          @default(now())
+  updatedAt       DateTime          @updatedAt
+  
+  @@index([type])
+  @@index([status])
+}
+
+enum ComponentType {
+  SIEM            // Security Information & Event Management
+  SOAR            // Security Orchestration & Response
+  EDR             // Endpoint Detection & Response
+  TIP             // Threat Intelligence Platform
+  IDS             // Intrusion Detection System
+  FIREWALL        // Network Firewall
+  PROXY           // Web Proxy/Gateway
+  MAIL_GATEWAY    // Email Security
+  STORAGE         // Database/Storage
+  BACKUP          // Backup System
+}
+
+enum ComponentStatus {
+  HEALTHY
+  DEGRADED
+  DOWN
+  MAINTENANCE
+  UNKNOWN
+}
+
+// ==================== DATA SOURCES (LOG INGESTION) ====================
+
+model DataSource {
+  id              String            @id @default(cuid())
+  name            String            @unique // Firewall Logs, DNS Traffic, AD, etc.
+  type            String            // Palo Alto, BIND, Microsoft AD, Squid, etc.
+  status          DataSourceStatus  @default(CONNECTED)
+  
+  // Ingestion Stats
+  eps             Int               @default(0)    // Events Per Second
+  eventsToday     BigInt            @default(0)
+  eventsTotal     BigInt            @default(0)
+  
+  // Configuration
+  connectionString String?
+  parserType      String?
+  retentionDays   Int               @default(90)
+  
+  // Health
+  lastEvent       DateTime?
+  errorCount      Int               @default(0)
+  lastError       String?
+  errorMessage    String?
+  
+  // Timestamps
+  createdAt       DateTime          @default(now())
+  updatedAt       DateTime          @updatedAt
+  
+  @@index([status])
+  @@index([type])
+}
+
+enum DataSourceStatus {
+  CONNECTED
+  ERROR
+  WARNING
+  DISCONNECTED
+  UNKNOWN
+}
+
+// ==================== AUDIT LOGGING ====================
+
+model AuditLog {
+  id              String        @id @default(cuid())
+  userId          String
+  user           User          @relation(fields: [userId], references: [id])
+  
+  action          String        // CREATE, UPDATE, DELETE, LOGIN, LOGOUT
+  resourceType    String        // Alert, Incident, User, etc.
+  resourceId      String?
+  
+  // Details
+  oldValue        String?       // JSON of previous state
+  newValue        String?       // JSON of new state
+  ipAddress       String?
+  userAgent       String?
+  
+  // Timestamps
+  createdAt       DateTime      @default(now())
+  
+  @@index([userId])
+  @@index([action])
+  @@index([createdAt])
+}
+
+// ==================== METRICS & STATISTICS ====================
+
+model DailyMetric {
+  id              String        @id @default(cuid())
+  date            DateTime      @unique
+  
+  // Alert Metrics
+  totalAlerts     Int           @default(0)
+  criticalAlerts  Int           @default(0)
+  highAlerts      Int           @default(0)
+  mediumAlerts    Int           @default(0)
+  lowAlerts       Int           @default(0)
+  resolvedAlerts  Int           @default(0)
+  
+  // Incident Metrics
+  totalIncidents  Int           @default(0)
+  p1Incidents     Int           @default(0)
+  p2Incidents     Int           @default(0)
+  p3Incidents     Int           @default(0)
+  p4Incidents     Int           @default(0)
+  closedIncidents Int           @default(0)
+  avgMTTR         Float?        // Average MTTR in hours
+  
+  // Processing Metrics
+  avgEPS          Float?        // Average Events Per Second
+  peakEPS         Float?        // Peak EPS
+  totalEvents     BigInt        @default(0)
+  
+  // Threat Intel
+  newIOCs         Int           @default(0)
+  threatsBlocked  Int           @default(0)
+  
+  // Endpoint Coverage
+  endpointsTotal  Int           @default(0)
+  endpointsOnline Int           @default(0)
+  
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+  
+  @@index([date])
+}
