@@ -1,0 +1,694 @@
+     1→'use client';
+     2→
+     3→/**
+     4→ * SS7 Traffic Monitor Component
+     5→ * Djezzy National SOC Platform - SS7 Tools Suite
+     6→ * 
+     7→ * Real-time SS7 traffic visualization:
+     8→ * - Live message rate counter (messages/sec)
+     9→ * - Protocol distribution pie chart (MAP/CAP/ISUP/SCCP)
+    10→ * - Top talkers table (OPC/DPC pairs)
+    11→ * - Geographic traffic map (Algeria wilayas)
+    12→ * - Alert threshold indicators
+    13→ */
+    14→
+    15→import React, { useState, useEffect, useCallback } from 'react';
+    16→import {
+    17→  Activity, AlertTriangle, Radio, Globe, TrendingUp,
+    18→  ArrowUpRight, ArrowDownRight, Clock, Zap, Server,
+    19→  Network, Signal, BarChart3, PieChart as PieChartIcon,
+    20→  MapPin, RefreshCw, Download, Filter, Settings
+    21→} from 'lucide-react';
+    22→import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+    23→import { Badge } from '@/components/ui/badge';
+    24→import { Button } from '@/components/ui/button';
+    25→import { Progress } from '@/components/ui/progress';
+    26→import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+    27→import {
+    28→  Select, SelectContent, SelectItem, SelectTrigger, SelectValue
+    29→} from '@/components/ui/select';
+    30→import {
+    31→  ChartContainer,
+    32→  ChartTooltip,
+    33→  ChartTooltipContent,
+    34→  type ChartConfig
+    35→} from '@/components/ui/chart';
+    36→import {
+    37→  AreaChart,
+    38→  Area,
+    39→  BarChart,
+    40→  Bar,
+    41→  XAxis,
+    42→  YAxis,
+    43→  CartesianGrid,
+    44→  LineChart,
+    45→  Line,
+    46→  PieChart,
+    47→  Pie,
+    48→  Cell,
+    49→  ResponsiveContainer,
+    50→  Legend
+    51→} from 'recharts';
+    52→
+    53→// Types
+    54→interface TrafficData {
+    55→  timestamp: string;
+    56→  mps: number;
+    57→  bytes: number;
+    58→  mapCount: number;
+    59→  capCount: number;
+    60→  isupCount: number;
+    61→  sccpCount: number;
+    62→}
+    63→
+    64→interface TalkerPair {
+    65→  opc: string;
+    66→  dpc: string;
+    67→  count: number;
+    68→  bytes: number;
+    69→  protocols: string[];
+    70→}
+    71→
+    72→interface WilayaTraffic {
+    73→  name: string;
+    74→  code: number;
+    75→  messages: number;
+    76→  subscribers: number;
+    77→  riskScore: number;
+    78→}
+    79→
+    80→// Protocol colors for charts
+    81→const PROTOCOL_COLORS = {
+    82→  MAP: '#3b82f6',
+    83→  CAP: '#ef4444',
+    84→  ISUP: '#06b6d4',
+    85→  SCCP: '#f59e0b',
+    86→  TCAP: '#10b981',
+    87→  M3UA: '#8b5cf6',
+    88→  SCTP: '#f97316',
+    89→};
+    90→
+    91→const chartConfig = {
+    92→  mps: { label: 'Messages/sec', color: '#3b82f6' },
+    93→  bytes: { label: 'Bytes', color: '#10b981' },
+    94→  mapCount: { label: 'MAP', color: PROTOCOL_COLORS.MAP },
+    95→  capCount: { label: 'CAP', color: PROTOCOL_COLORS.CAP },
+    96→  isupCount: { label: 'ISUP', color: PROTOCOL_COLORS.ISUP },
+    97→  sccpCount: { label: 'SCCP', color: PROTOCOL_COLORS.SCCP },
+    98→} satisfies ChartConfig;
+    99→
+   100→// Sample data generators
+   101→function generateTimeSeriesData(points: number = 60): TrafficData[] {
+   102→  const data: TrafficData[] = [];
+   103→  const now = new Date();
+   104→  
+   105→  for (let i = points; i >= 0; i--) {
+   106→    const time = new Date(now.getTime() - i * 60000);
+   107→    const baseMPS = 2500 + Math.sin(i / 10) * 500;
+   108→    const noise = (Math.random() - 0.5) * 400;
+   109→    
+   110→    data.push({
+   111→      timestamp: time.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }),
+   112→      mps: Math.round(Math.max(100, baseMPS + noise)),
+   113→      bytes: Math.round((baseMPS + noise) * 150),
+   114→      mapCount: Math.round((baseMPS + noise) * 0.45),
+   115→      capCount: Math.round((baseMPS + noise) * 0.15),
+   116→      isupCount: Math.round((baseMPS + noise) * 0.25),
+   117→      sccpCount: Math.round((baseMPS + noise) * 0.10),
+   118→    });
+   119→  }
+   120→  
+   121→  return data;
+   122→}
+   123→
+   124→function generateTopTalkers(): TalkerPair[] {
+   125→  return [
+   126→    { opc: '3-001-001', dpc: '3-042-001', count: 15420, bytes: 2340000, protocols: ['MAP'] },
+   127→    { opc: '3-065-001', dpc: '3-001-001', count: 12350, bytes: 1890000, protocols: ['MAP', 'CAP'] },
+   128→    { opc: '3-101-001', dpc: '3-002-001', count: 9870, bytes: 1520000, protocols: ['ISUP'] },
+   129→    { opc: '3-002-001', dpc: '3-065-001', count: 8540, bytes: 1310000, protocols: ['ISUP', 'CAP'] },
+   130→    { opc: '3-042-001', dpc: '3-101-001', count: 7620, bytes: 1170000, protocols: ['MAP'] },
+   131→    { opc: '3-003-001', dpc: '3-042-001', count: 6540, bytes: 990000, protocols: ['MAP'] },
+   132→    { opc: '3-065-002', dpc: '3-003-001', count: 5890, bytes: 890000, protocols: ['SCCP', 'TCAP'] },
+   133→    { opc: '3-102-001', dpc: '3-065-001', count: 4720, bytes: 720000, protocols: ['ISUP'] },
+   134→    { opc: '3-001-002', dpc: '3-042-002', count: 3980, bytes: 610000, protocols: ['MAP'] },
+   135→    { opc: '3-042-002', dpc: '3-101-002', count: 3150, bytes: 480000, protocols: ['CAP'] },
+   136→  ];
+   137→}
+   138→
+   139→function generateWilayaTraffic(): WilayaTraffic[] {
+   140→  return [
+   141→    { name: 'Algiers', code: 16, messages: 45230, subscribers: 1250000, riskScore: 12 },
+   142→    { name: 'Oran', code: 31, messages: 28740, subscribers: 720000, riskScore: 18 },
+   143→    { name: 'Constantine', code: 25, messages: 22450, subscribers: 650000, riskScore: 15 },
+   144→    { name: 'Batna', code: 5, messages: 15670, subscribers: 420000, riskScore: 22 },
+   145→    { name: 'Biskra', code: 7, messages: 12340, subscribers: 380000, riskScore: 28 },
+   146→    { name: 'Tlemcen', code: 13, messages: 11890, subscribers: 350000, riskScore: 14 },
+   147→    { name: 'Sétif', code: 28, messages: 11230, subscribers: 340000, riskScore: 19 },
+   148→    { name: 'Béjaïa', code: 6, messages: 10560, subscribers: 310000, riskScore: 16 },
+   149→    { name: 'Annaba', code: 23, messages: 9870, subscribers: 290000, riskScore: 11 },
+   150→    { name: 'Blida', code: 9, messages: 9430, subscribers: 280000, riskScore: 21 },
+   151→    { name: 'Tizi Ouzou', code: 15, messages: 8920, subscribers: 265000, riskScore: 17 },
+   152→    { name: 'Djelfa', code: 44, messages: 7890, subscribers: 240000, riskScore: 25 },
+   153→  ];
+   154→}
+   155→
+   156→// Main component
+   157→export default function SS7TrafficMonitor() {
+   158→  const [trafficData, setTrafficData] = useState<TrafficData[]>([]);
+   159→  const [currentMPS, setCurrentMPS] = useState<number>(0);
+   160→  const [selectedPeriod, setSelectedPeriod] = useState<string>('1h');
+   161→  const [isLoading, setIsLoading] = useState<boolean>(true);
+   162→  const [lastUpdate, setLastUpdate] = useState<Date>(new Date());
+   163→  const [autoRefresh, setAutoRefresh] = useState<boolean>(true);
+   164→
+   165→  // Initialize data
+   166→  useEffect(() => {
+   167→    setTrafficData(generateTimeSeriesData(60));
+   168→    setIsLoading(false);
+   169→  }, []);
+   170→
+   171→  // Auto-refresh simulation
+   172→  useEffect(() => {
+   173→    if (!autoRefresh) return;
+   174→    
+   175→    const interval = setInterval(() => {
+   176→      setTrafficData(prev => {
+   177→        const newData = [...prev.slice(1)];
+   178→        const lastEntry = prev[prev.length - 1];
+   179→        const baseMPS = lastEntry.mps;
+   180→        const variation = (Math.random() - 0.5) * 200;
+   181→        
+   182→        const newMPS = Math.max(100, baseMPS + variation);
+   183→        setCurrentMPS(newMPS);
+   184→        
+   185→        newData.push({
+   186→          timestamp: new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }),
+   187→          mps: Math.round(newMPS),
+   188→          bytes: Math.round(newMPS * 150),
+   189→          mapCount: Math.round(newMPS * 0.45),
+   190→          capCount: Math.round(newMPS * 0.15),
+   191→          isupCount: Math.round(newMPS * 0.25),
+   192→          sccpCount: Math.round(newMPS * 0.10),
+   193→        });
+   194→        
+   195→        return newData;
+   196→      });
+   197→      
+   198→      setLastUpdate(new Date());
+   199→    }, 5000);
+   200→
+   201→    return () => clearInterval(interval);
+   202→  }, [autoRefresh]);
+   203→
+   204→  const handleRefresh = useCallback(() => {
+   205→    setIsLoading(true);
+   206→    setTimeout(() => {
+   207→      setTrafficData(generateTimeSeriesData(60));
+   208→      setLastUpdate(new Date());
+   209→      setIsLoading(false);
+   210→    }, 500);
+   211→  }, []);
+   212→
+   213→  const topTalkers = generateTopTalkers();
+   214→  const wilayaTraffic = generateWilayaTraffic();
+   215→  
+   216→  // Calculate protocol distribution
+   217→  const latestData = trafficData[trafficData.length - 1];
+   218→  const protocolDistribution = latestData ? [
+   219→    { name: 'MAP', value: latestData.mapCount, color: PROTOCOL_COLORS.MAP },
+   220→    { name: 'ISUP', value: latestData.isupCount, color: PROTOCOL_COLORS.ISUP },
+   221→    { name: 'CAP', value: latestData.capCount, color: PROTOCOL_COLORS.CAP },
+   222→    { name: 'SCCP', value: latestData.sccpCount, color: PROTOCOL_COLORS.SCCP },
+   223→  ] : [];
+   224→
+   225→  // Calculate totals
+   226→  const totalMessages = trafficData.reduce((sum, d) => sum + d.mps, 0);
+   227→  const avgMPS = trafficData.length > 0 ? totalMessages / trafficData.length : 0;
+   228→  const peakMPS = trafficData.reduce((max, d) => Math.max(max, d.mps), 0);
+   229→
+   230→  return (
+   231→    <div className="space-y-6">
+   232→      {/* Header */}
+   233→      <div className="flex items-center justify-between">
+   234→        <div>
+   235→          <h2 className="text-2xl font-bold text-white flex items-center gap-2">
+   236→            <Radio className="w-6 h-6 text-blue-400" />
+   237→            SS7 Traffic Monitor
+   238→          </h2>
+   239→          <p className="text-gray-400 mt-1">Real-time signaling traffic analysis</p>
+   240→        </div>
+   241→        
+   242→        <div className="flex items-center gap-3">
+   243→          <Badge variant="outline" className="text-green-400 border-green-400 animate-pulse">
+   244→            LIVE
+   245→          </Badge>
+   246→          
+   247→          <Select value={selectedPeriod} onValueChange={setSelectedPeriod}>
+   248→            <SelectTrigger className="w-[100px] bg-slate-800 border-slate-600">
+   249→              <SelectValue />
+   250→            </SelectTrigger>
+   251→            <SelectContent>
+   252→              <SelectItem value="15m">15 min</SelectItem>
+   253→              <SelectItem value="1h">1 hour</SelectItem>
+   254→              <SelectItem value="6h">6 hours</SelectItem>
+   255→              <SelectItem value="24h">24 hours</SelectItem>
+   256→            </SelectContent>
+   257→          </Select>
+   258→          
+   259→          <Button 
+   260→            variant="outline" 
+   261→            size="sm" 
+   262→            onClick={() => setAutoRefresh(!autoRefresh)}
+   263→            className={autoRefresh ? 'bg-green-900/30 border-green-600' : ''}
+   264→          >
+   265→            <RefreshCw className={`w-4 h-4 mr-1 ${autoRefresh ? 'animate-spin' : ''}`} />
+   266→            Auto
+   267→          </Button>
+   268→          
+   269→          <Button variant="outline" size="sm" onClick={handleRefresh}>
+   270→            <RefreshCw className="w-4 h-4 mr-1" />
+   271→            Refresh
+   272→          </Button>
+   273→        </div>
+   274→      </div>
+   275→
+   276→      {/* Key Metrics Cards */}
+   277→      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+   278→        <MetricCard
+   279→          title="Current Rate"
+   280→          value={`${currentMPS.toLocaleString()}`}
+   281→          unit="msg/s"
+   282→          icon={<Activity className="w-5 h-5 text-blue-400" />}
+   283→          trend={currentMPS > avgMPS ? 'up' : currentMPS < avgMPS * 0.8 ? 'down' : 'stable'}
+   284→          trendValue={`${((currentMPS / avgMPS - 1) * 100).toFixed(1)}%`}
+   285→        />
+   286→        
+   287→        <MetricCard
+   288→          title="Peak Rate"
+   289→          value={`${peakMPS.toLocaleString()}`}
+   290→          unit="msg/s"
+   291→          icon={<Zap className="w-5 h-5 text-yellow-400" />}
+   292→          trend="stable"
+   293→          trendValue={`Avg: ${avgMPS.toFixed(0)}/s`}
+   294→        />
+   295→        
+   296→        <MetricCard
+   297→          title="Total Messages"
+   298→          value={(totalMessages * 60).toLocaleString()}
+   299→          unit="last hr"
+   300→          icon={<BarChart3 className="w-5 h-5 text-green-400" />}
+   301→          trend="stable"
+   302→        />
+   303→        
+   304→        <MetricCard
+   305→          title="Active Routes"
+   306→          value={topTalkers.length.toString()}
+   307→          unit="OPC/DPC pairs"
+   308→          icon={<Network className="w-5 h-5 text-purple-400" />}
+   309→          trend="stable"
+   310→        />
+   311→      </div>
+   312→
+   313→      {/* Main Charts Row */}
+   314→      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+   315→        {/* Traffic Time Series */}
+   316→        <Card className="lg:col-span-2 bg-slate-900/50 border-slate-700">
+   317→          <CardHeader className="pb-2">
+   318→            <CardTitle className="text-white text-lg flex items-center gap-2">
+   319→              <TrendingUp className="w-5 h-5 text-blue-400" />
+   320→              Message Rate Over Time
+   321→            </CardTitle>
+   322→            <CardDescription>Messages per second (last 60 minutes)</CardDescription>
+   323→          </CardHeader>
+   324→          <CardContent>
+   325→            <ChartContainer config={chartConfig} className="h-[300px] w-full">
+   326→              <AreaChart data={trafficData}>
+   327→                <CartesianGrid strokeDasharray="3 3" stroke="#334155" />
+   328→                <XAxis 
+   329→                  dataKey="timestamp" 
+   330→                  tick={{ fill: '#94a3b8', fontSize: 11 }}
+   331→                  interval="preserveStartEnd"
+   332→                />
+   333→                <YAxis 
+   334→                  tick={{ fill: '#94a3b8', fontSize: 11 }}
+   335→                  domain={['dataMin - 100', 'dataMax + 100']}
+   336→                />
+   337→                <ChartTooltip content={<ChartTooltipContent />} />
+   338→                <Area
+   339→                  type="monotone"
+   340→                  dataKey="mps"
+   341→                  stroke="#3b82f6"
+   342→                  fill="#3b82f6"
+   343→                  fillOpacity={0.2}
+   344→                  strokeWidth={2}
+   345→                />
+   346→              </AreaChart>
+   347→            </ChartContainer>
+   348→          </CardContent>
+   349→        </Card>
+   350→
+   351→        {/* Protocol Distribution */}
+   352→        <Card className="bg-slate-900/50 border-slate-700">
+   353→          <CardHeader className="pb-2">
+   354→            <CardTitle className="text-white text-lg flex items-center gap-2">
+   355→              <PieChartIcon className="w-5 h-5 text-purple-400" />
+   356→              Protocol Distribution
+   357→            </CardTitle>
+   358→            <CardDescription>Current message mix</CardDescription>
+   359→          </CardHeader>
+   360→          <CardContent>
+   361→            <ChartContainer config={chartConfig} className="h-[200px] w-full">
+   362→              <PieChart>
+   363→                <Pie
+   364→                  data={protocolDistribution}
+   365→                  cx="50%"
+   366→                  cy="50%"
+   367→                  innerRadius={50}
+   368→                  outerRadius={80}
+   369→                  paddingAngle={5}
+   370→                  dataKey="value"
+   371→                >
+   372→                  {protocolDistribution.map((entry, index) => (
+   373→                    <Cell key={`cell-${index}`} fill={entry.color} />
+   374→                  ))}
+   375→                </Pie>
+   376→                <ChartTooltip content={<ChartTooltipContent />} />
+   377→                <Legend 
+   378→                  verticalAlign="bottom" 
+   379→                  height={36}
+   380→                  formatter={(value) => <span className="text-gray-300">{value}</span>}
+   381→                />
+   382→              </PieChart>
+   383→            </ChartContainer>
+   384→            
+   385→            {/* Protocol breakdown list */}
+   386→            <div className="mt-4 space-y-2">
+   387→              {protocolDistribution.map((proto) => (
+   388→                <div key={proto.name} className="flex items-center justify-between text-sm">
+   389→                  <div className="flex items-center gap-2">
+   390→                    <div 
+   391→                      className="w-3 h-3 rounded-full" 
+   392→                      style={{ backgroundColor: proto.color }}
+   393→                    />
+   394→                    <span className="text-gray-300">{proto.name}</span>
+   395→                  </div>
+   396→                  <span className="text-white font-mono">{proto.value.toLocaleString()}/s</span>
+   397→                </div>
+   398→              ))}
+   399→            </div>
+   400→          </CardContent>
+   401→        </Card>
+   402→      </div>
+   403→
+   404→      {/* Bottom Section: Top Talkers & Wilaya Traffic */}
+   405→      <Tabs defaultValue="talkers" className="w-full">
+   406→        <TabsList className="grid w-full grid-cols-3 bg-slate-800">
+   407→          <TabsTrigger value="talkers" className="data-[state=active]:bg-slate-600">
+   408→            <Server className="w-4 h-4 mr-2" />
+   409→            Top Talkers
+   410→          </TabsTrigger>
+   411→          <TabsTrigger value="geographic" className="data-[state=active]:bg-slate-600">
+   412→            <MapPin className="w-4 h-4 mr-2" />
+   413→            Geographic View
+   414→          </TabsTrigger>
+   415→          <TabsTrigger value="alerts" className="data-[state=active]:bg-slate-600">
+   416→            <AlertTriangle className="w-4 h-4 mr-2" />
+   417→            Threshold Alerts
+   418→          </TabsTrigger>
+   419→        </TabsList>
+   420→
+   421→        {/* Top Talkers Tab */}
+   422→        <TabsContent value="talkers" className="mt-4">
+   423→          <Card className="bg-slate-900/50 border-slate-700">
+   424→            <CardHeader>
+   425→              <CardTitle className="text-white">Top Signaling Pairs (OPC → DPC)</CardTitle>
+   426→              <CardDescription>Highest volume routes by message count</CardDescription>
+   427→            </CardHeader>
+   428→            <CardContent>
+   429→              <div className="overflow-x-auto">
+   430→                <table className="w-full text-sm">
+   431→                  <thead>
+   432→                    <tr className="border-b border-slate-700">
+   433→                      <th className="text-left py-3 px-4 text-gray-400 font-medium">Rank</th>
+   434→                      <th className="text-left py-3 px-4 text-gray-400 font-medium">Origin PC</th>
+   435→                      <th className="text-left py-3 px-4 text-gray-400 font-medium">Dest PC</th>
+   436→                      <th className="text-right py-3 px-4 text-gray-400 font-medium">Messages</th>
+   437→                      <th className="text-right py-3 px-4 text-gray-400 font-medium">Volume</th>
+   438→                      <th className="text-left py-3 px-4 text-gray-400 font-medium">Protocols</th>
+   439→                    </tr>
+   440→                  </thead>
+   441→                  <tbody>
+   442→                    {topTalkers.map((talker, idx) => (
+   443→                      <tr key={idx} className="border-b border-slate-800 hover:bg-slate-800/50 transition-colors">
+   444→                        <td className="py-3 px-4">
+   445→                          <span className="text-white font-medium">#{idx + 1}</span>
+   446→                        </td>
+   447→                        <td className="py-3 px-4">
+   448→                          <code className="text-blue-400 font-mono text-xs bg-slate-800 px-2 py-1 rounded">
+   449→                            {talker.opc}
+   450→                          </code>
+   451→                        </td>
+   452→                        <td className="py-3 px-4">
+   453→                          <code className="text-green-400 font-mono text-xs bg-slate-800 px-2 py-1 rounded">
+   454→                            {talker.dpc}
+   455→                          </code>
+   456→                        </td>
+   457→                        <td className="py-3 px-4 text-right">
+   458→                          <span className="text-white font-mono">{talker.count.toLocaleString()}</span>
+   459→                        </td>
+   460→                        <td className="py-3 px-4 text-right">
+   461→                          <span className="text-gray-400 font-mono text-xs">
+   462→                            {(talker.bytes / 1048576).toFixed(1)} MB
+   463→                          </span>
+   464→                        </td>
+   465→                        <td className="py-3 px-4">
+   466→                          <div className="flex gap-1">
+   467→                            {talker.protocols.map(p => (
+   468→                              <Badge 
+   469→                                key={p} 
+   470→                                variant="outline" 
+   471→                                className="text-xs border-slate-600"
+   472→                                style={{ borderColor: PROTOCOL_COLORS[p as keyof typeof PROTOCOL_COLORS] || '#666' }}
+   473→                              >
+   474→                                {p}
+   475→                              </Badge>
+   476→                            ))}
+   477→                          </div>
+   478→                        </td>
+   479→                      </tr>
+   480→                    ))}
+   481→                  </tbody>
+   482→                </table>
+   483→              </div>
+   484→            </CardContent>
+   485→          </Card>
+   486→        </TabsContent>
+   487→
+   488→        {/* Geographic Tab */}
+   489→        <TabsContent value="geographic" className="mt-4">
+   490→          <Card className="bg-slate-900/50 border-slate-700">
+   491→            <CardHeader>
+   492→              <CardTitle className="text-white flex items-center gap-2">
+   493→                <Globe className="w-5 h-5 text-green-400" />
+   494→                Traffic by Wilaya (Algeria)
+   495→              </CardTitle>
+   496→              <CardDescription>Geographic distribution of signaling activity</CardDescription>
+   497→            </CardHeader>
+   498→            <CardContent>
+   499→              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+   500→                {wilayaTraffic.map((wilaya) => (
+   501→                  <div 
+   502→                    key={wilaya.code}
+   503→                    className="p-4 rounded-lg bg-slate-800/50 border border-slate-700 hover:border-slate-600 transition-colors"
+   504→                  >
+   505→                    <div className="flex items-start justify-between mb-3">
+   506→                      <div>
+   507→                        <h4 className="text-white font-semibold">{wilaya.name}</h4>
+   508→                        <p className="text-gray-500 text-xs">Code: {wilaya.code.toString().padStart(2, '0')}</p>
+   509→                      </div>
+   510→                      <Badge 
+   511→                        variant="outline"
+   512→                        className={
+   513→                          wilaya.riskScore > 25 ? 'border-red-500 text-red-400' :
+   514→                          wilaya.riskScore > 18 ? 'border-yellow-500 text-yellow-400' :
+   515→                          'border-green-500 text-green-400'
+   516→                        }
+   517→                      >
+   518→                        Risk: {wilaya.riskScore}
+   519→                      </Badge>
+   520→                    </div>
+   521→                    
+   522→                    <div className="space-y-2">
+   523→                      <div className="flex justify-between text-sm">
+   524→                        <span className="text-gray-400">Messages:</span>
+   525→                        <span className="text-white font-mono">{wilaya.messages.toLocaleString()}</span>
+   526→                      </div>
+   527→                      <div className="flex justify-between text-sm">
+   528→                        <span className="text-gray-400">Subscribers:</span>
+   529→                        <span className="text-white font-mono">{(wilaya.subscribers / 1000).toFixed(0)}K</span>
+   530→                      </div>
+   531→                      <Progress 
+   532→                        value={Math.min(100, (wilaya.messages / 50000) * 100)} 
+   533→                        className="h-1 mt-2"
+   534→                      />
+   535→                    </div>
+   536→                  </div>
+   537→                ))}
+   538→              </div>
+   539→            </CardContent>
+   540→          </Card>
+   541→        </TabsContent>
+   542→
+   543→        {/* Threshold Alerts Tab */}
+   544→        <TabsContent value="alerts" className="mt-4">
+   545→          <Card className="bg-slate-900/50 border-slate-700">
+   546→            <CardHeader>
+   547→              <CardTitle className="text-white flex items-center gap-2">
+   548→                <AlertTriangle className="w-5 h-5 text-yellow-400" />
+   549→                Traffic Threshold Status
+   550→              </CardTitle>
+   551→              <CardDescription>Real-time alert thresholds and status</CardDescription>
+   552→            </CardHeader>
+   553→            <CardContent>
+   554→              <div className="space-y-4">
+   555→                {[
+   556→                  { 
+   557→                    name: 'Message Rate Threshold',
+   558→                    current: currentMPS,
+   559→                    warning: 3500,
+   560→                    critical: 4500,
+   561→                    unit: 'msg/s'
+   562→                  },
+   563→                  { 
+   564→                    name: 'Error Rate',
+   565→                    current: 0.12,
+   566→                    warning: 1.0,
+   567→                    critical: 5.0,
+   568→                    unit: '%'
+   569→                  },
+   570→                  { 
+   571→                    name: 'Link Utilization',
+   572→                    current: 42,
+   573→                    warning: 70,
+   574→                    critical: 90,
+   575→                    unit: '%'
+   576→                  },
+   577→                  { 
+   578→                    name: 'Queue Depth',
+   579→                    current: 1250,
+   580→                    warning: 5000,
+   581→                    critical: 10000,
+   582→                    unit: 'msgs'
+   583→                  },
+   584→                  { 
+   585→                    name: 'Response Time (avg)',
+   586→                    current: 12,
+   587→                    warning: 50,
+   588→                    critical: 100,
+   589→                    unit: 'ms'
+   590→                  },
+   591→                ].map((threshold, idx) => (
+   592→                  <div key={idx} className="p-4 rounded-lg bg-slate-800/50 border border-slate-700">
+   593→                    <div className="flex items-center justify-between mb-2">
+   594→                      <span className="text-white font-medium">{threshold.name}</span>
+   595→                      <div className="flex items-center gap-2">
+   596→                        <span className="text-white font-mono">
+   597→                          {typeof threshold.current === 'number' ? threshold.current.toFixed(threshold.unit === '%' ? 2 : 0) : threshold.current}
+   598→                        </span>
+   599→                        <span className="text-gray-500 text-sm">{threshold.unit}</span>
+   600→                        <Badge 
+   601→                          variant="outline"
+   602→                          className={
+   603→                            threshold.current >= threshold.critical ? 'border-red-500 text-red-400 bg-red-950/20' :
+   604→                            threshold.current >= threshold.warning ? 'border-yellow-500 text-yellow-400 bg-yellow-950/20' :
+   605→                            'border-green-500 text-green-400'
+   606→                          }
+   607→                        >
+   608→                          {threshold.current >= threshold.critical ? 'CRITICAL' :
+   609→                           threshold.current >= threshold.warning ? 'WARNING' : 'NORMAL'}
+   610→                        </Badge>
+   611→                      </div>
+   612→                    </div>
+   613→                    
+   614→                    {/* Visual indicator bar */}
+   615→                    <div className="relative h-2 bg-slate-700 rounded-full overflow-hidden">
+   616→                      <div 
+   617→                        className={`absolute h-full rounded-full transition-all duration-500 ${
+   618→                          threshold.current >= threshold.critical ? 'bg-red-500' :
+   619→                          threshold.current >= threshold.warning ? 'bg-yellow-500' :
+   620→                          'bg-green-500'
+   621→                        }`}
+   622→                        style={{ width: `${Math.min(100, (threshold.current / threshold.critical) * 100)}%` }}
+   623→                      />
+   624→                      
+   625→                      {/* Warning marker */}
+   626→                      <div 
+   627→                        className="absolute top-0 bottom-0 w-0.5 bg-yellow-500"
+   628→                        style={{ left: `${(threshold.warning / threshold.critical) * 100}%` }}
+   629→                      />
+   630→                    </div>
+   631→                    
+   632→                    <div className="flex justify-between mt-1 text-xs text-gray-500">
+   633→                      <span>0</span>
+   634→                      <span className="text-yellow-500">Warning ({threshold.warning})</span>
+   635→                      <span className="text-red-500">Critical ({threshold.critical})</span>
+   636→                    </div>
+   637→                  </div>
+   638→                ))}
+   639→              </div>
+   640→            </CardContent>
+   641→          </Card>
+   642→        </TabsContent>
+   643→      </Tabs>
+   644→
+   645→      {/* Footer info */}
+   646→      <div className="flex items-center justify-between text-sm text-gray-500 pt-2">
+   647→        <span>Last updated: {lastUpdate.toLocaleTimeString()}</span>
+   648→        <span>Data source: SS7 Collector Service</span>
+   649→      </div>
+   650→    </div>
+   651→  );
+   652→}
+   653→
+   654→// Metric Card Sub-component
+   655→function MetricCard({ 
+   656→  title, 
+   657→  value, 
+   658→  unit, 
+   659→  icon, 
+   660→  trend, 
+   661→  trendValue 
+   662→}: { 
+   663→  title: string; 
+   664→  value: string; 
+   665→  unit?: string; 
+   666→  icon: React.ReactNode; 
+   667→  trend?: 'up' | 'down' | 'stable'; 
+   668→  trendValue?: string;
+   669→}) {
+   670→  return (
+   671→    <Card className="bg-slate-900/50 border-slate-700 hover:border-slate-600 transition-colors">
+   672→      <CardContent className="pt-6">
+   673→        <div className="flex items-center justify-between mb-3">
+   674→          {icon}
+   675→          {trend && (
+   676→            <div className={`flex items-center text-xs ${
+   677→              trend === 'up' ? 'text-red-400' :
+   678→              trend === 'down' ? 'text-green-400' :
+   679→              'text-gray-400'
+   680→            }`}>
+   681→              {trend === 'up' && <ArrowUpRight className="w-3 h-3 mr-1" />}
+   682→              {trend === 'down' && <ArrowDownRight className="w-3 h-3 mr-1" />}
+   683→              {trendValue}
+   684→            </div>
+   685→          )}
+   686→        </div>
+   687→        
+   688→        <div className="text-2xl font-bold text-white mb-1">{value}</div>
+   689→        <p className="text-gray-400 text-sm">{title}{unit && <span className="ml-1 text-gray-500">({unit})</span>}</p>
+   690→      </CardContent>
+   691→    </Card>
+   692→  );
+   693→}
+   694→

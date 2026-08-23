@@ -1,0 +1,872 @@
+     1→'use client'
+     2→
+     3→import React, { useState, useMemo, useCallback } from 'react'
+     4→import {
+     5→  Crosshair, Search, Play, Pause, Save, Download, Upload,
+     6→  Filter, Plus, Trash2, Copy, CheckCircle, AlertTriangle,
+     7→  Clock, Target, Brain, Fingerprint, FileText, Globe,
+     8→  Shield, Bug, UserCheck, Network, Database, Terminal,
+     9→  ChevronRight, ChevronDown, Zap, Eye, EyeOff, RefreshCw,
+    10→  Bookmark, Share2, History, LayoutGrid, List, ArrowRight
+    11→} from 'lucide-react'
+    12→import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
+    13→import { Button } from '@/components/ui/button'
+    14→import { Badge } from '@/components/ui/badge'
+    15→import { Input } from '@/components/ui/input'
+    16→import { Textarea } from '@/components/ui/textarea'
+    17→import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
+    18→import {
+    19→  Table, TableBody, TableCell, TableHead, TableHeader, TableRow
+    20→} from '@/components/ui/table'
+    21→import {
+    22→  Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger
+    23→} from '@/components/ui/dialog'
+    24→import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
+    25→import { Progress } from '@/components/ui/progress'
+    26→import { ScrollArea } from '@/components/ui/scroll-area'
+    27→import { Separator } from '@/components/ui/separator'
+    28→
+    29→// ============================================================
+    30→// TYPES & INTERFACES FOR THREAT HUNTING
+    31→// ============================================================
+    32→
+    33→interface IOC {
+    34→  id: string
+    35→  type: 'ip' | 'domain' | 'hash' | 'url' | 'email' | 'pattern'
+    36→  value: string
+    37→  confidence: number
+    38→  source: string
+    39→  firstSeen: string
+    40→  lastSeen: string
+    41→  tags: string[]
+    42→}
+    43→
+    44→interface HuntQuery {
+    45→  id: string
+    46→  name: string
+    47→  queryType: 'SQL' | 'LUCENE' | 'SIGMA' | 'YARA' | 'CUSTOM'
+    48→  queryString: string
+    49→  dataSource: string
+    50→  resultCount: number
+    51→  executionTime: number
+    52→  executedAt: string
+    53→  status: 'pending' | 'running' | 'completed' | 'error'
+    54→}
+    55→
+    56→interface HuntFinding {
+    57→  id: string
+    58→  queryId: string
+    59→  title: string
+    60→  description: string
+    61→  severity: 'INFO' | 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL'
+    62→  confidence: number
+    63→  status: 'NEW' | 'INVESTIGATING' | 'CONFIRMED' | 'FALSE_POSITIVE' | 'ESCALATED'
+    64→  rawEvidence: Record<string, unknown>
+    65→  iocs: IOC[]
+    66→  timestamp: string
+    67→}
+    68→
+    69→interface HuntSession {
+    70→  id: string
+    71→  name: string
+    72→  description: string
+    73→  hypothesis: string
+    74→  status: 'DRAFT' | 'ACTIVE' | 'PAUSED' | 'COMPLETED' | 'CANCELLED'
+    75→  hunter: string
+    76→  queries: HuntQuery[]
+    77→  findings: HuntFinding[]
+    78→  createdAt: string
+    79→  updatedAt: string
+    80→}
+    81→
+    82→interface HypothesisTemplate {
+    83→  id: string
+    84→  name: string
+    85→  category: string
+    86→  description: string
+    87→  templateQuery: string
+    88→}
+    89→
+    90→// ============================================================
+    91→// MOCK DATA FOR DEMONSTRATION
+    92→// ============================================================
+    93→
+    94→const mockHypotheses: HypothesisTemplate[] = [
+    95→  {
+    96→    id: 'h1',
+    97→    name: 'Lateral Movement Detection',
+    98→    category: 'Initial Access',
+    99→    description: 'Detect potential lateral movement patterns across network segments',
+   100→    templateQuery: 'source:* AND event_type:authentication AND (action:failure OR action:success) | stats count by source_ip, dest_ip'
+   101→  },
+   102→  {
+   103→    id: 'h2',
+   104→    name: 'Data Exfiltration Patterns',
+   105→    category: 'Exfiltration',
+   106→    description: 'Identify unusual data transfer volumes to external destinations',
+   107→    templateQuery: 'event_type:network_flow AND bytes_out:>10000000 AND (dest_port:443 OR dest_port:80) | stats sum(bytes_out) by dest_ip, user'
+   108→  },
+   109→  {
+   110→    id: 'h3',
+   111→    name: 'Credential Dumping',
+   112→    category: 'Credential Access',
+   113→    description: 'Detect suspicious process executions related to credential access',
+   114→    templateQuery: 'process_name:(lsass.exe* OR mimikatz* OR procdump* OR ntdsutil*) OR command_line:*-dump*'
+   115→  },
+   116→  {
+   117→    id: 'h4',
+   118→    name: 'Persistence Mechanisms',
+   119→    category: 'Persistence',
+   120→    description: 'Find registry modifications and scheduled task creations',
+   121→    templateQuery: 'event_type:registry AND (key_path:*Run* OR key_path:*Startup*) OR event_type:scheduled_task'
+   122→  },
+   123→  {
+   124→    id: 'h5',
+   125→    name: 'Telecom-Specific: SIM Swapping',
+   126→    category: 'Telecom Fraud',
+   127→    description: 'Detect potential SIM swap activities in subscriber management systems',
+   128→    templateQuery: 'system:ssm AND event_type:sim_swap AND (risk_score:>70 OR verification_bypass:true)'
+   129→  }
+   130→]
+   131→
+   132→const mockSession: HuntSession = {
+   133→  id: 'session-001',
+   134→  name: 'APT Investigation - Djezzy Network',
+   135→  description: 'Investigating suspected APT activity targeting core network infrastructure',
+   136→  hypothesis: 'Adversary has established persistence via compromised service accounts and is performing lateral movement between BTS and BSC systems',
+   137→  status: 'ACTIVE',
+   138→  hunter: 'SOC Analyst Ahmed',
+   139→  queries: [
+   140→    {
+   141→      id: 'q1',
+   142→      name: 'Authentication Failures - Last 24h',
+   143→      queryType: 'LUCENE',
+   144→      queryString: 'event_type:auth AND status:failure AND timestamp:[now-24h TO now]',
+   145→      dataSource: 'SIEM - Security Events',
+   146→      resultCount: 1247,
+   147→      executionTime: 2340,
+   148→      executedAt: '2026-01-15T10:30:00Z',
+   149→      status: 'completed'
+   150→    },
+   151→    {
+   152→      id: 'q2',
+   153→      name: 'Lateral Movement Detection',
+   154→      queryType: 'SQL',
+   155→      queryString: 'SELECT source_ip, dest_ip, COUNT(*) as attempts FROM auth_logs WHERE status = \'failure\' GROUP BY source_ip, dest_ip HAVING COUNT(*) > 50 ORDER BY attempts DESC',
+   156→      dataSource: 'PostgreSQL - Auth Logs',
+   157→      resultCount: 23,
+   158→      executionTime: 1856,
+   159→      executedAt: '2026-01-15T10:35:00Z',
+   160→      status: 'completed'
+   161→    },
+   162→    {
+   163→      id: 'q3',
+   164→      name: 'Process Anomaly Scan (Sigma)',
+   165→      queryType: 'SIGMA',
+   166→      queryString: 'detection:\n  selection:\n    Image|contains: \'powershell\'\n    CommandLine|contains:\n      - \'EncodedCommand\'\n      - \'DownloadString\'\n  condition: selection',
+   167→      dataSource: 'EDR - Endpoint Telemetry',
+   168→      resultCount: 0,
+   169→      executionTime: 0,
+   170→      executedAt: '',
+   171→      status: 'pending'
+   172→    }
+   173→  ],
+   174→  findings: [
+   175→    {
+   176→      id: 'f1',
+   177→      queryId: 'q2',
+   178→      title: 'Suspicious Lateral Movement Pattern Detected',
+   179→      description: 'Multiple authentication failures observed from 10.50.12.87 attempting to access 15 different hosts in the BSC segment within 2 hours',
+   180→      severity: 'HIGH',
+   181→      confidence: 87,
+   182→      status: 'INVESTIGATING',
+   183→      rawEvidence: {
+   184→        sourceIp: '10.50.12.87',
+   185→        destHosts: ['bsc-01.djezzy.dz', 'bsc-03.djezzy.dz', 'bsc-05.djezzy.dz'],
+   186→        attemptCount: 847,
+   187→        timeWindow: '2h 14m',
+   188→        protocols: ['SMB', 'RDP', 'WinRM']
+   189→      },
+   190→      iocs: [
+   191→        { id: 'ioc1', type: 'ip', value: '10.50.12.87', confidence: 92, source: 'SIEM Correlation', firstSeen: '2026-01-15T08:00:00Z', lastSeen: '2026-01-15T10:14:00Z', tags: ['suspicious', 'internal'] }
+   192→      ],
+   193→      timestamp: '2026-01-15T10:32:00Z'
+   194→    },
+   195→    {
+   196→      id: 'f2',
+   197→      queryId: 'q1',
+   198→      title: 'Brute Force Attack Against Subscriber Portal',
+   199→      description: 'Coordinated brute force attack detected against the subscriber self-care portal with 1247 failed attempts from 34 unique IPs',
+   200→      severity: 'MEDIUM',
+   201→      confidence: 94,
+   202→      status: 'NEW',
+   203→      rawEvidence: {
+   204→        targetSystem: 'subscriber-portal.djezzy.dz',
+   205→        uniqueSourceIPs: 34,
+   206→        totalAttempts: 1247,
+   207→        targetedAccounts: ['admin', 'support', 'operator']
+   208→      },
+   209→      iocs: [],
+   210→      timestamp: '2026-01-15T10:30:00Z'
+   211→    },
+   212→    {
+   213→      id: 'f3',
+   214→      queryId: 'q2',
+   215→      title: 'Potential Credential Stuffing - OSS Interface',
+   216→      description: 'Pattern consistent with credential stuffing observed against Operations Support Systems interface',
+   217→      severity: 'CRITICAL',
+   218→      confidence: 78,
+   219→      status: 'ESCALATED',
+   220→      rawEvidence: {
+   221→        targetSystem: 'oss-interface.internal.djezzy.dz',
+   222→        pattern: 'credential_stuffing',
+   223→        automationIndicators: ['constant_time_interval', 'user_agent_rotation']
+   224→      },
+   225→      iocs: [
+   226→        { id: 'ioc2', type: 'ip', value: '91.121.87.45', confidence: 88, source: 'WAF Logs', firstSeen: '2026-01-15T09:00:00Z', lastSeen: '2026-01-15T10:30:00Z', tags: ['external', 'known-bad'] },
+   227→        { id: 'ioc3', type: 'ip', value: '185.220.101.0/24', confidence: 75, source: 'Threat Intel Feed', firstSeen: '2026-01-14T00:00:00Z', lastSeen: '2026-01-15T10:30:00Z', tags: ['tor-exit', 'reputation-bad'] }
+   228→      ],
+   229→      timestamp: '2026-01-15T10:28:00Z'
+   230→    }
+   231→  ],
+   232→  createdAt: '2026-01-15T08:00:00Z',
+   233→  updatedAt: '2026-01-15T10:35:00Z'
+   234→}
+   235→
+   236→// ============================================================
+   237→// HELPER COMPONENTS
+   238→// ============================================================
+   239→
+   240→const SeverityBadge: React.FC<{ severity: HuntFinding['severity'] }> = ({ severity }) => {
+   241→  const config = {
+   242→    INFO: { variant: 'secondary' as const, label: 'Info', icon: <Eye className="w-3 h-3" /> },
+   243→    LOW: { variant: 'outline' as const, label: 'Low', icon: <AlertTriangle className="w-3 h-3" /> },
+   244→    MEDIUM: { variant: 'default' as const, label: 'Medium', icon: <AlertTriangle className="w-3 h-3" /> },
+   245→    HIGH: { variant: 'destructive' as const, label: 'High', icon: <Shield className="w-3 h-3" /> },
+   246→    CRITICAL: { variant: 'destructive' as const, label: 'Critical', icon: <Bug className="w-3 h-3" /> }
+   247→  }
+   248→  
+   249→  return (
+   250→    <Badge variant={config[severity].variant} className="gap-1">
+   251→      {config[severity].icon}
+   252→      {config[severity].label}
+   253→    </Badge>
+   254→  )
+   255→}
+   256→
+   257→const StatusBadge: React.FC<{ status: string }> = ({ status }) => {
+   258→  const colors: Record<string, string> = {
+   259→    DRAFT: 'bg-gray-100 text-gray-700',
+   260→    ACTIVE: 'bg-green-100 text-green-700',
+   261→    PAUSED: 'bg-yellow-100 text-yellow-700',
+   262→    COMPLETED: 'bg-blue-100 text-blue-700',
+   263→    CANCELLED: 'bg-red-100 text-red-700',
+   264→    NEW: 'bg-purple-100 text-purple-700',
+   265→    INVESTIGATING: 'bg-orange-100 text-orange-700',
+   266→    CONFIRMED: 'bg-green-100 text-green-700',
+   267→    FALSE_POSITIVE: 'bg-gray-100 text-gray-500',
+   268→    ESCALATED: 'bg-red-100 text-red-700',
+   269→    pending: 'bg-gray-100 text-gray-600',
+   270→    running: 'bg-blue-100 text-blue-600 animate-pulse',
+   271→    completed: 'bg-green-100 text-green-600',
+   272→    error: 'bg-red-100 text-red-600'
+   273→  }
+   274→
+   275→  return (
+   276→    <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${colors[status] || 'bg-gray-100 text-gray-700'}`}>
+   277→      {status}
+   278→    </span>
+   279→  )
+   280→}
+   281→
+   282→const ConfidenceIndicator: React.FC<{ value: number }> = ({ value }) => {
+   283→  const getColor = (v: number) => {
+   284→    if (v >= 80) return 'text-green-600'
+   285→    if (v >= 60) return 'text-yellow-600'
+   286→    if (v >= 40) return 'text-orange-600'
+   287→    return 'text-red-600'
+   288→  }
+   289→
+   290→  return (
+   291→    <div className="flex items-center gap-2">
+   292→      <Progress value={value} className="w-16 h-2" />
+   293→      <span className={`text-sm font-medium ${getColor(value)}`}>{value}%</span>
+   294→    </div>
+   295→  )
+   296→}
+   297→
+   298→// ============================================================
+   299→// MAIN HUNT WORKSPACE COMPONENT
+   300→// ============================================================
+   301→
+   302→export const HuntWorkspace: React.FC = () => {
+   303→  // State Management
+   304→  const [session, setSession] = useState<HuntSession>(mockSession)
+   305→  const [selectedFinding, setSelectedFinding] = useState<HuntFinding | null>(null)
+   306→  const [activeTab, setActiveTab] = useState('overview')
+   307→  const [queryInput, setQueryInput] = useState('')
+   308→  const [isExecuting, setIsExecuting] = useState(false)
+   309→  const [viewMode, setViewMode] = useState<'grid' | 'list'>('list')
+   310→  const [showHypotheses, setShowHypotheses] = useState(false)
+   311→  const [filterSeverity, setFilterSeverity] = useState<string>('all')
+   312→
+   313→  // Computed Values
+   314→  const filteredFindings = useMemo(() => {
+   315→    if (filterSeverity === 'all') return session.findings
+   316→    return session.findings.filter(f => f.severity === filterSeverity)
+   317→  }, [session.findings, filterSeverity])
+   318→
+   319→  const stats = useMemo(() => ({
+   320→    totalFindings: session.findings.length,
+   321→    criticalCount: session.findings.filter(f => f.severity === 'CRITICAL').length,
+   322→    highCount: session.findings.filter(f => f.severity === 'HIGH').length,
+   323→    investigatingCount: session.findings.filter(f => f.status === 'INVESTIGATING').length,
+   324→    totalIOCs: session.findings.reduce((acc, f) => acc + f.iocs.length, 0),
+   325→    avgConfidence: Math.round(session.findings.reduce((acc, f) => acc + f.confidence, 0) / session.findings.length || 0)
+   326→  }), [session.findings])
+   327→
+   328→  // Handlers
+   329→  const handleExecuteQuery = useCallback(async () => {
+   330→    if (!queryInput.trim()) return
+   331→    
+   332→    setIsExecuting(true)
+   333→    // Simulate query execution
+   334→    await new Promise(resolve => setTimeout(resolve, 2000))
+   335→    
+   336→    const newQuery: HuntQuery = {
+   337→      id: `q${session.queries.length + 1}`,
+   338→      name: `Custom Query ${session.queries.length + 1}`,
+   339→      queryType: 'LUCENE',
+   340→      queryString: queryInput,
+   341→      dataSource: 'SIEM - All Events',
+   342→      resultCount: Math.floor(Math.random() * 500),
+   343→      executionTime: Math.floor(Math.random() * 3000),
+   344→      executedAt: new Date().toISOString(),
+   345→      status: 'completed'
+   346→    }
+   347→    
+   348→    setSession(prev => ({
+   349→      ...prev,
+   350→      queries: [...prev.queries, newQuery],
+   351→      updatedAt: new Date().toISOString()
+   352→    }))
+   353→    setQueryInput('')
+   354→    setIsExecuting(false)
+   355→  }, [queryInput, session.queries.length])
+   356→
+   357→  const handleApplyHypothesis = useCallback((hypothesis: HypothesisTemplate) => {
+   358→    setQueryInput(hypothesis.templateQuery)
+   359→    setShowHypotheses(false)
+   360→  }, [])
+   361→
+   362→  const handleExportSession = useCallback(() => {
+   363→    const dataStr = JSON.stringify(session, null, 2)
+   364→    const blob = new Blob([dataStr], { type: 'application/json' })
+   365→    const url = URL.createObjectURL(blob)
+   366→    const a = document.createElement('a')
+   367→    a.href = url
+   368→    a.download = `hunt-session-${session.id}-${new Date().toISOString().split('T')[0]}.json`
+   369→    a.click()
+   370→    URL.revokeObjectURL(url)
+   371→  }, [session])
+   372→
+   373→  return (
+   374→    <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-white p-6">
+   375→      {/* Header */}
+   376→      <div className="max-w-[1800px] mx-auto">
+   377→        <div className="flex items-center justify-between mb-6">
+   378→          <div className="flex items-center gap-4">
+   379→            <div className="p-3 bg-gradient-to-br from-red-500 to-orange-600 rounded-xl shadow-lg shadow-red-500/20">
+   380→              <Crosshair className="w-7 h-7 text-white" />
+   381→            </div>
+   382→            <div>
+   383→              <h1 className="text-3xl font-bold bg-gradient-to-r from-white to-gray-300 bg-clip-text text-transparent">
+   384→                Threat Hunting Workspace
+   385→              </h1>
+   386→              <p className="text-gray-400 mt-1">Djezzy National SOC - Advanced Threat Detection</p>
+   387→            </div>
+   388→          </div>
+   389→          
+   390→          <div className="flex items-center gap-3">
+   391→            <StatusBadge status={session.status} />
+   392→            <Button variant="outline" size="sm" onClick={() => setShowHypotheses(!showHypotheses)}>
+   393→              <Brain className="w-4 h-4 mr-2" />
+   394→              Hypotheses
+   395→            </Button>
+   396→            <Button variant="outline" size="sm" onClick={handleExportSession}>
+   397→              <Download className="w-4 h-4 mr-2" />
+   398→              Export
+   399→            </Button>
+   400→            <Button size="sm" className="bg-gradient-to-r from-red-500 to-orange-500 hover:from-red-600 hover:to-orange-600">
+   401→              <Save className="w-4 h-4 mr-2" />
+   402→              Save Session
+   403→            </Button>
+   404→          </div>
+   405→        </div>
+   406→
+   407→        {/* Session Info Bar */}
+   408→        <Card className="mb-6 border-slate-700/50 bg-slate-800/40 backdrop-blur-sm">
+   409→          <CardContent className="py-4">
+   410→            <div className="flex items-center justify-between">
+   411→              <div className="flex items-center gap-6">
+   412→                <div>
+   413→                  <span className="text-xs text-gray-400 uppercase tracking-wider">Session</span>
+   414→                  <h2 className="font-semibold text-white">{session.name}</h2>
+   415→                </div>
+   416→                <Separator orientation="vertical" className="h-8 bg-slate-600" />
+   417→                <div>
+   418→                  <span className="text-xs text-gray-400 uppercase tracking-wider">Hunter</span>
+   419→                  <p className="text-sm text-gray-200 flex items-center gap-2">
+   420→                    <UserCheck className="w-4 h-4" />{session.hunter}
+   421→                  </p>
+   422→                </div>
+   423→                <Separator orientation="vertical" className="h-8 bg-slate-600" />
+   424→                <div>
+   425→                  <span className="text-xs text-gray-400 uppercase tracking-wider">Duration</span>
+   426→                  <p className="text-sm text-gray-200 flex items-center gap-2">
+   427→                    <Clock className="w-4 h-4" />2h 35m
+   428→                  </p>
+   429→                </div>
+   430→              </div>
+   431→              
+   432→              <div className="flex items-center gap-2 text-xs text-gray-400">
+   433→                <Database className="w-4 h-4" />
+   434→                <span>Last updated: {new Date(session.updatedAt).toLocaleString()}</span>
+   435→              </div>
+   436→            </div>
+   437→            
+   438→            {/* Hypothesis Display */}
+   439→            <div className="mt-4 p-3 rounded-lg bg-slate-900/50 border border-slate-700/50">
+   440→              <div className="flex items-start gap-2">
+   441→                <Target className="w-4 h-4 text-orange-400 mt-0.5 flex-shrink-0" />
+   442→                <div>
+   443→                  <span className="text-xs text-orange-400 font-medium uppercase tracking-wider">Active Hypothesis</span>
+   444→                  <p className="text-sm text-gray-300 mt-1">{session.hypothesis}</p>
+   445→                </div>
+   446→              </div>
+   447→            </div>
+   448→          </CardContent>
+   449→        </Card>
+   450→
+   451→        {/* Stats Cards */}
+   452→        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4 mb-6">
+   453→          <Card className="border-slate-700/50 bg-slate-800/40 backdrop-blur-sm">
+   454→            <CardContent className="p-4 text-center">
+   455→              <Target className="w-5 h-5 mx-auto text-blue-400 mb-2" />
+   456→              <div className="text-2xl font-bold text-white">{stats.totalFindings}</div>
+   457→              <div className="text-xs text-gray-400">Total Findings</div>
+   458→            </CardContent>
+   459→          </Card>
+   460→          <Card className="border-slate-700/50 bg-slate-800/40 backdrop-blur-sm">
+   461→            <CardContent className="p-4 text-center">
+   462→              <Bug className="w-5 h-5 mx-auto text-red-400 mb-2" />
+   463→              <div className="text-2xl font-bold text-red-400">{stats.criticalCount}</div>
+   464→              <div className="text-xs text-gray-400">Critical</div>
+   465→            </CardContent>
+   466→          </Card>
+   467→          <Card className="border-slate-700/50 bg-slate-800/40 backdrop-blur-sm">
+   468→            <CardContent className="p-4 text-center">
+   469→              <AlertTriangle className="w-5 h-5 mx-auto text-orange-400 mb-2" />
+   470→              <div className="text-2xl font-bold text-orange-400">{stats.highCount}</div>
+   471→              <div className="text-xs text-gray-400">High Severity</div>
+   472→            </CardContent>
+   473→          </Card>
+   474→          <Card className="border-slate-700/50 bg-slate-800/40 backdrop-blur-sm">
+   475→            <CardContent className="p-4 text-center">
+   476→              <Search className="w-5 h-5 mx-auto text-yellow-400 mb-2" />
+   477→              <div className="text-2xl font-bold text-yellow-400">{stats.investigatingCount}</div>
+   478→              <div className="text-xs text-gray-400">Investigating</div>
+   479→            </CardContent>
+   480→          </Card>
+   481→          <Card className="border-slate-700/50 bg-slate-800/40 backdrop-blur-sm">
+   482→            <CardContent className="p-4 text-center">
+   483→              <Fingerprint className="w-5 h-5 mx-auto text-green-400 mb-2" />
+   484→              <div className="text-2xl font-bold text-green-400">{stats.totalIOCs}</div>
+   485→              <div className="text-xs text-gray-400">IOCs Extracted</div>
+   486→            </CardContent>
+   487→          </Card>
+   488→          <Card className="border-slate-700/50 bg-slate-800/40 backdrop-blur-sm">
+   489→            <CardContent className="p-4 text-center">
+   490→              <Brain className="w-5 h-5 mx-auto text-purple-400 mb-2" />
+   491→              <div className="text-2xl font-bold text-purple-400">{stats.avgConfidence}%</div>
+   492→              <div className="text-xs text-gray-400">Avg Confidence</div>
+   493→            </CardContent>
+   494→          </Card>
+   495→        </div>
+   496→
+   497→        {/* Main Content Area */}
+   498→        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+   499→          {/* Left Panel - Query Builder & Results */}
+   500→          <div className="lg:col-span-2 space-y-6">
+   501→            {/* Query Builder */}
+   502→            <Card className="border-slate-700/50 bg-slate-800/40 backdrop-blur-sm">
+   503→              <CardHeader className="pb-3">
+   504→                <div className="flex items-center justify-between">
+   505→                  <CardTitle className="text-lg flex items-center gap-2">
+   506→                    <Terminal className="w-5 h-5 text-green-400" />
+   507→                    Query Builder
+   508→                  </CardTitle>
+   509→                  <div className="flex items-center gap-2">
+   510→                    <Select defaultValue="LUCENE">
+   511→                      <SelectTrigger className="w-28 h-8 text-xs bg-slate-900/50 border-slate-600">
+   512→                        <SelectValue />
+   513→                      </SelectTrigger>
+   514→                      <SelectContent>
+   515→                        <SelectItem value="LUCENE">Lucene</SelectItem>
+   516→                        <SelectItem value="SQL">SQL</SelectItem>
+   517→                        <SelectItem value="SIGMA">Sigma</SelectItem>
+   518→                        <SelectItem value="YARA">YARA</SelectItem>
+   519→                      </SelectContent>
+   520→                    </Select>
+   521→                    <Select defaultValue="siem-all">
+   522→                      <SelectTrigger className="w-40 h-8 text-xs bg-slate-900/50 border-slate-600">
+   523→                        <SelectValue />
+   524→                      </SelectTrigger>
+   525→                      <SelectContent>
+   526→                        <SelectItem value="siem-all">SIEM - All Events</SelectItem>
+   527→                        <SelectItem value="siem-auth">SIEM - Auth Events</SelectItem>
+   528→                        <SelectItem value="edr">EDR - Endpoints</SelectItem>
+   529→                        <SelectItem value="network">Network Flows</SelectItem>
+   530→                        <SelectItem value="telecom">Telecom Systems</SelectItem>
+   531→                      </SelectContent>
+   532→                    </Select>
+   533→                  </div>
+   534→                </div>
+   535→              </CardHeader>
+   536→              <CardContent className="space-y-4">
+   537→                {/* Hypothesis Templates Panel */}
+   538→                {showHypotheses && (
+   539→                  <div className="p-4 rounded-lg bg-slate-900/70 border border-slate-600 mb-4">
+   540→                    <h4 className="text-sm font-semibold text-gray-200 mb-3 flex items-center gap-2">
+   541→                      <Brain className="w-4 h-4 text-purple-400" />
+   542→                      Hypothesis Templates
+   543→                    </h4>
+   544→                    <div className="grid gap-2 max-h-48 overflow-y-auto">
+   545→                      {mockHypotheses.map(h => (
+   546→                        <button
+   547→                          key={h.id}
+   548→                          onClick={() => handleApplyHypothesis(h)}
+   549→                          className="text-left p-3 rounded-md bg-slate-800/50 hover:bg-slate-700/50 border border-slate-600/50 transition-colors"
+   550→                        >
+   551→                          <div className="flex items-center justify-between">
+   552→                            <span className="text-sm font-medium text-white">{h.name}</span>
+   553→                            <Badge variant="outline" className="text-xs">{h.category}</Badge>
+   554→                          </div>
+   555→                          <p className="text-xs text-gray-400 mt-1">{h.description}</p>
+   556→                        </button>
+   557→                      ))}
+   558→                    </div>
+   559→                  </div>
+   560→                )}
+   561→
+   562→                <Textarea
+   563→                  placeholder="Enter your hunting query... (Supports Lucene, SQL, Sigma, YARA syntax)"
+   564→                  value={queryInput}
+   565→                  onChange={(e) => setQueryInput(e.target.value)}
+   566→                  className="min-h-[120px] bg-slate-900/50 border-slate-600 text-white placeholder:text-gray-500 font-mono text-sm"
+   567→                />
+   568→
+   569→                <div className="flex items-center justify-between">
+   570→                  <div className="flex items-center gap-2">
+   571→                    <Button
+   572→                      size="sm"
+   573→                      onClick={handleExecuteQuery}
+   574→                      disabled={!queryInput.trim() || isExecuting}
+   575→                      className="bg-gradient-to-r from-green-500 to-emerald-500 hover:from-green-600 hover:to-emerald-600"
+   576→                    >
+   577→                      {isExecuting ? (
+   578→                        <>
+   579→                          <RefreshCw className="w-4 h-4 mr-2 animate-spin" />
+   580→                          Executing...
+   581→                        </>
+   582→                      ) : (
+   583→                        <>
+   584→                          <Play className="w-4 h-4 mr-2" />
+   585→                          Execute Query
+   586→                        </>
+   587→                      )}
+   588→                    </Button>
+   589→                    <Button variant="outline" size="sm">
+   590→                      <Pause className="w-4 h-4 mr-2" />
+   591→                      Pause
+   592→                    </Button>
+   593→                  </div>
+   594→                  
+   595→                  <div className="flex items-center gap-2 text-xs text-gray-400">
+   596→                    <Button variant="ghost" size="sm" className="text-gray-400">
+   597→                      <History className="w-4 h-4 mr-1" />
+   598→                      History
+   599→                    </Button>
+   600→                    <Button variant="ghost" size="sm" className="text-gray-400">
+   601→                      <Bookmark className="w-4 h-4 mr-1" />
+   602→                      Save Template
+   603→                    </Button>
+   604→                  </div>
+   605→                </div>
+   606→              </CardContent>
+   607→            </Card>
+   608→
+   609→            {/* Query History */}
+   610→            <Card className="border-slate-700/50 bg-slate-800/40 backdrop-blur-sm">
+   611→              <CardHeader className="pb-3">
+   612→                <CardTitle className="text-lg flex items-center gap-2">
+   613→                  <History className="w-5 h-5 text-blue-400" />
+   614→                  Query History
+   615→                  <Badge variant="secondary" className="ml-2">{session.queries.length}</Badge>
+   616→                </CardTitle>
+   617→              </CardHeader>
+   618→              <CardContent>
+   619→                <ScrollArea className="h-[250px]">
+   620→                  <Table>
+   621→                    <TableHeader>
+   622→                      <TableRow className="border-slate-700/50 hover:bg-transparent">
+   623→                        <TableHead className="text-gray-400">Name</TableHead>
+   624→                        <TableHead className="text-gray-400">Type</TableHead>
+   625→                        <TableHead className="text-gray-400">Results</TableHead>
+   626→                        <TableHead className="text-gray-400">Time</TableHead>
+   627→                        <TableHead className="text-gray-400">Status</TableHead>
+   628→                      </TableRow>
+   629→                    </TableHeader>
+   630→                    <TableBody>
+   631→                      {session.queries.map(query => (
+   632→                        <TableRow key={query.id} className="border-slate-700/50 cursor-pointer hover:bg-slate-700/30">
+   633→                          <TableCell className="font-medium text-white">{query.name}</TableCell>
+   634→                          <TableCell>
+   635→                            <Badge variant="outline" className="text-xs">{query.queryType}</Badge>
+   636→                          </TableCell>
+   637→                          <TableCell className="text-gray-300">
+   638→                            {query.resultCount.toLocaleString()} results
+   639→                          </TableCell>
+   640→                          <TableCell className="text-gray-400 text-sm">
+   641→                            {(query.executionTime / 1000).toFixed(2)}s
+   642→                          </TableCell>
+   643→                          <TableCell>
+   644→                            <StatusBadge status={query.status} />
+   645→                          </TableCell>
+   646→                        </TableRow>
+   647→                      ))}
+   648→                    </TableBody>
+   649→                  </Table>
+   650→                </ScrollArea>
+   651→              </CardContent>
+   652→            </Card>
+   653→          </div>
+   654→
+   655→          {/* Right Panel - Findings */}
+   656→          <div className="space-y-6">
+   657→            {/* Findings List */}
+   658→            <Card className="border-slate-700/50 bg-slate-800/40 backdrop-blur-sm">
+   659→              <CardHeader className="pb-3">
+   660→                <div className="flex items-center justify-between">
+   661→                  <CardTitle className="text-lg flex items-center gap-2">
+   662→                    <Crosshair className="w-5 h-5 text-red-400" />
+   663→                    Findings
+   664→                    <Badge variant="destructive" className="ml-2">{filteredFindings.length}</Badge>
+   665→                  </CardTitle>
+   666→                  <div className="flex items-center gap-2">
+   667→                    <Select value={filterSeverity} onValueChange={setFilterSeverity}>
+   668→                      <SelectTrigger className="w-24 h-8 text-xs bg-slate-900/50 border-slate-600">
+   669→                        <SelectValue />
+   670→                      </SelectTrigger>
+   671→                      <SelectContent>
+   672→                        <SelectItem value="all">All</SelectItem>
+   673→                        <SelectItem value="CRITICAL">Critical</SelectItem>
+   674→                        <SelectItem value="HIGH">High</SelectItem>
+   675→                        <SelectItem value="MEDIUM">Medium</SelectItem>
+   676→                        <SelectItem value="LOW">Low</SelectItem>
+   677→                      </SelectContent>
+   678→                    </Select>
+   679→                    <div className="flex border border-slate-600 rounded">
+   680→                      <Button
+   681→                        variant={viewMode === 'list' ? 'secondary' : 'ghost'}
+   682→                        size="icon"
+   683→                        className="h-8 w-8"
+   684→                        onClick={() => setViewMode('list')}
+   685→                      >
+   686→                        <List className="w-4 h-4" />
+   687→                      </Button>
+   688→                      <Button
+   689→                        variant={viewMode === 'grid' ? 'secondary' : 'ghost'}
+   690→                        size="icon"
+   691→                        className="h-8 w-8"
+   692→                        onClick={() => setViewMode('grid')}
+   693→                      >
+   694→                        <LayoutGrid className="w-4 h-4" />
+   695→                      </Button>
+   696→                    </div>
+   697→                  </div>
+   698→                </div>
+   699→              </CardHeader>
+   700→              <CardContent>
+   701→                <ScrollArea className="h-[450px]">
+   702→                  <div className="space-y-3">
+   703→                    {filteredFindings.map(finding => (
+   704→                      <div
+   705→                        key={finding.id}
+   706→                        onClick={() => setSelectedFinding(finding)}
+   707→                        className={`p-4 rounded-lg border cursor-pointer transition-all ${
+   708→                          selectedFinding?.id === finding.id
+   709→                            ? 'bg-slate-700/50 border-red-500/50 shadow-lg shadow-red-500/10'
+   710→                            : 'bg-slate-900/30 border-slate-700/50 hover:bg-slate-800/50 hover:border-slate-600'
+   711→                        }`}
+   712→                      >
+   713→                        <div className="flex items-start justify-between gap-2">
+   714→                          <h4 className="text-sm font-medium text-white line-clamp-2">{finding.title}</h4>
+   715→                          <SeverityBadge severity={finding.severity} />
+   716→                        </div>
+   717→                        
+   718→                        <p className="text-xs text-gray-400 mt-2 line-clamp-2">{finding.description}</p>
+   719→                        
+   720→                        <div className="flex items-center justify-between mt-3">
+   721→                          <StatusBadge status={finding.status} />
+   722→                          <ConfidenceIndicator value={finding.confidence} />
+   723→                        </div>
+   724→                        
+   725→                        {finding.iocs.length > 0 && (
+   726→                          <div className="mt-3 pt-3 border-t border-slate-700/50">
+   727→                            <div className="flex items-center gap-2 text-xs text-gray-400">
+   728→                              <Fingerprint className="w-3 h-3" />
+   729→                              <span>{finding.iocs.length} IOCs extracted</span>
+   730→                            </div>
+   731→                          </div>
+   732→                        )}
+   733→                      </div>
+   734→                    ))}
+   735→                  </div>
+   736→                </ScrollArea>
+   737→              </CardContent>
+   738→            </Card>
+   739→          </div>
+   740→        </div>
+   741→
+   742→        {/* Finding Detail Modal */}
+   743→        {selectedFinding && (
+   744→          <Dialog open={!!selectedFinding} onOpenChange={() => setSelectedFinding(null)}>
+   745→            <DialogContent className="max-w-4xl max-h-[85vh] overflow-y-auto bg-slate-900 border-slate-700 text-white">
+   746→              <DialogHeader>
+   747→                <DialogTitle className="flex items-center gap-3 text-xl">
+   748→                  <SeverityBadge severity={selectedFinding.severity} />
+   749→                  {selectedFinding.title}
+   750→                </DialogTitle>
+   751→                <DialogDescription className="text-gray-400">
+   752→                  Finding ID: {selectedFinding.id} | Created: {new Date(selectedFinding.timestamp).toLocaleString()}
+   753→                </DialogDescription>
+   754→              </DialogHeader>
+   755→
+   756→              <Tabs defaultValue="details" className="mt-4">
+   757→                <TabsList className="bg-slate-800">
+   758→                  <TabsTrigger value="details">Details</TabsTrigger>
+   759→                  <TabsTrigger value="evidence">Raw Evidence</TabsTrigger>
+   760→                  <TabsTrigger value="iocs">IOCs ({selectedFinding.iocs.length})</TabsTrigger>
+   761→                  <TabsTrigger value="actions">Actions</TabsTrigger>
+   762→                </TabsList>
+   763→
+   764→                <TabsContent value="details" className="space-y-4 mt-4">
+   765→                  <div className="grid grid-cols-2 gap-4">
+   766→                    <div className="p-4 rounded-lg bg-slate-800/50 border border-slate-700">
+   767→                      <span className="text-xs text-gray-400 uppercase tracking-wider">Description</span>
+   768→                      <p className="text-sm text-gray-200 mt-1">{selectedFinding.description}</p>
+   769→                    </div>
+   770→                    <div className="p-4 rounded-lg bg-slate-800/50 border border-slate-700 space-y-3">
+   771→                      <div className="flex items-center justify-between">
+   772→                        <span className="text-xs text-gray-400 uppercase tracking-wider">Confidence</span>
+   773→                        <ConfidenceIndicator value={selectedFinding.confidence} />
+   774→                      </div>
+   775→                      <div className="flex items-center justify-between">
+   776→                        <span className="text-xs text-gray-400 uppercase tracking-wider">Status</span>
+   777→                        <StatusBadge status={selectedFinding.status} />
+   778→                      </div>
+   779→                    </div>
+   780→                  </div>
+   781→                </TabsContent>
+   782→
+   783→                <TabsContent value="evidence" className="mt-4">
+   784→                  <pre className="p-4 rounded-lg bg-slate-950 border border-slate-700 overflow-x-auto text-sm text-green-400 font-mono">
+   785→                    {JSON.stringify(selectedFinding.rawEvidence, null, 2)}
+   786→                  </pre>
+   787→                </TabsContent>
+   788→
+   789→                <TabsContent value="iocs" className="mt-4">
+   790→                  {selectedFinding.iocs.length > 0 ? (
+   791→                    <Table>
+   792→                      <TableHeader>
+   793→                        <TableRow className="border-slate-700">
+   794→                          <TableHead className="text-gray-400">Type</TableHead>
+   795→                          <TableHead className="text-gray-400">Value</TableHead>
+   796→                          <TableHead className="text-gray-400">Confidence</TableHead>
+   797→                          <TableHead className="text-gray-400">Source</TableHead>
+   798→                          <TableHead className="text-gray-400">Tags</TableHead>
+   799→                        </TableRow>
+   800→                      </TableHeader>
+   801→                      <TableBody>
+   802→                        {selectedFinding.iocs.map(ioc => (
+   803→                          <TableRow key={ioc.id} className="border-slate-700/50">
+   804→                            <TableCell>
+   805→                              <Badge variant="outline" className="text-xs">{ioc.type.toUpperCase()}</Badge>
+   806→                            </TableCell>
+   807→                            <TableCell className="font-mono text-sm text-white">{ioc.value}</TableCell>
+   808→                            <TableCell>{ioc.confidence}%</TableCell>
+   809→                            <TableCell className="text-gray-400 text-sm">{ioc.source}</TableCell>
+   810→                            <TableCell>
+   811→                              <div className="flex gap-1 flex-wrap">
+   812→                                {ioc.tags.map(tag => (
+   813→                                  <Badge key={tag} variant="secondary" className="text-xs">{tag}</Badge>
+   814→                                ))}
+   815→                              </div>
+   816→                            </TableCell>
+   817→                          </TableRow>
+   818→                        ))}
+   819→                      </TableBody>
+   820→                    </Table>
+   821→                  ) : (
+   822→                    <div className="text-center py-8 text-gray-400">
+   823→                      <Fingerprint className="w-12 h-12 mx-auto mb-3 opacity-50" />
+   824→                      <p>No IOCs extracted for this finding</p>
+   825→                    </div>
+   826→                  )}
+   827→                </TabsContent>
+   828→
+   829→                <TabsContent value="actions" className="mt-4">
+   830→                  <div className="grid grid-cols-2 gap-3">
+   831→                    <Button variant="outline" className="justify-start gap-2 h-auto py-3">
+   832→                      <Share2 className="w-4 h-4" />
+   833→                      <div className="text-left">
+   834→                        <div className="font-medium text-sm">Escalate to IR</div>
+   835→                        <div className="text-xs text-gray-400">Create incident from this finding</div>
+   836→                      </div>
+   837→                    </Button>
+   838→                    <Button variant="outline" className="justify-start gap-2 h-auto py-3">
+   839→                      <Bookmark className="w-4 h-4" />
+   840→                      <div className="text-left">
+   841→                        <div className="font-medium text-sm">Add to Threat Intel</div>
+   842→                        <div className="text-xs text-gray-400">Push IOCs to TI platform</div>
+   843→                      </div>
+   844→                    </Button>
+   845→                    <Button variant="outline" className="justify-start gap-2 h-auto py-3">
+   846→                      <Copy className="w-4 h-4" />
+   847→                      <div className="text-left">
+   848→                        <div className="font-medium text-sm">Clone Query</div>
+   849→                        <div className="text-xs text-gray-400">Use this query as template</div>
+   850→                      </div>
+   851→                    </Button>
+   852→                    <Button variant="outline" className="justify-start gap-2 h-auto py-3">
+   853→                      <FileText className="w-4 h-4" />
+   854→                      <div className="text-left">
+   855→                        <div className="font-medium text-sm">Generate Report</div>
+   856→                        <div className="text-xs text-gray-400">Export finding details</div>
+   857→                      </div>
+   858→                    </Button>
+   859→                  </div>
+   860→                </TabsContent>
+   861→              </Tabs>
+   862→            </DialogContent>
+   863→          </Dialog>
+   864→        )}
+   865→      </div>
+   866→    </div>
+   867→  )
+   868→}
+   869→
+   870→// Export default for easy importing
+   871→export default HuntWorkspace
+   872→
