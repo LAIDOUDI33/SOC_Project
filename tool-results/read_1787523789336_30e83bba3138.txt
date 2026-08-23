@@ -1,0 +1,1187 @@
+     1→/**
+     2→ * TheHive & Cortex SOAR Integration Client
+     3→ * Phase 11: Enterprise Security Orchestration & Response
+     4→ * 
+     5→ * Features:
+     6→ * - TheHive 5.x Case Management API integration
+     7→ * - Cortex Analysis Engine with 10+ analyzers
+     8→ * - Automated playbook execution
+     9→ * - Bidirectional sync with SOC Platform
+    10→ * - IOC enrichment and task automation
+    11→ * 
+    12→ * @version 1.0.0
+    13→ */
+    14→
+    15→import { EventEmitter } from 'events';
+    16→
+    17→// ============================================================
+    18→// Types & Interfaces
+    19→// ============================================================
+    20→
+    21→export interface TheHiveConfig {
+    22→  apiUrl: string;
+    23→  apiKey: string;
+    24→  organisation?: string; // For multi-tenant TheHive
+    25→  timeout?: number;
+    26→}
+    27→
+    28→export interface CortexConfig {
+    29→  apiUrl: string;
+    30→  apiKey: string;
+    31→  timeout?: number;
+    32→}
+    33→
+    34→export interface SoarIntegrationConfig {
+    35→  thehive: TheHiveConfig;
+    36→  cortex: CortexConfig;
+    37→  enableWebhook?: boolean; // Receive webhooks from TheHive
+    38→  webhookSecret?: string;
+    39→}
+    40→
+    41→// TheHive Models
+    42→export interface HiveCase {
+    43→  id: string;
+    44→  caseId: number;
+    45→  title: string;
+    46→  description: string;
+    47→  severity: number; // 1-4 (critical to low)
+    48→  status: 'Open' | 'Resolved' | 'Deleted' | 'Duplicated';
+    49→  tags: string[];
+    50→  flag: boolean;
+    51→  tlp: number; // Traffic Light Protocol (0-3)
+    52→  pap: number; // Permissible Actions Protocol (0-3)
+    53→  summary?: string;
+    54→  assignee?: string;
+    55→  owner?: string;
+    56→  customFields?: Record<string, any>;
+    57→  
+    58→  // Dates
+    59→  createdAt: string;
+    60→  updatedAt: string;
+    61→  startDate?: string;
+    62→  
+    63→  // Metrics
+    64→  taskCount?: number;
+    65→  observableCount?: number;
+    66→}
+    67→
+    68→export interface HiveTask {
+    69→  id: string;
+    70→  taskId: number;
+    71→  title: string;
+    72→  description?: string;
+    73→  status: 'Waiting' | 'InProgress' | 'Completed' | 'Cancel';
+    74→  flag: boolean;
+    75→  assignee?: string;
+    76→  dueDate?: string;
+    77→  startDate?: string;
+    78→  endDate?: string;
+    79→  
+    80→  // Group
+    81→  groupId?: number;
+    82→  groupName?: string;
+    83→}
+    84→
+    85→export interface HiveObservable {
+    86→  id: string;
+    87→  observableId: number;
+    88→  dataType: string; // ip, domain, hash, url, mail, etc.
+    89→  data: string; // The actual value
+    90→  message?: string;
+    91→  tlp: number;
+    92→  pap: number;
+    93→  ioc?: boolean;
+    94→  sighted?: boolean;
+    95→  tags: string[];
+    96→  
+    97→  // Analysis results
+    98→  analysis?: CortexAnalysis[];
+    99→  
+   100→  // Related cases/observables
+   101→  similar?: Array<{
+   102→    ratio: number;
+   103→    observable: { id: string; dataType: string; data: string };
+   104→  }>;
+   105→}
+   106→
+   107→export interface HiveTimelineEntry {
+   108→  id: string;
+   109→  entryId: number;
+   110→  caseId: number;
+   111→  contentType: 'case' | 'task' | 'observable';
+   112→  content: string;
+   113→  createdAt: string;
+   114→  createdBy: string;
+   115→  tags?: string[];
+   116→}
+   117→
+   118→export interface Comment {
+   119→  id: string;
+   120→  commentId: number;
+   121→  caseId: number;
+   122→  text: string;
+   123→  author: string;
+   124→  createdAt: string;
+   125→  modifiedAt?: string;
+   126→}
+   127→
+   128→// Cortex Models
+   129→export interface CortexAnalyzer {
+   130→  id: string;
+   131→  name: string;
+   132→  version: string;
+   133→  description: string;
+   134→  dataTypeList: string[]; // What types of observables it can analyze
+   135→  author: string;
+   136→  url: string;
+   137→  license?: string;
+   138→  configuration: Record<string, any>;
+   139→}
+   140→
+   141→export interface CortexJob {
+   142→  jobId: string;
+   143→  analyzerId: string;
+   144→  analyzerName: string;
+   145→  analyzerDefinition: string;
+   146→  observable: { dataType: string; data: string };
+   147→  status: 'Success' | 'Failure' | 'Timeout' | 'Unknown';
+   148→  createDate: string;
+   149→  startDate?: string;
+   150→  endDate?: string;
+   151→  
+   152→  // Results
+   153→  report?: CortexReport;
+   154→  errorMessage?: string;
+   155→}
+   156→
+   157→export interface CortexReport {
+   158→  summary: { taxonomies: Array<{ namespace: string; predicate: string; level: string; value: string }>; full: string };
+   159→  artifacts: Array<{ data: string; label: string; messageType: string; tags?: string[] }>;
+   160→  operations: Array<{ operation: object }>;
+   161→  fullReport?: any; // Complete report object
+   162→}
+   163→
+   164→// Search & Filter Types
+   165→export interface CaseSearchFilters {
+   166→  range?: string; // "all", "my-cases", "excluded"
+   167→  query?: Array<{
+   168→    _field: string;
+   169→    _value: any;
+   170→    _operator?: string;
+   171→  }>;
+   172→  sort?: Array<{ _field: string; _order: 'asc' | 'desc' }>;
+   173→  count?: number;
+   174→  from?: number;
+   175→}
+   176→
+   177→export interface ObservableSearchFilters {
+   178→  range?: string;
+   179→  dataType?: string[];
+   180→  query?: Array<{
+   181→    _field: string;
+   182→    _value: any;
+   183→  }>;
+   184→  sort?: Array<{ _field: string; _order: 'asc' | 'desc' }>;
+   185→  count?: number;
+   186→  from?: number;
+   187→}
+   188→
+   189→// ============================================================
+   190→// Custom Errors
+   191→// ============================================================
+   192→
+   193→export class SoarIntegrationError extends Error {
+   194→  constructor(
+   195→    message: string,
+   196→    public code: string,
+   197→    public originalError?: Error,
+   198→    public context?: Record<string, any>
+   199→  ) {
+   200→    super(message);
+   201→    this.name = 'SoarIntegrationError';
+   202→  }
+   203→}
+   204→
+   205→export class TheHiveApiError extends SoarIntegrationError {
+   206→  constructor(
+   207→    message: string,
+   208→    public statusCode: number,
+   209→    originalError?: Error
+   210→  ) {
+   211→    super(message, 'THEHIVE_API_ERROR', originalError);
+   212→    this.name = 'TheHiveApiError';
+   213→  }
+   214→}
+   215→
+   216→export class CortexApiError extends SoarIntegrationError {
+   217→  constructor(
+   218→    message: string,
+   219→    public statusCode: number,
+   220→    originalError?: Error
+   221→  ) {
+   222→    super(message, 'CORTEX_API_ERROR', originalError);
+   223→    this.name = 'CortexApiError';
+   224→  }
+   225→}
+   226→
+   227→// ============================================================
+   228→// TheHive Client
+   229→// ============================================================
+   230→
+   231→export class TheHiveClient {
+   232→  private config: TheHiveConfig;
+   233→
+   234→  constructor(config: TheHiveConfig) {
+   235→    this.config = {
+   236→      ...config,
+   237→      timeout: config.timeout || 30000,
+   238→    };
+   239→  }
+   240→
+   241→  private async apiRequest<T>(
+   242→    path: string,
+   243→    options: RequestInit = {}
+   244→  ): Promise<T> {
+   245→    const url = `${this.config.apiUrl}${path}`;
+   246→    
+   247→    try {
+   248→      const response = await fetch(url, {
+   249→        ...options,
+   250→        headers: {
+   251→          'Authorization': `Bearer ${this.config.apiKey}`,
+   252→          'Content-Type': 'application/json',
+   253→          ...(this.config.organisation ? { 'X-Organisation': this.config.organisation } : {}),
+   254→          ...(options.headers as Record<string, string>),
+   255→        },
+   256→        signal: AbortSignal.timeout(this.config.timeout!),
+   257→      });
+   258→
+   259→      if (!response.ok) {
+   260→        const errorBody = await response.json().catch(() => ({}));
+   261→        throw new TheHiveApiError(
+   262→          `TheHive API error (${response.status}): ${errorBody.message || response.statusText}`,
+   263→          response.status,
+   264→          undefined,
+   265→          errorBody
+   266→        );
+   267→      }
+   268→
+   269→      return response.json() as Promise<T>;
+   270→    } catch (error) {
+   271→      if (error instanceof TheHiveApiError || error instanceof SoarIntegrationError) throw error;
+   272→      throw new SoarIntegrationError(
+   273→        `TheHive request failed: ${error instanceof Error ? error.message : String(error)}`,
+   274→        'REQUEST_ERROR',
+   275→        error as Error
+   276→      );
+   277→    }
+   278→  }
+   279→
+   280→  /**
+   281→   * Create a new case in TheHive
+   282→   */
+   283→  async createCase(caseData: {
+   284→    title: string;
+   285→    description: string;
+   286→    severity: 1 | 2 | 3 | 4;
+   287→    tags?: string[];
+   288→    tlp?: number;
+   289→    pap?: number;
+   290→    flag?: boolean;
+   291→    template?: string;
+   292→    taskTitle?: string; // Auto-create first task
+   293→  }): Promise<HiveCase> {
+   294→    const payload = {
+   295→      title: caseData.title,
+   296→      description: caseData.description,
+   297→      severity: caseData.severity,
+   298→      tags: caseData.tags || [],
+   299→      tlp: caseData.tlp || 2,
+   300→      pap: caseData.pap || 2,
+   301→      flag: caseData.flag || false,
+   302→    };
+   303→
+   304→    return this.apiRequest<HiveCase>('/api/case', {
+   305→      method: 'POST',
+   306→      body: JSON.stringify(payload),
+   307→    });
+   308→  }
+   309→
+   310→  /**
+   311→   * Get a specific case by ID
+   312→   */
+   313→  async getCase(caseId: string): Promise<HiveCase> {
+   314→    return this.apiRequest<HiveCase>(`/api/case/${caseId}`);
+   315→  }
+   316→
+   317→  /**
+   318→   * Search cases with filters
+   319→   */
+   320→  async searchCases(filters: CaseSearchFilters): Promise<{
+   321→    cases: HiveCase[];
+   322→    total: number;
+   323→  }> {
+   324→    const response = await this.apiRequest<{
+   325→      cases: HiveCase[];
+   326→      total: number;
+   327→    }>('/api/case/_search', {
+   328→      method: 'POST',
+   329→      body: JSON.stringify({
+   330→        query: filters.query || [],
+   331→        range: filters.range || 'all',
+   332→        sort: filters.sort || [{ _field: 'createdAt', _order: 'desc' }],
+   333→        count: filters.count || 50,
+   334→        from: filters.from || 0,
+   335→      }),
+   336→    });
+   337→
+   338→    return response;
+   339→  }
+   340→
+   341→  /**
+   342→   * Update an existing case
+   343→   */
+   344→  async updateCase(caseId: string, updates: Partial<Pick<HiveCase, 'title' | 'description' | 'severity' | 'status' | 'tags' | 'tlp' | 'pap' | 'flag'>>): Promise<HiveCase> {
+   345→    return this.apiRequest<HiveCase>(`/api/case/${caseId}`, {
+   346→      method: 'PATCH',
+   347→      body: JSON.stringify(updates),
+   348→    });
+   349→  }
+   350→
+   351→  /**
+   352→   * Close/resolve a case
+   353→   */
+   354→  async closeCase(caseId: string, resolution?: string): Promise<HiveCase> {
+   355→    return this.updateCase(caseId, { status: 'Resolved' });
+   356→  }
+   357→
+   358→  /**
+   359→   * Get tasks for a case
+   360→   */
+   361→  async getTasks(caseId: string): Promise<HiveTask[]> {
+   362→    return this.apiRequest<HiveTask[]>(`/api/case/${caseId}/task`);
+   363→  }
+   364→
+   365→  /**
+   366→   * Create a new task for a case
+   367→   */
+   368→  async createTask(caseId: string, taskData: {
+   369→    title: string;
+   370→    description?: string;
+   371→    assignee?: string;
+   372→    flag?: boolean;
+   373→    dueDate?: string;
+   374→    status?: 'Waiting' | 'InProgress' | 'Completed' | 'Cancel';
+   375→  }): Promise<HiveTask> {
+   376→    return this.apiRequest<HiveTask>(`/api/case/${caseId}/task`, {
+   377→      method: 'POST',
+   378→      body: JSON.stringify(taskData),
+   379→    });
+   380→  }
+   381→
+   382→  /**
+   383→   * Update a task
+   384→   */
+   385→  async updateTask(caseId: string, taskId: string, updates: Partial<Pick<HiveTask, 'title' | 'description' | 'status' | 'assignee' | 'flag' | 'dueDate'>>): Promise<HiveTask> {
+   386→    return this.apiRequest<HiveTask>(`/api/case/${caseId}/task/${taskId}`, {
+   387→      method: 'PATCH',
+   388→      body: JSON.stringify(updates),
+   389→    });
+   390→  }
+   391→
+   392→  /**
+   393→   * Add observable to a case
+   394→   */
+   395→  async addObservable(caseId: string, observable: {
+   396→    dataType: string;
+   397→    data: string;
+   398→    message?: string;
+   399→    tlp?: number;
+   400→    pap?: number;
+   401→    tags?: string[];
+   402→    ioc?: boolean;
+   403→    sighted?: boolean;
+   404→  }): Promise<HiveObservable> {
+   405→    return this.apiRequest<HiveObservable>(`/api/case/${caseId}/observable`, {
+   406→      method: 'POST',
+   407→      body: JSON.stringify(observable),
+   408→    });
+   409→  }
+   410→
+   411→  /**
+   412→   * Batch add observables to a case
+   413→   */
+   414→  async addObservablesBatch(caseId: string, observables: Array<{
+   415→    dataType: string;
+   416→    data: string;
+   417→    message?: string;
+   418→    tags?: string[];
+   419→  }>): Promise<HiveObservable[]> {
+   420→    const results = await Promise.allSettled(
+   421→      observables.map(obs => this.addObservable(caseId, obs))
+   422→    );
+   423→
+   424→    return results
+   425→      .filter((r): r is PromiseFulfilledResult<HiveObservable> => r.status === 'fulfilled')
+   426→      .map(r => r.value);
+   427→  }
+   428→
+   429→  /**
+   430→   * Get observables for a case
+   431→   */
+   432→  async getObservables(caseId: string, filters?: ObservableSearchFilters): Promise<{
+   433→    observables: HiveObservable[];
+   434→    total: number;
+   435→  }> {
+   436→    const params = new URLSearchParams();
+   437→    if (filters?.dataType?.length) params.append('dataType', filters.dataType.join(','));
+   438→    if (filters?.count) params.append('count', String(filters.count));
+   439→    if (filters?.from) params.append('from', String(filters.from));
+   440→
+   441→    return this.apiRequest<{
+   442→      observables: HiveObservable[];
+   443→      total: number;
+   444→    }>(`/api/case/${caseId}/observable?${params}`);
+   445→  }
+   446→
+   447→  /**
+   448→   * Search observables across all cases
+   449→   */
+   450→  async searchObservables(filters: ObservableSearchFilters): Promise<{
+   451→    observables: HiveObservable[];
+   452→    total: number;
+   453→  }> {
+   454→    return this.apiRequest<{
+   455→      observables: HiveObservable[];
+   456→      total: number;
+   457→    }>('/api/case/observable/_search', {
+   458→      method: 'POST',
+   459→      body: JSON.stringify({
+   460→        query: filters.query || [],
+   461→        range: filters.range || 'all',
+   462→        sort: filters.sort || [{ _field: 'createdAt', _order: 'desc' }],
+   463→        count: filters.count || 50,
+   464→        from: filters.from || 0,
+   465→      }),
+   466→    });
+   467→  }
+   468→
+   469→  /**
+   470→   * Get timeline entries for a case
+   471→   */
+   472→  async getTimeline(caseId: string): Promise<HiveTimelineEntry[]> {
+   473→    return this.apiRequest<HiveTimelineEntry[]>(`/api/case/${caseId}/timeline`);
+   474→  }
+   475→
+   476→  /**
+   477→   * Add comment to a case
+   478→   */
+   479→  async addComment(caseId: string, text: string): Promise<Comment> {
+   480→    return this.apiRequest<Comment>(`/api/case/${caseId}/comment`, {
+   481→      method: 'POST',
+   482→      body: JSON.stringify({ message: text }),
+   483→    });
+   484→  }
+   485→
+   486→  /**
+   487→   * Merge two cases
+   488→   */
+   489→  async mergeCases(targetCaseId: string, sourceCaseIds: string[]): Promise<HiveCase> {
+   490→    return this.apiRequest<HiveCase>(`/api/case/${targetCaseId}/_merge`, {
+   491→      method: 'POST',
+   492→      body: JSON.stringify({ caseIds: sourceCaseIds }),
+   493→    });
+   494→
+   495→  }
+   496→
+   497→  /**
+   498→   * Export a case
+   499→   */
+   500→  async exportCase(caseId: string, format: 'json' | 'csv'): Promise<Blob> {
+   501→    const response = await fetch(`${this.config.apiUrl}/api/case/${caseId}/export?format=${format}`, {
+   502→      headers: {
+   503→        'Authorization': `Bearer ${this.config.apiKey}`,
+   504→      },
+   505→    });
+   506→
+   507→    if (!response.ok) {
+   508→      throw new TheHiveApiError(`Export failed: ${response.statusText}`, response.status);
+   509→    }
+   510→
+   511→    return response.blob();
+   512→  }
+   513→
+   514→  /**
+   515→   * Test connectivity to TheHive
+   516→   */
+   517→  async healthCheck(): Promise<{
+   518→    status: 'healthy' | 'unhealthy';
+   519→    version: string;
+   520→    user: string;
+   521→    latency: number;
+   522→  }> {
+   523→    const startTime = Date.now();
+   524→    
+   525→    try {
+   526→      const user = await this.apiRequest<any>('/api/user/me');
+   527→      const latency = Date.now() - startTime;
+   528→
+   529→      return {
+   530→        status: 'healthy',
+   531→        version: 'connected',
+   532→        user: user.id || 'unknown',
+   533→        latency,
+   534→      };
+   535→    } catch (error) {
+   536→      return {
+   537→        status: 'unhealthy',
+   538→        version: 'unknown',
+   539→        user: 'unknown',
+   540→        latency: Date.now() - startTime,
+   541→      };
+   542→    }
+   543→  }
+   544→}
+   545→
+   546→// ============================================================
+   547→// Cortex Client
+   548→// ============================================================
+   549→
+   550→export class CortexClient {
+   551→  private config: CortexConfig;
+   552→
+   553→  constructor(config: CortexConfig) {
+   554→    this.config = {
+   555→      ...config,
+   556→      timeout: config.timeout || 60000, // Cortex jobs can take longer
+   557→    };
+   558→  }
+   559→
+   560→  private async apiRequest<T>(
+   561→    path: string,
+   562→    options: RequestInit = {}
+   563→  ): Promise<T> {
+   564→    const url = `${this.config.apiUrl}${path}`;
+   565→
+   566→    try {
+   567→      const response = await fetch(url, {
+   568→        ...options,
+   569→        headers: {
+   570→          'Authorization': `Bearer ${this.config.apiKey}`,
+   571→          'Content-Type': 'application/json',
+   572→          ...(options.headers as Record<string, string>),
+   573→        },
+   574→        signal: AbortSignal.timeout(this.config.timeout!),
+   575→      });
+   576→
+   577→      if (!response.ok) {
+   578→        const errorBody = await response.json().catch(() => ({}));
+   579→        throw new CortexApiError(
+   580→          `Cortex API error (${response.status}): ${errorBody.message || response.statusText}`,
+   581→          response.status,
+   582→          undefined,
+   583→          errorBody
+   584→        );
+   585→      }
+   586→
+   587→      return response.json() as Promise<T>;
+   588→    } catch (error) {
+   589→      if (error instanceof CortexApiError || error instanceof SoarIntegrationError) throw error;
+   590→      throw new SoarIntegrationError(
+   591→        `Cortex request failed: ${error instanceof Error ? error.message : String(error)}`,
+   592→        'REQUEST_ERROR',
+   593→        error as Error
+   594→      );
+   595→    }
+   596→  }
+   597→
+   598→  /**
+   599→   * Get available analyzers
+   600→   */
+   601→  async getAnalyzers(dataType?: string): Promise<CortexAnalyzer[]> {
+   602→    let url = '/api/analyzer';
+   603→    if (dataType) {
+   604→      url += `?dataType=${dataType}`;
+   605→    }
+   606→
+   607→    return this.apiRequest<CortexAnalyzer[]>(url);
+   608→  }
+   609→
+   610→  /**
+   611→   * Run analysis on an observable
+   612→   */
+   613→  async runAnalysis(observable: {
+   614→    dataType: string;
+   615→    data: string;
+   616→    attachment?: string; // For file-based observables
+   617→  }, analyzerIds: string[], options?: {
+   618→    force?: boolean; // Re-run even if cached results exist
+   619→    tlp?: number;
+   620→    pap?: number;
+   621→  }): Promise<CortexJob> {
+   622→    const payload = {
+   623→      data: [observable],
+   624→      analyzerIds,
+   625→      force: options?.force || false,
+   626→      tlp: options?.tlp || 2,
+   627→      pap: options?.pap || 2,
+   628→    };
+   629→
+   630→    return this.apiRequest<CortexJob>('/api/analyze', {
+   631→      method: 'POST',
+   632→      body: JSON.stringify(payload),
+   633→    });
+   634→  }
+   635→
+   636→  /**
+   637→   * Run multiple analyzers on an observable (common use case)
+   638→   */
+   639→  async runFullAnalysis(observable: {
+   640→    dataType: string;
+   641→    data: string;
+   642→  }, category?: 'ip' | 'domain' | 'hash' | 'url' | 'mail' | 'telco'): Promise<CortexJob[]> {
+   643→    // Select appropriate analyzers based on data type and category
+   644→    let analyzerIds: string[];
+   645→
+   646→    switch (category || observable.dataType) {
+   647→      case 'ip':
+   648→        analyzerIds = [
+   649→          'AbuseIPDB_2_0',
+   650→          'VirusTotal_GetIPReport_3_1',
+   651→          'Shodan_Search',
+   652→          'Censys_Search',
+   653→          'IPInfo_1_0',
+   654→          'GreyNoise_Community_3_1',
+   655→          'ThreatFox_1_0',
+   656→        ];
+   657→        break;
+   658→      
+   659→      case 'domain':
+   660→        analyzerIds = [
+   661→          'VirusTotal_GetDomainReport_3_1',
+   662→          'DNSdb_Tools_3_1',
+   663→          'SecurityTrails_2_1',
+   664→          'Urlhaus_Query_1_0',
+   665→          'PhishTank_Submit_2_1',
+   666→          'AlienVault_OTXQuery_2_1',
+   667→        ];
+   668→        break;
+   669→      
+   670→      case 'hash':
+   671→        analyzerIds = [
+   672→          'VirusTotal_GetReport_3_1',
+   673→          'HybridAnalysis_GetReport_2_1',
+   674→          'MalwareBazaar_GetFile_2_1',
+   675→          'XForce_Malware_2_0',
+   676→          'MISP_Search_2_1',
+   677→          'Unpac_ME_EXE_Unpacker_1_0',
+   678→        ];
+   679→        break;
+   680→      
+   681→      case 'url':
+   682→        analyzerIds = [
+   683→          'VirusTotal_ScanURL_3_1',
+   684→          'UrlScan_IO_1_0',
+   685→          'Phishtank_2_0',
+   686→          'URLhaus_Query_1_0',
+   687→          'GoogleSafeBrowsing_1_0',
+   688→        ];
+   689→        break;
+   690→      
+   691→      case 'mail':
+   692→        analyzerIds = [
+   693→          'HaveIBeenPwned_Breaches_2_1',
+   694→          'Hunter_io_2_0',
+   695→          'EmailRep_2_0',
+   696→          'MISP_Search_2_1',
+   697→        ];
+   698→        break;
+   699→
+   700→      case 'telco':
+   701→        // Djezzy-specific telco analyzers
+   702→        analyzerIds = [
+   703→          'Djezzy_Subscriber_Lookup_1_0',
+   704→          'Djezzy_Fraud_Check_1_0',
+   705→          'SIMSwap_Database_1_0',
+   706→          'Roaming_Analysis_1_0',
+   707→        ];
+   708→        break;
+   709→      
+   710→      default:
+   711→        analyzerIds = ['VirusTotal_GetReport_3_1'];
+   712→    }
+   713→
+   714→    // Run each analyzer (or could batch them)
+   715→    const jobPromises = analyzerIds.map(analyzerId =>
+   716→      this.runAnalysis(observable, [analyzerId]).catch(error => {
+   717→        console.error(`[Cortex] Analyzer ${analyzerId} failed:`, error);
+   718→        return null;
+   719→      })
+   720→    );
+   721→
+   722→    const jobs = await Promise.all(jobPromises);
+   723→    return jobs.filter((job): job is CortexJob => job !== null);
+   724→  }
+   725→
+   726→  /**
+   727→   * Get job status and results
+   728→   */
+   729→  async getJob(jobId: string): Promise<CortexJob> {
+   730→    return this.apiRequest<CortexJob>(`/api/job/${jobId}`);
+   731→  }
+   732→
+   733→  /**
+   734→   * Wait for job completion (polling)
+   735→   */
+   736→  async waitForJob(
+   737→    jobId: string,
+   738→    options?: {
+   739→      pollIntervalMs?: number;
+   740→      maxWaitMs?: number;
+   741→    }
+   742→  ): Promise<CortexJob> {
+   743→    const pollInterval = options?.pollIntervalMs || 2000;
+   744→    const maxWait = options?.maxWaitMs || 120000; // Default 2 minutes
+   745→    const startTime = Date.now();
+   746→
+   747→    while (Date.now() - startTime < maxWait) {
+   748→      const job = await this.getJob(jobId);
+   749→
+   750→      if (job.status === 'Success' || job.status === 'Failure' || job.status === 'Timeout') {
+   751→        return job;
+   752→      }
+   753→
+   754→      // Wait before polling again
+   755→      await new Promise(resolve => setTimeout(resolve, pollInterval));
+   756→    }
+   757→
+   758→    throw new SoarIntegrationError('Job wait timeout exceeded', 'TIMEOUT');
+   759→  }
+   760→
+   761→  /**
+   762→   * Analyze observable and wait for all results
+   763→   */
+   764→  async analyzeAndWait(
+   765→    observable: {
+   766→      dataType: string;
+   767→      data: string;
+   768→    },
+   769→    category?: string
+   770→  ): Promise<CortexJob[]> {
+   771→    // Start all analyses
+   772→    const jobs = await this.runFullAnalysis(observable, category);
+   773→
+   774→    // Wait for all to complete
+   775→    const completedJobs = await Promise.allSettled(
+   776→      jobs.map(job => this.waitForJob(job.jobId))
+   777→    );
+   778→
+   779→    return completedJobs
+   780→      .filter((r): r is PromiseFulfilledResult<CortexJob> => r.status === 'fulfilled')
+   781→      .map(r => r.value);
+   782→  }
+   783→
+   784→  /**
+   785→   * Get report for a completed job
+   786→   */
+   787→  async getReport(jobId: string, format: 'full' | 'summary' = 'summary'): Promise<CortexReport> {
+   788→    const job = await this.getJob(jobId);
+   789→    
+   790→    if (!job.report) {
+   791→      throw new SoarIntegrationError('No report available for this job', 'NO_REPORT');
+   792→    }
+   793→
+   794→    return format === 'full' ? job.report.fullReport : job.report;
+   795→  }
+   796→
+   797→  /**
+   798→   * Search past jobs
+   799→   */
+   800→  async searchJobs(filters?: {
+   801→    dataType?: string;
+   802→    data?: string;
+   803→    status?: string;
+   804→    analyzerId?: string;
+   805→    startDate?: string;
+   806→    endDate?: string;
+   807→    range?: string;
+   808→    count?: number;
+   809→    from?: number;
+   810→  }): Promise<{ jobs: CortexJob[]; total: number }> {
+   811→    const params = new URLSearchParams();
+   812→    if (filters?.dataType) params.append('dataType', filters.dataType);
+   813→    if (filters?.data) params.append('data', filters.data);
+   814→    if (filters?.status) params.append('status', filters.status);
+   815→    if (filters?.analyzerId) params.append('analyzerId', filters.analyzerId);
+   816→    if (filters?.startDate) params.append('startDate', filters.startDate);
+   817→    if (filters?.endDate) params.append('endDate', filters.endDate);
+   818→    if (filters?.range) params.append('range', filters.range);
+   819→    if (filters?.count) params.append('count', String(filters.count));
+   820→    if (filters?.from) params.append('from', String(filters.from));
+   821→
+   822→    return this.apiRequest(`/api/job/search?${params}`);
+   823→  }
+   824→
+   825→  /**
+   826→   * Test connectivity to Cortex
+   827→   */
+   828→  async healthCheck(): Promise<{
+   829→    status: 'healthy' | 'unhealthy';
+   830→    version: string;
+   831→    analyzerCount: number;
+   832→    latency: number;
+   833→  }> {
+   834→    const startTime = Date.now();
+   835→
+   836→    try {
+   837→      const analyzers = await this.getAnalyzers();
+   838→      const latency = Date.now() - startTime;
+   839→
+   840→      return {
+   841→        status: 'healthy',
+   842→        version: 'connected',
+   843→        analyzerCount: analyzers.length,
+   844→        latency,
+   845→      };
+   846→    } catch (error) {
+   847→      return {
+   848→        status: 'unhealthy',
+   849→        version: 'unknown',
+   850→        analyzerCount: 0,
+   851→        latency: Date.now() - startTime,
+   852→      };
+   853→    }
+   854→  }
+   855→}
+   856→
+   857→// ============================================================
+   858→// Main SOAR Integration Service
+   859→// ============================================================
+   860→
+   861→export class SoarIntegrationService extends EventEmitter {
+   862→  private thehiveClient: TheHiveClient;
+   863→  private cortexClient: CortexClient;
+   864→  private config: SoarIntegrationConfig;
+   865→  private isRunning = false;
+   866→
+   867→  constructor(config: SoarIntegrationConfig) {
+   868→    super();
+   869→    this.config = config;
+   870→    this.thehiveClient = new TheHiveClient(config.thehive);
+   871→    this.cortexClient = new CortexClient(config.cortex);
+   872→  }
+   873→
+   874→  /**
+   875→   * Initialize the SOAR integration service
+   876→   */
+   877→  async initialize(): Promise<void> {
+   878→    console.log('[SOAR] Initializing SOAR integration service...');
+   879→
+   880→    try {
+   881→      // Test TheHive connectivity
+   882→      const thehiveHealth = await this.thehiveClient.healthCheck();
+   883→      console.log(`[SOAR] TheHive connection: ${thehiveHealth.status} (${thehiveHealth.latency}ms)`);
+   884→
+   885→      // Test Cortex connectivity
+   886→      const cortexHealth = await this.cortexClient.healthCheck();
+   887→      console.log(`[SOAR] Cortex connection: ${cortexHealth.status} (${cortexHealth.latency}ms, ${cortexHealth.analyzerCount} analyzers)`);
+   888→
+   889→      this.isRunning = true;
+   890→      this.emit('initialized', { thehiveHealth, cortexHealth });
+   891→
+   892→      console.log('[SOAR] SOAR integration service initialized successfully');
+   893→    } catch (error) {
+   894→      console.error('[SOAR] Failed to initialize:', error);
+   895→      this.emit('error', error);
+   896→      throw error;
+   897→    }
+   898→  }
+   899→
+   900→  /**
+   901→   * Shutdown gracefully
+   902→   */
+   903→  async shutdown(): Promise<void> {
+   904→    console.log('[SOAR] Shutting down SOAR integration service...');
+   905→    this.isRunning = false;
+   906→    this.emit('shutdown');
+   907→    console.log('[SOAR] SOAR integration service shutdown complete');
+   908→  }
+   909→
+   910→  /**
+   911→   * Create incident case from security alert
+   912→   */
+   913→  async createIncidentCase(alert: {
+   914→    title: string;
+   915→    description: string;
+   916→    severity: 'critical' | 'high' | 'medium' | 'low';
+   917→    eventType: string;
+   918→    sourceIp?: string;
+   919→    destinationIp?: string;
+   920→    subscriberId?: string;
+   921→    rawLog?: string;
+   922→  }): Promise<{
+   923→    case: HiveCase;
+   924→    initialTask: HiveTask;
+   925→    observablesAdded: HiveObservable[];
+   926→  }> {
+   927→    if (!this.isRunning) {
+   928→      throw new SoarIntegrationError('SOAR service is not running', 'SERVICE_NOT_RUNNING');
+   929→    }
+   930→
+   931→    // Map severity
+   932→    const severityMap: Record<string, 1 | 2 | 3 | 4> = {
+   933→      critical: 1,
+   934→      high: 2,
+   935→      medium: 3,
+   936→      low: 4,
+   937→    };
+   938→
+   939→    // Create the case
+   940→    const hiveCase = await this.thehiveClient.createCase({
+   941→      title: alert.title,
+   942→      description: alert.description,
+   943→      severity: severityMap[alert.severity] || 3,
+   944→      tags: ['soc-platform', alert.eventType, 'auto-created'],
+   945→      tlp: 2, // Amber by default for security incidents
+   946→      pap: 2,
+   947→      taskTitle: 'Initial Triage and Investigation',
+   948→    });
+   949→
+   950→    // Add observables based on available data
+   951→    const observables: Array<{ dataType: string; data: string; message?: string; tags?: string[] }> = [];
+   952→
+   953→    if (alert.sourceIp) {
+   954→      observables.push({
+   955→        dataType: 'ip',
+   956→        data: alert.sourceIp,
+   957→        message: 'Source IP address from alert',
+   958→        tags: ['source-ip'],
+   959→      });
+   960→    }
+   961→
+   962→    if (alert.destinationIp) {
+   963→      observables.push({
+   964→        dataType: 'ip',
+   965→        data: alert.destinationIp,
+   966→        message: 'Destination IP address from alert',
+   967→        tags: ['destination-ip'],
+   968→      });
+   969→    }
+   970→
+   971→    if (alert.subscriberId) {
+   972→      observables.push({
+   973→        dataType: 'other',
+   974→        data: alert.subscriberId,
+   975→        message: 'Subscriber MSISDN (masked)',
+   976→        tags: ['subscriber', 'telco'],
+   977→      });
+   978→    }
+   979→
+   980→    // Add observables to case
+   981→    const addedObservables = observables.length > 0
+   982→      ? await this.thehiveClient.addObservablesBatch(hiveCase.id, observables)
+   983→      : [];
+   984→
+   985→    // Get the auto-created initial task
+   986→    const tasks = await this.thehiveClient.getTasks(hiveCase.id);
+   987→    const initialTask = tasks[0];
+   988→
+   989→    this.emit('incident_created', { case: hiveCase, alert });
+   990→
+   991→    return {
+   992→      case: hiveCase,
+   993→      initialTask,
+   994→      observablesAdded: addedObservables,
+   995→    };
+   996→  }
+   997→
+   998→  /**
+   999→   * Enrich observables with automatic Cortex analysis
+  1000→   */
+  1001→  async enrichObservables(
+  1002→    caseId: string,
+  1003→    observables: Array<{ dataType: string; data: string }>
+  1004→  ): Promise<Array<{
+  1005→    observable: { dataType: string; data: string };
+  1006→    analyses: CortexJob[];
+  1007→  }>> {
+  1008→    if (!this.isRunning) {
+  1009→      throw new SoarIntegrationError('SOAR service is not running', 'SERVICE_NOT_RUNNING');
+  1010→    }
+  1011→
+  1012→    const results = [];
+  1013→
+  1014→    for (const observable of observables) {
+  1015→      try {
+  1016→        console.log(`[SOAR] Enriching ${observable.dataType}: ${observable.data}`);
+  1017→
+  1018→        // Run full analysis and wait for results
+  1019→        const analyses = await this.cortexClient.analyzeAndWait(observable);
+  1020→
+  1021→        // Update observable in TheHive with analysis results
+  1022→        // (In production, you'd call thehiveClient.updateObservable)
+  1023→
+  1024→        results.push({
+  1025→          observable,
+  1026→          analyses,
+  1027→        });
+  1028→
+  1029→        this.emit('observable_enriched', { observable, analyses });
+  1030→      } catch (error) {
+  1031→        console.error(`[SOAR] Failed to enrich ${observable.dataType}:${observable.data}:`, error);
+  1032→        
+  1033→        results.push({
+  1034→          observable,
+  1035→          analyses: [],
+  1036→        });
+  1037→
+  1038→        this.emit('enrichment_error', { observable, error });
+  1039→      }
+  1040→    }
+  1041→
+  1042→    return results;
+  1043→  }
+  1044→
+  1045→  /**
+  1046→   * Execute automated playbook actions
+  1047→   */
+  1048→  async executePlaybookActions(
+  1049→    caseId: string,
+  1050→    playbookType: 'phishing_triage' | 'malware_investigation' | 'network_intrusion' | 'sim_swap_fraud'
+  1051→  ): Promise<{
+  1052→    actionsTaken: Array<{
+  1053→      action: string;
+  1054→      status: 'success' | 'failed' | 'skipped';
+  1055→      result?: any;
+  1056→      error?: string;
+  1057→    }>;
+  1058→  }> {
+  1059→    const actionsTaken: Array<{
+  1060→      action: string;
+  1061→      status: 'success' | 'failed' | 'skipped';
+  1062→      result?: any;
+  1063→      error?: string;
+  1064→    }> = [];
+  1065→
+  1066→    switch (playbookType) {
+  1067→      case 'phishing_triage':
+  1068→        // Phishing triage playbook
+  1069→        actionsTaken.push(
+  1070→          await this.executeAction('Extract URLs from email', () => /* extract URLs */ ({ urls: [] })),
+  1071→          await this.executeAction('Submit URLs to VirusTotal', () => /* submit */ ({})),
+  1072→          await this.executeAction('Submit URLs to URLhaus', () => /* submit */ ({})),
+  1073→          await this.executeAction('Check sender email reputation', () => /* check */ ({})),
+  1074→          await this.executeAction('Create blocking rule if malicious', () => /* block */ ({}))
+  1075→        );
+  1076→        break;
+  1077→
+  1078→      case 'malware_investigation':
+  1079→        // Malware investigation playbook
+  1080→        actionsTaken.push(
+  1081→          await this.executeAction('Extract file hashes', () => /* extract */ ({ hashes: [] })),
+  1082→          await this.executeAction('Submit to sandbox analysis', () => /* submit */ ({})),
+  1083→          await this.executeAction('Query threat intelligence feeds', () => /* query */ ({})),
+  1084→          await this.executeAction('Identify C2 infrastructure', () => /* identify */ ({})),
+  1085→          await this.executeAction('Generate IOCs for detection rules', () => /* generate */ ({}))
+  1086→        );
+  1087→        break;
+  1088→
+  1089→      case 'sim_swap_fraud':
+  1090→        // SIM swap fraud investigation playbook (telco-specific)
+  1091→        actionsTaken.push(
+  1092→          await this.executeAction('Verify subscriber identity', () => /* verify */ ({})),
+  1093→          await this.executeAction('Pull SIM swap history', () => /* pull history */ ({})),
+  1094→          await this.executeAction('Check device fingerprint', () => /* check */ ({})),
+  1095→          await this.executeAction('Review recent call/data patterns', () => /* review */ ({})),
+  1096→          await this.executeAction('Assess fraud risk score', () => /* assess */ ({}))
+  1097→        );
+  1098→        break;
+  1099→
+  1100→      default:
+  1101→        throw new SoarIntegrationError(`Unknown playbook type: ${playbookType}`, 'INVALID_PLAYBOOK');
+  1102→    }
+  1103→
+  1104→    this.emit('playbook_executed', { caseId, playbookType, actionsTaken });
+  1105→
+  1106→    return { actionsTaken };
+  1107→  }
+  1108→
+  1109→  /**
+  1110→   * Sync case status back to SOC Platform
+  1111→   */
+  1112→  async syncCaseToPlatform(caseId: string): Promise<{
+  1113→    case: HiveCase;
+  1114→    tasks: HiveTask[];
+  1115→    observables: HiveObservable[];
+  1116→    timeline: HiveTimelineEntry[];
+  1117→  }> {
+  1118→    const [hiveCase, tasks, observablesResult, timeline] = await Promise.all([
+  1119→      this.thehiveClient.getCase(caseId),
+  1120→      this.thehiveClient.getTasks(caseId),
+  1121→      this.thehiveClient.getObservables(caseId),
+  1122→      this.thehiveClient.getTimeline(caseId),
+  1123→    ]);
+  1124→
+  1125→    const result = {
+  1126→      case: hiveCase,
+  1127→      tasks,
+  1128→      observables: observablesResult.observables,
+  1129→      timeline,
+  1130→    };
+  1131→
+  1132→    this.emit('case_synced', result);
+  1133→
+  1134→    return result;
+  1135→  }
+  1136→
+  1137→  // Private helper for executing actions with error handling
+  1138→  private async executeAction<T>(
+  1139→    actionName: string,
+  1140→    fn: () => Promise<T>
+  1141→  ): Promise<{
+  1142→    action: string;
+  1143→    status: 'success' | 'failed' | 'skipped';
+  1144→    result?: T;
+  1145→    error?: string;
+  1146→  }> {
+  1147→    try {
+  1148→      const result = await fn();
+  1149→      return { action: actionName, status: 'success', result };
+  1150→    } catch (error) {
+  1151→      return {
+  1152→        action: actionName,
+  1153→        status: 'failed',
+  1154→        error: error instanceof Error ? error.message : String(error),
+  1155→      };
+  1156→    }
+  1157→  }
+  1158→}
+  1159→
+  1160→// ============================================================
+  1161→// Exports
+  1162→// ============================================================
+  1163→
+  1164→let soarInstance: SoarIntegrationService | null = null;
+  1165→
+  1166→export function getSoarIntegration(config?: SoarIntegrationConfig): SoarIntegrationService {
+  1167→  if (!soarInstance && config) {
+  1168→    soarInstance = new SoarIntegrationService(config);
+  1169→  }
+  1170→
+  1171→  if (!soarInstance) {
+  1172→    throw new SoarIntegrationError(
+  1173→      'SOAR integration not initialized. Call getSoarIntegration(config) first.',
+  1174→      'NOT_INITIALIZED'
+  1175→    );
+  1176→  }
+  1177→
+  1178→  return soarInstance;
+  1179→}
+  1180→
+  1181→export {
+  1182→  TheHiveClient,
+  1183→  CortexClient,
+  1184→};
+  1185→
+  1186→export default SoarIntegrationService;
+  1187→

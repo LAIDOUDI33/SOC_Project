@@ -1,0 +1,1158 @@
+     1→/**
+     2→ * Compliance Engine Service
+     3→ * Core engine for compliance automation including:
+     4→ * - Assessment management and scoring
+     5→ * - Gap analysis and remediation tracking
+     6→ * - ARTP report generation
+     7→ * - ANSSI alignment scoring
+     8→ * - Metrics calculation
+     9→ * 
+    10→ * @version 1.0.0
+    11→ * @module compliance/engine
+    12→ */
+    13→
+    14→import { db } from '@/lib/db';
+    15→import {
+    16→  ComplianceFramework,
+    17→  ComplianceControl,
+    18→  ComplianceAssessment,
+    19→  ControlAssessment,
+    20→  ComplianceEvidence,
+    21→  ArtpSubmission,
+    22→  GapFinding,
+    23→  ComplianceMetric,
+    24→  AnssiAlignment,
+    25→  AssessmentResult,
+    26→  ControlCriticality,
+    27→  AssessmentStatus,
+    28→  RiskRating,
+    29→  MappingStrength,
+    30→  AnssiImplementationStatus,
+    31→  MetricTrend,
+    32→  RemediationStatus,
+    33→  EvidenceReviewStatus
+    34→} from '@prisma/client';
+    35→
+    36→import { ARTP_FRAMEWORK, ARTP_CONTROLS, ArtpControlDefinition } from './artp-framework';
+    37→import { ANSSI_ALIGNMENTS, AnssiAlignmentDefinition } from './anssi-framework';
+    38→
+    39→// ============================================================
+    40→// Types
+    41→// ============================================================
+    42→
+    43→export interface ComplianceScore {
+    44→  overall: number;           // 0-100 percentage
+    45→  compliant: number;         // Count
+    46→  partiallyCompliant: number;
+    47→  nonCompliant: number;
+    48→  notAssessed: number;
+    49→  notApplicable: number;
+    50→  criticalGaps: number;      // Count of CRITICAL severity gaps
+    51→  weightedScore: number;     // Weighted by control criticality
+    52→}
+    53→
+    54→export interface GapAnalysisResult {
+    55→  totalGaps: number;
+    56→  bySeverity: Record<string, number>;
+    57→  byCategory: Record<string, number>;
+    58→  byType: Record<string, number>;
+    59→  openRemediations: number;
+    60→  overdueRemediations: number;
+    61→  averageRemediationTime: number; // days
+    62→  findings: GapFinding[];
+    63→}
+    64→
+    65→export interface ArtpReportData {
+    66→  submissionNumber: string;
+    67→  type: string;
+    68→  title: string;
+    69→  generatedAt: Date;
+    70→  periodStart: Date;
+    71→  periodEnd: Date;
+    72→  summary: {
+    73→    totalIncidents: number;
+    74→    incidentsReportedToArtp: number;
+    75→    fraudCases: number;
+    76→    fraudLossDZD: number;
+    77→    complianceScore: number;
+    78→    openFindings: number;
+    79→    criticalFindings: number;
+    80→  };
+    81→  incidentDetails: any[];
+    82→  fraudDetails: any[];
+    83→  complianceStatus: any;
+    84→  recommendations: string[];
+    85→}
+    86→
+    87→// ============================================================
+    88→// Framework Initialization
+    89→// ============================================================
+    90→
+    91→/**
+    92→ * Initialize ARTP framework in database if not exists
+    93→ */
+    94→export async function initializeArtpFramework(): Promise<ComplianceFramework> {
+    95→  const existing = await db.complianceFramework.findUnique({
+    96→    where: { name: ARTP_FRAMEWORK.name }
+    97→  });
+    98→
+    99→  if (existing) {
+   100→    return existing;
+   101→  }
+   102→
+   103→  const framework = await db.complianceFramework.create({
+   104→    data: {
+   105→      name: ARTP_FRAMEWORK.name,
+   106→      displayName: ARTP_FRAMEWORK.displayName,
+   107→      description: ARTP_FRAMEWORK.description,
+   108→      version: ARTP_FRAMEWORK.version,
+   109→      frameworkType: ARTP_FRAMEWORK.frameworkType,
+   110→      jurisdiction: ARTP_FRAMEWORK.jurisdiction,
+   111→      issuingBody: ARTP_FRAMEWORK.issuingBody,
+   112→      effectiveDate: ARTP_FRAMEWORK.effectiveDate,
+   113→      reviewFrequency: ARTP_FRAMEWORK.reviewFrequency,
+   114→      status: ARTP_FRAMEWORK.status,
+   115→      documentationUrl: ARTP_FRAMEWORK.documentationUrl,
+   116→      contactEmail: ARTP_FRAMEWORK.contactEmail,
+   117→      controlCategories: JSON.stringify(ARTP_FRAMEWORK.controlCategories),
+   118→      scoringMethodology: JSON.stringify(ARTP_FRAMEWORK.scoringMethodology)
+   119→    }
+   120→  });
+   121→
+   122→  // Create controls
+   123→  for (const controlDef of ARTP_CONTROLS) {
+   124→    await db.complianceControl.create({
+   125→      data: {
+   126→        frameworkId: framework.id,
+   127→        controlId: controlDef.controlId,
+   128→        controlRef: controlDef.controlRef,
+   129→        name: controlDef.name,
+   130→        description: controlDef.description,
+   131→        category: controlDef.category,
+   132→        family: controlDef.family,
+   133→        criticality: controlDef.criticality,
+   134→        priority: controlDef.priority,
+   135→        requirements: controlDef.requirements,
+   136→        implementationGuidance: controlDef.implementationGuidance,
+   137→        evidenceRequirements: JSON.stringify(controlDef.evidenceRequirements),
+   138→        testingProcedures: controlDef.testingProcedures,
+   139→        mappedControls: JSON.stringify(controlDef.anssiMapping ? [controlDef.anssiMapping] : []),
+   140→        status: 'ACTIVE' as any,
+   141→        isApplicable: true
+   142→      }
+   143→    });
+   144→  }
+   145→
+   146→  console.log(`[Compliance Engine] Initialized ARTP framework with ${ARTP_CONTROLS.length} controls`);
+   147→  return framework;
+   148→}
+   149→
+   150→/**
+   151→ * Initialize ANSSI alignments in database
+   152→ */
+   153→export async function initializeAnssiAlignments(frameworkId: string): Promise<void> {
+   154→  const existingCount = await db.ansiAlignment.count();
+   155→  if (existingCount > 0) {
+   156→    console.log(`[Compliance Engine] ${existingCount} ANSSI alignments already exist`);
+   157→    return;
+   158→  }
+   159→
+   160→  // Get all controls mapped by controlId for lookup
+   161→  const controls = await db.complianceControl.findMany({
+   162→    where: { frameworkId }
+   163→  });
+   164→  const controlMap = new Map(controls.map(c => [c.controlId, c.id]));
+   165→
+   166→  let created = 0;
+   167→  for (const alignment of ANSSI_ALIGNMENTS) {
+   168→    // Find related ARTP control IDs
+   169→    const artpControlIds = alignment.artpMapping
+   170→      .map(ref => controlMap.get(ref))
+   171→      .filter(Boolean) as string[];
+   172→
+   173→    // Use first mapped control as primary, or create without specific control
+   174→    const localControlId = artpControlIds[0];
+   175→
+   176→    await db.ansiAlignment.create({
+   177→      data: {
+   178→        localControlId: localControlId || '',
+   179→        anssiReference: alignment.ansiReference,
+   180→        anssiDomain: alignment.ansiDomain,
+   181→        anssiCategory: alignment.ansiCategory,
+   182→        mappingStrength: (alignment.id.includes('FULL') ? MappingStrength.FULL :
+   183→                          alignment.id.includes('SUBSTANTIAL') ? MappingStrength.SUBSTANTIAL :
+   184→                          alignment.id.includes('PARTIAL') ? MappingStrength.PARTIAL :
+   185→                          MappingStrength.MINIMAL) as MappingStrength,
+   186→        implementationStatus: AnssiImplementationStatus.NOT_IMPLEMENTED,
+   187→        certRelevant: alignment.certRelevant,
+   188→        certLevel: alignment.certLevel
+   189→      }
+   190→    });
+   191→    created++;
+   192→  }
+   193→
+   194→  console.log(`[Compliance Engine] Initialized ${created} ANSSI alignments`);
+   195→}
+   196→
+   197→// ============================================================
+   198→// Assessment Management
+   199→// ============================================================
+   200→
+   201→/**
+   202→ * Create a new compliance assessment
+   203→ */
+   204→export async function createAssessment(params: {
+   205→  frameworkId: string;
+   206→  assessmentType: any;
+   207→  scope?: any;
+   208→  assessedBy?: string;
+   209→  targetEndDate?: Date;
+   210→}): Promise<ComplianceAssessment> {
+   211→  const assessment = await db.complianceAssessment.create({
+   212→    data: {
+   213→      frameworkId: params.frameworkId,
+   214→      assessmentType: params.assessmentType,
+   215→      scope: params.scope,
+   216→      assessedBy: params.assessedBy,
+   217→      targetEndDate: params.targetEndDate,
+   218→      status: AssessmentStatus.IN_PROGRESS,
+   219→      startDate: new Date()
+   220→    },
+   221→    include: {
+   222→      framework: {
+   223→        include: { controls: true }
+   224→      }
+   225→    }
+   226→  });
+   227→
+   228→  // Initialize control assessments for all applicable controls
+   229→  const controls = assessment.framework.controls.filter(c => c.isApplicable);
+   230→  
+   231→  await db.controlAssessment.createMany({
+   232→    data: controls.map(control => ({
+   233→      assessmentId: assessment.id,
+   234→      controlId: control.id,
+   235→      result: AssessmentResult.NOT_ASSESSED,
+   236→      confidenceLevel: 100.0
+   237→    }))
+   238→  });
+   239→
+   240→  await db.complianceAssessment.update({
+   241→    where: { id: assessment.id },
+   242→    data: { totalControls: controls.length }
+   243→  });
+   244→
+   245→  console.log(`[Compliance Engine] Created assessment ${assessment.id} with ${controls.length} controls`);
+   246→  return assessment;
+   247→}
+   248→
+   249→/**
+   250→ * Update a single control assessment result
+   251→ */
+   252→export async function updateControlAssessment(params: {
+   253→  assessmentId: string;
+   254→  controlId: string;
+   255→  result: AssessmentResult;
+   256→  score?: number;
+   257→  findings?: string;
+   258→  evidenceCollected?: boolean;
+   259→  remediationRequired?: boolean;
+   260→  remediationPlan?: string;
+   261→  comments?: string;
+   262→}): Promise<ControlAssessment> {
+   263→  const update = await db.controlAssessment.update({
+   264→    where: {
+   265→      assessmentId_controlId: {
+   266→        assessmentId: params.assessmentId,
+   267→        controlId: params.controlId
+   268→      }
+   269→    },
+   270→    data: {
+   271→      result: params.result,
+   272→      score: params.score,
+   273→      findings: params.findings,
+   274→      evidenceCollected: params.evidenceCollected,
+   275→      remediationRequired: params.remediationRequired,
+   276→      remediationPlan: params.remediationPlan,
+   277→      comments: params.comments,
+   278→      assessedAt: new Date()
+   279→    }
+   280→  });
+   281→
+   282→  // Recalculate assessment scores
+   283→  await recalculateAssessmentScores(params.assessmentId);
+   284→
+   285→  return update;
+   286→}
+   287→
+   288→/**
+   289→ * Recalculate overall assessment scores from control assessments
+   290→ */
+   291→async function recalculateAssessmentScores(assessmentId: string): Promise<void> {
+   292→  const controlAssessments = await db.controlAssessment.findMany({
+   293→    where: { assessmentId },
+   294→    include: { control: true }
+   295→  });
+   296→
+   297→  let compliantCount = 0;
+   298→  let partialCount = 0;
+   299→  let nonCompliantCount = 0;
+   300→  let naCount = 0;
+   301→  let notAssessedCount = 0;
+   302→  let weightedSum = 0;
+   303→  let totalWeight = 0;
+   304→
+   305→  const criticalityWeights = {
+   306→    [ControlCriticality.CRITICAL]: 5,
+   307→    [ControlCriticality.HIGH]: 4,
+   308→    [ControlCriticality.MEDIUM]: 3,
+   309→    [ControlCriticality.LOW]: 2
+   310→  };
+   311→
+   312→  for (const ca of controlAssessments) {
+   313→    const weight = criticalityWeights[ca.control.criticality] || 3;
+   314→    totalWeight += weight;
+   315→
+   316→    switch (ca.result) {
+   317→      case AssessmentResult.COMPLIANT:
+   318→        compliantCount++;
+   319→        weightedSum += weight * 100;
+   320→        break;
+   321→      case AssessmentResult.PARTIALLY_COMPLIANT:
+   322→        partialCount++;
+   323→        weightedSum += weight * (ca.score || 50);
+   324→        break;
+   325→      case AssessmentResult.NON_COMPLIANT:
+   326→        nonCompliantCount++;
+   327→        weightedSum += weight * 0;
+   328→        break;
+   329→      case AssessmentResult.NOT_APPLICABLE:
+   330→        naCount++;
+   331→        totalWeight -= weight; // Exclude from weighting
+   332→        break;
+   333→      default:
+   334→        notAssessedCount++;
+   335→        break;
+   336→    }
+   337→  }
+   338→
+   339→  const overallScore = totalWeight > 0 ? Math.round((weightedSum / totalWeight) * 100) / 100 : 0;
+   340→
+   341→  await db.complianceAssessment.update({
+   342→    where: { id: assessmentId },
+   343→    data: {
+   344→      overallScore,
+   345→      compliantCount,
+   346→      partialCount,
+   347→      nonCompliantCount,
+   348→      notApplicableCount: naCount,
+   349→      notAssessedCount: notAssessedCount
+   350→    }
+   351→  });
+   352→}
+   353→
+   354→/**
+   355→ * Complete an assessment with final calculations
+   356→ */
+   357→export async function completeAssessment(
+   358→  assessmentId: string,
+   359→  executiveSummary?: string,
+   360→  recommendations?: string[]
+   361→): Promise<ComplianceAssessment> {
+   362→  // Final score calculation
+   363→  await recalculateAssessmentScores(assessmentId);
+   364→
+   365→  // Generate gap findings from non-compliant controls
+   366→  await generateGapFindings(assessmentId);
+   367→
+   368→  const assessment = await db.complianceAssessment.update({
+   369→    where: { id: assessmentId },
+   370→    data: {
+   371→      status: AssessmentStatus.COMPLETED,
+   372→      completedAt: new Date(),
+   373→      executiveSummary,
+   374→      recommendations: JSON.stringify(recommendations || [])
+   375→    }
+   376→  });
+   377→
+   378→  console.log(`[Compliance Engine] Completed assessment ${assessmentId} with score ${assessment.overallScore}%`);
+   379→  return assessment;
+   380→}
+   381→
+   382→// ============================================================
+   383→// Scoring Functions
+   384→// ============================================================
+   385→
+   386→/**
+   387→ * Calculate comprehensive compliance score for a framework
+   388→ */
+   389→export async function calculateFrameworkComplianceScore(
+   390→  frameworkId: string
+   391→): Promise<ComplianceScore> {
+   392→  const latestAssessment = await db.complianceAssessment.findFirst({
+   393→    where: {
+   394→      frameworkId,
+   395→      status: AssessmentStatus.COMPLETED
+   396→    },
+   397→    orderBy: { completedAt: 'desc' },
+   398→    include: {
+   399→      controlAssessments: {
+   400→        include: { control: true }
+   401→      }
+   402→    }
+   403→  });
+   404→
+   405→  if (!latestAssessment) {
+   406→    return {
+   407→      overall: 0,
+   408→      compliant: 0,
+   409→      partiallyCompliant: 0,
+   410→      nonCompliant: 0,
+   411→      notAssessed: 0,
+   412→      notApplicable: 0,
+   413→      criticalGaps: 0,
+   414→      weightedScore: 0
+   415→    };
+   416→  }
+   417→
+   418→  return calculateAssessmentScore(latestAssessment.id);
+   419→}
+   420→
+   421→/**
+   422→ * Calculate score for a specific assessment
+   423→ */
+   424→export async function calculateAssessmentScore(
+   425→  assessmentId: string
+   426→): Promise<ComplianceScore> {
+   427→  const controlAssessments = await db.controlAssessment.findMany({
+   428→    where: { assessmentId },
+   429→    include: { control: true }
+   430→  });
+   431→
+   432→  let compliant = 0, partial = 0, nonCompliant = 0, na = 0, notAssessed = 0;
+   433→  let criticalGaps = 0;
+   434→  let weightedSum = 0, totalWeight = 0;
+   435→
+   436→  const weights = {
+   437→    [ControlCriticality.CRITICAL]: 5,
+   438→    [ControlCriticality.HIGH]: 4,
+   439→    [ControlCriticality.MEDIUM]: 3,
+   440→    [ControlCriticality.LOW]: 2
+   441→  };
+   442→
+   443→  for (const ca of controlAssessments) {
+   444→    const w = weights[ca.control.criticality] || 3;
+   445→    totalWeight += w;
+   446→
+   447→    switch (ca.result) {
+   448→      case AssessmentResult.COMPLIANT:
+   449→        compliant++;
+   450→        weightedSum += w * 100;
+   451→        break;
+   452→      case AssessmentResult.PARTIALLY_COMPLIANT:
+   453→        partial++;
+   454→        weightedSum += w * (ca.score || 50);
+   455→        break;
+   456→      case AssessmentResult.NON_COMPLIANT:
+   457→        nonCompliant++;
+   458→        if (ca.control.criticality === ControlCriticality.CRITICAL) {
+   459→          criticalGaps++;
+   460→        }
+   461→        break;
+   462→      case AssessmentResult.NOT_APPLICABLE:
+   463→        na++;
+   464→        totalWeight -= w;
+   465→        break;
+   466→      default:
+   467→        notAssessed++;
+   468→        break;
+   469→    }
+   470→  }
+   471→
+   472→  return {
+   473→    overall: totalWeight > 0 ? Math.round((weightedSum / totalWeight) * 100) / 100 : 0,
+   474→    compliant,
+   475→    partiallyCompliant: partial,
+   476→    nonCompliant,
+   477→    notAssessed,
+   478→    notApplicable: na,
+   479→    criticalGaps,
+   480→    weightedScore: totalWeight > 0 ? Math.round((weightedSum / totalWeight) * 100) / 100 : 0
+   481→  };
+   482→}
+   483→
+   484→// ============================================================
+   485→// Gap Analysis
+   486→// ============================================================
+   487→
+   488→/**
+   489→ * Generate gap findings from assessment results
+   490→ */
+   491→async function generateGapFindings(assessmentId: string): Promise<void> {
+   492→  const nonCompliantControls = await db.controlAssessment.findMany({
+   493→    where: {
+   494→      assessmentId,
+   495→      result: { in: [AssessmentResult.NON_COMPLIANT, AssessmentResult.PARTIALLY_COMPLIANT] }
+   496→    },
+   497→    include: { control: true }
+   498→  });
+   499→
+   500→  for (const ca of nonCompliantControls) {
+   501→    // Check if gap finding already exists for this control
+   502→    const existing = await db.gapFinding.findFirst({
+   503→      where: {
+   504→        assessmentId,
+   505→        controlId: ca.controlId
+   506→      }
+   507→    });
+   508→
+   509→    if (!existing) {
+   510→      await db.gapFinding.create({
+   511→        data: {
+   512→          assessmentId,
+   513→          controlId: ca.controlId,
+   514→          title: `Gap: ${ca.control.name}`,
+   515→          description: ca.findings || `Control ${ca.control.controlId} is assessed as ${ca.result}`,
+   516→          gapType: 'CONTROL_GAP',
+   517→          severity: mapCriticalityToGapSeverity(ca.control.criticality),
+   518→          remediationStatus: RemediationStatus.OPEN,
+   519→          ownerId: ca.owner || undefined,
+   520→          dueDate: ca.targetDate
+   521→        }
+   522→      });
+   523→    }
+   524→  }
+   525→}
+   526→
+   527→function mapCriticalityToGapSeverity(criticality: ControlCriticality): any {
+   528→  switch (criticality) {
+   529→    case ControlCriticality.CRITICAL: return 'CRITICAL';
+   530→    case ControlCriticality.HIGH: return 'HIGH';
+   531→    case ControlCriticality.MEDIUM: return 'MEDIUM';
+   532→    case ControlCriticality.LOW: return 'LOW';
+   533→    default: return 'INFORMATIONAL';
+   534→  }
+   535→}
+   536→
+   537→/**
+   538→ * Get comprehensive gap analysis for an organization
+   539→ */
+   540→export async function getGapAnalysis(frameworkId?: string): Promise<GapAnalysisResult> {
+   541→  const where: any = {};
+   542→  if (frameworkId) {
+   543→    where.assessment = { frameworkId };
+   544→  }
+   545→
+   546→  const findings = await db.gapFinding.findMany({
+   547→    where,
+   548→    include: {
+   549→      assessment: true,
+   550→      control: true
+   551→    },
+   552→    orderBy: { severity: 'asc' }
+   553→  });
+   554→
+   555→  const bySeverity: Record<string, number> = {};
+   556→  const byCategory: Record<string, number> = {};
+   557→  const byType: Record<string, number> = {};
+   558→
+   559→  let openRemediations = 0;
+   560→  let overdueRemediations = 0;
+   561→  let totalRemediationDays = 0;
+   562→  let resolvedWithDate = 0;
+   563→
+   564→  for (const finding of findings) {
+   565→    // By severity
+   566→    bySeverity[finding.severity] = (bySeverity[finding.severity] || 0) + 1;
+   567→
+   568→    // By category
+   569→    if (finding.control) {
+   570→      const cat = finding.control.category;
+   571→      byCategory[cat] = (byCategory[cat] || 0) + 1;
+   572→    }
+   573→
+   574→    // By type
+   575→    byType[finding.gapType] = (byType[finding.gapType] || 0) + 1;
+   576→
+   577→    // Remediation status
+   578→    if (finding.remediationStatus !== RemediationStatus.CLOSED &&
+   579→        finding.remediationStatus !== RemediationStatus.ACCEPTED_RISK) {
+   580→      openRemediations++;
+   581→
+   582→      if (finding.dueDate && new Date(finding.dueDate) < new Date()) {
+   583→        overdueRemediations++;
+   584→      }
+   585→    }
+   586→
+   587→    // Average remediation time
+   588→    if (finding.resolvedAt && finding.createdAt) {
+   589→      const days = Math.abs(new Date(finding.resolvedAt).getTime() - new Date(finding.createdAt).getTime()) / (1000 * 60 * 60 * 24);
+   590→      totalRemediationDays += days;
+   591→      resolvedWithDate++;
+   592→    }
+   593→  }
+   594→
+   595→  return {
+   596→    totalGaps: findings.length,
+   597→    bySeverity,
+   598→    byCategory,
+   599→    byType,
+   600→    openRemediations,
+   601→    overdueRemediations,
+   602→    averageRemediationTime: resolvedWithDate > 0 ? Math.round(totalRemediationDays / resolvedWithDate) : 0,
+   603→    findings
+   604→  };
+   605→}
+   606→
+   607→// ============================================================
+   608→// ARTP Report Generation
+   609→// ============================================================
+   610→
+   611→/**
+   612→ * Generate ARTP regulatory submission report
+   613→ */
+   614→export async function generateArtpReport(params: {
+   615→  submissionType: any;
+   616→  incidentId?: string;
+   617→  fraudCaseId?: string;
+   618→  assessmentId?: string;
+   619→  preparedBy: string;
+   620→  priority?: any;
+   621→}): Promise<ArtpSubmission> {
+   622→  const submissionNumber = generateArtpSubmissionNumber(params.submissionType);
+   623→  
+   624→  // Calculate deadline based on priority/type
+   625→  const deadline = calculateArtpDeadline(params.priority);
+   626→
+   627→  const submission = await db.artpSubmission.create({
+   628→    data: {
+   629→      submissionNumber,
+   630→      submissionType: params.submissionType,
+   631→      title: generateArtpTitle(params.submissionType),
+   632→      status: 'DRAFT',
+   633→      incidentId: params.incidentId,
+   634→      fraudCaseId: params.fraudCaseId,
+   635→      assessmentId: params.assessmentId,
+   636→      preparedBy: params.preparedBy,
+   637→      priority: params.priority || 'STANDARD',
+   638→      deadline
+   639→    }
+   640→  });
+   641→
+   642→  console.log(`[Compliance Engine] Created ARTP submission ${submissionNumber}`);
+   643→  return submission;
+   644→}
+   645→
+   646→/**
+   647→ * Populate ARTP report with actual data
+   648→ */
+   649→export async function populateArtpReport(submissionId: string): Promise<ArtpSubmission> {
+   650→  const submission = await db.artpSubmission.findUniqueOrThrow({
+   651→    where: { id: submissionId }
+   652→  });
+   653→
+   654→  const reportData: ArtpReportData = {
+   655→    submissionNumber: submission.submissionNumber,
+   656→    type: submission.submissionType,
+   657→    title: submission.title,
+   658→    generatedAt: new Date(),
+   659→    periodStart: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000), // Last 30 days
+   660→    periodEnd: new Date(),
+   661→    summary: {
+   662→      totalIncidents: 0,
+   663→      incidentsReportedToArtp: 0,
+   664→      fraudCases: 0,
+   665→      fraudLossDZD: 0,
+   666→      complianceScore: 0,
+   667→      openFindings: 0,
+   668→      criticalFindings: 0
+   669→    },
+   670→    incidentDetails: [],
+   671→    fraudDetails: [],
+   672→    complianceStatus: {},
+   673→    recommendations: []
+   674→  };
+   675→
+   676→  // Gather incident data if linked
+   677→  if (submission.incidentId) {
+   678→    const incident = await db.incident.findUnique({
+   679→      where: { id: submission.incidentId },
+   680→      include: { alerts: true, updates: true }
+   681→    });
+   682→    
+   683→    if (incident) {
+   684→      reportData.summary.totalIncidents = 1;
+   685→      reportData.incidentDetails.push({
+   686→        id: incident.id,
+   687→        title: incident.title,
+   688→        severity: incident.severity,
+   689→        status: incident.status,
+   690→        detectedAt: incident.detectedAt,
+   691→        description: incident.description
+   692→      });
+   693→    }
+   694→  }
+   695→
+   696→  // Gather fraud data if linked
+   697→  if (submission.fraudCaseId) {
+   698→    const fraudCase = await db.fraudCase.findUnique({
+   699→      where: { id: submission.fraudCaseId }
+   700→    });
+   701→    
+   702→    if (fraudCase) {
+   703→      reportData.summary.fraudCases = 1;
+   704→      reportData.summary.fraudLossDZD = fraudCase.estimatedLossDZD || 0;
+   705→      reportData.fraudDetails.push({
+   706→        caseNumber: fraudCase.caseNumber,
+   707→        type: fraudCase.type,
+   708→        severity: fraudCase.severity,
+   709→        status: fraudCase.status,
+   710→        estimatedLossDZD: fraudCase.estimatedLossDZD
+   711→      });
+   712→    }
+   713→  }
+   714→
+   715→  // Gather compliance data if linked or for quarterly reports
+   716→  if (submission.assessmentId || submission.submissionType === 'QUARTERLY_REPORT') {
+   717→    const latestAssessment = submission.assessmentId
+   718→      ? await db.complianceAssessment.findUnique({ where: { id: submission.assessmentId } })
+   719→      : await db.complianceAssessment.findFirst({
+   720→          where: { status: 'COMPLETED' },
+   721→          orderBy: { completedAt: 'desc' }
+   722→        });
+   723→
+   724→    if (latestAssessment) {
+   725→      reportData.summary.complianceScore = latestAssessment.overallScore || 0;
+   726→      
+   727→      const gaps = await db.gapFinding.count({
+   728→        where: {
+   729→          assessmentId: latestAssessment.id,
+   730→          remediationStatus: { notIn: ['CLOSED', 'ACCEPTED_RISK'] }
+   731→        }
+   732→      });
+   733→      
+   734→      const criticalGaps = await db.gapFinding.count({
+   735→        where: {
+   736→          assessmentId: latestAssessment.id,
+   737→          severity: 'CRITICAL',
+   738→          remediationStatus: { notIn: ['CLOSED', 'ACCEPTED_RISK'] }
+   739→        }
+   740→      });
+   741→
+   742→      reportData.summary.openFindings = gaps;
+   743→      reportData.summary.criticalFindings = criticalGaps;
+   744→    }
+   745→  }
+   746→
+   747→  // Generate recommendations based on gaps
+   748→  reportData.recommendations = await generateRecommendations();
+   749→
+   750→  // Update submission with report data
+   751→  const updated = await db.artpSubmission.update({
+   752→    where: { id: submissionId },
+   753→    data: {
+   754→      detailedReport: JSON.stringify(reportData),
+   755→      summary: generateExecutiveSummary(reportData)
+   756→    }
+   757→  });
+   758→
+   759→  return updated;
+   760→}
+   761→
+   762→/**
+   763→ * Submit ARTP report to authority (mark as submitted)
+   764→ */
+   765→export async function submitArtpReport(
+   766→  submissionId: string,
+   767→  submittedBy: string
+   768→): Promise<ArtpSubmission> {
+   769→  return await db.artpSubmission.update({
+   770→    where: { id: submissionId },
+   771→    data: {
+   772→      status: 'SUBMITTED',
+   773→      submittedAt: new Date()
+   774→    }
+   775→  });
+   776→}
+   777→
+   778→// Helper functions for ARTP reporting
+   779→function generateArtpSubmissionNumber(type: string): string {
+   780→  const date = new Date();
+   781→  const year = date.getFullYear();
+   782→  const month = String(date.getMonth() + 1).padStart(2, '0');
+   783→  const seq = Math.floor(Math.random() * 10000).toString().padStart(4, '0');
+   784→  const typeCode = type.substring(0, 3).toUpperCase();
+   785→  return `ARTP-${year}${month}-${typeCode}-${seq}`;
+   786→}
+   787→
+   788→function generateArtpTitle(type: string): string {
+   789→  const titles: Record<string, string> = {
+   790→    'INCIDENT_REPORT': 'Security Incident Report',
+   791→    'FRAUD_REPORT': 'Fraud Case Report',
+   792→    'BREACH_NOTIFICATION': 'Personal Data Breach Notification',
+   793→    'QUARTERLY_REPORT': 'Quarterly Security Status Report',
+   794→    'ANNUAL_CERTIFICATION': 'Annual Security Certification',
+   795→    'AD_HOC_REQUEST': 'Response to ARTP Inquiry',
+   796→    'SELF_ASSESSMENT': 'Security Self-Assessment Declaration'
+   797→  };
+   798→  return titles[type] || 'Regulatory Submission';
+   799→}
+   800→
+   801→function calculateArtpDeadline(priority?: any): Date {
+   802→  const now = new Date();
+   803→  switch (priority) {
+   804→    case 'URGENT':
+   805→      return new Date(now.getTime() + 24 * 60 * 60 * 1000); // 24 hours
+   806→    case 'HIGH':
+   807→      return new Date(now.getTime() + 72 * 60 * 60 * 1000); // 72 hours
+   808→    default:
+   809→      return new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000); // 7 days
+   810→  }
+   811→}
+   812→
+   813→function generateExecutiveSummary(data: ArtpReportData): string {
+   814→  return `
+   815→# Djezzy Security Report - ${data.submissionNumber}
+   816→
+   817→## Executive Summary
+   818→
+   819→**Reporting Period:** ${data.periodStart.toDateString()} - ${data.periodEnd.toDateString()}
+   820→**Report Generated:** ${data.generatedAt.toISOString()}
+   821→**Report Type:** ${data.type}
+   822→
+   823→### Key Metrics
+   824→
+   825→| Metric | Value |
+   826→|--------|-------|
+   827→| Total Security Incidents | ${data.summary.totalIncidents} |
+   828→| Incidents Reported to ARTP | ${data.summary.incidentsReportedToArtp} |
+   829→| Fraud Cases | ${data.summary.fraudCases} |
+   830→| Estimated Fraud Loss | ${data.summary.fraudLossDZD.toLocaleString()} DZD |
+   831→| Overall Compliance Score | ${data.summary.complianceScore}% |
+   832→| Open Compliance Findings | ${data.summary.openFindings} |
+   833→| Critical Findings Requiring Action | ${data.summary.criticalFindings} |
+   834→
+   835→### Key Recommendations
+   836→
+   837→${data.recommendations.map((r, i) => `${i + 1}. ${r}`).join('\n')}
+   838→
+   839→---
+   840→*This report was auto-generated by Djezzy National SOC Platform*
+   841→*Classification: OFFICIAL - For ARTP Submission*
+   842→`.trim();
+   843→}
+   844→
+   845→async function generateRecommendations(): Promise<string[]> {
+   846→  const openGaps = await db.gapFinding.findMany({
+   847→    where: {
+   848→      remediationStatus: { in: ['OPEN', 'IN_PROGRESS'] },
+   849→      severity: { in: ['CRITICAL', 'HIGH'] }
+   850→    },
+   851→    take: 10,
+   852→    orderBy: { severity: 'asc' }
+   853→  });
+   854→
+   855→  const recommendations: string[] = [];
+   856→
+   857→  if (openGaps.some(g => g.severity === 'CRITICAL')) {
+   858→    recommendations.push('IMMEDIATE: Address critical security gaps - allocate emergency resources');
+   859→  }
+   860→
+   861→  if (openGaps.some(g => g.severity === 'HIGH')) {
+   862→    recommendations.push('SHORT-TERM: Develop remediation plan for high-severity findings within 30 days');
+   863→  }
+   864→
+   865→  const categoryCounts: Record<string, number> = {};
+   866→  for (const gap of openGaps) {
+   867→    if (gap.control) {
+   868→      const cat = gap.control.category;
+   869→      categoryCounts[cat] = (categoryCounts[cat] || 0) + 1;
+   870→    }
+   871→  }
+   872→
+   873→  const topCategory = Object.entries(categoryCounts).sort((a, b) => b[1] - a[1])[0];
+   874→  if (topCategory) {
+   875→    recommendations.push(`FOCUS AREA: ${topCategory[0]} has highest concentration of gaps (${topCategory[1]} items)`);
+   876→  }
+   877→
+   878→  recommendations.push('Continue regular security awareness training for all personnel');
+   879→  recommendations.push('Maintain 24/7 SOC monitoring and incident response readiness');
+   880→
+   881→  return recommendations;
+   882→}
+   883→
+   884→// ============================================================
+   885→// Evidence Management
+   886→// ============================================================
+   887→
+   888→/**
+   889→ * Add evidence to a control
+   890→ */
+   891→export async function addEvidence(params: {
+   892→  controlId: string;
+   893→  assessmentId?: string;
+   894→  title: string;
+   895→  description?: string;
+   896→  type: any;
+   897→  classification?: any;
+   898→  filePath?: string;
+   899→  fileName?: string;
+   900→  fileHash?: string;
+   901→  fileSize?: number;
+   902→  mimeType?: string;
+   903→  collectedBy: string;
+   904→  sourceSystem?: string;
+   905→  automatedCollection?: boolean;
+   906→}): Promise<ComplianceEvidence> {
+   907→  return await db.complianceEvidence.create({
+   908→    data: {
+   909→      controlId: params.controlId,
+   910→      assessmentId: params.assessmentId,
+   911→      title: params.title,
+   912→      description: params.description,
+   913→      type: params.type,
+   914→      classification: params.classification || 'INTERNAL',
+   915→      filePath: params.filePath,
+   916→      fileName: params.fileName,
+   917→      fileHash: params.fileHash,
+   918→      fileSize: params.fileSize,
+   919→      mimeType: params.mimeType,
+   920→      collectedBy: params.collectedBy,
+   921→      sourceSystem: params.sourceSystem,
+   922→      automatedCollection: params.automatedCollection || false,
+   923→      reviewStatus: EvidenceReviewStatus.PENDING
+   924→    }
+   925→  });
+   926→}
+   927→
+   928→/**
+   929→ * Validate evidence for compliance use
+   930→ */
+   931→export async function validateEvidence(
+   932→  evidenceId: string,
+   933→  reviewedBy: string,
+   934→  isValid: boolean,
+   935→  comments?: string
+   936→): Promise<ComplianceEvidence> {
+   937→  return await db.complianceEvidence.update({
+   938→    where: { id: evidenceId },
+   939→    data: {
+   940→      reviewStatus: isValid ? EvidenceReviewStatus.VALIDATED : EvidenceReviewStatus.INVALIDATED,
+   941→      reviewedBy,
+   942→      reviewedAt: new Date(),
+   943→      reviewComments: comments
+   944→    }
+   945→  });
+   946→}
+   947→
+   948→// ============================================================
+   949→// Metrics & Dashboard Data
+   950→// ============================================================
+   951→
+   952→/**
+   953→ * Calculate and store compliance metrics for dashboard
+   954→ */
+   955→export async function updateComplianceMetrics(frameworkId?: string): Promise<void> {
+   956→  // Overall compliance score
+   957→  const latestAssessment = await db.complianceAssessment.findFirst({
+   958→    where: frameworkId ? { frameworkId, status: 'COMPLETED' } : { status: 'COMPLETED' },
+   959→    orderBy: { completedAt: 'desc' }
+   960→  });
+   961→
+   962→  const currentScore = latestAssessment?.overallScore || 0;
+   963→
+   964→  await upsertMetric({
+   965→    metricName: 'overall_compliance_score',
+   966→    metricCategory: 'OVERALL_COMPLIANCE',
+   967→    frameworkId,
+   968→    currentValue: currentScore,
+   969→    previousValue: undefined, // Will be set by upsert logic
+   970→    targetValue: 80, // Target 80% compliance
+   971→    unit: '%',
+   972→    trend: currentScore >= 80 ? MetricTrend.IMPROVING : 
+   973→           currentScore >= 60 ? MetricTrend.STABLE : MetricTrend.DECLINING,
+   974→    calculationMethod: 'Weighted average of control assessments',
+   975→    dataSource: 'Compliance Assessment Engine'
+   976→  });
+   977→
+   978→  // ARTP submissions status
+   979→  const pendingSubmissions = await db.artpSubmission.count({
+   980→    where: {
+   981→      status: { in: ['DRAFT', 'IN_REVIEW', 'PENDING_APPROVAL'] },
+   982→      deadline: { lte: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000) }
+   983→    }
+   984→  });
+   985→
+   986→  await upsertMetric({
+   987→    metricName: 'pending_artp_submissions',
+   988→    metricCategory: 'ARTP_SUBMISSIONS',
+   989→    frameworkId,
+   990→    currentValue: pendingSubmissions,
+   991→    targetValue: 0,
+   992→    unit: 'count',
+   993→    trend: pendingSubmissions > 5 ? MetricTrend.DECLINING : MetricTrend.STABLE,
+   994→    calculationMethod: 'Count of submissions due within 7 days',
+   995→    dataSource: 'ARTP Submissions table'
+   996→  });
+   997→
+   998→  // Open gap findings
+   999→  const openGaps = await db.gapFinding.count({
+  1000→    where: {
+  1001→      remediationStatus: { notIn: ['CLOSED', 'ACCEPTED_RISK'] }
+  1002→    }
+  1003→  });
+  1004→
+  1005→  await upsertMetric({
+  1006→    metricName: 'open_gap_findings',
+  1007→    metricCategory: 'REMEDIATION_PROGRESS',
+  1008→    frameworkId,
+  1009→    currentValue: openGaps,
+  1010→    targetValue: 10,
+  1011→    unit: 'count',
+  1012→    trend: openGaps > 20 ? MetricTrend.DECLINING : MetricTrend.STABLE,
+  1013→    calculationMethod: 'Count of non-closed gap findings',
+  1014→    dataSource: 'Gap Findings table'
+  1015→  });
+  1016→}
+  1017→
+  1018→async function upsertMetric(params: {
+  1019→  metricName: string;
+  1020→  metricCategory: any;
+  1021→  frameworkId?: string;
+  1022→  currentValue: number;
+  1023→  previousValue?: number;
+  1024→  targetValue?: number;
+  1025→  unit?: string;
+  1026→    trend?: any;
+  1027→  calculationMethod?: string;
+  1028→  dataSource?: string;
+  1029→}): Promise<void> {
+  1030→  const existing = await db.complianceMetric.findUnique({
+  1031→    where: { metricName: params.metricName }
+  1032→  });
+  1033→
+  1034→  if (existing) {
+  1035→    await db.complianceMetric.update({
+  1036→      where: { metricName: params.metricName },
+  1037→      data: {
+  1038→        currentValue: params.currentValue,
+  1039→        previousValue: existing.currentValue,
+  1040→        targetValue: params.targetValue,
+  1041→        unit: params.unit,
+  1042→        trend: params.trend,
+  1043→        lastCalculatedAt: new Date()
+  1044→      }
+  1045→    });
+  1046→  } else {
+  1047→    await db.complianceMetric.create({
+  1048→      data: {
+  1049→        metricName: params.metricName,
+  1050→        metricCategory: params.metricCategory,
+  1051→        frameworkId: params.frameworkId,
+  1052→        currentValue: params.currentValue,
+  1053→        targetValue: params.targetValue,
+  1054→        unit: params.unit,
+  1055→        trend: params.trend,
+  1056→        calculationMethod: params.calculationMethod,
+  1057→        dataSource: params.dataSource,
+  1058→        lastCalculatedAt: new Date()
+  1059→      }
+  1060→    });
+  1061→  }
+  1062→}
+  1063→
+  1064→/**
+  1065→ * Get dashboard metrics
+  1066→ */
+  1067→export async function getDashboardMetrics(): Promise<any[]> {
+  1068→  return await db.complianceMetric.findMany({
+  1069→    orderBy: { metricCategory: 'asc' }
+  1070→  });
+  1071→}
+  1072→
+  1073→// ============================================================
+  1074→// ANSSI Alignment Scoring
+  1075→// ============================================================
+  1076→
+  1077→/**
+  1078→ * Calculate ANSSI alignment maturity score
+  1079→ */
+  1080→export async function calculateAnssiAlignmentScore(): Promise<{
+  1081→  overallAlignment: number;
+  1082→  byDomain: Record<string, { total: number; implemented: number; partial: number; score: number }>;
+  1083→  certificationReadiness: any;
+  1084→}> {
+  1085→  const alignments = await db.ansiAlignment.findMany();
+  1086→
+  1087→  const byDomain: Record<string, any> = {};
+  1088→  let totalImplemented = 0;
+  1089→  let totalFullAlignment = 0;
+  1090→
+  1091→  for (const alignment of alignments) {
+  1092→    const domain = alignment.ansiDomain;
+  1093→    if (!byDomain[domain]) {
+  1094→      byDomain[domain] = { total: 0, implemented: 0, partial: 0, score: 0 };
+  1095→    }
+  1096→
+  1097→    byDomain[domain].total++;
+  1098→
+  1099→    switch (alignment.implementationStatus) {
+  1100→      case AnssiImplementationStatus.IMPLEMENTED:
+  1101→        byDomain[domain].implemented++;
+  1102→        totalImplemented++;
+  1103→        if (alignment.mappingStrength === MappingStrength.FULL ||
+  1104→            alignment.mappingStrength === MappingStrength.SUBSTANTIAL) {
+  1105→          totalFullAlignment++;
+  1106→        }
+  1107→        break;
+  1108→      case AnssiImplementationStatus.PARTIALLY_IMPLEMENTED:
+  1109→        byDomain[domain].partial++;
+  1110→        totalImplemented += 0.5;
+  1111→        break;
+  1112→    }
+  1113→  }
+  1114→
+  1115→  // Calculate per-domain scores
+  1116→  for (const domain of Object.keys(byDomain)) {
+  1117→    const d = byDomain[domain];
+  1118→    d.score = d.total > 0 ? Math.round(((d.implemented + d.partial * 0.5) / d.total) * 100) : 0;
+  1119→  }
+  1120→
+  1121→  const overallAlignment = alignments.length > 0 
+  1122→    ? Math.round((totalImplemented / alignments.length) * 100) 
+  1123→    : 0;
+  1124→
+  1125→  // Determine certification readiness
+  1126→  const certRelevant = alignments.filter(a => a.certRelevant);
+  1127→  const certImplemented = certRelevant.filter(a => 
+  1128→    a.implementationStatus === AnssiImplementationStatus.IMPLEMENTED
+  1129→  );
+  1130→  const certificationReadiness = {
+  1131→    basic: certImplemented.filter(a => a.certLevel === 'BASIC').length >= 
+  1132→           certRelevant.filter(a => a.certLevel === 'BASIC').length,
+  1133→    standard: certImplemented.filter(a => a.certLevel === 'STANDARD').length >= 
+  1134→               certRelevant.filter(a => a.certLevel === 'STANDARD').length,
+  1135→    advanced: certImplemented.filter(a => a.certLevel === 'ADVANCED').length >= 
+  1136→               certRelevant.filter(a => a.certLevel === 'ADVANCED').length
+  1137→  };
+  1138→
+  1139→  return {
+  1140→    overallAlignment,
+  1141→    byDomain,
+  1142→    certificationReadiness
+  1143→  };
+  1144→}
+  1145→
+  1146→// Export initialization function
+  1147→export async function initializeComplianceEngine(): Promise<{ framework: ComplianceFramework; controlsCount: number }> {
+  1148→  const framework = await initializeArtpFramework();
+  1149→  await initializeAnssiAlignments(framework.id);
+  1150→  await updateComplianceMetrics(framework.id);
+  1151→  
+  1152→  const controlsCount = await db.complianceControl.count({
+  1153→    where: { frameworkId: framework.id }
+  1154→  });
+  1155→
+  1156→  return { framework, controlsCount };
+  1157→}
+  1158→

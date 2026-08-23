@@ -1,0 +1,1757 @@
+     1→/**
+     2→ * GRR Rapid Response & Osquery EDR Integration Client
+     3→ * Phase 11: Enterprise Endpoint Detection & Response
+     4→ * 
+     5→ * Features:
+     6→ * - GRR API v3 integration for remote live forensics
+     7→ * - Osquery Fleet management for endpoint visibility
+     8→ * - Real-time endpoint telemetry streaming
+     9→ * - Hunt management and artifact collection
+    10→ * - Telecom-specific endpoint correlation (workstations, servers, network devices)
+    11→ * - Automated response actions (isolate, file fetch, process kill)
+    12→ * 
+    13→ * Scale Targets:
+    14→ * - 50,000+ endpoints monitored
+    15→ * - 100,000+ queries/day
+    16→ * - <5s detection-to-response time
+    17→ * 
+    18→ * @version 1.0.0
+    19→ * @license Proprietary - Djezzy National SOC Platform
+    20→ */
+    21→
+    22→import { EventEmitter } from 'events';
+    23→
+    24→// ============================================================
+    25→// Types & Interfaces
+    26→// ============================================================
+    27→
+    28→export interface GrrConfig {
+    29→  apiUrl: string;
+    30→  username: string;
+    31→  password: string;
+    32→  insecure?: boolean; // Allow self-signed certs (dev only)
+    33→  timeout?: number;   // Request timeout in ms (default: 60000 for GRR)
+    34→}
+    35→
+    36→export interface OsqueryConfig {
+    37→  fleetApiUrl: string;
+    38→  enrollmentSecret: string;
+    39→  apiKey?: string;
+    40→  timeout?: number;
+    41→}
+    42→
+    43→export interface EdrIntegrationConfig {
+    44→  grr: GrrConfig;
+    45→  osquery: OsqueryConfig;
+    46→  kafka?: {
+    47→    brokers: string[];
+    48→    topic: string; // e.g., "edr.telemetry"
+    49→  };
+    50→  enableAutoResponse?: boolean; // Enable automated containment actions
+    51→  maxConcurrentHunts?: number;  // Max parallel GRR hunts (default: 10)
+    52→}
+    53→
+    54→// GRR Models
+    55→export interface GrrClient {
+    56→  clientId: string;
+    57→  hostname: string;
+    58→  os: string;
+    59→  osVersion: string;
+    60→  ipAddress: string[];
+    61→  macAddress?: string[];
+    62→  lastSeenAt: string;
+    63→  firstSeenAt: string;
+    64→  labels: string[];
+    65→  installTime: string;
+    66→  clientVersion: string;
+    67→  ping: number;
+    68→  // Telco-specific fields
+    69→  assetTag?: string;
+    70→  department?: string;
+    71→  location?: string;
+    72→  owner?: string;
+    73→  riskScore?: number; // 0-100 based on endpoint risk
+    74→}
+    75→
+    76→export interface GrrHunt {
+    77→  huntId: string;
+    78→  name: string;
+    79→  description: string;
+    80→  status: 'STARTED' | 'PAUSED' | 'STOPPED' | 'COMPLETED' | 'ERROR';
+    81→  createdAt: string;
+    82→  updatedAt: string;
+    83→  createdBy: string;
+    84→  clientLimit?: { count: number }; // Limit to N clients
+    85→  clientRate?: number; // Clients per second
+    86→  totalClients?: number;
+    87→  completedClients?: number;
+    88→  resultsCount?: number;
+    89→  // Hunt rules
+    90→  rules?: Array<{
+    91→    ruleType: string;
+    92→    match?: Record<string, any>;
+    93→  }>;
+    94→  // Artifact names to collect
+    95→  artifactNames?: string[];
+    96→  // Telco-specific
+    97→  priority?: 'critical' | 'high' | 'medium' | 'low';
+    98→  incidentId?: string; // Link to SOC incident
+    99→}
+   100→
+   101→export interface GrrFlow {
+   102→  flowId: string;
+   103→  clientId: string;
+   104→  huntId?: string;
+   105→  flowType: string;
+   106→  status: 'RUNNING' | 'TERMINATED' | 'ERROR' | 'CLIENT_ERROR';
+   107→  createdAt: string;
+   108→  startedAt?: string;
+   109→  creator: string;
+   110→  args?: Record<string, any>;
+   111→  resultsCount?: number;
+   112→  results?: Array<Record<string, any>>;
+   113→}
+   114→
+   115→export interface GrrArtifact {
+   116→  name: string;
+   117→  documentation?: string;
+   118→  supportedOs?: string[]; // ['Linux', 'Windows', 'Darwin']
+   119→  sources?: Array<{
+   120→    type: string;
+   121→    attributes?: Array<{ name: string; value: any }>;
+   122→    conditions?: Array<{ attribute: string; operator: string; value: any }>;
+   123→    pathSeparator?: string;
+   124→    paths?: string[];
+   125→    query?: string; // For OSQuery artifacts
+   126→    key?: string;
+   127→    nestedArtifact?: string;
+   128→  }>;
+   129→  // Custom artifacts for telecom
+   130→  isCustom?: boolean;
+   131→  category?: 'Forensic' | 'Telemetry' | 'Custom' | 'Telco';
+   132→}
+   133→
+   134→// Osquery Models
+   135→export interface OsqueryNode {
+   136→  nodeKey: string;
+   137→  hostname: string;
+   138→  uuid: string;
+   139→  platform: string; // darwin, windows, linux
+   140→  osVersion: string;
+   141→  osBuild?: string;
+   142→  cpuType?: string;
+   143→  cpuBrand?: string;
+   144→  physicalMemory?: number; // bytes
+   145→  hardwareSerial?: string;
+   146→  hostnameOverride?: string;
+   147→  ipAddress?: string;
+   148→  primaryMac?: string;
+   149→  lastSeenAt: string;
+   150→  label: string; // e.g., "Production", "Development"
+   151→  user_email?: string;
+   152→  detailInterval?: number; // seconds between detailed queries
+   153→  activeInterval?: number; // seconds between active queries
+   154→  // Telco-specific
+   155→  environment?: 'production' | 'staging' | 'development' | 'dmz';
+   156→  criticality?: 'critical' | 'high' | 'medium' | 'low';
+   157→  businessUnit?: string;
+   158→}
+   159→
+   160→export interface OsqueryDistributedQuery {
+   161→  id: string;
+   162→  name: string;
+   163→  query: string;
+   164→  createdAt: string;
+   165→  creator: string;
+   166→  status: 'pending' | 'running' | 'completed' | 'expired';
+   167→  // Results summary
+   168→  totalTargets?: number;
+   169→  completedTargets?: number;
+   170→  // SQL query details
+   171→  sql: string;
+   172→  // Telco context
+   173→  category?: 'inventory' | 'security' | 'compliance' | 'troubleshooting';
+   174→  scheduled?: boolean;
+   175→  interval?: number; // seconds for scheduled queries
+   176→}
+   177→
+   178→export interface OsqueryQueryResult {
+   179→  nodeKey: string;
+   180→  hostname: string;
+   181→  columns: Record<string, any>;
+   182→  timestamp: number;
+   183→}
+   184→
+   185→export interface OsqueryLog {
+   186→  timestamp: string;
+   187→  severity: number; // 0=info, 1=warning, 2=error
+   188→  message: string;
+   189→  line?: string;
+   190→  file?: string;
+   191→  version?: string;
+   192→  nodeName?: string;
+   193→  hostIdentifier?: string;
+   194→}
+   195→
+   196→// EDR Alert Models
+   197→export interface EdrAlert {
+   198→  alertId: string;
+   199→  source: 'grr' | 'osquery' | 'hybrid';
+   200→  severity: 'critical' | 'high' | 'medium' | 'low' | 'info';
+   201→  title: string;
+   202→  description: string;
+   203→  clientId?: string;
+   204→  nodeId?: string;
+   205→  hostname: string;
+   206→  category: string; // malware, persistence, data_exposure, reconnaissance, etc.
+   207→  iocMatch?: string; // Matched IOC if applicable
+   208→  timestamp: string;
+   209→  // Enrichment
+   210→  endpointContext?: Partial<GrrClient | OsqueryNode>;
+   211→  artifacts?: Array<{ name: string; url: string }>;
+   212→  // Response actions taken
+   213→  autoResponse?: {
+   214→    action: string;
+   215→    executedAt: string;
+   216→    result: 'success' | 'failed' | 'partial';
+   217→  }[];
+   218→  // Incident linkage
+   219→  incidentId?: string;
+   220→  caseId?: string;
+   221→}
+   222→
+   223→// Hunt Result with Telco Context
+   224→export interface TelcoHuntResult {
+   225→  huntId: string;
+   226→  clientId: string;
+   227→  hostname: string;
+   228→  department?: string;
+   229→  location?: string;
+   230→  findings: Array<{
+   231→    type: 'file' | 'registry' | 'process' | 'network' | 'artifact';
+   232→    data: Record<string, any>;
+   233→    riskLevel: 'critical' | 'high' | 'medium' | 'low' | 'info';
+   234→    iocIndicators?: string[];
+   235→  }>;
+   236→  collectedAt: string;
+   237→  analystNotes?: string;
+   238→}
+   239→
+   240→// ============================================================
+   241→// EDR Client Class
+   242→// ============================================================
+   243→
+   244→export class GrrOsqueryEdrClient extends EventEmitter {
+   245→  private config: EdrIntegrationConfig;
+   246→  private grrAuthToken?: string;
+   247→  private osqueryAuthToken?: string;
+   248→  private isConnected: boolean = false;
+   249→  private hunts: Map<string, GrrHunt> = new Map();
+   250→  private activeFlows: Map<string, GrrFlow> = new Map();
+   251→  
+   252→  // Statistics
+   253→  public stats = {
+   254→    endpointsMonitored: 0,
+   255→    activeHunts: 0,
+   256→    totalHuntsCompleted: 0,
+   257→    alertsGenerated: 0,
+   258→    artifactsCollected: 0,
+   259→    averageResponseTimeMs: 0,
+   260→    lastSyncAt: null as Date | null,
+   261→  };
+   262→
+   263→  constructor(config: EdrIntegrationConfig) {
+   264→    super();
+   265→    this.config = config;
+   266→    
+   267→    // Set up internal event handlers
+   268→    this.on('error', (err) => {
+   269→      console.error('[EDR] Error:', err.message);
+   270→    });
+   271→    
+   272→    this.on('alert', (alert: EdrAlert) => {
+   273→      this.stats.alertsGenerated++;
+   274→      console.log(`[EDR] Alert (${alert.severity}): ${alert.title} on ${alert.hostname}`);
+   275→    });
+   276→  }
+   277→
+   278→  // ============================================================
+   279→  // Connection Management
+   280→  // ============================================================
+   281→
+   282→  /**
+   283→   * Initialize connections to both GRR and Osquery Fleet
+   284→   */
+   285→  async connect(): Promise<void> {
+   286→    try {
+   287→      console.log('[EDR] Connecting to GRR at', this.config.grr.apiUrl);
+   288→      
+   289→      // Authenticate with GRR
+   290→      const grrAuthResponse = await this.fetchGrr('/config', {
+   291→        method: 'GET',
+   292→      });
+   293→      
+   294→      if (grrAuthResponse.ok) {
+   295→        this.isConnected = true;
+   296→        console.log('[EDR] GRR authentication successful');
+   297→        
+   298→        // Get initial stats
+   299→        await this.refreshStats();
+   300→      } else {
+   301→        throw new Error(`GRR auth failed: ${grrAuthResponse.status}`);
+   302→      }
+   303→
+   304→      // Test Osquery Fleet connection
+   305→      if (this.config.osquery.fleetApiUrl) {
+   306→        console.log('[EDR] Testing Osquery Fleet connection...');
+   307→        const fleetTest = await this.fetchFleet('/api/v1/version');
+   308→        if (fleetTest.ok) {
+   309→          console.log('[EDR] Osquery Fleet connected successfully');
+   310→        } else {
+   311→          console.warn('[EDR] Osquery Fleet connection failed, continuing with GRR only');
+   312→        }
+   313→      }
+   314→
+   315→      this.emit('connected', { 
+   316→        grr: true, 
+   317→        osquery: !!this.config.osquery.fleetApiUrl,
+   318→        timestamp: new Date()
+   319→      });
+   320→      
+   321→    } catch (error) {
+   322→      this.isConnected = false;
+   323→      this.emit('error', error);
+   324→      throw error;
+   325→    }
+   326→  }
+   327→
+   328→  /**
+   329→   * Disconnect from all services
+   330→   */
+   331→  async disconnect(): Promise<void> {
+   332→    this.grrAuthToken = undefined;
+   333→    this.osqueryAuthToken = undefined;
+   334→    this.isConnected = false;
+   335→    this.hunts.clear();
+   336→    this.activeFlows.clear();
+   337→    
+   338→    this.emit('disconnected', { timestamp: new Date() });
+   339→    console.log('[EDR] Disconnected from all services');
+   340→  }
+   341→
+   342→  get connectionStatus(): boolean {
+   343→    return this.isConnected;
+   344→  }
+   345→
+   346→  // ============================================================
+   347→  // GRR Client Management
+   348→  // ============================================================
+   349→
+   350→  /**
+   351→   * Search for GRR clients with filtering options
+   352→   * Telco-specific: search by department, location, OS, labels
+   353→   */
+   354→  async searchClients(params: {
+   355→    query?: string;       // Search in hostname, IP, username
+   356→    limit?: number;       // Max results (default: 100)
+   357→    offset?: number;      // Pagination offset
+   358→    os?: string;          // Filter by OS (Linux, Windows, Darwin)
+   359→    labels?: string[];    // Filter by labels
+   360→    onlineThreshold?: number; // Seconds since last ping (default: 3600)
+   361→    sortBy?: 'last_seen' | 'first_seen' | 'hostname';
+   362→    sortOrder?: 'asc' | 'desc';
+   363→  }): Promise<{ clients: GrrClient[]; total: number }> {
+   364→    const {
+   365→      query,
+   366→      limit = 100,
+   367→      offset = 0,
+   368→      os,
+   369→      labels,
+   370→      onlineThreshold = 3600,
+   371→      sortBy = 'last_seen',
+   372→      sortOrder = 'desc'
+   373→    } = params;
+   374→
+   375→    try {
+   376→      const searchParams = new URLSearchParams({
+   377→        limit: limit.toString(),
+   378→        offset: offset.toString(),
+   379→        sort_by: sortBy,
+   380→        sort_order: sortOrder,
+   381→        ...(query && { query }),
+   382→        ...(os && { os }),
+   383→        ...(onlineThreshold && { online_threshold: onlineThreshold.toString() }),
+   384→      });
+   385→
+   386→      const response = await this.fetchGrr(`/clients?${searchParams}`);
+   387→      
+   388→      if (!response.ok) {
+   389→        throw new Error(`GRR client search failed: ${response.status}`);
+   390→      }
+   391→
+   392→      const data = await response.json();
+   393→      const clients: GrrClient[] = (data.clients || []).map(this.transformGrrClient);
+   394→      
+   395→      // Apply label filtering locally if needed
+   396→      let filteredClients = clients;
+   397→      if (labels && labels.length > 0) {
+   398→        filteredClients = clients.filter(client =>
+   399→          labels.some(label => client.labels.includes(label))
+   400→        );
+   401→      }
+   402→
+   403→      return {
+   404→        clients: filteredClients,
+   405→        total: data.total_count || filteredClients.length
+   406→      };
+   407→
+   408→    } catch (error) {
+   409→      this.emit('error', error);
+   410→      throw error;
+   411→    }
+   412→  }
+   413→
+   414→  /**
+   415→   * Get single client details with full context
+   416→   */
+   417→  async getClient(clientId: string): Promise<GrrClient> {
+   418→    const response = await this.fetchGrr(`/clients/${clientId}`);
+   419→    
+   420→    if (!response.ok) {
+   421→      throw new Error(`Failed to get client ${clientId}: ${response.status}`);
+   422→    }
+   423→
+   424→    const data = await response.json();
+   425→    return this.transformGrrClient(data);
+   426→  }
+   427→
+   428→  /**
+   429→   * Get client statistics for dashboard
+   430→   */
+   431→  async getClientStats(): Promise<{
+   432→    total: number;
+   433→    online: number;
+   434→    offline: number;
+   435→    byOs: Record<string, number>;
+   436→    byDepartment: Record<string, number>;
+   437→    byRiskLevel: Record<string, number>;
+   438→    avgPing: number;
+   439→  }> {
+   440→    // In production, this would aggregate from GRR's /clients/stats endpoint
+   441→    // For now, return mock stats that would come from GRR
+   442→    return {
+   443→      total: this.stats.endpointsMonitored || 48723,
+   444→      online: Math.floor((this.stats.endpointsMonitored || 48723) * 0.87),
+   445→      offline: Math.floor((this.stats.endpointsMonitored || 48723) * 0.13),
+   446→      byOs: {
+   447→        'Linux': 28456,
+   448→        'Windows': 15234,
+   449→        'macOS': 5033,
+   450→      },
+   451→      byDepartment: {
+   452→        'NOC': 1234,
+   453→        'IT Operations': 3456,
+   454→        'Development': 5678,
+   455→        'Corporate': 8901,
+   456→        'Field Operations': 23456,
+   457→        'Data Center': 6998,
+   458→      },
+   459→      byRiskLevel: {
+   460→        'critical': 12,
+   461→        'high': 234,
+   462→        'medium': 4567,
+   463→        'low': 43910,
+   464→      },
+   465→      avgPing: 245, // ms
+   466→    };
+   467→  }
+   468→
+   469→  // ============================================================
+   470→  // GRR Hunt Management
+   471→  // ============================================================
+   472→
+   473→  /**
+   474→   * Create a new GRR hunt for forensic artifact collection
+   475→   * Telco-specific: supports department/location targeting
+   476→   */
+   477→  async createHunt(params: {
+   478→    name: string;
+   479→    description: string;
+   480→    artifactNames: string[];     // Artifacts to collect
+   481→    huntRunnerArgs?: Record<string, any>; // Additional runner arguments
+   482→    clientLimit?: number;       // Max clients to target
+   483→    clientRate?: number;        // Clients per second
+   484→    priority?: 'critical' | 'high' | 'medium' | 'low';
+   485→    incidentId?: string;        // Link to SOC incident
+   486→    targetLabels?: string[];    // Target specific client labels
+   487→    excludeLabels?: string[];   // Exclude certain clients
+   488→  }): Promise<GrrHunt> {
+   489→    const {
+   490→      name,
+   491→      description,
+   492→      artifactNames,
+   493→      huntRunnerArgs = {},
+   494→      clientLimit,
+   495→      clientRate = 50,
+   496→      priority = 'medium',
+   497→      incidentId,
+   498→      targetLabels,
+   499→      excludeLabels,
+   500→    } = params;
+   501→
+   502→    try {
+   503→      const huntPayload = {
+   504→        hunt_name: name,
+   505→        hunt_description: description,
+   506→        runner_args: {
+   507→          ...huntRunnerArgs,
+   508→          ...(clientLimit && { client_limit: { count: clientLimit } }),
+   509→          client_rate: clientRate,
+   510→        },
+   511→        // Use FlowArgs for artifact collection
+   512→        flow_args: {
+   513→          artifact_list: artifactNames,
+   514→        },
+   515→        // Telco-specific metadata
+   516→        start_hunt: true,
+   517→      };
+   518→
+   519→      const response = await this.fetchGrr('/hunts', {
+   520→        method: 'POST',
+   521→        body: JSON.stringify(huntPayload),
+   522→      });
+   523→
+   524→      if (!response.ok) {
+   525→        const errorText = await response.text();
+   526→        throw new Error(`Failed to create hunt: ${response.status} - ${errorText}`);
+   527→      }
+   528→
+   529→      const huntData = await response.json();
+   530→      const hunt: GrrHunt = {
+   531→        huntId: huntData.hunt_id || huntData.hunt?.huntId,
+   532→        name,
+   533→        description,
+   534→        status: 'STARTED',
+   535→        createdAt: new Date().toISOString(),
+   536→        updatedAt: new Date().toISOString(),
+   537→        createdBy: 'soc-platform',
+   538→        clientLimit: clientLimit ? { count: clientLimit } : undefined,
+   539→        clientRate,
+   540→        artifactNames,
+   541→        priority,
+   542→        incidentId,
+   543→      };
+   544→
+   545→      this.hunts.set(hunt.huntId, hunt);
+   546→      this.stats.activeHunts++;
+   547→
+   548→      this.emit('huntCreated', hunt);
+   549→      console.log(`[EDR] Hunt created: ${name} (${hunt.huntId})`);
+   550→
+   551→      return hunt;
+   552→
+   553→    } catch (error) {
+   554→      this.emit('error', error);
+   555→      throw error;
+   556→    }
+   557→  }
+   558→
+   559→  /**
+   560→   * Get all hunts with optional filtering
+   561→   */
+   562→  async getHunts(params: {
+   563→    status?: GrrHunt['status'];
+   564→    limit?: number;
+   565→    offset?: number;
+   566→  } = {}): Promise<GrrHunt[]> {
+   567→    const { status, limit = 50, offset = 0 } = params;
+   568→
+   569→    try {
+   570→      const response = await this.fetchGrr(
+   571→        `/hunts?limit=${limit}&offset=${offset}${status ? `&status=${status}` : ''}`
+   572→      );
+   573→
+   574→      if (!response.ok) {
+   575→        throw new Error(`Failed to get hunts: ${response.status}`);
+   576→      }
+   577→
+   578→      const data = await response.json();
+   579→      return (data.hunts || []).map((h: any) => ({
+   580→        huntId: h.hunt_id,
+   581→        name: h.hunt_name || h.name,
+   582→        description: h.hunt_description || h.description,
+   583→        status: h.status || 'UNKNOWN',
+   584→        createdAt: h.create_time || h.createdAt,
+   585→        updatedAt: h.last_status_time || h.updatedAt,
+   586→        createdBy: h.creator || h.createdBy,
+   587→        totalClients: h.total_clients || h.totalClients,
+   588→        completedClients: h.completed_clients || h.completedClients,
+   589→        resultsCount: h.results_count || h.resultsCount,
+   590→        ...h,
+   591→      }));
+   592→
+   593→    } catch (error) {
+   594→      this.emit('error', error);
+   595→      // Return cached hunts if API fails
+   596→      return Array.from(this.hunts.values());
+   597→    }
+   598→  }
+   599→
+   600→  /**
+   601→   * Pause an active hunt
+   602→   */
+   603→  async pauseHunt(huntId: string): Promise<void> {
+   604→    const response = await this.fetchGrr(`/hunts/${huntId}/pause`, {
+   605→      method: 'POST',
+   606→    });
+   607→
+   608→    if (!response.ok) {
+   609→      throw new Error(`Failed to pause hunt ${huntId}: ${response.status}`);
+   610→    }
+   611→
+   612→    const hunt = this.hunts.get(huntId);
+   613→    if (hunt) {
+   614→      hunt.status = 'PAUSED';
+   615→      hunt.updatedAt = new Date().toISOString();
+   616→    }
+   617→
+   618→    this.emit('huntUpdated', { huntId, status: 'PAUSED' });
+   619→  }
+   620→
+   621→  /**
+   622→   * Resume a paused hunt
+   623→   */
+   624→  async resumeHunt(huntId: string): Promise<void> {
+   625→    const response = await this.fetchGrr(`/hunts/${huntId}/resume`, {
+   626→      method: 'POST',
+   627→    });
+   628→
+   629→    if (!response.ok) {
+   630→      throw new Error(`Failed to resume hunt ${huntId}: ${response.status}`);
+   631→    }
+   632→
+   633→    const hunt = this.hunts.get(huntId);
+   634→    if (hunt) {
+   635→      hunt.status = 'STARTED';
+   636→      hunt.updatedAt = new Date().toISOString();
+   637→    }
+   638→
+   639→    this.emit('huntUpdated', { huntId, status: 'STARTED' });
+   640→  }
+   641→
+   642→  /**
+   643→   * Stop/cancel a hunt
+   644→   */
+   645→  async stopHunt(huntId: string): Promise<void> {
+   646→    const response = await this.fetchGRR(`/hunts/${huntId}/stop`, {
+   647→      method: 'POST',
+   648→    });
+   649→
+   650→    if (!response.ok) {
+   651→      throw new Error(`Failed to stop hunt ${huntId}: ${response.status}`);
+   652→    }
+   653→
+   654→    const hunt = this.hunts.get(huntId);
+   655→    if (hunt) {
+   656→      hunt.status = 'STOPPED';
+   657→      hunt.updatedAt = new Date().toISOString();
+   658→      this.stats.activeHunts--;
+   659→      this.stats.totalHuntsCompleted++;
+   660→    }
+   661→
+   662→    this.emit('huntStopped', huntId);
+   663→  }
+   664→
+   665→  /**
+   666→   * Get hunt results with analysis
+   667→   * Returns structured findings with risk assessment
+   668→   */
+   669→  async getHuntResults(
+   670→    huntId: string,
+   671→    params: {
+   672→      limit?: number;
+   673→      offset?: number;
+   674→      includeArtifacts?: boolean;
+   675→      riskFilter?: ('critical' | 'high' | 'medium' | 'low')[];
+   676→    } = {}
+   677→  ): Promise<TelcoHuntResult[]> {
+   678→    const { limit = 100, offset = 0, includeArtifacts = true, riskFilter } = params;
+   679→
+   680→    try {
+   681→      const response = await this.fetchGrr(
+   682→        `/hunts/${huntId}/results?limit=${limit}&offset=${offset}&include_artifacts=${includeArtifacts}`
+   683→      );
+   684→
+   685→      if (!response.ok) {
+   686→        throw new Error(`Failed to get hunt results: ${response.status}`);
+   687→      }
+   688→
+   689→      const data = await response.json();
+   690→      
+   691→      // Transform raw results into structured TelcoHuntResults
+   692→      const results: TelcoHuntResult[] = (data.results || []).map((r: any) => ({
+   693→        huntId,
+   694→        clientId: r.client_id,
+   695→        hostname: r.hostname || 'Unknown',
+   696→        department: r.labels?.find((l: string) => 
+   697→          ['NOC', 'IT Operations', 'Development', 'Corporate'].includes(l)
+   698→        ),
+   699→        findings: this.analyzeHuntFindings(r.payload || r),
+   700→        collectedAt: r.timestamp || new Date().toISOString(),
+   701→      }));
+   702→
+   703→      // Apply risk filter if specified
+   704→      let filteredResults = results;
+   705→      if (riskFilter && riskFilter.length > 0) {
+   706→        filteredResults = results.filter(r =>
+   707→          r.findings.some(f => riskFilter.includes(f.riskLevel))
+   708→        );
+   709→      }
+   710→
+   711→      return filteredResults;
+   712→
+   713→    } catch (error) {
+   714→      this.emit('error', error);
+   715→      return [];
+   716→    }
+   717→  }
+   718→
+   719→  // ============================================================
+   720→  // GRR Flow Management (Single Client Actions)
+   721→  // ============================================================
+   722→
+   723→  /**
+   724→   * Start a flow on a single client
+   725→   * Common flows: FileFinder, ListDirectory, FetchFile, ExecuteCommand
+   726→   */
+   727→  async startFlow(clientId: string, params: {
+   728→    flowType: string;
+   729→    args?: Record<string, any>;
+   730→  }): Promise<GrrFlow> {
+   731→    const { flowType, args = {} } = params;
+   732→
+   733→    try {
+   734→      const response = await this.fetchGrr(`/clients/${clientId}/flows`, {
+   735→        method: 'POST',
+   736→        body: JSON.stringify({
+   737→          flow: { name: flowType, args },
+   738→        }),
+   739→      });
+   740→
+   741→      if (!response.ok) {
+   742→        throw new Error(`Failed to start flow on ${clientId}: ${response.status}`);
+   743→      }
+   744→
+   745→      const data = await response.json();
+   746→      const flow: GrrFlow = {
+   747→        flowId: data.flow_id || data.context?.flow_id,
+   748→        clientId,
+   749→        flowType,
+   750→        status: 'RUNNING',
+   751→        createdAt: new Date().toISOString(),
+   752→        startedAt: new Date().toISOString(),
+   753→        creator: 'soc-platform',
+   754→        args,
+   755→      };
+   756→
+   757→      this.activeFlows.set(flow.flowId, flow);
+   758→
+   759→      this.emit('flowStarted', flow);
+   760→      return flow;
+   761→
+   762→    } catch (error) {
+   763→      this.emit('error', error);
+   764→      throw error;
+   765→    }
+   766→  }
+   767→
+   768→  /**
+   769→   * Get flow status and results
+   770→   */
+   771→  async getFlow(clientId: string, flowId: string): Promise<GrrFlow> {
+   772→    const response = await this.fetchGrr(`/clients/${clientId}/flows/${flowId}`);
+   773→
+   774→    if (!response.ok) {
+   775→      throw new Error(`Failed to get flow ${flowId}: ${response.status}`);
+   776→    }
+   777→
+   778→    const data = await response.json();
+   779→    const existingFlow = this.activeFlows.get(flowId) || {};
+   780→
+   781→    return {
+   782→      flowId,
+   783→      clientId,
+   784→      flowType: data.flow?.name || existingFlow.flowType,
+   785→      status: data.context?.state || 'UNKNOWN',
+   786→      createdAt: data.context?.create_time || existingFlow.createdAt,
+   787→      startedAt: data.context?.started_at || existingFlow.startedAt,
+   788→      creator: data.context?.creator || existingFlow.creator,
+   789→      resultsCount: data.context?.results_count || 0,
+   790→      results: data.results || [],
+   791→      ...existingFlow,
+   792→    };
+   793→  }
+   794→
+   795→  /**
+   796→   * Collect common forensic artifacts from an endpoint
+   797→   * Convenience wrapper around startFlow
+   798→   */
+   799→  async collectForensics(clientId: string, artifactTypes: Array<
+   800→    'recent_files' | 'running_processes' | 'network_connections' | 
+   801→    'user_accounts' | 'scheduled_tasks' | 'startup_items' | 'browser_history'
+   802→  > = ['running_processes', 'network_connections']): Promise<GrrFlow> {
+   803→    
+   804→    // Map artifact types to GRR flow names
+   805→    const artifactMap: Record<string, string> = {
+   806→      recent_files: 'RecentFilesFinder',
+   807→      running_processes: 'ProcessListing',
+   808→      network_connections: 'NetstatAction',
+   809→      user_accounts: 'UserList',
+   810→      scheduled_tasks: 'WindowsSchedulerEnumeration',
+   811→      startup_items: 'StartupItemsEnumerator',
+   812→      browser_history: 'ChromeHistory',
+   813→    };
+   814→
+   815→    const flowNames = artifactTypes.map(t => artifactMap[t]).filter(Boolean);
+   816→    
+   817→    return this.startFlow(clientId, {
+   818→      flowType: 'ArtifactCollectorFlow',
+   819→      args: { artifact_list: flowNames },
+   820→    });
+   821→  }
+   822→
+   823→  // ============================================================
+   824→  // Osquery Fleet Management
+   825→  // ============================================================
+   826→
+   827→  /**
+   828→   * Get all enrolled Osquery nodes
+   829→   */
+   830→  async getNodes(params: {
+   831→    status?: 'online' | 'offline' | 'all';
+   832→    platform?: string;
+   833→    label?: string;
+   834→    limit?: number;
+   835→    offset?: number;
+   836→  } = {}): Promise<OsqueryNode[]> {
+   837→    const { status = 'all', platform, label, limit = 100, offset = 0 } = params;
+   838→
+   839→    try {
+   840→      const queryParams = new URLSearchParams({
+   841→        limit: limit.toString(),
+   842→        offset: offset.toString(),
+   843→        ...(status !== 'all' && { status }),
+   844→        ...(platform && { platform }),
+   845→        ...(label && { label }),
+   846→      });
+   847→
+   848→      const response = await this.fetchFleet(`/api/v1/nodes?${queryParams}`);
+   849→
+   850→      if (!response.ok) {
+   851→        throw new Error(`Failed to get nodes: ${response.status}`);
+   852→      }
+   853→
+   854→      const data = await response.json();
+   855→      return (data.nodes || []).map(this.transformOsqueryNode);
+   856→
+   857→    } catch (error) {
+   858→      this.emit('error', error);
+   859→      return [];
+   860→    }
+   861→  }
+   862→
+   863→  /**
+   864→   * Execute distributed query across nodes
+   865→   * Core Osquery functionality for real-time visibility
+   866→   */
+   867→  async executeDistributedQuery(params: {
+   868→    query: string;           // SQL query
+   869→    name: string;            // Query name for tracking
+   870→    targets?: {              // Target specific nodes
+   871→      nodeKeys?: string[];
+   872→      labels?: string[];
+   873→    };
+   874→    timeout?: number;        // Query timeout in seconds (default: 60)
+   875→    category?: 'inventory' | 'security' | 'compliance' | 'troubleshooting';
+   876→  }): Promise<OsqueryDistributedQuery> {
+   877→    const {
+   878→      query,
+   879→      name,
+   880→      targets = {},
+   881→      timeout = 60,
+   882→      category = 'security',
+   883→    } = params;
+   884→
+   885→    try {
+   886→      const payload = {
+   887→        query,
+   888→        name,
+   889→        ...(targets.nodeKeys && { selected: targets.nodeKeys }),
+   890→        ...(targets.labels && { selected_labels: targets.labels }),
+   891→      };
+   892→
+   893→      const response = await this.fetchFleet('/api/v1/distributed/queries', {
+   894→        method: 'POST',
+   895→        body: JSON.stringify(payload),
+   896→      });
+   897→
+   898→      if (!response.ok) {
+   899→        const errorText = await response.text();
+   900→        throw new Error(`Distributed query failed: ${response.status} - ${errorText}`);
+   901→      }
+   902→
+   903→      const data = await response.json();
+   904→      const distributedQuery: OsqueryDistributedQuery = {
+   905→        id: data.distributed_query_id || data.id,
+   906→        name,
+   907→        query: data.query || query,
+   908→        createdAt: new Date().toISOString(),
+   909→        creator: 'soc-platform',
+   910→        status: 'running',
+   911→        sql: query,
+   912→        category,
+   913→      };
+   914→
+   915→      this.emit('distributedQueryStarted', distributedQuery);
+   916→      console.log(`[EDR] Distributed query "${name}" started targeting ${data.count || 'all'} nodes`);
+   917→
+   918→      return distributedQuery;
+   919→
+   920→    } catch (error) {
+   921→      this.emit('error', error);
+   922→      throw error;
+   923→    }
+   924→  }
+   925→
+   926→  /**
+   927→   * Get distributed query results
+   928→   */
+   929→  async getQueryResults(queryId: string): Promise<{
+   930→    results: OsqueryQueryResult[];
+   931→    total: number;
+   932→    completed: number;
+   933→    errors: number;
+   934→  }> {
+   935→    try {
+   936→      const response = await this.fetchFleet(`/api/v1/distributed/queries/${queryId}/results`);
+   937→
+   938→      if (!response.ok) {
+   939→        throw new Error(`Failed to get query results: ${response.status}`);
+   940→      }
+   941→
+   942→      const data = await response.json();
+   943→
+   944→      return {
+   945→        results: (data.results || []).map((r: any) => ({
+   946→          nodeKey: r.node_key,
+   947→          hostname: r.host_display_name || r.hostname,
+   948→          columns: r.columns || {},
+   949→          timestamp: r.timestamp,
+   950→        })),
+   951→        total: data.count || 0,
+   952→        completed: data.completed || 0,
+   953→        errors: data.errors || 0,
+   954→      };
+   955→
+   956→    } catch (error) {
+   957→      this.emit('error', error);
+   958→      throw error;
+   959→    }
+   960→  }
+   961→
+   962→  /**
+   963→   * Pre-built security queries for common use cases
+   964→   * Telco-specific: includes telecom threat detection queries
+   965→   */
+   966→  async runSecurityPreset(preset: keyof typeof SecurityPresets, targets?: {
+   967→    nodeKeys?: string[];
+   968→    labels?: string[];
+   969→  }): Promise<OsqueryDistributedQuery> {
+   970→    const presetConfig = SecurityPresets[preset];
+   971→    if (!presetConfig) {
+   972→      throw new Error(`Unknown security preset: ${preset}`);
+   973→    }
+   974→
+   975→    return this.executeDistributedQuery({
+   976→      query: presetConfig.query,
+   977→      name: presetConfig.name,
+   978→      category: presetConfig.category,
+   979→      targets,
+   980→    });
+   981→  }
+   982→
+   983→  // ============================================================
+   984→  // Automated Response Actions
+   985→  // ============================================================
+   986→
+   987→  /**
+   988→   * Isolate an endpoint from the network
+   989→   * CRITICAL ACTION: Requires elevated permissions
+   990→   */
+   991→  async isolateEndpoint(clientId: string, reason: string, requestedBy: string): Promise<{
+   992→    success: boolean;
+   993→    actionId: string;
+   994→    isolationStatus: 'isolating' | 'isolated' | 'failed';
+   995→  }> {
+   996→    if (!this.config.enableAutoResponse) {
+   997→      console.warn('[EDR] Auto-response disabled, skipping isolation');
+   998→      return { success: false, actionId: '', isolationStatus: 'failed' };
+   999→    }
+  1000→
+  1001→    try {
+  1002→      // Log the isolation request
+  1003→      this.emit('actionInitiated', {
+  1004→        type: 'isolation',
+  1005→        clientId,
+  1006→        reason,
+  1007→        requestedBy,
+  1008→        timestamp: new Date(),
+  1009→      });
+  1010→
+  1011→      // Execute GRR network isolation flow
+  1012→      const flow = await this.startFlow(clientId, {
+  1013→        flowType: 'NetworkIsolation',
+  1014→        args: { reason, requested_by: requestedBy },
+  1015→      });
+  1016→
+  1017→      // Create audit record
+  1018→      this.emit('alert', {
+  1019→        alertId: `iso-${Date.now()}`,
+  1020→        source: 'grr',
+  1021→        severity: 'critical',
+  1022→        title: `Endpoint Isolated: ${clientId}`,
+  1023→        description: `Endpoint isolated due to: ${reason}`,
+  1024→        clientId,
+  1025→        hostname: '',
+  1026→        category: 'containment',
+  1027→        timestamp: new Date().toISOString(),
+  1028→        autoResponse: [{
+  1029→          action: 'isolate',
+  1030→          executedAt: new Date().toISOString(),
+  1031→          result: 'success',
+  1032→        }],
+  1033→      } as EdrAlert);
+  1034→
+  1035→      return {
+  1036→        success: true,
+  1037→        actionId: flow.flowId,
+  1038→        isolationStatus: 'isolating',
+  1039→      };
+  1040→
+  1041→    } catch (error) {
+  1042→      this.emit('error', error);
+  1043→      return { success: false, actionId: '', isolationStatus: 'failed' };
+  1044→    }
+  1045→  }
+  1046→
+  1047→  /**
+  1048→   * Kill a malicious process on an endpoint
+  1049→   */
+  1050→  async killProcess(clientId: string, pid: number, reason: string): Promise<{
+  1051→    success: boolean;
+  1052→    flowId: string;
+  1053→  }> {
+  1054→    if (!this.config.enableAutoResponse) {
+  1055→      return { success: false, flowId: '' };
+  1056→    }
+  1057→
+  1058→    try {
+  1059→      const flow = await this.startFlow(clientId, {
+  1060→        flowType: 'KillProcess',
+  1061→        args: { pid, reason },
+  1062→      });
+  1063→
+  1064→      this.emit('actionExecuted', {
+  1065→        type: 'kill_process',
+  1066→        clientId,
+  1067→        pid,
+  1068→        reason,
+  1069→        flowId: flow.flowId,
+  1070→      });
+  1071→
+  1072→      return { success: true, flowId: flow.flowId };
+  1073→
+  1074→    } catch (error) {
+  1075→      this.emit('error', error);
+  1076→      return { success: false, flowId: '' };
+  1077→    }
+  1078→  }
+  1079→
+  1080→  /**
+  1081→   * Fetch suspicious file from endpoint for analysis
+  1082→   */
+  1083→  async fetchFileForAnalysis(clientId: string, filePath: string): Promise<{
+  1084→    success: boolean;
+  1085→    flowId: string;
+  1086→    downloadUrl?: string;
+  1087→  }> {
+  1088→    try {
+  1089→      const flow = await this.startFlow(clientId, {
+  1090→        flowType: 'FetchFile',
+  1091→        args: { path: filePath, max_file_size: 100 * 1024 * 1024 }, // 100MB max
+  1092→      });
+  1093→
+  1094→      this.stats.artifactsCollected++;
+  1095→
+  1096→      // Poll for completion and get download URL
+  1097→      // In production, this would be async with callback/webhook
+  1098→      return {
+  1099→        success: true,
+  1100→        flowId: flow.flowId,
+  1101→        downloadUrl: `/api/v1/edr/files/${flow.flowId}`,
+  1102→      };
+  1103→
+  1104→    } catch (error) {
+  1105→      this.emit('error', error);
+  1106→      return { success: false, flowId: '' };
+  1107→    }
+  1108→  }
+  1109→
+  1110→  // ============================================================
+  1111→  // Artifact Management
+  1112→  // ============================================================
+  1113→
+  1114→  /**
+  1115→   * Get available GRR artifacts
+  1116→   */
+  1117→  async getArtifacts(params: {
+  1118→    filter?: 'custom' | 'builtin' | 'telco';
+  1119→    category?: string;
+  1120→  } = {}): Promise<GrrArtifact[]> {
+  1121→    const { filter, category } = params;
+  1122→
+  1123→    try {
+  1124→      const response = await this.fetchGrr('/artifacts');
+  1125→
+  1126→      if (!response.ok) {
+  1127→        throw new Error(`Failed to get artifacts: ${response.status}`);
+  1128→      }
+  1129→
+  1130→      const data = await response.json();
+  1131→      let artifacts: GrrArtifact[] = (data.artifacts || []).map((a: any) => ({
+  1132→        name: a.name,
+  1133→        documentation: a.documentation,
+  1134→        supportedOs: a.supported_os,
+  1135→        sources: a.sources,
+  1136→        isCustom: a.is_custom || false,
+  1137→        category: a.category || 'Forensic',
+  1138→      }));
+  1139→
+  1140→      // Apply filters
+  1141→      if (filter === 'custom') {
+  1142→        artifacts = artifacts.filter(a => a.isCustom);
+  1143→      } else if (filter === 'builtin') {
+  1144→        artifacts = artifacts.filter(a => !a.isCustom);
+  1145→      } else if (filter === 'telco') {
+  1146→        artifacts = artifacts.filter(a => a.category === 'Telco');
+  1147→      }
+  1148→
+  1149→      if (category) {
+  1150→        artifacts = artifacts.filter(a => a.category === category);
+  1151→      }
+  1152→
+  1153→      return artifacts;
+  1154→
+  1155→    } catch (error) {
+  1156→      this.emit('error', error);
+  1157→      // Return built-in telco artifacts as fallback
+  1158→      return this.getBuiltinTelcoArtifacts();
+  1159→    }
+  1160→  }
+  1161→
+  1162→  /**
+  1163→   * Create custom artifact for telecom-specific collection
+  1164→   */
+  1165→  async createCustomArtifact(artifact: Omit<GrrArtifact, 'isCustom'>): Promise<GrrArtifact> {
+  1166→    try {
+  1167→      const payload = {
+  1168→        ...artifact,
+  1169→        isCustom: true,
+  1170→        category: artifact.category || 'Telco',
+  1171→      };
+  1172→
+  1173→      const response = await this.fetchGrr('/artifacts', {
+  1174→        method: 'POST',
+  1175→        body: JSON.stringify(payload),
+  1176→      });
+  1177→
+  1178→      if (!response.ok) {
+  1179→        throw new Error(`Failed to create artifact: ${response.status}`);
+  1180→      }
+  1181→
+  1182→      const created = await response.json();
+  1183→      this.emit('artifactCreated', created);
+  1184→      
+  1185→      return {
+  1186→        ...artifact,
+  1187→        isCustom: true,
+  1188→      };
+  1189→
+  1190→    } catch (error) {
+  1191→      this.emit('error', error);
+  1192→      throw error;
+  1193→    }
+  1194→  }
+  1195→
+  1196→  // ============================================================
+  1197→  // Statistics & Health
+  1198→  // ============================================================
+  1199→
+  1200→  /**
+  1201→   * Refresh EDR statistics from both systems
+  1202→   */
+  1203→  async refreshStats(): Promise<void> {
+  1204→    try {
+  1205→      // Get GRR client count
+  1206→      const grrStats = await this.getClientStats();
+  1207→      this.stats.endpointsMonitored = grrStats.total;
+  1208→      this.stats.lastSyncAt = new Date();
+  1209→
+  1210→      // Get Osquery node count
+  1211→      if (this.config.osquery.fleetApiUrl) {
+  1212→        const nodes = await this.getNodes({ limit: 1 });
+  1213→        // Total count would come from API headers or separate endpoint
+  1214→      }
+  1215→
+  1216→      this.emit('statsUpdated', this.stats);
+  1217→
+  1218→    } catch (error) {
+  1219→      this.emit('error', error);
+  1220→    }
+  1221→  }
+  1222→
+  1223→  /**
+  1224→   * Comprehensive health check for EDR integrations
+  1225→   */
+  1226→  async healthCheck(): Promise<{
+  1227→    grr: { status: 'healthy' | 'degraded' | 'unhealthy'; latency: number; uptime?: string };
+  1228→    osquery: { status: 'healthy' | 'degraded' | 'unhealthy'; latency: number; nodeCount?: number };
+  1229→    overall: 'operational' | 'degraded' | 'down';
+  1230→  }> {
+  1231→    const startTime = Date.now();
+  1232→
+  1233→    // Check GRR health
+  1234→    let grrStatus: 'healthy' | 'degraded' | 'unhealthy' = 'unhealthy';
+  1235→    let grrLatency = 0;
+  1236→    try {
+  1237→      const grrStart = Date.now();
+  1238→      const grrResponse = await this.fetchGrr('/health');
+  1239→      grrLatency = Date.now() - grrStart;
+  1240→      grrStatus = grrResponse.ok ? 'healthy' : 'degraded';
+  1241→    } catch {
+  1242→      grrStatus = 'unhealthy';
+  1243→    }
+  1244→
+  1245→    // Check Osquery health
+  1246→    let osqueryStatus: 'healthy' | 'degraded' | 'unhealthy' = 'unhealthy';
+  1247→    let osqueryLatency = 0;
+  1248→    let nodeCount = 0;
+  1249→    try {
+  1250→      const osqStart = Date.now();
+  1251→      const osqResponse = await this.fetchFleet('/api/v1/health');
+  1252→      osqueryLatency = Date.now() - osqStart;
+  1253→      osqueryStatus = osqResponse.ok ? 'healthy' : 'degraded';
+  1254→      
+  1255→      // Try to get node count
+  1256→      try {
+  1257→        const nodes = await this.getNodes({ limit: 1 });
+  1258→        nodeCount = 0; // Would come from pagination header
+  1259→      } catch {
+  1260→        // Ignore
+  1261→      }
+  1262→    } catch {
+  1263→      osqueryStatus = 'unhealthy';
+  1264→    }
+  1265→
+  1266→    // Determine overall status
+  1267→    const overall = (grrStatus === 'healthy' || grrStatus === 'degraded') &&
+  1268→                    (osqueryStatus === 'healthy' || osqueryStatus === 'degraded')
+  1269→      ? 'operational'
+  1270→      : grrStatus === 'unhealthy' && osqueryStatus === 'unhealthy'
+  1271→        ? 'down'
+  1272→        : 'degraded';
+  1273→
+  1274→    return {
+  1275→      grr: { status: grrStatus, latency: grrLatency },
+  1276→      osquery: { status: osqueryStatus, latency: osqueryLatency, nodeCount },
+  1277→      overall,
+  1278→    };
+  1279→  }
+  1280→
+  1281→  // ============================================================
+  1282→  // Private Helper Methods
+  1283→  // ============================================================
+  1284→
+  1285→  private async fetchGrr(path: string, init: RequestInit = {}): Promise<Response> {
+  1286→    const url = `${this.config.grr.apiUrl.replace(/\/$/, '')}${path}`;
+  1287→    const headers: HeadersInit = {
+  1288→      'Content-Type': 'application/json',
+  1289→      ...(init.headers as Record<string, string>),
+  1290→    };
+  1291→
+  1292→    // Add auth token if available
+  1293→    if (this.grrAuthToken) {
+  1294→      headers['Authorization'] = `Bearer ${this.grrAuthToken}`;
+  1295→    } else {
+  1296→      // Basic auth for initial login
+  1297→      const credentials = Buffer.from(
+  1298→        `${this.config.grr.username}:${this.config.grr.password}`
+  1299→      ).toString('base64');
+  1300→      headers['Authorization'] = `Basic ${credentials}`;
+  1301→    }
+  1302→
+  1303→    return fetch(url, {
+  1304→      ...init,
+  1305→      headers,
+  1306→      signal: AbortSignal.timeout(this.config.grr.timeout || 60000),
+  1307→    });
+  1308→  }
+  1309→
+  1310→  private async fetchFleet(path: string, init: RequestInit = {}): Promise<Response> {
+  1311→    if (!this.config.osquery.fleetApiUrl) {
+  1312→      throw new Error('Osquery Fleet URL not configured');
+  1313→    }
+  1314→
+  1315→    const url = `${this.config.osquery.fleetApiUrl.replace(/\/$/, '')}${path}`;
+  1316→    const headers: HeadersInit = {
+  1317→      'Content-Type': 'application/json',
+  1318→      ...(init.headers as Record<string, string>),
+  1319→    };
+  1320→
+  1321→    if (this.osqueryAuthToken) {
+  1322→      headers['Authorization'] = `Bearer ${this.osqueryAuthToken}`;
+  1323→    } else if (this.config.osquery.apiKey) {
+  1324→      headers['Authorization'] = `Bearer ${this.config.osquery.apiKey}`;
+  1325→    }
+  1326→
+  1327→    return fetch(url, {
+  1328→      ...init,
+  1329→      headers,
+  1330→      signal: AbortSignal.timeout(this.config.osquery.timeout || 30000),
+  1331→    });
+  1332→  }
+  1333→
+  1334→  private transformGrrClient(raw: any): GrrClient {
+  1335→    return {
+  1336→      clientId: raw.client_id || raw.clientId,
+  1337→      hostname: raw.hostname || raw.host_info?.hostname || 'Unknown',
+  1338→      os: raw.os || raw.os_info?.system || 'Unknown',
+  1339→      osVersion: raw.os_version || raw.os_info?.version || '',
+  1340→      ipAddress: raw.ip_address || raw.host_info?.ip || [],
+  1341→      macAddress: raw.mac_address || raw.host_info?.mac_addresses,
+  1342→      lastSeenAt: raw.last_seen_at || raw.lastSeenAt || raw.ping?.timestamp,
+  1343→      firstSeenAt: raw.first_seen_at || raw.firstSeenAt,
+  1344→      labels: raw.labels || [],
+  1345→      installTime: raw.install_time || raw.client_info?.install_time,
+  1346→      clientVersion: raw.client_version || raw.client_info?.client_version,
+  1347→      ping: raw.last_ping_ms || raw.ping?.latency || 0,
+  1348→      // Telco-specific enrichment
+  1349→      assetTag: raw.asset_tag,
+  1350→      department: raw.labels?.find((l: string) => 
+  1351→        ['NOC', 'IT Operations', 'Development', 'Corporate', 'Field'].some(d => l.includes(d))
+  1352→      ),
+  1353→      owner: raw.users?.[0]?.username || raw.username,
+  1354→      riskScore: this.calculateEndpointRisk(raw),
+  1355→    };
+  1356→  }
+  1357→
+  1358→  private transformOsqueryNode(raw: any): OsqueryNode {
+  1359→    return {
+  1360→      nodeKey: raw.node_key || raw.nodeKey,
+  1361→      hostname: raw.hostname || raw.host_display_name || 'Unknown',
+  1362→      uuid: raw.uuid || raw.hardware_uuid || '',
+  1363→      platform: raw.platform || 'unknown',
+  1364→      osVersion: raw.os_version || raw.osversion || '',
+  1365→      cpuType: raw.cpu_type || raw.cpu_type_name,
+  1366→      cpuBrand: raw.cpu_brand || raw.cpu_physical_cores,
+  1367→      physicalMemory: raw.physical_memory || raw.memory,
+  1368→      hardwareSerial: raw.hardware_serial || raw.serial_number,
+  1369→      ipAddress: raw.primary_ip || raw.ip_address,
+  1370→      primaryMac: raw.primary_mac || raw.mac_address,
+  1371→      lastSeenAt: raw.last_seen_at || raw.last_seen || new Date().toISOString(),
+  1372→      label: raw.label || 'unknown',
+  1373→      user_email: raw.user_email || raw.owner_email,
+  1374→      detailInterval: raw.detail_interval,
+  1375→      activeInterval: raw.active_interval,
+  1376→      // Telco-specific
+  1377→      environment: raw.environment,
+  1378→      criticality: raw.criticality,
+  1379→      businessUnit: raw.business_unit || raw.label,
+  1380→    };
+  1381→  }
+  1382→
+  1383→  private calculateEndpointRisk(client: any): number {
+  1384→    let riskScore = 0;
+  1385→    
+  1386→    // Factor 1: Days since last seen (stale = risky)
+  1387→    const lastSeen = new Date(client.last_seen_at || client.lastSeenAt);
+  1388→    const daysSinceLastSeen = (Date.now() - lastSeen.getTime()) / (1000 * 60 * 60 * 24);
+  1389→    if (daysSinceLastSeen > 30) riskScore += 30;
+  1390→    else if (daysSinceLastSeen > 7) riskScore += 15;
+  1391→
+  1392→    // Factor 2: OS version (outdated = risky)
+  1393→    const osVersion = client.os_version || '';
+  1394→    if (osVersion.includes('Windows 7') || osVersion.includes('Server 2008')) riskScore += 25;
+  1395→    else if (osVersion.includes('Windows 8') || osVersion.includes('Server 2012')) riskScore += 15;
+  1396→
+  1397→    // Factor 3: Labels indicating sensitive environments
+  1398→    const labels = client.labels || [];
+  1399→    if (labels.some(l => l.includes('DMZ'))) riskScore += 20;
+  1400→    if (labels.some(l => l.includes('Production'))) riskScore += 10;
+  1401→
+  1402→    // Factor 4: Ping latency (high = potential issues)
+  1403→    const ping = client.last_ping_ms || client.ping || 0;
+  1404→    if (ping > 5000) riskScore += 15;
+  1405→    else if (ping > 2000) riskScore += 5;
+  1406→
+  1407→    return Math.min(100, riskScore);
+  1408→  }
+  1409→
+  1410→  private analyzeHuntFindings(payload: any): TelcoHuntResult['findings'] {
+  1411→    const findings: TelcoHuntResult['findings'] = [];
+  1412→
+  1413→    // Analyze different payload types
+  1414→    if (payload.files) {
+  1415→      payload.files.forEach((file: any) => {
+  1416→        findings.push({
+  1417→          type: 'file',
+  1418→          data: file,
+  1419→          riskLevel: this.assessFileRisk(file),
+  1420→          iocIndicators: this.extractIocFromFile(file),
+  1421→        });
+  1422→      });
+  1423→    }
+  1424→
+  1425→    if (payload.processes) {
+  1426→      payload.processes.forEach((proc: any) => {
+  1427→        findings.push({
+  1428→          type: 'process',
+  1429→          data: proc,
+  1430→          riskLevel: this.assessProcessRisk(proc),
+  1431→          iocIndicators: this.extractIocFromProcess(proc),
+  1432→        });
+  1433→      });
+  1434→    }
+  1435→
+  1436→    if (payload.network_connections) {
+  1437→      payload.network_connections.forEach((conn: any) => {
+  1438→        findings.push({
+  1439→          type: 'network',
+  1440→          data: conn,
+  1441→          riskLevel: this.assessConnectionRisk(conn),
+  1442→          iocIndicators: this.extractIocFromConnection(conn),
+  1443→        });
+  1444→      });
+  1445→    }
+  1446→
+  1447→    return findings;
+  1448→  }
+  1449→
+  1450→  private assessFileRisk(file: any): 'critical' | 'high' | 'medium' | 'low' | 'info' {
+  1451→    const filename = (file.name || '').toLowerCase();
+  1452→    const path = (file.path || '').toLowerCase();
+  1453→    
+  1454→    // Critical indicators
+  1455→    if (filename.match(/\.(exe|dll|bat|ps1|vbs|js|jar)$/i) && 
+  1456→        path.includes('temp')) return 'critical';
+  1457→    if (filename.match(/(mimikatz|cobalt|covenant|sliver|metasploit)/i)) return 'critical';
+  1458→    
+  1459→    // High indicators
+  1460→    if (path.includes('startup') || path.includes('run keys')) return 'high';
+  1461→    if (file.size && file.size > 100 * 1024 * 1024 && filename.endsWith('.zip')) return 'high'; // Large zip
+  1462→    
+  1463→    // Medium indicators
+  1464→    if (path.includes('downloads') && filename.match(/\.(exe|msi|scr)/i)) return 'medium';
+  1465→    if (file.hash?.md5 && KNOWN_MALWARE_HASHES.includes(file.hash.md5)) return 'critical';
+  1466→
+  1467→    return 'info';
+  1468→  }
+  1469→
+  1470→  private assessProcessRisk(process: any): 'critical' | 'high' | 'medium' | 'low' | 'info' {
+  1471→    const cmdline = (process.cmdline || process.command_line || '').toLowerCase();
+  1472→    const name = (process.name || process.process_name || '').toLowerCase();
+  1473→    
+  1474→    // Critical process names
+  1475→    if (name.match(/(mimikatz|psexec|ncat|netcat|plink|putty)/i)) return 'critical';
+  1476→    
+  1477→    // Suspicious command lines
+  1478→    if (cmdline.includes('encodecommand') || cmdline.includes('-encodedcommand')) return 'high';
+  1479→    if (cmdline.includes('downloadstring') || cmdline.includes('downloadfile')) return 'high';
+  1480→    if (cmdline.includes('bypass') && cmdline.includes('executionpolicy')) return 'high';
+  1481→    
+  1482→    // Unusual parent processes
+  1483→    if (name === 'cmd.exe' && process.parent?.match(/(word|excel|outlook|winword)/i)) return 'medium';
+  1484→    if (name === 'powershell.exe' && process.parent?.match(/(chrome|firefox|edge)/i)) return 'high';
+  1485→
+  1486→    return 'info';
+  1487→  }
+  1488→
+  1489→  private assessConnectionRisk(connection: any): 'critical' | 'high' | 'medium' | 'low' | 'info' {
+  1490→    const remoteIp = connection.remote_address || connection.remote_ip || '';
+  1491→    const remotePort = connection.remote_port || connection.remoteport;
+  1492→    const protocol = connection.protocol || connection.proto || '';
+  1493→
+  1494→    // Known bad ports
+  1495→    const suspiciousPorts = [4444, 5555, 6667, 8888, 4443, 1337, 31337];
+  1496→    if (suspiciousPorts.includes(remotePort)) return 'critical';
+  1497→
+  1498→    // Unusual outbound protocols
+  1499→    if (protocol === 'irc' || protocol === 'torrent') return 'high';
+  1500→    
+  1501→    // Connections to known bad countries (simplified check)
+  1502→    if (this.isSuspiciousGeolocation(remoteIp)) return 'high';
+  1503→
+  1504→    return 'info';
+  1505→  }
+  1506→
+  1507→  private extractIocFromFile(file: any): string[] {
+  1508→    const iocs: string[] = [];
+  1509→    if (file.hash?.md5) iocs.push(`MD5:${file.hash.md5}`);
+  1510→    if (file.hash?.sha256) iocs.push(`SHA256:${file.hash.sha256}`);
+  1511→    if (file.path) iocs.push(`PATH:${file.path}`);
+  1512→    return iocs;
+  1513→  }
+  1514→
+  1515→  private extractIocFromProcess(process: any): string[] {
+  1516→    const iocs: string[] = [];
+  1517→    if (process.pid) iocs.push(`PID:${process.pid}`);
+  1518→    if (process.hash?.md5) iocs.push(`MD5:${process.hash.md5}`);
+  1519→    if (process.cmdline) iocs.push(`CMDLINE:${process.cmdline.substring(0, 200)}`);
+  1520→    return iocs;
+  1521→  }
+  1522→
+  1523→  private extractIocFromConnection(connection: any): string[] {
+  1524→    const iocs: string[] = [];
+  1525→    if (connection.remote_address) iocs.push(`IP:${connection.remote_address}`);
+  1526→    if (connection.remote_port) iocs.push(`PORT:${connection.remote_port}`);
+  1527→    if (connection.domain) iocs.push(`DOMAIN:${connection.domain}`);
+  1528→    return iocs;
+  1529→  }
+  1530→
+  1531→  private isSuspiciousGeolocation(ip: string): boolean {
+  1532→    // Simplified check - in production, use GeoIP database
+  1533→    // This would check against known high-risk countries/regions
+  1534→    return false;
+  1535→  }
+  1536→
+  1537→  private getBuiltinTelcoArtifacts(): GrrArtifact[] {
+  1538→    return [
+  1539→      {
+  1540→        name: 'TelcoWorkstationForensics',
+  1541→        documentation: 'Collects forensics artifacts from NOC/SOC workstations',
+  1542→        supportedOs: ['Linux', 'Windows'],
+  1543→        sources: [
+  1544→          { type: 'PATH', paths: ['/tmp', '%TEMP%', '$LOCALAPPDATA\\Temp'] },
+  1545→          { type: 'REGISTRY_KEY', path: 'HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Run' },
+  1546→          { type: 'COMMAND', query: 'SELECT * FROM running_processes;' },
+  1547→        ],
+  1548→        isCustom: false,
+  1549→        category: 'Telco',
+  1550→      },
+  1551→      {
+  1552→        name: 'TelecomServerBaseline',
+  1553→        documentation: 'Baseline collection for telecom infrastructure servers',
+  1554→        supportedOs: ['Linux'],
+  1555→        sources: [
+  1556→          { type: 'COMMAND', query: 'SELECT * FROM listening_ports;' },
+  1557→          { type: 'COMMAND', query: 'SELECT * FROM cron;' },
+  1558→          { type: 'COMMAND', query: 'SELECT * FROM users WHERE uid < 1000;' },
+  1559→          { type: 'PATH', paths: ['/etc/passwd', '/etc/shadow', '/etc/sudoers'] },
+  1560→        ],
+  1561→        isCustom: false,
+  1562→        category: 'Telco',
+  1563→      },
+  1564→      {
+  1565→        name: 'NetworkDeviceConfiguration',
+  1566→        documentation: 'Collects configuration from managed network devices',
+  1567→        supportedOs: ['Linux'],
+  1568→        sources: [
+  1569→          { type: 'PATH', paths: ['/etc/network/interfaces', '/etc/sysconfig/network-scripts/'] },
+  1570→          { type: 'COMMAND', query: 'SELECT * FROM iptables;' },
+  1571→          { type: 'COMMAND', query: 'SELECT * FROM kernel_modules;' },
+  1572→        ],
+  1573→        isCustom: false,
+  1574→        category: 'Telco',
+  1575→      },
+  1576→    ];
+  1577→  }
+  1578→}
+  1579→
+  1580→// ============================================================
+  1581→// Pre-built Security Query Presets
+  1582→// ============================================================
+  1583→
+  1584→const SecurityPresets = {
+  1585→  // Malware Detection
+  1586→  suspicious_processes: {
+  1587→    name: 'Suspicious Process Detection',
+  1588→    query: `
+  1589→      SELECT p.name, p.pid, p.parent, p.path, p.cmdline, p.on_disk, p.start_time,
+  1590→             u.username, h.sha256
+  1591→      FROM processes p
+  1592→      LEFT JOIN users u ON p.uid = u.uid
+  1593→      LEFT JOIN hash h ON p.path = h.path
+  1594→      WHERE p.name LIKE '%powershell%' AND p.cmdline LIKE '%-encodedcommand%'
+  1595→         OR p.name LIKE '%certutil%' AND p.cmdline LIKE '%urlcache%'
+  1596→         OR p.name IN ('mimikatz.exe', 'psexec.exe', 'ncat.exe', 'plink.exe')
+  1597→         OR p.cmdline LIKE '%downloadstring%'
+  1598→         OR p.cmdline LIKE '%invoke-expression%'
+  1599→    `,
+  1600→    category: 'security' as const,
+  1601→  },
+  1602→
+  1603→  // Persistence Mechanisms
+  1604→  persistence_mechanisms: {
+  1605→    name: 'Persistence Mechanism Scan',
+  1606→    query: `
+  1607→      SELECT * FROM startup_items WHERE status = 'enabled'
+  1608→        AND (name LIKE '%backdoor%' OR name LIKE '%persistence%' OR 
+  1609→             target LIKE '%temp%' OR target LIKE '%appdata%');
+  1610→      
+  1611→      SELECT * FROM cron WHERE command LIKE '%curl%' OR command LIKE '%wget%'
+  1612→        OR command LIKE('%bash%-%i%>%%/dev/tcp/%');
+  1613→      
+  1614→      SELECT * FROM plist WHERE path LIKE '%LaunchAgents%' OR path LIKE '%LaunchDaemons%'
+  1615→        AND (key = 'ProgramArguments' AND value LIKE '%/tmp/%');
+  1616→    `,
+  1617→    category: 'security' as const,
+  1618→  },
+  1619→
+  1620→  // Network Reconnaissance
+  1621→  network_recon: {
+  1622→    name: 'Network Reconnaissance Detection',
+  1623→    query: `
+  1624→      SELECT DISTINCT p.name, p.pid, p.cmdline, a.local_address, a.remote_address, a.remote_port
+  1625→      FROM process_open_sockets a
+  1626→      JOIN processes p ON a.pid = p.pid
+  1627→      WHERE a.remote_port IN (21, 22, 23, 25, 53, 80, 443, 445, 1433, 3306, 3389, 5432, 8080, 8443)
+  1628→        AND p.name NOT IN ('chrome.exe', 'firefox.exe', 'msedge.exe', 'ssh', 'curl', 'wget')
+  1629→        AND a.remote_address NOT LIKE '10.%' 
+  1630→        AND a.remote_address NOT LIKE '192.168.%'
+  1631→        AND a.remote_address NOT LIKE '172.16.%'
+  1632→        AND a.remote_address NOT LIKE '127.%';
+  1633→    `,
+  1634→    category: 'security' as const,
+  1635→  },
+  1636→
+  1637→  // Data Exfiltration Signs
+  1638→  data_exfil: {
+  1639→    name: 'Data Exfiltration Indicators',
+  1640→    query: `
+  1641→      SELECT f.filename, f.path, f.size, f.uid, f.atime, f.mtime, f.ctime,
+  1642→             p.name AS process_name, p.cmdline
+  1643→      FROM file f
+  1644→      JOIN processes p ON f.uid = p.uid
+  1645→      WHERE f.filename LIKE '%.zip' AND f.size > 10485760
+  1646→        AND p.cmdline LIKE '%archive%' OR p.cmdline LIKE '%compress%'
+  1647→      
+  1648→      UNION
+  1649→      
+  1650→      SELECT f.filename, f.path, f.size, f.uid, f.atime, f.mtime, f.ctime,
+  1651→             NULL, NULL
+  1652→      FROM file
+  1653→      WHERE (f.filename LIKE '%password%' OR f.filename LIKE '%secret%' 
+  1654→        OR f.filename LIKE '%credential%' OR f.filename LIKE '%backup%.sql')
+  1655→        AND f.mtime > (strftime('%s','now') - 86400);
+  1656→    `,
+  1657→    category: 'security' as const,
+  1658→  },
+  1659→
+  1660→  // Telco-Specific: SIM Box Detection
+  1661→  simbox_detection: {
+  1662→    name: 'SIM Box / GSM Gateway Detection',
+  1663→    query: `
+  1664→      SELECT * FROM usb_devices WHERE vendor LIKE '%Huawei%' 
+  1665→        OR vendor LIKE '%Quectel%' OR vendor LIKE '%Simcom%'
+  1666→        OR product LIKE '%GSM%' OR product LIKE '%modem%';
+  1667→      
+  1668→      SELECT * FROM processes WHERE name LIKE '%asterisk%' 
+  1669→        OR name LIKE '%freeswitch%' OR name LIKE '%kamailio%'
+  1670→        OR name LIKE '%opensips%' OR cmdLine LIKE '%gsm%';
+  1671→    `,
+  1672→    category: 'security' as const,
+  1673→  },
+  1674→
+  1675→  // Telco-Specific: SS7/Diameter Tool Detection
+  1676→  telecom_tool_detection: {
+  1677→    name: 'Telecom Protocol Tool Detection',
+  1678→    query: `
+  1679→      SELECT * FROM listening_ports WHERE port IN (1812, 1813, 3868, 3789, 292, 2222, 5000)
+  1680→        OR port >= 5600 AND port <= 5699; -- SS7 MTP range
+  1681→      
+  1682→      SELECT * FROM deb_packages WHERE name LIKE '%ss7%' OR name LIKE '%diameter%'
+  1683→        OR name LIKE '%sigtran%' OR name LIKE '%camel%';
+  1684→      
+  1685→      SELECT * FROM processes WHERE cmdline LIKE '%ss7%' OR cmdline like '%map%'
+  1686→        OR cmdline LIKE '%cap%' OR cmdline LIKE '%isinap%';
+  1687→    `,
+  1688→    category: 'security' as const,
+  1689→  },
+  1690→
+  1691→  // Inventory: All Endpoints Summary
+  1692→  endpoint_inventory: {
+  1693→    name: 'Complete Endpoint Inventory',
+  1694→    query: `
+  1695→      SELECT hostname, os_version, cpu_brand, physical_memory, 
+  1696→             (SELECT COUNT(*) FROM users) AS user_count,
+  1697→             (SELECT COUNT(*) FROM listening_ports) AS open_ports,
+  1698→             datetime(last_seen, 'unixepoch') AS last_boot
+  1699→      FROM system_info;
+  1700→    `,
+  1701→    category: 'inventory' as const,
+  1702→  },
+  1703→
+  1704→  // Compliance: Unpatched Software
+  1705→  vulnerability_scan: {
+  1706→    name: 'Vulnerable Software Detection',
+  1707→    query: `
+  1708→      SELECT name, version, vendor FROM programs 
+  1709→        WHERE (name LIKE '%Adobe Reader%' AND CAST(SUBSTR(version, 1, 1) AS INTEGER) < 20)
+  1710→           OR (name LIKE '%Java%' AND version LIKE '1.8.0_%')
+  1711→           OR (name LIKE '%Flash%' AND CAST(SUBSTR(version, 1, 2) AS INTEGER) < 32)
+  1712→           OR (vendor = 'Apache' AND name LIKE '%HTTP Server%' AND version LIKE '2.4.%')
+  1713→           OR (name LIKE '%OpenSSL%' AND version LIKE '1.1.1%' AND version NOT LIKE '%h%')
+  1714→      ORDER BY name;
+  1715→    `,
+  1716→    category: 'compliance' as const,
+  1717→  },
+  1718→
+  1719→  // Recent File Activity (User Space)
+  1720→  recent_user_activity: {
+  1721→    name: 'Recent User File Activity (24hr)',
+  1722→    query: `
+  1723→      SELECT f.filename, f.path, f.size, f.uid, f.permissions, 
+  1724→             datetime(f.atime, 'unixepoch') AS accessed,
+  1725→             datetime(f.mtime, 'unixepoch') AS modified,
+  1726→             u.username
+  1727→      FROM file f
+  1728→      JOIN users u ON f.uid = u.uid
+  1729→      WHERE f.mtime > (strftime('%s', 'now') - 86400)
+  1730→        AND f.path NOT LIKE '/sys/%' AND f.path NOT LIKE '/proc/%'
+  1731→        AND f.path NOT LIKE '/dev/%'
+  1732→      ORDER BY f.mtime DESC
+  1733→      LIMIT 100;
+  1734→    `,
+  1735→    category: 'troubleshooting' as const,
+  1736→  },
+  1737→};
+  1738→
+  1739→// Constants
+  1740→const KNOWN_MALWARE_HASHES: string[] = [
+  1741→  // Example hashes - in production, load from threat intelligence feed
+  1742→  '44d88612fea8a8f36de82e1278abb02f', // MD5 test hash (not actual malware)
+  1743→  // Add real malware hashes here
+  1744→];
+  1745→
+  1746→// Export singleton factory
+  1747→let edrInstance: GrrOsqueryEdrClient | null = null;
+  1748→
+  1749→export function createEdrClient(config: EdrIntegrationConfig): GrrOsqueryEdrClient {
+  1750→  if (!edrInstance) {
+  1751→    edrInstance = new GrrOsqueryEdrClient(config);
+  1752→  }
+  1753→  return edrInstance;
+  1754→}
+  1755→
+  1756→export default GrrOsqueryEdrClient;
+  1757→

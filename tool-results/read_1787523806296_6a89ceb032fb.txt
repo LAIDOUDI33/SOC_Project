@@ -1,0 +1,994 @@
+     1→/**
+     2→ * Djezzy National SOC Platform - Demo Data Library
+     3→ * 
+     4→ * Comprehensive mock data for all dashboards with realistic
+     5→ * Algerian telecom context (Djezzy, +213 country code)
+     6→ * 
+     7→ * @version 1.0.0
+     8→ * @last-updated 2026-01-22
+     9→ */
+    10→
+    11→// ============================================================
+    12→// TYPES
+    13→// ============================================================
+    14→
+    15→export interface KPIData {
+    16→  title: string
+    17→  value: string | number
+    18→  change: number
+    19→  changeLabel: string
+    20→  status: 'excellent' | 'good' | 'warning' | 'critical'
+    21→  icon?: string
+    22→}
+    23→
+    24→export interface AlertData {
+    25→  id: string
+    26→  severity: 'critical' | 'high' | 'medium' | 'low' | 'info'
+    27→  title: string
+    28→  source: string
+    29→  timestamp: string
+    30→  status: 'open' | 'acknowledged' | 'investigating' | 'resolved' | 'closed'
+    31→  assignee: string
+    32→  description: string
+    33→  sourceIp?: string
+    34→  destIp?: string
+    35→  mitreTechnique?: string
+    36→}
+    37→
+    38→export interface TrendDataPoint {
+    39→  date: string
+    40→  alerts: number
+    41→  incidents: number
+    42→  resolved: number
+    43→  riskScore: number
+    44→}
+    45→
+    46→export interface RiskHeatMapData {
+    47→  businessUnit: string
+    48→  riskScore: number
+    49→  trend: 'up' | 'down' | 'stable'
+    50→  category: string
+    51→}
+    52→
+    53→export interface SLAData {
+    54→  name: string
+    55→  target: number
+    56→  actual: number
+    57→  status: 'met' | 'breached' | 'at-risk'
+    58→}
+    59→
+    60→export interface SS7TrafficData {
+    61→  messagesPerSecond: number
+    62→  peakMessagesPerSecond: number
+    63→  protocolDistribution: Record<string, number>
+    64→  topTalkers: SS7TopTalker[]
+    65→  fraudAlerts: FraudAlert[]
+    66→  timeSeriesData: TimeSeriesPoint[]
+    67→}
+    68→
+    69→export interface SS7TopTalker {
+    70→  opc: string
+    71→  dpc: string
+    72→  mps: number
+    73→  protocol: string
+    74→  totalMessages: number
+    75→}
+    76→
+    77→export interface FraudAlert {
+    78→  type: string
+    79→  count: number
+    80→  blocked: number
+    81→  financialImpact: number
+    82→  detectionRate: number
+    83→}
+    84→
+    85→export interface TimeSeriesPoint {
+    86→  timestamp: string
+    87→  value: number
+    88→}
+    89→
+    90→export interface ANRTComplianceData {
+    91→  overallScore: number
+    92→  requirements: ANRTRequirement[]
+    93→  lastAuditDate: string
+    94→  nextAuditDate: string
+    95→  auditorName: string
+    96→}
+    97→
+    98→export interface ANRTRequirement {
+    99→  id: string
+   100→  name: string
+   101→  category: string
+   102→  status: 'compliant' | 'partial' | 'non-compliant' | 'pending-review'
+   103→  evidenceCount: number
+   104→  lastAssessment: string
+   105→  riskLevel: 'low' | 'medium' | 'high' | 'critical'
+   106→}
+   107→
+   108→export interface HuntSession {
+   109→  id: string
+   110→  name: string
+   111→  status: 'active' | 'completed' | 'paused' | 'archived'
+   112→  results: number
+   113→  iocsFound: number
+   114→  author: string
+   115→  createdAt: string
+   116→  lastActivity: string
+   117→  hypothesis: string
+   118→  tags: string[]
+   119→}
+   120→
+   121→export interface SystemComponent {
+   122→  name: string
+   123→  status: 'healthy' | 'degraded' | 'down' | 'maintenance'
+   124→  uptime: number
+   125→  cpu: number
+   126→  memory: number
+   127→  disk: number
+   128→  lastCheck: string
+   129→}
+   130→
+   131→export interface IncidentData {
+   132→  id: string
+   133→  title: string
+   134→  severity: 'critical' | 'high' | 'medium' | 'low'
+   135→  status: 'open' | 'contained' | 'eradicated' | 'recovered' | 'closed'
+   136→  createdAt: string
+   137→  assignee: string
+   138→  phase: string
+   139→  affectedAssets: number
+   140→  description: string
+   141→}
+   142→
+   143→// ============================================================
+   144→// EXECUTIVE DASHBOARD DATA
+   145→// ============================================================
+   146→
+   147→export const executiveKPIs: KPIData[] = [
+   148→  {
+   149→    title: 'Risk Score',
+   150→    value: '23',
+   151→    change: -12,
+   152→    changeLabel: 'vs last month (improved)',
+   153→    status: 'excellent',
+   154→    icon: 'shield'
+   155→  },
+   156→  {
+   157→    title: 'MTTR (hrs)',
+   158→    value: '2.4',
+   159→    change: -18,
+   160→    changeLabel: 'improvement this quarter',
+   161→    status: 'good',
+   162→    icon: 'clock'
+   163→  },
+   164→  {
+   165→    title: 'Asset Coverage',
+   166→    value: '94.2%',
+   167→    change: 2.1,
+   168→    changeLabel: 'new assets monitored',
+   169→    status: 'good',
+   170→    icon: 'target'
+   171→  },
+   172→  {
+   173→    title: 'Compliance %',
+   174→    value: '98.5%',
+   175→    change: 0.5,
+   176→    changeLabel: 'ANRT requirements met',
+   177→    status: 'excellent',
+   178→    icon: 'check-circle'
+   179→  }
+   180→]
+   181→
+   182→export const trendData30Days: TrendDataPoint[] = generateTrendData(30)
+   183→
+   184→function generateTrendData(days: number): TrendDataPoint[] {
+   185→  const data: TrendDataPoint[] = []
+   186→  const now = new Date()
+   187→  
+   188→  // Base values for realistic Djezzy SOC data
+   189→  const baseAlerts = 85
+   190→  const baseIncidents = 12
+   191→  const baseResolved = 68
+   192→  const baseRiskScore = 28
+   193→  
+   194→  for (let i = days; i >= 0; i--) {
+   195→    const date = new Date(now)
+   196→    date.setDate(date.getDate() - i)
+   197→    
+   198→    // Add realistic variation with slight trends
+   199→    const dayVariation = Math.sin(i / 5) * 15
+   200→    const randomFactor = (Math.random() - 0.5) * 20
+   201→    
+   202→    data.push({
+   203→      date: date.toISOString().split('T')[0],
+   204→      alerts: Math.floor(baseAlerts + dayVariation + randomFactor + (i < 10 ? -15 : 5)),
+   205→      incidents: Math.floor(baseIncidents + (Math.random() - 0.3) * 8),
+   206→      resolved: Math.floor(baseResolved + dayVariation * 0.8 + randomFactor * 0.5),
+   207→      riskScore: Math.max(15, Math.min(45, Math.floor(baseRiskScore + (days - i) * 0.3 + (Math.random() - 0.5) * 5)))
+   208→    })
+   209→  }
+   210→  
+   211→  return data
+   212→}
+   213→
+   214→export const riskHeatMap: RiskHeatMapData[] = [
+   215→  { businessUnit: 'Core Network (MSC/HLR)', riskScore: 42, trend: 'down', category: 'Infrastructure' },
+   216→  { businessUnit: 'Radio Access Network', riskScore: 35, trend: 'stable', category: 'Infrastructure' },
+   217→  { businessUnit: 'IT Systems & Servers', riskScore: 28, trend: 'down', category: 'Technology' },
+   218→  { businessUnit: 'Customer Services (CRM)', riskScore: 22, trend: 'stable', category: 'Operations' },
+   219→  { businessUnit: 'Billing Systems', riskScore: 38, trend: 'up', category: 'Financial' },
+   220→  { businessUnit: 'SS7/Diameter Signaling', riskScore: 55, trend: 'down', category: 'Network Security' },
+   221→  { businessUnit: 'Data Centers (Algiers/Oran)', riskScore: 18, trend: 'stable', category: 'Infrastructure' },
+   222→  { businessUnit: 'Partner Integrations (B2B)', riskScore: 48, trend: 'up', category: 'External' },
+   223→  { businessUnit: 'Mobile Money (Djezzy Cash)', riskScore: 32, trend: 'down', category: 'Financial' },
+   224→  { businessUnit: 'Fiber Optic Backbone', riskScore: 25, trend: 'stable', category: 'Infrastructure' }
+   225→]
+   226→
+   227→export const slaData: SLAData[] = [
+   228→  { name: 'Critical Incident Response (<15min)', target: 95, actual: 97.2, status: 'met' },
+   229→  { name: 'High Severity Detection Rate', target: 98, actual: 98.7, status: 'met' },
+   230→  { name: 'Threat Intel Dissemination (<30min)', target: 90, actual: 94.5, status: 'met' },
+   231→  { name: 'Vulnerability Remediation (72h)', target: 85, actual: 82.3, status: 'at-risk' },
+   232→  { name: 'SS7 Attack Response (<5min)', target: 99, actual: 99.8, status: 'met' },
+   233→  { name: 'Report Generation (24h)', target: 100, actual: 100, status: 'met' }
+   234→]
+   235→
+   236→// ============================================================
+   237→// ALERTS DATA (Realistic Djezzy/Algerian Telecom Context)
+   238→// ============================================================
+   239→
+   240→export const recentAlerts: AlertData[] = [
+   241→  {
+   242→    id: 'ALT-2026-00147',
+   243→    severity: 'critical',
+   244→    title: 'Brute Force Attack Detected - SSH Service',
+   245→    source: 'Wazuh SIEM',
+   246→    timestamp: new Date(Date.now() - 12 * 60000).toISOString(),
+   247→    status: 'investigating',
+   248→    assignee: 'Ahmed B.',
+   249→    description: 'Multiple failed login attempts from IP 41.101.150.123 targeting core network management server in Algiers DC',
+   250→    sourceIp: '41.101.150.123',
+   251→    destIp: '196.3.150.50',
+   252→    mitreTechnique: 'T1110.001'
+   253→  },
+   254→  {
+   255→    id: 'ALT-2026-00146',
+   256→    severity: 'critical',
+   257→    title: 'SS7 MAP_AnyTimeInterrogation Surge Detected',
+   258→    source: 'SS7 Monitor',
+   259→    timestamp: new Date(Date.now() - 28 * 60000).toISOString(),
+   260→    status: 'open',
+   261→    assignee: 'Karim M.',
+   262→    description: 'Unusual spike in ATI queries from OPC 3-065-1 to HLR, potential subscriber tracking attack. Origin: International gateway',
+   263→    mitreTechnique: 'T1402'
+   264→  },
+   265→  {
+   266→    id: 'ALT-2026-00145',
+   267→    severity: 'high',
+   268→    title: 'Suspicious SIM Swap Activity - Oran Region',
+   269→    source: 'Fraud Detection System',
+   270→    timestamp: new Date(Date.now() - 45 * 60000).toISOString(),
+   271→    status: 'acknowledged',
+   272→    assignee: 'Fatima Z.',
+   273→    description: 'Multiple SIM swap requests for premium subscribers within 24h from same dealer ID DJZ-ORAN-0147',
+   274→    sourceIp: '196.200.87.45',
+   275→    mitreTechnique: 'T1534'
+   276→  },
+   277→  {
+   278→    id: 'ALT-2026-00144',
+   279→    severity: 'high',
+   280→    title: 'DDoS Attack Pattern - DNS Infrastructure',
+   281→    source: 'Suricata IDS',
+   282→    timestamp: new Date(Date.now() - 67 * 60000).toISOString(),
+   283→    status: 'investigating',
+   284→    assignee: 'Yacine K.',
+   285→    description: 'Amplification attack detected against Djezzy DNS servers, query volume 12x normal baseline. Source IPs: 500+ unique Algerian IPs (potential botnet)',
+   286→    sourceIp: 'Multiple sources',
+   287→    destIp: '196.3.150.10',
+   288→    mitreTechnique: 'T1498'
+   289→  },
+   290→  {
+   291→    id: 'ALT-2026-00143',
+   292→    severity: 'high',
+   293→    title: 'Unauthorized API Access - Billing System',
+   294→    source: 'Wazuh SIEM',
+   295→    timestamp: new Date(Date.now() - 89 * 60000).toISOString(),
+   296→    status: 'open',
+   297→    assignee: 'Amina L.',
+   298→    description: 'Authentication bypass attempt on billing API endpoint /api/v2/subscribers/balance. Source: Internal network segment 10.40.50.x',
+   299→    sourceIp: '10.40.50.178',
+   300→    destIp: '10.40.50.10',
+   301→    mitreTechnique: 'T1078'
+   302→  },
+   303→  {
+   304→    id: 'ALT-2026-00142',
+   305→    severity: 'medium',
+   306→    title: 'Malware Signature Detected - Finance Dept',
+   307→    source: 'CrowdStrike EDR',
+   308→    timestamp: new Date(Date.now() - 120 * 60000).toISOString(),
+   309→    status: 'resolved',
+   310→    assignee: 'Mohamed S.',
+   311→    description: 'Trojan.emotet variant detected on workstation FIN-WS-042. File quarantined, user credentials rotated.',
+   312→    mitreTechnique: 'T1059.005'
+   313→  },
+   314→  {
+   315→    id: 'ALT-2026-00141',
+   316→    severity: 'medium',
+   317→    title: 'Phishing Campaign Targeting Djezzy Employees',
+   318→    source: 'Proofpoint Email Security',
+   319→    timestamp: new Date(Date.now() - 145 * 60000).toISOString(),
+   320→    status: 'investigating',
+   321→    assignee: 'Nadia B.',
+   322→    description: 'Spear-phishing emails impersonating IT support requesting password reset. 23 emails blocked, 3 reported by users.',
+   323→    mitreTechnique: 'T1566.001'
+   324→  },
+   325→  {
+   326→    id: 'ALT-2026-00140',
+   327→    severity: 'high',
+   328→    title: 'Diameter Attack - Roaming Interface',
+   329→    source: 'SS7 Firewall',
+   330→    timestamp: new Date(Date.now() - 180 * 60000).toISOString(),
+   331→    status: 'open',
+   332→    assignee: 'Omar F.',
+   333→    description: 'Invalid ULR/ULA messages detected on S6a interface. Potential IMSI brute force via roaming partner AS12388 (Mediterranean Telecom)',
+   334→    mitreTechnique: 'T1404'
+   335→  },
+   336→  {
+   337→    id: 'ALT-2026-00139',
+   338→    severity: 'medium',
+   339→    title: 'Vulnerability Scan Detected - External Perimeter',
+   340→    source: 'Palo Alto NGFW',
+   341→    timestamp: new Date(Date.now() - 210 * 60000).toISOString(),
+   342→    status: 'acknowledged',
+   343→    assignee: 'Samir H.',
+   344→    description: 'Automated vulnerability scanning from IP 185.220.101.10 (Tor exit node). Blocked at perimeter firewall.',
+   345→    sourceIp: '185.220.101.10',
+   346→    mitreTechnique: 'T1595'
+   347→  },
+   348→  {
+   349→    id: 'ALT-2026-00138',
+   350→    severity: 'low',
+   351→    title: 'Policy Violation - Unauthorized Software',
+   352→    source: 'Microsoft Defender',
+   353→    timestamp: new Date(Date.now() - 240 * 60000).toISOString(),
+   354→    status: 'closed',
+   355→    assignee: 'System',
+   356→    description: 'Torrent client detected on workstation ENG-WS-089. Policy enforcement action taken automatically.',
+   357→    mitreTechnique: 'T1072'
+   358→  },
+   359→  {
+   360→    id: 'ALT-2026-00137',
+   361→    severity: 'critical',
+   362→    title: 'IRSF Fraud Pattern Detected - Premium Rate Numbers',
+   363→    source: 'Fraud Management System',
+   364→    timestamp: new Date(Date.now() - 270 * 60000).toISOString(),
+   365→    status: 'investigating',
+   366→    assignee: 'Leila M.',
+   367→    description: 'Unusual traffic surge to +213 XXX international premium rate numbers. Estimated loss: 2,450,000 DZD/hour if not blocked.',
+   368→    mitreTechnique: 'T1401'
+   369→  },
+   370→  {
+   371→    id: 'ALT-2026-00136',
+   372→    severity: 'medium',
+   373→    title: 'SSL Certificate Expiring - Customer Portal',
+   374→    source: 'Certificate Monitor',
+   375→    timestamp: new Date(Date.now() - 300 * 60000).toISOString(),
+   376→    status: 'open',
+   377→    assignee: 'Rachid A.',
+   378→    description: 'SSL certificate for www.djezzy.dz expires in 7 days. Renewal required to prevent browser warnings.',
+   379→    mitreTechnique: ''
+   380→  },
+   381→  {
+   382→    id: 'ALT-2026-00135',
+   383→    severity: 'high',
+   384→    title: 'Data Exfiltration Attempt - Database Server',
+   385→    source: 'Imperva WAF',
+   386→    timestamp: new Date(Date.now() - 340 * 60000).toISOString(),
+   387→    status: 'resolved',
+   388→    assignee: 'Hakim T.',
+   389→    description: 'SQL injection attempt followed by large data export query blocked. Attacker used UNION-based technique on customer database.',
+   390→    sourceIp: '91.121.87.33',
+   391→    destIp: '196.3.151.25',
+   392→    mitreTechnique: 'T1190'
+   393→  },
+   394→  {
+   395→    id: 'ALT-2026-00134',
+   396→    severity: 'low',
+   397→    title: 'Configuration Drift - Core Router',
+   398→    source: 'Network Configuration Manager',
+   399→    timestamp: new Date(Date.now() - 380 * 60000).toISOString(),
+   400→    status: 'acknowledged',
+   401→    assignee: 'Nora C.',
+   402→    description: 'Unauthorized configuration change detected on CR-ALG-01. ACL rule modified outside maintenance window.',
+   403→    mitreTechnique: ''
+   404→  },
+   405→  {
+   406→    id: 'ALT-2026-00133',
+   407→    severity: 'medium',
+   408→    title: 'Insider Threat Indicator - Bulk Data Access',
+   409→    source: 'Splunk UEBA',
+   410→    timestamp: new Date(Date.now() - 420 * 60000).toISOString(),
+   411→    status: 'investigating',
+   412→    assignee: 'Djamel R.',
+   413→    description: 'User account service_desk_ali accessed 15,000+ customer records in 2 hours - 5x normal pattern. Behavioral anomaly flagged.',
+   414→    mitreTechnique: 'T1530'
+   415→  },
+   416→  {
+   417→    id: 'ALT-2026-00132',
+   418→    severity: 'high',
+   419→    title: 'Zero-Day Exploit Attempt - Web Application',
+   420→    source: 'ModSecurity WAF',
+   421→    timestamp: new Date(Date.now() - 480 * 60000).toISOString(),
+   422→    status: 'open',
+   423→    assignee: 'Salima K.',
+   424→    description: 'CVE-2024-XXXX exploitation attempt on self-care portal. Request payload indicates known exploit kit usage.',
+   425→    sourceIp: '194.163.32.45',
+   426→    destIp: '196.3.152.80',
+   427→    mitreTechnique: 'T1190'
+   428→  },
+   429→  {
+   430→    id: 'ALT-2026-00131',
+   431→    severity: 'medium',
+   432→    title: 'APT Indicator - APT28 Tool Signature',
+   433→    source: 'CrowdStrike EDR',
+   434→    timestamp: new Date(Date.now() - 520 * 60000).toISOString(),
+   435→    status: 'investigating',
+   436→    assignee: 'Cyber Threat Intel Team',
+   437→    description: 'XAgent backdoor communication pattern detected on executive laptop. Possible spear-phishing initial access.',
+   438→    mitreTechnique: 'T1105'
+   439→  },
+   440→  {
+   441→    id: 'ALT-2026-00130',
+   442→    severity: 'low',
+   443→    title: 'Geographic Anomaly - VPN Login',
+   444→    source: 'RSA SecurID',
+   445→    timestamp: new Date(Date.now() - 560 * 60000).toISOString(),
+   446→    status: 'closed',
+   447→    assignee: 'System',
+   448→    description: 'Impossible travel detected: User logged in from Algiers at 08:00 and London at 08:45. Account temporarily locked.',
+   449→    mitreTechnique: 'T1078'
+   450→  },
+   451→  {
+   452→    id: 'ALT-2026-00129',
+   453→    severity: 'high',
+   454→    title: 'Wangiri Fraud Pattern Identified',
+   455→    source: 'FMS (Fraud Management)',
+   456→    timestamp: new Date(Date.now() - 600 * 60000).toISOString(),
+   457→    status: 'resolved',
+   458→    assignee: 'Fraud Team',
+   459→    description: 'Missed call fraud ring identified. 847 subscriber numbers involved in wangiri scheme. Blocks applied, ANRT notified per regulation.',
+   460→    mitreTechnique: 'T1401'
+   461→  },
+   462→  {
+   463→    id: 'ALT-2026-00128',
+   464→    severity: 'medium',
+   465→    title: 'IoT Device Anomaly - Smart Meter Network',
+   466→    source: 'IoT Security Platform',
+   467→    timestamp: new Date(Date.now() - 650 * 60000).toISOString(),
+   468→    status: 'open',
+   469→    assignee: 'Infrastructure Team',
+   470→    description: 'Unusual outbound traffic from 23 smart meters in Constantine region. Potential Mirai variant infection.',
+   471→    mitreTechnique: 'T1046'
+   472→  }
+   473→]
+   474→
+   475→// ============================================================
+   476→// TELECOM/SS7 DASHBOARD DATA
+   477→// ============================================================
+   478→
+   479→export const ss7TrafficData: SS7TrafficData = {
+   480→  messagesPerSecond: 1247,
+   481→  peakMessagesPerSecond: 2891,
+   482→  protocolDistribution: {
+   483→    MAP: 45,
+   484→    CAP: 15,
+   485→    ISUP: 25,
+   486→    SCCP: 10,
+   487→    TCAP: 5
+   488→  },
+   489→  topTalkers: [
+   490→    { opc: '3-001-0', dpc: '51-1-0', mps: 342, protocol: 'MAP', totalMessages: 29540000 },
+   491→    { opc: '3-065-1', dpc: '3-001-0', mps: 287, protocol: 'ISUP', totalMessages: 24790000 },
+   492→    { opc: '3-101-2', dpc: '3-065-1', mps: 198, protocol: 'MAP', totalMessages: 17110000 },
+   493→    { opc: '3-102-0', dpc: '3-001-0', mps: 156, protocol: 'CAP', totalMessages: 13480000 },
+   494→    { opc: '3-042-1', dpc: '3-101-2', mps: 134, protocol: 'TCAP', totalMessages: 11580000 },
+   495→    { opc: '3-003-0', dpc: '3-065-1', mps: 98, protocol: 'MAP', totalMessages: 8467000 },
+   496→    { opc: '3-201-0', dpc: '3-001-0', mps: 76, protocol: 'SCCP', totalMessages: 6566000 },
+   497→    { opc: '3-001-0', dpc: '3-201-0', mps: 65, protocol: 'ISUP', totalMessages: 5616000 },
+   498→    { opc: '51-1-0', dpc: '3-102-0', mps: 54, protocol: 'CAP', totalMessages: 4665000 },
+   499→    { opc: '3-065-1', dpc: '3-042-1', mps: 43, protocol: 'MAP', totalMessages: 3715000 }
+   500→  ],
+   501→  fraudAlerts: [
+   502→    { type: 'IRSF (International Revenue Share Fraud)', count: 23, blocked: 18, financialImpact: 2450000, detectionRate: 98.5 },
+   503→    { type: 'SIM Swap Fraud', count: 7, blocked: 6, financialImpact: 890000, detectionRate: 95.2 },
+   504→    { type: 'Wangiri/Missed Call Fraud', count: 156, blocked: 156, financialImpact: 320000, detectionRate: 99.9 },
+   505→    { type: 'CLI Spoofing', count: 12, blocked: 11, financialImpact: 450000, detectionRate: 92.1 },
+   506→    { type: 'PBX Hacking', count: 4, blocked: 4, financialImpact: 180000, detectionRate: 100 },
+   507→    { type: 'Premium Rate Number Abuse', count: 31, blocked: 28, financialImpact: 1270000, detectionRate: 97.8 }
+   508→  ],
+   509→  timeSeriesData: generateSS7TimeSeries(24)
+   510→}
+   511→
+   512→function generateSS7TimeSeries(hours: number): TimeSeriesPoint[] {
+   513→  const data: TimeSeriesPoint[] = []
+   514→  const now = new Date()
+   515→  
+   516→  // Realistic traffic patterns for Algerian mobile network
+   517→  for (let i = hours; i >= 0; i--) {
+   518→    const timestamp = new Date(now)
+   519→    timestamp.setHours(timestamp.getHours() - i)
+   520→    
+   521→    // Simulate daily patterns: low at night, peaks during day
+   522→    const hour = timestamp.getHours()
+   523→    let baseLoad = 800
+   524→    
+   525→    if (hour >= 7 && hour <= 9) baseLoad = 1800  // Morning rush
+   526→    else if (hour >= 11 && hour <= 13) baseLoad = 2200  // Lunch period
+   527→    else if (hour >= 17 && hour <= 20) baseLoad = 2500  // Evening peak
+   528→    else if (hour >= 0 && hour <= 5) baseLoad = 400  // Night
+   529→    
+   530→    const variation = (Math.random() - 0.5) * baseLoad * 0.3
+   531→    
+   532→    data.push({
+   533→      timestamp: timestamp.toISOString(),
+   534→      value: Math.round(Math.max(200, baseLoad + variation))
+   535→    })
+   536→  }
+   537→  
+   538→  return data
+   539→}
+   540→
+   541→// Algeria Wilaya data for geographic analysis
+   542→export const algeriaWilayaData = [
+   543→  { code: '16', name: 'Alger', alertCount: 147, riskLevel: 'high', subscriberCount: 4200000 },
+   544→  { code: '31', name: 'Oran', alertCount: 89, riskLevel: 'medium', subscriberCount: 1800000 },
+   545→  { code: '40', name: 'Constantine', alertCount: 67, riskLevel: 'medium', subscriberCount: 1200000 },
+   546→  { code: '03', name: 'Annaba', alertCount: 34, riskLevel: 'low', subscriberCount: 650000 },
+   547→  { code: '09', name: 'Blida', alertCount: 45, riskLevel: 'medium', subscriberCount: 980000 },
+   548→  { code: '10', name: 'Bouira', alertCount: 23, riskLevel: 'low', subscriberCount: 720000 },
+   549→  { code: '19', name: 'Setif', alertCount: 56, riskLevel: 'medium', subscriberCount: 1500000 },
+   550→  { code: '25', name: 'Bejaia', alertCount: 38, riskLevel: 'low', subscriberCount: 850000 },
+   551→  { code: '27', name: 'Jijel', alertCount: 18, riskLevel: 'low', subscriberCount: 380000 },
+   552→  { code: '28', name: 'Skikda', alertCount: 29, riskLevel: 'low', subscriberCount: 520000 },
+   553→  { code: '34', name: 'Biskra', alertCount: 41, riskLevel: 'medium', subscriberCount: 680000 },
+   554→  { code: '36', name: 'Ouargla', alertCount: 22, riskLevel: 'low', subscriberCount: 580000 },
+   555→  { code: '39', name: 'Tlemcen', alertCount: 52, riskLevel: 'medium', subscriberCount: 890000 },
+   556→  { code: '44', name: 'Sidi Bel Abbes', alertCount: 31, riskLevel: 'low', subscriberCount: 620000 },
+   557→  { code: '48', name: 'Relizane', alertCount: 15, riskLevel: 'low', subscriberCount: 340000 }
+   558→]
+   559→
+   560→// ============================================================
+   561→// COMPLIANCE DASHBOARD DATA (ANRT Regulations)
+   562→// ============================================================
+   563→
+   564→export const anrtComplianceData: ANRTComplianceData = {
+   565→  overallScore: 96,
+   566→  lastAuditDate: '2025-12-15',
+   567→  nextAuditDate: '2026-06-15',
+   568→  auditorName: 'ANRT Cybersecurity Division',
+   569→  requirements: [
+   570→    { id: 'ANRT-001', name: 'Data Localization (Law 18-05)', category: 'Legal', status: 'compliant', evidenceCount: 12, lastAssessment: '2025-12-10', riskLevel: 'low' },
+   571→    { id: 'ANRT-002', name: 'Subscriber Privacy (IMSI Protection)', category: 'Privacy', status: 'compliant', evidenceCount: 18, lastAssessment: '2025-12-12', riskLevel: 'low' },
+   572→    { id: 'ANRT-003', name: 'Lawful Interception Capability', category: 'Regulatory', status: 'compliant', evidenceCount: 8, lastAssessment: '2025-11-28', riskLevel: 'low' },
+   573→    { id: 'ANRT-004', name: 'Cybersecurity Notification (72h)', category: 'Incident Response', status: 'compliant', evidenceCount: 15, lastAssessment: '2025-12-14', riskLevel: 'low' },
+   574→    { id: 'ANRT-005', name: 'SS7/Diameter Security Controls', category: 'Network Security', status: 'compliant', evidenceCount: 22, lastAssessment: '2025-12-15', riskLevel: 'low' },
+   575→    { id: 'ANRT-006', name: 'Encryption Standards (AES-256)', category: 'Cryptography', status: 'compliant', evidenceCount: 10, lastAssessment: '2025-12-08', riskLevel: 'low' },
+   576→    { id: 'ANRT-007', name: 'Access Control & Authentication', category: 'Identity', status: 'compliant', evidenceCount: 14, lastAssessment: '2025-12-11', riskLevel: 'low' },
+   577→    { id: 'ANRT-008', name: 'Audit Log Retention (2 years)', category: 'Compliance', status: 'compliant', evidenceCount: 9, lastAssessment: '2025-12-05', riskLevel: 'low' },
+   578→    { id: 'ANRT-009', name: 'Incident Response Plan (CSIRT)', category: 'Incident Response', status: 'compliant', evidenceCount: 16, lastAssessment: '2025-12-13', riskLevel: 'low' },
+   579→    { id: 'ANRT-010', name: 'Third-party Risk Management', category: 'Vendor Management', status: 'partial', evidenceCount: 6, lastAssessment: '2025-11-20', riskLevel: 'medium' },
+   580→    { id: 'ANRT-011', name: 'Business Continuity Planning', category: 'Resilience', status: 'compliant', evidenceCount: 11, lastAssessment: '2025-12-02', riskLevel: 'low' },
+   581→    { id: 'ANRT-012', name: 'Staff Training & Awareness', category: 'Human Resources', status: 'compliant', evidenceCount: 24, lastAssessment: '2025-12-14', riskLevel: 'low' },
+   582→    { id: 'ANRT-013', name: 'Physical Security (DC Access)', category: 'Physical Security', status: 'compliant', evidenceCount: 7, lastAssessment: '2025-11-30', riskLevel: 'low' },
+   583→    { id: 'ANRT-014', name: 'Network Segmentation', category: 'Network Security', status: 'compliant', evidenceCount: 13, lastAssessment: '2025-12-09', riskLevel: 'low' },
+   584→    { id: 'ANRT-015', name: 'Vulnerability Management Program', category: 'Security Operations', status: 'partial', evidenceCount: 8, lastAssessment: '2025-12-01', riskLevel: 'medium' }
+   585→  ]
+   586→}
+   587→
+   588→// Compliance score history (for charts)
+   589→export const complianceHistory = [
+   590→  { month: 'Jul 2025', score: 89 },
+   591→  { month: 'Aug 2025', score: 91 },
+   592→  { month: 'Sep 2025', score: 92 },
+   593→  { month: 'Oct 2025', score: 94 },
+   594→  { month: 'Nov 2025', score: 95 },
+   595→  { month: 'Dec 2025', score: 96 },
+   596→  { month: 'Jan 2026', score: 96 }
+   597→]
+   598→
+   599→// ============================================================
+   600→// THREAT HUNTING DATA
+   601→// ============================================================
+   602→
+   603→export const huntSessions: HuntSession[] = [
+   604→  {
+   605→    id: 'HUNT-2026-001',
+   606→    name: 'APT28 Indicators - Djezzy Executive Targeting',
+   607→    status: 'active',
+   608→    results: 47,
+   609→    iocsFound: 12,
+   610→    author: 'Karim M.',
+   611→    createdAt: '2026-01-20T08:30:00Z',
+   612→    lastActivity: new Date().toISOString(),
+   613→    hypothesis: 'APT28 is targeting telecom executives in North Africa using spear-phishing with XAgent malware',
+   614→    tags: ['APT', 'Russia', 'Executive', 'XAgent']
+   615→  },
+   616→  {
+   617→    id: 'HUNT-2026-002',
+   618→    name: 'SS7 Vulnerability Scanning Activity Analysis',
+   619→    status: 'active',
+   620→    results: 134,
+   621→    iocsFound: 8,
+   622→    author: 'Fatima Z.',
+   623→    createdAt: '2026-01-19T10:15:00Z',
+   624→    lastActivity: new Date(Date.now() - 3600000).toISOString(),
+   625→    hypothesis: 'Unknown threat actor probing SS7 infrastructure for MAP vulnerabilities prior to IRSF campaign',
+   626→    tags: ['SS7', 'Signaling', 'Reconnaissance']
+   627→  },
+   628→  {
+   629→    id: 'HUNT-2026-003',
+   630→    name: 'Internal Lateral Movement Detection',
+   631→    status: 'completed',
+   632→    results: 289,
+   633→    iocsFound: 3,
+   634→    author: 'Ahmed B.',
+   635→    createdAt: '2026-01-15T09:00:00Z',
+   636→    lastActivity: '2026-01-18T16:45:00Z',
+   637→    hypothesis: 'Detect potential insider threat or compromised credential usage patterns in billing system',
+   638→    tags: ['Insider', 'Lateral Movement', 'Credential']
+   639→  },
+   640→  {
+   641→    id: 'HUNT-2026-004',
+   642→    name: 'SIM Box Farm Identification',
+   643→    status: 'completed',
+   644→    results: 567,
+   645→    iocsFound: 23,
+   646→    author: 'Fraud Team',
+   647→    createdAt: '2026-01-10T14:20:00Z',
+   648→    lastActivity: '2026-01-17T11:30:00Z',
+   649→    hypothesis: 'Identify active SIM box termination points used for international bypass fraud',
+   650→    tags: ['Fraud', 'SIM Box', 'Revenue Assurance']
+   651→  },
+   652→  {
+   653→    id: 'HUNT-2026-005',
+   654→    name: 'Zero-Day Web Exploitation Hunting',
+   655→    status: 'paused',
+   656→    results: 78,
+   657→    iocsFound: 2,
+   658→    author: 'Yacine K.',
+   659→    createdAt: '2026-01-18T07:45:00Z',
+   660→    lastActivity: '2026-01-21T09:00:00Z',
+   661→    hypothesis: 'Search for web application exploitation attempts targeting self-care portal using novel techniques',
+   662→    tags: ['Web', 'Zero-Day', 'Application Security']
+   663→  },
+   664→  {
+   665→    id: 'HUNT-2026-006',
+   666→    name: 'DNS Tunneling Detection',
+   667→    status: 'active',
+   668→    results: 156,
+   669→    iocsFound: 5,
+   670→    author: 'Nadia B.',
+   671→    createdAt: '2026-01-21T06:00:00Z',
+   672→    lastActivity: new Date(Date.now() - 1800000).toISOString(),
+   673→    hypothesis: 'Identify potential data exfiltration via DNS tunneling from internal network',
+   674→    tags: ['DNS', 'Exfiltration', 'Covert Channel']
+   675→  }
+   676→]
+   677→
+   678→// IOCs found during hunts
+   679→export const huntIOCs = [
+   680→  { type: 'IP Address', value: '185.220.101.10', confidence: 95, source: 'HUNT-001', firstSeen: '2026-01-18' },
+   681→  { type: 'Domain', value: 'djezzy-secure-update[.]tk', confidence: 92, source: 'HUNT-001', firstSeen: '2026-01-19' },
+   682→  { type: 'Hash', value: 'a1b2c3d4e5f6...SHA256', confidence: 98, source: 'HUNT-001', firstSeen: '2026-01-20' },
+   683→  { type: 'URL', value: 'http://196.3.150[.]99/admin/login', confidence: 87, source: 'HUNT-002', firstSeen: '2026-01-19' },
+   684→  { type: 'GT', value: '3-065-1-XXX-XXX', confidence: 75, source: 'HUNT-002', firstSeen: '2026-01-19' },
+   685→  { type: 'IMSI Range', value: '2130150XXXXXXXX', confidence: 70, source: 'HUNT-004', firstSeen: '2026-01-12' },
+   686→  { type: 'IP Address', value: '91.121.87.[33-38]', confidence: 88, source: 'HUNT-003', firstSeen: '2026-01-16' },
+   687→  { type: 'Email', value: 'support@djezzy-security[.]com', confidence: 94, source: 'HUNT-001', firstSeen: '2026-01-17' }
+   688→]
+   689→
+   690→// ============================================================
+   691→// SYSTEM HEALTH DATA
+   692→// ============================================================
+   693→
+   694→export const systemComponents: SystemComponent[] = [
+   695→  {
+   696→    name: 'Wazuh SIEM Cluster (Primary)',
+   697→    status: 'healthy',
+   698→    uptime: 99.97,
+   699→    cpu: 45,
+   700→    memory: 62,
+   701→    disk: 58,
+   702→    lastCheck: new Date().toISOString()
+   703→  },
+   704→  {
+   705→    name: 'PostgreSQL Database (Analytics)',
+   706→    status: 'healthy',
+   707→    uptime: 99.99,
+   708→    cpu: 32,
+   709→    memory: 71,
+   710→    disk: 64,
+   711→    lastCheck: new Date().toISOString()
+   712→  },
+   713→  {
+   714→    name: 'Elasticsearch Cluster (Logs)',
+   715→    status: 'healthy',
+   716→    uptime: 99.95,
+   717→    cpu: 58,
+   718→    memory: 78,
+   719→    disk: 72,
+   720→    lastCheck: new Date().toISOString()
+   721→  },
+   722→  {
+   723→    name: 'SS7 Monitoring Probe (Algiers)',
+   724→    status: 'healthy',
+   725→    uptime: 99.98,
+   726→    cpu: 22,
+   727→    memory: 41,
+   728→    disk: 35,
+   729→    lastCheck: new Date().toISOString()
+   730→  },
+   731→  {
+   732→    name: 'SS7 Monitoring Probe (Oran)',
+   733→    status: 'healthy',
+   734→    uptime: 99.94,
+   735→    cpu: 28,
+   736→    memory: 45,
+   737→    disk: 38,
+   738→    lastCheck: new Date().toISOString()
+   739→  },
+   740→  {
+   741→    name: 'TheHive Incident Platform',
+   742→    status: 'healthy',
+   743→    uptime: 99.99,
+   744→    cpu: 18,
+   745→    memory: 55,
+   746→    disk: 42,
+   747→    lastCheck: new Date().toISOString()
+   748→  },
+   749→  {
+   750→    name: 'Cortex Analysis Engine',
+   751→    status: 'degraded',
+   752→    uptime: 98.5,
+   753→    cpu: 85,
+   754→    memory: 89,
+   755→    disk: 55,
+   756→    lastCheck: new Date(Date.now() - 300000).toISOString()
+   757→  },
+   758→  {
+   759→    name: 'MISP Threat Intelligence',
+   760→    status: 'healthy',
+   761→    uptime: 99.97,
+   762→    cpu: 35,
+   763→    memory: 52,
+   764→    disk: 61,
+   765→    lastCheck: new Date().toISOString()
+   766→  },
+   767→  {
+   768→    name: 'Grafana Dashboards',
+   769→    status: 'healthy',
+   770→    uptime: 99.99,
+   771→    cpu: 12,
+   772→    memory: 34,
+   773→    disk: 28,
+   774→    lastCheck: new Date().toISOString()
+   775→  },
+   776→  {
+   777→    name: 'Kafka Message Queue',
+   778→    status: 'healthy',
+   779→    uptime: 99.98,
+   780→    cpu: 42,
+   781→    memory: 48,
+   782→    disk: 45,
+   783→    lastCheck: new Date().toISOString()
+   784→  },
+   785→  {
+   786→    name: 'CrowdStrike Falcon Sensor Gateway',
+   787→    status: 'healthy',
+   788→    uptime: 99.95,
+   789→    cpu: 25,
+   790→    memory: 38,
+   791→    disk: 30,
+   792→    lastCheck: new Date().toISOString()
+   793→  },
+   794→  {
+   795→    name: 'ANRT Reporting Module',
+   796→    status: 'maintenance',
+   797→    uptime: 95.0,
+   798→    cpu: 5,
+   799→    memory: 22,
+   800→    disk: 40,
+   801→    lastCheck: new Date(Date.now() - 600000).toISOString()
+   802→  }
+   803→]
+   804→
+   805→// ============================================================
+   806→// INCIDENT DATA
+   807→// ============================================================
+   808→
+   809→export const recentIncidents: IncidentData[] = [
+   810→  {
+   811→    id: 'INC-2026-00089',
+   812→    title: 'SS7 IRSF Attack Campaign Mitigation',
+   813→    severity: 'critical',
+   814→    status: 'contained',
+   815→    createdAt: '2026-01-21T02:15:00Z',
+   816→    assignee: 'SOC Tier 2',
+   817→    phase: 'Eradication',
+   818→    affectedAssets: 4,
+   819→    description: 'International revenue share fraud campaign targeting premium rate numbers in Tunisia. Blocked 23 fraudulent MSISDNs.'
+   820→  },
+   821→  {
+   822→    id: 'INC-2026-00088',
+   823→    title: 'APT Spear-Phishing Campaign',
+   824→    severity: 'high',
+   825→    status: 'open',
+   826→    createdAt: '2026-01-20T14:30:00Z',
+   827→    assignee: 'Threat Intel Team',
+   828→    phase: 'Analysis',
+   829→    affectedAssets: 3,
+   830→    description: 'Targeted phishing emails sent to 15 executives containing XAgent dropper. 2 workstations potentially compromised.'
+   831→  },
+   832→  {
+   833→    id: 'INC-2026-00087',
+   834→    title: 'Database SQL Injection Attempt',
+   835→    severity: 'high',
+   836→    status: 'recovered',
+   837→    createdAt: '2026-01-19T09:45:00Z',
+   838→    assignee: 'AppSec Team',
+   839→    phase: 'Lessons Learned',
+   840→    affectedAssets: 2,
+   841→    description: 'SQL injection attempt on customer portal. Attack blocked by WAF, no data exfiltration confirmed.'
+   842→  },
+   843→  {
+   844→    id: 'INC-2026-00086',
+   845→    title: 'Insider Threat Investigation',
+   846→    severity: 'medium',
+   847→    status: 'open',
+   848→    createdAt: '2026-01-18T11:20:00Z',
+   849→    assignee: 'HR & SOC Joint',
+   850→    phase: 'Detection',
+   851→    affectedAssets: 1,
+   852→    description: 'Anomalous bulk data access pattern detected from service desk account. Investigation ongoing.'
+   853→  },
+   854→  {
+   855→    id: 'INC-2026-00085',
+   856→    title: 'DDoS Attack on DNS Infrastructure',
+   857→    severity: 'high',
+   858→    status: 'closed',
+   859→    createdAt: '2026-01-16T16:00:00Z',
+   860→    assignee: 'Network Security Team',
+   861→    phase: 'Closed',
+   862→    affectedAssets: 6,
+   863→    description: 'Amplification attack mitigated via Cloudflare scrubbing. Peak traffic 12Gbps. No service impact.'
+   864→  },
+   865→  {
+   866→    id: 'INC-2026-00084',
+   867→    title: 'Malware Infection - Finance Department',
+   868→    severity: 'medium',
+   869→    status: 'closed',
+   870→    createdAt: '2026-01-14T08:30:00Z',
+   871→    assignee: 'Endpoint Security',
+   872→    phase: 'Closed',
+   873→    affectedAssets: 1,
+   874→    description: 'Emotet variant detected and contained. Machine reimaged, credentials rotated.'
+   875→  },
+   876→  {
+   877→    id: 'INC-2026-00083',
+   878→    title: 'SIM Swap Fraud Ring',
+   879→    severity: 'critical',
+   880→    status: 'contained',
+   881→    createdAt: '2026-01-12T07:00:00Z',
+   882→    assignee: 'Fraud & Law Enforcement',
+   883→    phase: 'Eradication',
+   884→    affectedAssets: 2,
+   885→    description: 'Organized crime group performing SIM swaps to intercept banking OTPs. 7 accounts affected, ANRT notified.'
+   886→  }
+   887→]
+   888→
+   889→// ============================================================
+   890→// THREAT INTELLIGENCE FEED DATA
+   891→// ============================================================
+   892→
+   893→export const threatIntelFeeds = [
+   894→  { name: 'MISP Community Feed', status: 'active', iocCount: 45230, lastUpdate: new Date(Date.now() - 1800000).toISOString(), coverage: 'Global' },
+   895→  { name: 'AlienVault OTX', status: 'active', iocCount: 128500, lastUpdate: new Date(Date.now() - 900000).toISOString(), coverage: 'Global' },
+   896→  { name: 'GSMA Fraud Intelligence', status: 'active', iocCount: 3450, lastUpdate: new Date(Date.now() - 3600000).toISOString(), coverage: 'Telecom' },
+   897→  { name: 'CFCS-AM (Morocco CSIRT)', status: 'active', iocCount: 2300, lastUpdate: new Date(Date.now() - 7200000).toISOString(), coverage: 'Regional' },
+   898→  { name: 'ANRT Threat Sharing', status: 'active', iocCount: 890, lastUpdate: new Date(Date.now() - 14400000).toISOString(), coverage: 'National' },
+   899→  { name: 'Telecom ISAC', status: 'degraded', iocCount: 67800, lastUpdate: new Date(Date.now() - 28800000).toISOString(), coverage: 'Industry' },
+   900→  { name: 'CrowdStrike Intel', status: 'active', iocCount: 234000, lastUpdate: new Date(Date.now() - 600000).toISOString(), coverage: 'Global' }
+   901→]
+   902→
+   903→// ============================================================
+   904→// ANALYST WORKSPACE DATA
+   905→// ============================================================
+   906→
+   907→export const analystStats = {
+   908→  totalAlertsToday: 147,
+   909→  criticalOpen: 3,
+   910→  highOpen: 12,
+   911→  mediumOpen: 28,
+   912→  avgResponseTime: '4.2 min',
+   913→  escalationRate: '8.3%',
+   914→  falsePositiveRate: '23.5%',
+   915→  mttr: '2.4 hours',
+   916→  analystOnDuty: [
+   917→    { name: 'Ahmed B.', role: 'Tier 1 Analyst', shift: 'Morning', activeCases: 8 },
+   918→    { name: 'Fatima Z.', role: 'Tier 2 Analyst', shift: 'Morning', activeCases: 5 },
+   919→    { name: 'Karim M.', role: 'Tier 1 Analyst', shift: 'Afternoon', activeCases: 0 },
+   920→    { name: 'Amina L.', role: 'SOC Supervisor', shift: 'Full Day', activeCases: 3 }
+   921→  ],
+   922→  queueBreakdown: {
+   923→    new: 23,
+   924→    acknowledged: 18,
+   925→    investigating: 31,
+   926→    waiting: 9,
+   927→    resolvedToday: 66
+   928→  }
+   929→}
+   930→
+   931→// ============================================================
+   932→// GEOGRAPHIC/NETWORK DATA
+   933→// ============================================================
+   934→
+   935→export const networkTopology = [
+   936→  { id: 'alg-dc-01', name: 'Algiers Data Center', type: 'datacenter', location: { lat: 36.7538, lng: 3.0588 }, status: 'healthy', devices: 245 },
+   937→  { id: 'oran-dc-01', name: 'Oran Data Center', type: 'datacenter', location: { lat: 35.6911, lng: -0.6417 }, status: 'healthy', devices: 128 },
+   938→  { id: 'const-dc-01', name: 'Constantine POP', type: 'pop', location: { lat: 36.3650, lng: 6.6147 }, status: 'healthy', devices: 67 },
+   939→  { id: 'msc-01', name: 'MSC Primary (Algiers)', type: 'msc', location: { lat: 36.7538, lng: 3.0588 }, status: 'healthy', devices: 12 },
+   940→  { id: 'hlr-01', name: 'HLR Primary (Algiers)', type: 'hlr', location: { lat: 36.7538, lng: 3.0588 }, status: 'healthy', devices: 4 },
+   941→  { id: 'stp-01', name: 'STP Primary', type: 'stp', location: { lat: 36.7538, lng: 3.0588 }, status: 'healthy', devices: 2 },
+   942→  { id: 'gw-intl', name: 'International Gateway', type: 'gateway', location: { lat: 36.7538, lng: 3.0588 }, status: 'degraded', devices: 8 },
+   943→  { id: 'isp-01', name: 'Internet Service Point', type: 'isp', location: { lat: 36.7538, lng: 3.0588 }, status: 'healthy', devices: 15 }
+   944→]
+   945→
+   946→// ============================================================
+   947→// UTILITY FUNCTIONS
+   948→// ============================================================
+   949→
+   950→/**
+   951→ * Get dashboard summary statistics
+   952→ */
+   953→export function getDashboardSummary() {
+   954→  return {
+   955→    totalAlerts: recentAlerts.length,
+   956→    criticalAlerts: recentAlerts.filter(a => a.severity === 'critical').length,
+   957→    openIncidents: recentIncidents.filter(i => i.status === 'open' || i.status === 'contained').length,
+   958→    activeHunts: huntSessions.filter(h => h.status === 'active').length,
+   959→    complianceScore: anrtComplianceData.overallScore,
+   960→    systemHealth: Math.round(systemComponents.filter(c => c.status === 'healthy').length / systemComponents.length * 100),
+   961→    ss7MsgPerSecond: ss7TrafficData.messagesPerSecond,
+   962→    fraudBlockedToday: ss7TrafficData.fraudAlerts.reduce((sum, f) => sum + f.blocked, 0),
+   963→    lastUpdated: new Date().toISOString()
+   964→  }
+   965→}
+   966→
+   967→/**
+   968→ * Generate real-time alert feed simulation
+   969→ */
+   970→export function generateLiveAlert(): AlertData | null {
+   971→  // 20% chance of generating a new alert each call
+   972→  if (Math.random() > 0.2) return null
+   973→  
+   974→  const templates = [
+   975→    { severity: 'medium' as const, title: 'Login Failure - Multiple Attempts', source: 'Wazuh SIEM' },
+   976→    { severity: 'low' as const, title: 'Policy Violation Detected', source: 'CrowdStrike' },
+   977→    { severity: 'high' as const, title: 'Suspicious Network Traffic', source: 'Suricata IDS' },
+   978→    { severity: 'info' as const, title: 'Configuration Change Detected', source: 'NetMonitor' },
+   979→    { severity: 'medium' as const, title: 'Malware Hash Match', source: 'Threat Intel' }
+   980→  ]
+   981→  
+   982→  const template = templates[Math.floor(Math.random() * templates.length)]
+   983→  const id = `ALT-${Date.now()}`
+   984→  
+   985→  return {
+   986→    id,
+   987→    ...template,
+   988→    timestamp: new Date().toISOString(),
+   989→    status: 'open',
+   990→    assignee: 'Auto-Assigned',
+   991→    description: `Auto-generated ${template.title.toLowerCase()} alert`
+   992→  }
+   993→}
+   994→

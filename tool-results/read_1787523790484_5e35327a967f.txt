@@ -1,0 +1,1536 @@
+     1→/**
+     2→ * Wazuh SIEM Integration Client for Djezzy National SOC Platform
+     3→ * Phase 11: Enterprise Production Integration
+     4→ * 
+     5→ * Features:
+     6→ * - Wazuh API v3.15+ integration for alert management
+     7→ * - Elasticsearch 8.x client for log aggregation and search
+     8→ * - Real-time alert streaming with WebSocket support
+     9→ * - Event normalization and enrichment pipeline
+    10→ * - CDR (Call Detail Record) parsing and analysis
+    11→ * - Telecom-specific field mapping (MSISDN, IMSI, IMEI, Cell ID)
+    12→ * 
+    13→ * @version 1.0.0
+    14→ * @license Proprietary - Djezzy National SOC Platform
+    15→ */
+    16→
+    17→import { EventEmitter } from 'events';
+    18→
+    19→// ============================================================
+    20→// Types & Interfaces
+    21→// ============================================================
+    22→
+    23→export interface WazuhConfig {
+    24→  apiUrl: string;
+    25→  username: string;
+    26→  password: string;
+    27→  insecure?: boolean; // Allow self-signed certs (dev only)
+    28→  timeout?: number;   // Request timeout in ms (default: 30000)
+    29→}
+    30→
+    31→export interface ElasticsearchConfig {
+    32→  nodes: string[];
+    33→  username?: string;
+    34→  password?: string;
+    35→  apiKey?: string;
+    36→  tls?: {
+    37→    rejectUnauthorized?: boolean;
+    38→    ca?: string;
+    39→    cert?: string;
+    40→    key?: string;
+    41→  };
+    42→  maxRetries?: number;
+    43→  requestTimeout?: number;
+    44→}
+    45→
+    46→export interface SiemIntegrationConfig {
+    47→  wazuh: WazuhConfig;
+    48→  elasticsearch: ElasticsearchConfig;
+    49→  kafka?: KafkaProducerConfig; // Optional: Forward events to Kafka
+    50→}
+    51→
+    52→export interface KafkaProducerConfig {
+    53→  brokers: string[];
+    54→  topic: string;
+    55→  clientId?: string;
+    56→  sasl?: {
+    57→    mechanism: 'plain' | 'scram-sha-256' | 'scram-sha-512';
+    58→    username: string;
+    59→    password: string;
+    60→  };
+    61→  ssl?: boolean;
+    62→}
+    63→
+    64→export interface SecurityEvent {
+    65→  id: string;
+    66→  eventId: string;
+    67→  eventType: 'authentication' | 'network' | 'endpoint' | 'application' | 'cloud' | 'telecom';
+    68→  category: 'intrusion' | 'malware' | 'policy_violation' | 'anomaly' | 'reconnaissance' | 'fraud';
+    69→  severity: 'critical' | 'high' | 'medium' | 'low' | 'informational';
+    70→  status: 'new' | 'triaged' | 'investigating' | 'closed' | 'false_positive';
+    71→  
+    72→  sourceIp?: string;
+    73→  destinationIp?: string;
+    74→  sourcePort?: number;
+    75→  destinationPort?: number;
+    76→  protocol?: string;
+    77→  sourceHost?: string;
+    78→  destinationHost?: string;
+    79→  
+    80→  toolName: 'wazuh' | 'suricata' | 'zeek' | 'splunk' | 'custom';
+    81→  toolSeverity?: string;
+    82→  ruleId?: string;
+    83→  ruleName?: string;
+    84→  ruleCategory?: string; // MITRE ATT&CK tactic
+    85→  
+    86→  title: string;
+    87→  description?: string;
+    88→  metadata?: Record<string, any>;
+    89→  rawLog?: string;
+    90→  
+    91→  // Telecom-specific fields
+    92→  subscriberId?: string; // MSISDN (masked)
+    93→  imsi?: string;
+    94→  imei?: string;
+    95→  cellId?: string;
+    96→  lac?: string;
+    97→  
+    98→  incidentId?: string;
+    99→  iocMatched?: string;
+   100→  correlationGroup?: string;
+   101→  confidence?: number;
+   102→  
+   103→  geoLocation?: {
+   104→    country?: string;
+   105→    city?: string;
+   106→    lat?: number;
+   107→    lon?: number;
+   108→  };
+   109→  threatIntel?: Record<string, any>;
+   110→  assetInfo?: Record<string, any>;
+   111→  
+   112→  ingestedAt: Date;
+   113→  processedAt: Date;
+   114→  firstSeenAt: Date;
+   115→  lastSeenAt: Date;
+   116→  count: number;
+   117→  
+   118→  assignedTo?: string;
+   119→  triagedBy?: string;
+   120→  closedBy?: string;
+   121→  
+   122→  createdAt: Date;
+   123→  updatedAt: Date;
+   124→}
+   125→
+   126→export interface WazuhAlert {
+   127→  timestamp: string;
+   128→  rule: {
+   129→    id: number;
+   130→    level: number;
+   131→    description: string;
+   132→    gid: string;
+   133→    rev: number;
+   134→    frequency: number;
+   135→    fidelity: string;
+   136→    severity: string;
+   137→    custom?: Record<string, any>;
+   138→    mitre?: {
+   139→      id?: string;
+   140→      technique?: string;
+   141→      tactic?: string;
+   142→    };
+   143→  };
+   144→  agent: {
+   145→    id: string;
+   146→    name: string;
+   147→    ip: string;
+   148→  };
+   149→  manager: {
+   150→    name: string;
+   151→  };
+   152→  id: string;
+   153→  fullLog?: string;
+   154→  srcip?: {
+   155→    ip: string;
+   156→    geoLocation: {
+   157→      country_name: string;
+   158→      city_name: string;
+   159→      latitude: number;
+   160→      longitude: number;
+   161→    };
+   162→  };
+   163→  dstip?: {
+   164→    ip: string;
+   165→    geoLocation: {
+   166→      country_name: string;
+   167→      city_name: string;
+   168→      latitude: number;
+   169→      longitude: number;
+   170→    };
+   171→  };
+   172→  srcport?: number;
+   173→  dstport?: number;
+   174→  protocol?: string;
+   175→  syscheck?: any; // File integrity monitoring data
+   176→  vulnerability?: any; // Vulnerability detection data
+   177→  predecoder?: {
+   178→    program_name: string;
+   179→    hostname: string;
+   180→    timestamp: string;
+   181→  };
+   182→  data?: {
+   183→    srcuser?: string;
+   184→    dstuser?: string;
+   185→    url?: string;
+   186→  };
+   187→  compliance?: any; // Compliance monitoring results
+   188→}
+   189→
+   190→export interface AgentInfo {
+   191→  id: string;
+   192→  name: string;
+   193→  ip: string;
+   194→  status: 'active' | 'disconnected' | 'never_connected';
+   195→  lastKeepAlive: string;
+   196→  version: string;
+   197→  os: {
+   198→    platform: string;
+   199→    version: string;
+   200→    name: string;
+   201→  };
+   202→  group: string[];
+   203→}
+   204→
+   205→export interface SearchFilters {
+   206→  eventType?: string[];
+   207→  severity?: string[];
+   208→  status?: string[];
+   209→  sourceIp?: string;
+   210→  destinationIp?: string;
+   211→  toolName?: string[];
+   212→  dateRange?: {
+   213→    start: Date;
+   214→    end: Date;
+   215→  };
+   216→  subscriberId?: string;
+   217→  textQuery?: string; // Full-text search
+   218→  limit?: number;
+   219→  offset?: number;
+   220→  sortBy?: string;
+   221→  sortOrder?: 'asc' | 'desc';
+   222→}
+   223→
+   224→export interface IngestResult {
+   225→  success: boolean;
+   226→  eventId: string;
+   227→  ingestedAt: Date;
+   228→  errors?: string[];
+   229→  warnings?: string[];
+   230→}
+   231→
+   232→export interface MetricsSnapshot {
+   233→  totalEvents: number;
+   234→  eventsLast24h: number;
+   235→  eventsLastHour: number;
+   236→  criticalCount: number;
+   237→  highCount: number;
+   238→  mediumCount: number;
+   239→  lowCount: number;
+   240→  infoCount: number;
+   241→  openIncidents: number;
+   242→  avgIngestionRate: number; // Events per second
+   243→  activeAgents: number;
+   244→  disconnectedAgents: number;
+   245→  elasticsearchClusterStatus: 'green' | 'yellow' | 'red';
+   246→  indexSizeGB: number;
+   247→  lastEventTimestamp: Date | null;
+   248→}
+   249→
+   250→// ============================================================
+   251→// Custom Error Classes
+   252→// ============================================================
+   253→
+   254→export class SiemIntegrationError extends Error {
+   255→  constructor(
+   256→    message: string,
+   257→    public code: string,
+   258→    public originalError?: Error,
+   259→    public context?: Record<string, any>
+   260→  ) {
+   261→    super(message);
+   262→    this.name = 'SiemIntegrationError';
+   263→  }
+   264→}
+   265→
+   266→export class WazuhApiError extends SiemIntegrationError {
+   267→  constructor(
+   268→    message: string,
+   269→    public statusCode: number,
+   270→    public wazuhCode?: number,
+   271→    originalError?: Error
+   272→  ) {
+   273→    super(message, 'WAZUH_API_ERROR', originalError);
+   274→    this.name = 'WazuhApiError';
+   275→  }
+   276→}
+   277→
+   278→export class ElasticsearchError extends SiemIntegrationError {
+   279→  constructor(
+   280→    message: string,
+   281→    public esErrorType: string,
+   282→    originalError?: Error
+   283→  ) {
+   284→    super(message, 'ELASTICSEARCH_ERROR', originalError);
+   285→    this.name = 'ElasticsearchError';
+   286→  }
+   287→}
+   288→
+   289→// ============================================================
+   290→// Wazuh API Client
+   291→// ============================================================
+   292→
+   293→export class WazuhClient {
+   294→  private config: WazuhConfig;
+   295→  private token: string | null = null;
+   296→  private tokenExpiry: Date | null = null;
+   297→  private requestQueue: Array<() => Promise<any>> = [];
+   298→  private isRefreshing = false;
+   299→
+   300→  constructor(config: WazuhConfig) {
+   301→    this.config = {
+   302→      ...config,
+   303→      timeout: config.timeout || 30000,
+   304→      insecure: config.insecure || false,
+   305→    };
+   306→  }
+   307→
+   308→  /**
+   309→   * Authenticate with Wazuh API and get JWT token
+   310→   */
+   311→  async authenticate(): Promise<void> {
+   312→    try {
+   313→      const response = await fetch(`${this.config.apiUrl}/security/user/authenticate`, {
+   314→        method: 'POST',
+   315→        headers: { 'Content-Type': 'application/json' },
+   316→        body: JSON.stringify({
+   317→          username: this.config.username,
+   318→          password: this.config.password,
+   319→        }),
+   320→        signal: AbortSignal.timeout(this.config.timeout!),
+   321→      });
+   322→
+   323→      if (!response.ok) {
+   324→        const errorBody = await response.json().catch(() => ({}));
+   325→        throw new WazuhApiError(
+   326→          `Wazuh authentication failed: ${response.statusText}`,
+   327→          response.status,
+   328→          errorBody.code,
+   329→          undefined,
+   330→          { responseBody: errorBody }
+   331→        );
+   332→      }
+   333→
+   334→      const data = await response.json();
+   335→      this.token = data.data.token;
+   336→      this.tokenExpiry = new Date(Date.now() + 14 * 60 * 1000); // Token valid for ~14 minutes
+   337→    } catch (error) {
+   338→      if (error instanceof WazuhApiError) throw error;
+   339→      throw new SiemIntegrationError(
+   340→        `Failed to connect to Wazuh: ${error instanceof Error ? error.message : String(error)}`,
+   341→        'CONNECTION_ERROR',
+   342→        error as Error
+   343→      );
+   344→    }
+   345→  }
+   346→
+   347→  /**
+   348→   * Get auth header with valid token, refreshing if needed
+   349→   */
+   350→  private async getAuthHeader(): Promise<{ Authorization: string }> {
+   351→    if (!this.token || !this.tokenExpiry || this.tokenExpiry <= new Date()) {
+   352→      await this.authenticate();
+   353→    }
+   354→    return { Authorization: `Bearer ${this.token}` };
+   355→  }
+   356→
+   357→  /**
+   358→   * Make authenticated request to Wazuh API
+   359→   */
+   360→  private async apiRequest<T>(
+   361→    endpoint: string,
+   362→    options: RequestInit = {}
+   363→  ): Promise<T> {
+   364→    const headers = await this.getAuthHeader();
+   365→    
+   366→    try {
+   367→      const response = await fetch(`${this.config.apiUrl}${endpoint}`, {
+   368→        ...options,
+   369→        headers: {
+   370→          ...headers,
+   371→          ...(options.headers as Record<string, string>),
+   372→        },
+   373→        signal: AbortSignal.timeout(this.config.timeout!),
+   374→      });
+   375→
+   376→      if (response.status === 401) {
+   377→        // Token expired, refresh and retry once
+   378→        this.token = null;
+   379→        const retryHeaders = await this.getAuthHeader();
+   380→        const retryResponse = await fetch(`${this.config.apiUrl}${endpoint}`, {
+   381→          ...options,
+   382→          headers: {
+   383→            ...retryHeaders,
+   384→            ...(options.headers as Record<string, string>),
+   385→          },
+   386→          signal: AbortSignal.timeout(this.config.timeout!),
+   387→        });
+   388→        
+   389→        if (!retryResponse.ok) {
+   390→          throw new WazuhApiError(
+   391→            `Wazuh API request failed after retry: ${retryResponse.statusText}`,
+   392→            retryResponse.status
+   393→          );
+   394→        }
+   395→        return retryResponse.json() as Promise<T>;
+   396→      }
+   397→
+   398→      if (!response.ok) {
+   399→        throw new WazuhApiError(
+   400→          `Wazuh API request failed: ${response.statusText}`,
+   401→          response.status
+   402→        );
+   403→      }
+   404→
+   405→      return response.json() as Promise<T>;
+   406→    } catch (error) {
+   407→      if (error instanceof WazuhApiError || error instanceof SiemIntegrationError) throw error;
+   408→      throw new SiemIntegrationError(
+   409→        `Wazuh API request error: ${error instanceof Error ? error.message : String(error)}`,
+   410→        'REQUEST_ERROR',
+   411→        error as Error
+   412→      );
+   413→    }
+   414→  }
+   415→
+   416→  /**
+   417→   * Get all Wazuh agents with optional filters
+   418→   */
+   419→  async getAgents(filters?: {
+   420→    status?: 'active' | 'disconnected' | 'never_connected' | 'all';
+   421→    select?: string[]; // Fields to return
+   422→    search?: string;
+   423→    offset?: number;
+   424→    limit?: number;
+   425→    sort?: string;
+   426→  }): Promise<{ items: AgentInfo[]; totalItems: number }> {
+   427→    const params = new URLSearchParams();
+   428→    if (filters?.status && filters.status !== 'all') params.append('status', filters.status);
+   429→    if (filters?.select) params.append('select', filters.select.join(','));
+   430→    if (filters?.search) params.append('search', filters.search);
+   431→    if (filters?.offset) params.append('offset', String(filters.offset));
+   432→    if (filters?.limit) params.append('limit', String(filters.limit));
+   433→    if (filters?.sort) params.append('sort', filters.sort);
+   434→
+   435→    const query = params.toString();
+   436→    const response = await this.apiRequest<{
+   437→      data: { affected_items: AgentInfo[]; total_affected_items: number };
+   438→    }>(`/agents?${query}`);
+   439→
+   440→    return {
+   441→      items: response.data.affected_items,
+   442→      totalItems: response.data.total_affected_items,
+   443→    };
+   444→  }
+   445→
+   446→  /**
+   447→   * Get specific agent by ID
+   448→   */
+   449→  async getAgent(agentId: string): Promise<AgentInfo> {
+   450→    const response = await this.apiRequest<{
+   451→      data: AgentInfo[];
+   452→    }>(`/agents/${agentId}`);
+   453→    
+   454→    if (!response.data || response.data.length === 0) {
+   455→      throw new SiemIntegrationError(`Agent not found: ${agentId}`, 'NOT_FOUND');
+   456→    }
+   457→    
+   458→    return response.data[0];
+   459→  }
+   460→
+   461→  /**
+   462→   * Get security alerts from Wazuh with advanced filtering
+   463→   */
+   464→  async getAlerts(filters?: {
+   465→    agents?: string[];
+   466→    ruleIds?: number[];
+   467→    groups?: string[];
+   468→    level?: { from: number; to: number };
+   469→    dateRange?: { start: string; end: string }; // ISO format
+   470→    select?: string[];
+   471→    offset?: number;
+   472→    limit?: number;
+   473→    sort?: string;
+   474→    search?: string;
+   475→  }): Promise<{ items: WazuhAlert[]; totalItems: number }> {
+   476→    const params = new URLSearchParams();
+   477→    
+   478→    if (filters?.agents?.length) params.append('agents_list', filters.agents.join(','));
+   479→    if (filters?.ruleIds?.length) params.append('rule.id', filters.ruleIds.join(','));
+   480→    if (filters?.groups?.length) params.append('rule.groups', filters.groups.join(','));
+   481→    if (filters?.level) {
+   482→      params.append('rule.level', `${filters.level.from},${filters.level.to}`);
+   483→    }
+   484→    if (filters?.dateRange) {
+   485→      params.append('timeframe', `${filters.dateRange.start}/${filters.dateRange.end}`);
+   486→    } else {
+   487→      params.append('timeframe', '24h'); // Default to last 24 hours
+   488→    }
+   489→    if (filters?.select) params.append('select', filters.select.join(','));
+   490→    if (filters?.offset) params.append('offset', String(filters.offset));
+   491→    if (filters?.limit) params.append('limit', String(filters.limit || 100));
+   492→    if (filters?.sort) params.append('sort', filters.sort);
+   493→    if (filters?.search) params.append('search', filters.search);
+   494→
+   495→    const query = params.toString();
+   496→    const response = await this.apiRequest<{
+   497→      data: { affected_items: WazuhAlert[]; total_affected_items: number };
+   498→    }>(`/alerts/alerts?${query}`);
+   499→
+   500→    return {
+   501→      items: response.data.affected_items,
+   502→      totalItems: response.data.total_affected_items,
+   503→    };
+   504→  }
+   505→
+   506→  /**
+   507→   * Get summary statistics of alerts
+   508→   */
+   509→  async getAlertSummary(dateRange?: { start: string; end: string }): Promise<{
+   510→    total: number;
+   511→    critical: number;
+   512→    high: number;
+   513→    medium: number;
+   514→    low: number;
+   515→    informational: number;
+   516→    byRule: Array<{ ruleId: number; ruleDescription: string; count: number }>;
+   517→    byAgent: Array<{ agentId: string; agentName: string; count: number }>;
+   518→  }> {
+   519→    const params = new URLSearchParams();
+   520→    if (dateRange) {
+   521→      params.append('timeframe', `${dateRange.start}/${dateRange.end}`);
+   522→    } else {
+   523→      params.append('timeframe', '24h');
+   524→    }
+   525→
+   526→    // Get basic counts by severity
+   527→    const summaryResponse = await this.apiRequest<{
+   528→      data: {
+   529→        critical: number;
+   530→        high: number;
+   531→        medium: number;
+   532→        low: number;
+   533→        informational: number;
+   534→      };
+   535→    }>(`/alerts/summary?${params}`);
+   536→
+   537→    // Get top rules
+   538→    const topRulesResponse = await this.apiRequest<{
+   539→      data: Array<{ rule: { id: number; description: string }; count: number }>;
+   540→    }>(`/alerts/aggregation/rules?${params}&limit=10`);
+   541→
+   542→    // Get top agents
+   543→    const topAgentsResponse = await this.apiRequest<{
+   544→      data: Array<{ agent: { id: string; name: string }; count: number }>;
+   545→    }>(`/alerts/aggregation/agents?${params}&limit=10`);
+   546→
+   547→    return {
+   548→      total: Object.values(summaryResponse.data).reduce((sum, val) => sum + (val as number), 0),
+   549→      critical: summaryResponse.data.critical,
+   550→      high: summaryResponse.data.high,
+   551→      medium: summaryResponse.data.medium,
+   552→      low: summaryResponse.data.low,
+   553→      informational: summaryResponse.data.informational,
+   554→      byRule: topRulesResponse.data.map(item => ({
+   555→        ruleId: item.rule.id,
+   556→        ruleDescription: item.rule.description,
+   557→        count: item.count,
+   558→      })),
+   559→      byAgent: topAgentsResponse.data.map(item => ({
+   560→        agentId: item.agent.id,
+   561→        agentName: item.agent.name,
+   562→        count: item.count,
+   563→      })),
+   564→    };
+   565→  }
+   566→
+   567→  /**
+   568→   * Restart a Wazuh agent (useful after config changes)
+   569→   */
+   570→  async restartAgent(agentId: string): Promise<void> {
+   571→    await this.apiRequest(`/agents/${agentId}/restart`, { method: 'PUT' });
+   572→  }
+   573→
+   574→  /**
+   575→   * Get Syscheck file integrity events for an agent
+   576→   */
+   577→  async getSyscheckEvents(agentId: string, filters?: {
+   578→    type?: 'modified' | 'added' | 'deleted';
+   579→    dateRange?: { start: string; end: string };
+   580→    limit?: number;
+   581→    offset?: number;
+   582→  }) {
+   583→    const params = new URLSearchParams();
+   584→    if (filters?.type) params.append('type', filters.type);
+   585→    if (filters?.dateRange) {
+   586→      params.append('timeframe', `${filters.dateRange.start}/${filters.dateRange.end}`);
+   587→    }
+   588→    if (filters?.limit) params.append('limit', String(filters.limit));
+   589→    if (filters?.offset) params.append('offset', String(filters.offset));
+   590→
+   591→    return this.apiRequest(`/syscheck/${agentId}/files?${params}`);
+   592→  }
+   593→
+   594→  /**
+   595→   * Get vulnerability scan results for an agent
+   596→   */
+   597→  async getVulnerabilities(agentId: string, filters?: {
+   598→    severity?: 'Low' | 'Medium' | 'High' | 'Critical';
+   599→    offset?: number;
+   600→    limit?: number;
+   601→    sort?: string;
+   602→  }) {
+   603→    const params = new URLSearchParams();
+   604→    if (filters?.severity) params.append('severity', filters.severity);
+   605→    if (filters?.offset) params.append('offset', String(filters.offset));
+   606→    if (filters?.limit) params.append('limit', String(filters.limit || 100));
+   607→    if (filters?.sort) params.append('sort', filters.sort);
+   608→
+   609→    return this.apiRequest(`/vulnerability/${agentId}?${params}`);
+   610→  }
+   611→
+   612→  /**
+   613→   * Run Syscheck (FIM) scan on demand for an agent
+   614→   */
+   615→  async runSyscheckScan(agentId: string): Promise<{ taskId: number }> {
+   616→    const response = await this.apiRequest<{ data: { task_id: number } }>(
+   617→      `/syscheck/${agentId}/run`,
+   618→      { method: 'PUT' }
+   619→    );
+   620→    return { taskId: response.data.task_id };
+   621→  }
+   622→
+   623→  /**
+   624→   * Test connectivity to Wazuh API
+   625→   */
+   626→  async healthCheck(): Promise<{
+   627→    status: 'healthy' | 'unhealthy';
+   628→    version: string;
+   629→    latency: number;
+   630→    lastCheck: Date;
+   631→  }> {
+   632→    const startTime = Date.now();
+   633→    try {
+   634→      await this.authenticate();
+   635→      const latency = Date.now() - startTime;
+   636→      
+   637→      // Try a simple API call
+   638→      await this.apiRequest('/');
+   639→      
+   640→      return {
+   641→        status: 'healthy',
+   642→        version: 'connected',
+   643→        latency,
+   644→        lastCheck: new Date(),
+   645→      };
+   646→    } catch (error) {
+   647→      return {
+   648→        status: 'unhealthy',
+   649→        version: 'unknown',
+   650→        latency: Date.now() - startTime,
+   651→        lastCheck: new Date(),
+   652→      };
+   653→    }
+   654→  }
+   655→}
+   656→
+   657→// ============================================================
+   658→// Elasticsearch Client (Simplified for SOC use cases)
+   659→// ============================================================
+   660→
+   661→export class ElasticsearchClient {
+   662→  private config: ElasticsearchConfig;
+   663→
+   664→  constructor(config: ElasticsearchConfig) {
+   665→    this.config = {
+   666→      ...config,
+   667→      maxRetries: config.maxRetries || 3,
+   668→      requestTimeout: config.requestTimeout || 30000,
+   669→    };
+   670→  }
+   671→
+   672→  /**
+   673→   * Make request to Elasticsearch
+   674→   */
+   675→  private async request<T>(
+   676→    path: string,
+   677→    options: {
+   678→      method?: string;
+   679→      body?: any;
+   680→      query?: Record<string, string>;
+   681→    } = {}
+   682→  ): Promise<T> {
+   683→    const node = this.selectNode();
+   684→    const url = `${node}${path}`;
+   685→    
+   686→    const headers: Record<string, string> = {
+   687→      'Content-Type': 'application/json',
+   688→    };
+   689→
+   690→    // Authentication
+   691→    if (this.config.apiKey) {
+   692→      headers['Authorization'] = `ApiKey ${this.config.apiKey}`;
+   693→    } else if (this.config.username && this.config.password) {
+   694→      headers['Authorization'] = `Basic ${Buffer.from(`${this.config.username}:${this.config.password}`).toString('base64')}`;
+   695→    }
+   696→
+   697→    const queryParams = new URLSearchParams(options.query || {}).toString();
+   698→    const fullUrl = queryParams ? `${url}?${queryParams}` : url;
+   699→
+   700→    let retries = 0;
+   701→    while (retries <= this.config.maxRetries!) {
+   702→      try {
+   703→        const response = await fetch(fullUrl, {
+   704→          method: options.method || 'GET',
+   705→          headers,
+   706→          body: options.body ? JSON.stringify(options.body) : undefined,
+   707→          signal: AbortSignal.timeout(this.config.requestTimeout!),
+   708→        });
+   709→
+   710→        if (response.status === 401 || response.status === 403) {
+   711→          throw new ElasticsearchError('Authentication failed', 'AUTH_ERROR');
+   712→        }
+   713→
+   714→        const data = await response.json();
+   715→        
+   716→        if (data.error) {
+   717→          throw new ElasticsearchError(
+   718→            data.error.reason || 'Unknown Elasticsearch error',
+   719→            data.error.type
+   720→          );
+   721→        }
+   722→
+   723→        return data as T;
+   724→      } catch (error) {
+   725→        retries++;
+   726→        if (retries > this.config.maxRetries!) {
+   727→          if (error instanceof ElasticsearchError || error instanceof SiemIntegrationError) throw error;
+   728→          throw new ElasticsearchError(
+   729→            `Elasticsearch request failed: ${error instanceof Error ? error.message : String(error)}`,
+   730→            'REQUEST_ERROR',
+   731→            error as Error
+   732→          );
+   733→        }
+   734→        // Wait before retry (exponential backoff)
+   735→        await new Promise(resolve => setTimeout(resolve, Math.pow(2, retries) * 100));
+   736→      }
+   737→    }
+   738→
+   739→    throw new ElasticsearchError('Max retries exceeded', 'MAX_RETRIES_EXCEEDED');
+   740→  }
+   741→
+   742→  /**
+   743→   * Select an Elasticsearch node (round-robin or random)
+   744→   */
+   745→  private selectNode(): string {
+   746→    if (this.config.nodes.length === 1) return this.config.nodes[0];
+   747→    return this.config.nodes[Math.floor(Math.random() * this.config.nodes.length)];
+   748→  }
+   749→
+   750→  /**
+   751→   * Index a document (security event)
+   752→   */
+   753→  async indexEvent(index: string, event: SecurityEvent): Promise<string> {
+   754→    const response = await this.request<{ _id: string }>(`/${index}/_doc`, {
+   755→      method: 'POST',
+   756→      body: event,
+   757→    });
+   758→    return response._id;
+   759→  }
+   760→
+   761→  /**
+   762→   * Bulk index multiple events
+   763→   */
+   764→  async bulkIndexEvents(events: Array<{ index: string; event: SecurityEvent }>): Promise<{
+   765→    successes: number;
+   766→    errors: Array<{ id: string; error: string }>;
+   767→  }> {
+   768→    const body = events.flatMap(({ index, event }) => [
+   769→      { index: { _index: index, _id: event.id } },
+   770→      event,
+   771→    ]);
+   772→
+   773→    const response = await this.request<{
+   774→      items: Array<{ index?: { _id: string; error?: { reason: string; type: string } } }>;
+   775→      errors: boolean;
+   776→    }>('/_bulk', { method: 'POST', body });
+   777→
+   778→    const errors = response.items
+   779→      .filter(item => item.index?.error)
+   780→      .map(item => ({
+   781→        id: item.index!._id,
+   782→        error: item.index!.error!.reason,
+   783→      }));
+   784→
+   785→    return {
+   786→      successes: events.length - errors.length,
+   787→      errors,
+   788→    };
+   789→  }
+   790→
+   791→  /**
+   792→   * Search security events with full Elasticsearch DSL support
+   793→   */
+   794→  async searchEvents(index: string | string[], query: {
+   795→    bool?: {
+   796→      must?: Array<{ match?: Record<string, string>; term?: Record<string, any>; range?: Record<string, any>; exists?: { field: string } }>;
+   797→      must_not?: Array<{ term?: Record<string, any> }>;
+   798→      filter?: Array<{ range?: Record<string, any>; terms?: Record<string, any[]> }>;
+   799→    };
+   800→    sort?: Array<{ [field: string]: { order: 'asc' | 'desc' } }>;
+   801→    size?: number;
+   802→    from?: number;
+   803→    _source?: string[] | false;
+   804→    aggs?: Record<string, any>;
+   805→    highlight?: {
+   806→      fields: Record<string, { fragment_size?: number; number_of_fragments?: number }>;
+   807→    };
+   808→  }): Promise<{
+   809→    hits: {
+   810→      total: { value: number };
+   811→      hits: Array<{ _id: string; _source: SecurityEvent; highlight?: Record<string, string[]> }>;
+   812→    };
+   813→    aggregations?: Record<string, any>;
+   814→  }> {
+   815→    const indexStr = Array.isArray(index) ? index.join(',') : index;
+   816→    return this.request(`/${indexStr}/_search`, { method: 'POST', body: query });
+   817→  }
+   818→
+   819→  /**
+   820→   * Simple search with filters (easier to use than full DSL)
+   821→   */
+   822→  async simpleSearch(
+   823→    index: string,
+   824→    filters: SearchFilters
+   825→  ): Promise<{ events: SecurityEvent[]; total: number }> {
+   826→    const must: any[] = [];
+   827→
+   828→    // Text query
+   829→    if (filters.textQuery) {
+   830→      must.push({
+   831→        multi_match: {
+   832→          query: filters.textQuery,
+   833→          fields: ['title^2', 'description', 'rawLog'],
+   834→          fuzziness: 'AUTO',
+   835→        },
+   836→      });
+   837→    }
+   838→
+   839→    // Exact matches
+   840→    if (filters.eventType?.length) {
+   841→      must.push({ terms: { eventType: filters.eventType } });
+   842→    }
+   843→    if (filters.severity?.length) {
+   844→      must.push({ terms: { severity: filters.severity } });
+   845→    }
+   846→    if (filters.status?.length) {
+   847→      must.push({ terms: { status: filters.status } });
+   848→    }
+   849→    if (filters.toolName?.length) {
+   850→      must.push({ terms: { toolName: filters.toolName } });
+   851→    }
+   852→
+   853→    // IP addresses
+   854→    if (filters.sourceIp) {
+   855→      must.push({ term: { sourceIp: filters.sourceIp } });
+   856→    }
+   857→    if (filters.destinationIp) {
+   858→      must.push({ term: { destinationIp: filters.destinationIp } });
+   859→    }
+   860→
+   861→    // Subscriber ID (telco-specific)
+   862→    if (filters.subscriberId) {
+   863→      must.push({ term: { subscriberId: filters.subscriberId } });
+   864→    }
+   865→
+   866→    // Date range
+   867→    const filter: any[] = [];
+   868→    if (filters.dateRange) {
+   869→      filter.push({
+   870→        range: {
+   871→          ingestedAt: {
+   872→            gte: filters.dateRange.start.toISOString(),
+   873→            lte: filters.dateRange.end.toISOString(),
+   874→          },
+   875→        },
+   876→      });
+   877→    }
+   878→
+   879→    // Sort
+   880→    const sort = [{ [filters.sortBy || 'ingestedAt']: { order: filters.sortOrder || 'desc' } }];
+   881→
+   882→    const result = await this.searchEvents(index, {
+   883→      bool: { must, filter: must.length > 0 ? filter : undefined },
+   884→      sort,
+   885→      size: filters.limit || 50,
+   886→      from: filters.offset || 0,
+   887→    });
+   888→
+   889→    return {
+   890→      events: result.hits.hits.map(hit => hit._source),
+   891→      total: result.hits.total.value,
+   892→    };
+   893→  }
+   894→
+   895→  /**
+   896→   * Get event count by time interval (for time-series charts)
+   897→   */
+   898→  async getEventCountsByInterval(
+   899→    index: string,
+   900→    interval: 'minute' | 'hour' | 'day' | 'week' | 'month',
+   901→    dateRange: { start: Date; end: Date },
+   902→    groupBy?: string // e.g., 'severity', 'eventType'
+   903→  ): Promise<Array<{
+   904→    key: string;
+   905→    keyAsString: string;
+   906→    doc_count: number;
+   907→    subAggregations?: Record<string, Array<{ key: string; doc_count: number }>>;
+   908→  }>> {
+   909→    const aggs: Record<string, any> = {
+   910→      counts_over_time: {
+   911→        date_histogram: {
+   912→          field: 'ingestedAt',
+   913→          fixed_interval: interval,
+   914→          min_doc_count: 0,
+   915→          extended_bounds: {
+   916→            min: dateRange.start.toISOString(),
+   917→            max: dateRange.end.toISOString(),
+   918→          },
+   919→        },
+   920→      },
+   921→    };
+   922→
+   923→    if (groupBy) {
+   924→      aggs.counts_over_time.aggs = {
+   925→        by_field: {
+   926→          terms: { field: groupBy, size: 20 },
+   927→        },
+   928→      };
+   929→    }
+   930→
+   931→    const result = await this.searchEvents(index, {
+   932→      bool: {
+   933→        filter: [{
+   934→          range: {
+   935→            ingestedAt: {
+   936→              gte: dateRange.start.toISOString(),
+   937→              lte: dateRange.end.toISOString(),
+   938→            },
+   939→          },
+   940→        }],
+   941→      },
+   942→      size: 0, // Don't return documents, just aggregations
+   943→      aggs,
+   944→    });
+   945→
+   946→    return result.aggregations?.counts_over_time.buckets || [];
+   947→  }
+   948→
+   949→  /**
+   950→   * Delete events by query (with safety limits)
+   951→   */
+   952→  async deleteEventsByQuery(
+   953→    index: string,
+   954→    query: object,
+   955→    confirmDeleteAll: boolean = false
+   956→  ): Promise<{ deleted: number }> {
+   957→    if (!confirmDeleteAll) {
+   958→      // Safety check: require explicit confirmation for delete_all operations
+   959→      console.warn('deleteEventsByQuery called without confirmDeleteAll=true. Use with caution.');
+   960→    }
+   961→
+   962→    const result = await this.request<{ deleted: number }>(`/${index}/_delete_by_query`, {
+   963→      method: 'POST',
+   964→      body: { query },
+   965→    });
+   966→
+   967→    return { deleted: result.deleted };
+   968→  }
+   969→
+   970→  /**
+   971→   * Get cluster health status
+   972→   */
+   973→  async getClusterHealth(): Promise<{
+   974→    cluster_name: string;
+   975→    status: 'green' | 'yellow' | 'red';
+   976→    timed_out: boolean;
+   977→    number_of_nodes: number;
+   978→    number_of_data_nodes: number;
+   979→    active_primary_shards: number;
+   980→    active_shards: number;
+   981→    relocating_shards: number;
+   982→    initializing_shards: number;
+   983→    unassigned_shards: number;
+   984→  }> {
+   985→    return this.request('/_cluster/health');
+   986→  }
+   987→
+   988→  /**
+   989→   * Get indices stats
+   990→   */
+   991→  async getIndicesStats(indices?: string[]): Promise<{
+   992→    indices: Record<string, {
+   993→      primaries: { docs: { count: number }; store: { size_in_bytes: number } };
+   994→      total: { docs: { count: number }; store: { size_in_bytes: number } };
+   995→    }>;
+   996→  }> {
+   997→    const indexPattern = indices?.join(',') || '*';
+   998→    return this.request(`/${indexPattern}/_stats`);
+   999→  }
+  1000→
+  1001→  /**
+  1002→   * Refresh index (make changes visible for search)
+  1003→   */
+  1004→  async refreshIndex(index: string): Promise<{ shards: { successful: number; failed: number; total: number } }> {
+  1005→    return this.request(`/${index}/_refresh`, { method: 'POST' });
+  1006→  }
+  1007→}
+  1008→
+  1009→// ============================================================
+  1010→// Main SIEM Integration Class (Combines Wazuh + Elasticsearch)
+  1011→// ============================================================
+  1012→
+  1013→export class SiemIntegrationService extends EventEmitter {
+  1014→  private wazuhClient: WazuhClient;
+  1015→  private esClient: ElasticsearchClient;
+  1016→  private config: SiemIntegrationConfig;
+  1017→  private isRunning = false;
+  1018→  private metricsTimer?: NodeJS.Timeout;
+  1019→  private currentMetrics: MetricsSnapshot | null = null;
+  1020→
+  1021→  constructor(config: SiemIntegrationConfig) {
+  1022→    super();
+  1023→    this.config = config;
+  1024→    this.wazuhClient = new WazuhClient(config.wazuh);
+  1025→    this.esClient = new ElasticsearchClient(config.elasticsearch);
+  1026→  }
+  1027→
+  1028→  /**
+  1029→   * Initialize the SIEM integration service
+  1030→   */
+  1031→  async initialize(): Promise<void> {
+  1032→    console.log('[SIEM] Initializing SIEM integration service...');
+  1033→    
+  1034→    try {
+  1035→      // Test Wazuh connectivity
+  1036→      const wazuhHealth = await this.wazuhClient.healthCheck();
+  1037→      console.log(`[SIEM] Wazuh connection: ${wazuhHealth.status} (${wazuhHealth.latency}ms)`);
+  1038→
+  1039→      // Test Elasticsearch connectivity
+  1040→      const esHealth = await this.esClient.getClusterHealth();
+  1041→      console.log(`[SIEM] Elasticsearch cluster: ${esHealth.status} (${esHealth.number_of_nodes} nodes)`);
+  1042→
+  1043→      this.isRunning = true;
+  1044→      this.emit('initialized', { wazuhHealth, esHealth });
+  1045→      
+  1046→      // Start metrics collection
+  1047→      this.startMetricsCollection();
+  1048→
+  1049→      console.log('[SIEM] SIEM integration service initialized successfully');
+  1050→    } catch (error) {
+  1051→      console.error('[SIEM] Failed to initialize:', error);
+  1052→      this.emit('error', error);
+  1053→      throw error;
+  1054→    }
+  1055→  }
+  1056→
+  1057→  /**
+  1058→   * Shutdown the service gracefully
+  1059→   */
+  1060→  async shutdown(): Promise<void> {
+  1061→    console.log('[SIEM] Shutting down SIEM integration service...');
+  1062→    this.isRunning = false;
+  1063→    
+  1064→    if (this.metricsTimer) {
+  1065→      clearInterval(this.metricsTimer);
+  1066→    }
+  1067→    
+  1068→    this.emit('shutdown');
+  1069→    console.log('[SIEM] SIEM integration service shutdown complete');
+  1070→  }
+  1071→
+  1072→  /**
+  1073→   * Ingest a normalized security event into Elasticsearch
+  1074→   */
+  1075→  async ingestEvent(event: SecurityEvent): Promise<IngestResult> {
+  1076→    if (!this.isRunning) {
+  1077→      throw new SiemIntegrationError('SIEM service is not running', 'SERVICE_NOT_RUNNING');
+  1078→    }
+  1079→
+  1080→    const errors: string[] = [];
+  1081→    const warnings: string[] = [];
+  1082→
+  1083→    try {
+  1084→      // Validate required fields
+  1085→      if (!event.eventId) {
+  1086→        event.eventId = `evt-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+  1087→        warnings.push('Generated missing eventId');
+  1088→      }
+  1089→
+  1090→      if (!event.title) {
+  1091→        warnings.push('Event has no title');
+  1092→      }
+  1093→
+  1094→      // Set timestamps if not provided
+  1095→      if (!event.ingestedAt) event.ingestedAt = new Date();
+  1096→      if (!event.processedAt) event.processedAt = new Date();
+  1097→      if (!event.firstSeenAt) event.firstSeenAt = new Date();
+  1098→      if (!event.lastSeenAt) event.lastSeenAt = new Date();
+  1099→      if (!event.createdAt) event.createdAt = new Date();
+  1100→      if (!event.updatedAt) event.updatedAt = new Date();
+  1101→
+  1102→      // Index into Elasticsearch
+  1103→      const indexName = this.getIndexNameForDate(event.ingestedAt);
+  1104→      const docId = await this.esClient.indexEvent(indexName, event);
+  1105→
+  1106→      // Emit event for real-time subscribers
+  1107→      this.emit('event_ingested', event);
+  1108→
+  1109→      return {
+  1110→        success: true,
+  1111→        eventId: event.id || docId,
+  1112→        ingestedAt: event.ingestedAt,
+  1113→        errors: errors.length > 0 ? errors : undefined,
+  1114→        warnings: warnings.length > 0 ? warnings : undefined,
+  1115→      };
+  1116→    } catch (error) {
+  1117→      const errorMessage = error instanceof Error ? error.message : String(error);
+  1118→      errors.push(errorMessage);
+  1119→      
+  1120→      this.emit('ingest_error', { event, error: errorMessage });
+  1121→      
+  1122→      return {
+  1123→        success: false,
+  1124→        eventId: event.eventId || 'unknown',
+  1125→        ingestedAt: new Date(),
+  1126→        errors,
+  1127→        warnings: warnings.length > 0 ? warnings : undefined,
+  1128→      };
+  1129→    }
+  1130→  }
+  1131→
+  1132→  /**
+  1133→   * Batch ingest multiple events
+  1134→   */
+  1135→  async ingestEventsBatch(events: SecurityEvent[]): Promise<{
+  1136→    results: IngestResult[];
+  1137→    summary: { success: number; failed: number };
+  1138→  }> {
+  1139→    const results = await Promise.allSettled(
+  1140→      events.map(event => this.ingestEvent(event))
+  1141→    );
+  1142→
+  1143→    const fulfilledResults = results
+  1144→      .filter((r): r is PromiseFulfilledResult<IngestResult> => r.status === 'fulfilled')
+  1145→      .map(r => r.value);
+  1146→
+  1147→    const rejectedResults = results
+  1148→      .filter((r): r is PromiseRejectedResult => r.status === 'rejected')
+  1149→      .map(r => ({
+  1150→        success: false as const,
+  1151→        eventId: 'unknown',
+  1152→        ingestedAt: new Date(),
+  1153→        errors: [r.reason instanceof Error ? r.reason.message : String(r.reason)],
+  1154→      }));
+  1155→
+  1156→    return {
+  1157→      results: [...fulfilledResults, ...rejectedResults],
+  1158→      summary: {
+  1159→        success: fulfilledResults.filter(r => r.success).length,
+  1160→        failed: rejectedResults.length + fulfilledResults.filter(r => !r.success).length,
+  1161→      },
+  1162→    };
+  1163→  }
+  1164→
+  1165→  /**
+  1166→   * Convert Wazuh alert to normalized SecurityEvent
+  1167→   */
+  1168→  convertWazuhAlertToEvent(alert: WazuhAlert): SecurityEvent {
+  1169→    const now = new Date();
+  1170→    
+  1171→    // Map Wazuh severity levels to our scale
+  1172→    const severityMap: Record<number, SecurityEvent['severity']> = {
+  1173→      15: 'critical',
+  1174→      14: 'critical',
+  1175→      13: 'critical',
+  1176→      12: 'high',
+  1177→      11: 'high',
+  1178→      10: 'high',
+  1179→      9: 'medium',
+  1180→      8: 'medium',
+  1181→      7: 'medium',
+  1182→      6: 'low',
+  1183→      5: 'low',
+  1184→      4: 'low',
+  1185→      3: 'informational',
+  1186→      2: 'informational',
+  1187→      1: 'informational',
+  1188→      0: 'informational',
+  1189→    };
+  1190→
+  1191→    // Determine event type based on rule group/category
+  1192→    const eventType = this.determineEventType(alert);
+  1193→    const category = this.determineCategory(alert);
+  1194→
+  1195→    return {
+  1196→      id: `evt-${alert.id}-${Date.now()}`,
+  1197→      eventId: alert.id,
+  1198→      eventType,
+  1199→      category,
+  1200→      severity: severityMap[alert.rule.level] || 'informational',
+  1201→      status: 'new',
+  1202→      
+  1203→      sourceIp: alert.srcip?.ip,
+  1204→      destinationIp: alert.dstip?.ip,
+  1205→      sourcePort: alert.srcport,
+  1206→      destinationPort: alert.dstport,
+  1207→      protocol: alert.protocol,
+  1208→      sourceHost: alert.predecoder?.hostname,
+  1209→      
+  1210→      toolName: 'wazuh',
+  1211→      toolSeverity: String(alert.rule.level),
+  1212→      ruleId: String(alert.rule.id),
+  1213→      ruleName: alert.rule.description,
+  1214→      ruleCategory: alert.rule.mitre?.tactic || alert.rule.gid,
+  1215→      
+  1216→      title: alert.rule.description,
+  1217→      description: alert.fullLog,
+  1218→      metadata: {
+  1219→        wazuh: {
+  1220→          agentId: alert.agent.id,
+  1221→          agentName: alert.agent.name,
+  1222→          managerName: alert.manager.name,
+  1223→          ruleGid: alert.rule.gid,
+  1224→          ruleRev: alert.rule.rev,
+  1225→          ruleFrequency: alert.rule.frequency,
+  1226→          ruleFidelity: alert.rule.fidelity,
+  1227→          mitreTechnique: alert.rule.mitre?.technique,
+  1228→        },
+  1229→        syscheck: alert.syscheck,
+  1230→        vulnerability: alert.vulnerability,
+  1231→        compliance: alert.compliance,
+  1232→      },
+  1233→      rawLog: alert.fullLog,
+  1234→      
+  1235→      geoLocation: alert.srcip?.geoLocation ? {
+  1236→        country: alert.srcip.geoLocation.country_name,
+  1237→        city: alert.srcip.geoLocation.city_name,
+  1238→        lat: alert.srcip.geoLocation.latitude,
+  1239→        lon: alert.srcip.geoLocation.longitude,
+  1240→      } : undefined,
+  1241→      
+  1242→      ingestedAt: new Date(alert.timestamp),
+  1243→      processedAt: now,
+  1244→      firstSeenAt: new Date(alert.timestamp),
+  1245→      lastSeenAt: now,
+  1246→      count: 1,
+  1247→      
+  1248→      createdAt: now,
+  1249→      updatedAt: now,
+  1250→    };
+  1251→  }
+  1252→
+  1253→  /**
+  1254→   * Fetch recent alerts from Wazuh and ingest them
+  1255→   */
+  1256→  async fetchAndIngestRecentAlerts(options?: {
+  1257→    lastMinutes?: number;
+  1258→    limit?: number;
+  1259→    minLevel?: number;
+  1260→  }): Promise<{
+  1261→    fetched: number;
+  1262→    ingested: number;
+  1263→    failed: number;
+  1264→  }> {
+  1265→    const lastMinutes = options?.lastMinutes || 5;
+  1266→    const limit = options?.limit || 500;
+  1267→    const minLevel = options?.minLevel || 0;
+  1268→
+  1269→    const endTime = new Date().toISOString();
+  1270→    const startTime = new Date(Date.now() - lastMinutes * 60 * 1000).toISOString();
+  1271→
+  1272→    console.log(`[SIEM] Fetching alerts from Wazuh (${startTime} to ${endTime})...`);
+  1273→
+  1274→    try {
+  1275→      const alerts = await this.wazuhClient.getAlerts({
+  1276→        level: { from: minLevel, to: 15 },
+  1277→        dateRange: { start: startTime, end: endTime },
+  1278→        limit,
+  1279→      });
+  1280→
+  1281→      console.log(`[SIEM] Fetched ${alerts.items.length} alerts from Wazuh`);
+  1282→
+  1283→      // Convert and ingest each alert
+  1284→      const events = alerts.items.map(alert => this.convertWazuhAlertToEvent(alert));
+  1285→      const batchResult = await this.ingestEventsBatch(events);
+  1286→
+  1287→      console.log(`[SIEM] Ingested ${batchResult.summary.success}/${events.length} events`);
+  1288→
+  1289→      return {
+  1290→        fetched: alerts.items.length,
+  1291→        ingested: batchResult.summary.success,
+  1292→        failed: batchResult.summary.failed,
+  1293→      };
+  1294→    } catch (error) {
+  1295→      console.error('[SIEM] Failed to fetch/ingest alerts:', error);
+  1296→      throw error;
+  1297→    }
+  1298→  }
+  1299→
+  1300→  /**
+  1301→   * Search events across the SIEM
+  1302→   */
+  1303→  async searchEvents(filters: SearchFilters): Promise<{ events: SecurityEvent[]; total: number }> {
+  1304→    const indexPattern = this.getSearchIndexPattern(filters.dateRange);
+  1305→    return this.esClient.simpleSearch(indexPattern, filters);
+  1306→  }
+  1307→
+  1308→  /**
+  1309→   * Get aggregated metrics for dashboards
+  1310→   */
+  1311→  async getMetrics(): Promise<MetricsSnapshot> {
+  1312→    if (this.currentMetrics && Date.now() - this.currentMetrics.lastEventTimestamp.getTime() < 60000) {
+  1313→      return this.currentMetrics; // Cache for 1 minute
+  1314→    }
+  1315→
+  1316→    try {
+  1317→      // Get cluster health
+  1318→      const clusterHealth = await this.esClient.getClusterHealth();
+  1319→      
+  1320→      // Get indices stats
+  1321→      const indicesStats = await this.esClient.getIndicesStats(['security_events-*']);
+  1322→      
+  1323→      // Calculate total size
+  1324→      let totalSizeBytes = 0;
+  1325→      let totalDocs = 0;
+  1326→      Object.values(indicesStats.indices).forEach(idx => {
+  1327→        totalSizeBytes += idx.total.store.size_in_bytes;
+  1328→        totalDocs += idx.total.docs.count;
+  1329→      });
+  1330→
+  1331→      // Get event counts by severity (last 24h)
+  1332→      const last24h = {
+  1333→        start: new Date(Date.now() - 24 * 60 * 60 * 1000),
+  1334→        end: new Date(),
+  1335→      };
+  1336→
+  1337→      const severityCounts = await this.esClient.getEventCountsByInterval(
+  1338→        'security_events-*',
+  1339→        'hour',
+  1340→        last24h,
+  1341→        'severity'
+  1342→      );
+  1343→
+  1344→      // Flatten severity counts
+  1345→      const severityTotals: Record<string, number> = {};
+  1346→      severityCounts.forEach(bucket => {
+  1347→        bucket.subAggregations?.by_field?.forEach(subBucket => {
+  1348→          severityTotals[subBucket.key] = (severityTotals[subBucket.key] || 0) + subBucket.doc_count;
+  1349→        });
+  1350→      });
+  1351→
+  1352→      // Get Wazuh agent stats
+  1353→      const agents = await this.wazuhClient.getAgents({ status: 'all', limit: 1 });
+  1354→      const activeAgents = await this.wazuhClient.getAgents({ status: 'active', limit: 1 });
+  1355→      const disconnectedAgents = await this.wazuhClient.getAgents({ status: 'disconnected', limit: 1 });
+  1356→
+  1357→      // Get latest event timestamp
+  1358→      const latestEvents = await this.esClient.simpleSearch('security_events-*', {
+  1359→        limit: 1,
+  1360→        sortBy: 'ingestedAt',
+  1361→        sortOrder: 'desc',
+  1362→      });
+  1363→
+  1364→      this.currentMetrics = {
+  1365→        totalEvents: totalDocs,
+  1366→        eventsLast24h: severityCounts.reduce((sum, b) => sum + b.doc_count, 0),
+  1367→        eventsLastHour: severityCounts
+  1368→          .filter(b => new Date(b.key) > new Date(Date.now() - 60 * 60 * 1000))
+  1369→          .reduce((sum, b) => sum + b.doc_count, 0),
+  1370→        criticalCount: severityTotals.critical || 0,
+  1371→        highCount: severityTotals.high || 0,
+  1372→        mediumCount: severityTotals.medium || 0,
+  1373→        lowCount: severityTotals.low || 0,
+  1374→        infoCount: severityTotals.informational || 0,
+  1375→        openIncidents: 0, // TODO: Query incidents table
+  1376→        avgIngestionRate: severityTotals.critical 
+  1377→          ? severityCounts.reduce((sum, b) => sum + b.doc_count, 0) / (24 * 60 * 60) 
+  1378→          : 0,
+  1379→        activeAgents: activeAgents.totalItems,
+  1380→        disconnectedAgents: disconnectedAgents.totalItems,
+  1381→        elasticsearchClusterStatus: clusterHealth.status,
+  1382→        indexSizeGB: totalSizeBytes / (1024 * 1024 * 1024),
+  1383→        lastEventTimestamp: latestEvents.events[0]?.ingestedAt || null,
+  1384→      };
+  1385→
+  1386→      return this.currentMetrics;
+  1387→    } catch (error) {
+  1388→      console.error('[SIEM] Failed to collect metrics:', error);
+  1389→      // Return cached metrics even if stale
+  1390→      return this.currentMetrics || this.getEmptyMetrics();
+  1391→    }
+  1392→  }
+  1393→
+  1394→  /**
+  1395→   * Get real-time alert stream from Wazuh
+  1396→   */
+  1397→  async *alertStream(options?: {
+  1398→    intervalMs?: number;
+  1399→    minLevel?: number;
+  1400→  }): AsyncGenerator<WazuhAlert[]> {
+  1401→    const intervalMs = options?.intervalMs || 10000; // Default: every 10 seconds
+  1402→    const minLevel = options?.minLevel || 7; // Default: medium and above
+  1403→
+  1404→    while (this.isRunning) {
+  1405→      try {
+  1406→        const alerts = await this.wazuhClient.getAlerts({
+  1407→          level: { from: minLevel, to: 15 },
+  1408→          limit: 100,
+  1409→        });
+  1410→
+  1411→        yield alerts.items;
+  1412→      } catch (error) {
+  1413→        console.error('[SIEM] Alert stream error:', error);
+  1414→        this.emit('stream_error', error);
+  1415→      }
+  1416→
+  1417→      await new Promise(resolve => setTimeout(resolve, intervalMs));
+  1418→    }
+  1419→  }
+  1420→
+  1421→  // ============================================================
+  1422→  // Private Helper Methods
+  1423→  // ============================================================
+  1424→
+  1425→  private determineEventType(alert: WazuhAlert): SecurityEvent['eventType'] {
+  1426→    const ruleGroups = alert.rule.custom?.groups || [];
+  1427→    const programName = alert.predecoder?.program_name?.toLowerCase() || '';
+  1428→
+  1429→    if (ruleGroups.includes('web') || ruleGroups.includes('application')) return 'application';
+  1430→    if (ruleGroups.includes('auth') || ruleGroups.includes('authentication')) return 'authentication';
+  1431→    if (ruleGroups.includes('firewall') || ruleGroups.includes('ids') || ruleGroups.includes('network')) return 'network';
+  1432→    if (ruleGroups.includes('syscheck') || ruleGroups.includes('rootcheck')) return 'endpoint';
+  1433→    if (programName.includes('ss7') || programName.includes('diameter') || programName.includes('cdr')) return 'telecom';
+  1434→
+  1435→    return 'network'; // Default
+  1436→  }
+  1437→
+  1438→  private determineCategory(alert: WazuhAlert): SecurityEvent['category'] {
+  1439→    const level = alert.rule.level;
+  1440→    const ruleId = String(alert.rule.id);
+  1441→
+  1442→    if (level >= 13) return 'intrusion';
+  1443→    if (ruleId.startsWith('550') || ruleId.startsWith('551') || ruleId.startsWith('552') || ruleId.startsWith('553') || ruleId.startsWith('554')) return 'malware';
+  1444→    if (alert.syscheck) return 'policy_violation';
+  1445→    if (level >= 8) return 'anomaly';
+  1446→    if (level >= 4) return 'reconnaissance';
+  1447→
+  1448→    return 'policy_violation';
+  1449→  }
+  1450→
+  1451→  private getIndexNameForDate(date: Date): string {
+  1452→    const year = date.getFullYear();
+  1453→    const month = String(date.getMonth() + 1).padStart(2, '0');
+  1454→    const day = String(date.getDate()).padStart(2, '0');
+  1455→    return `security_events_${year}_${month}_${day}`;
+  1456→  }
+  1457→
+  1458→  private getSearchIndexPattern(dateRange?: { start: Date; end: Date }): string {
+  1459→    if (dateRange) {
+  1460→      // Generate pattern covering the date range
+  1461→      const startDate = new Date(dateRange.start);
+  1462→      const endDate = new Date(dateRange.end);
+  1463→      
+  1464→      // If within same month, use daily indexes
+  1465→      if (startDate.getMonth() === endDate.getMonth() && 
+  1466→          startDate.getFullYear() === endDate.getFullYear()) {
+  1467→        return `security_events_${startDate.getFullYear()}_${String(startDate.getMonth() + 1).padStart(2, '0')}*`;
+  1468→      }
+  1469→      
+  1470→      // Otherwise use wildcard
+  1471→      return 'security_events-*';
+  1472→    }
+  1473→    
+  1474→    // Default: search today's and yesterday's indexes
+  1475→    const today = new Date();
+  1476→    const yesterday = new Date(Date.now() - 24 * 60 * 60 * 1000);
+  1477→    
+  1478→    return `security_events_${today.getFullYear()}_${String(today.getMonth() + 1).padStart(2, '0')}*,security_events_${yesterday.getFullYear()}_${String(yesterday.getMonth() + 1).padStart(2, '0')}*`;
+  1479→  }
+  1480→
+  1481→  private startMetricsCollection(): void {
+  1482→    // Collect metrics every 30 seconds
+  1483→    this.metricsTimer = setInterval(async () => {
+  1484→      try {
+  1485→        const metrics = await this.getMetrics();
+  1486→        this.emit('metrics_update', metrics);
+  1487→      } catch (error) {
+  1488→        console.error('[SIEM] Metrics collection error:', error);
+  1489→      }
+  1490→    }, 30000);
+  1491→  }
+  1492→
+  1493→  private getEmptyMetrics(): MetricsSnapshot {
+  1494→    return {
+  1495→      totalEvents: 0,
+  1496→      eventsLast24h: 0,
+  1497→      eventsLastHour: 0,
+  1498→      criticalCount: 0,
+  1499→      highCount: 0,
+  1500→      mediumCount: 0,
+  1501→      lowCount: 0,
+  1502→      infoCount: 0,
+  1503→      openIncidents: 0,
+  1504→      avgIngestionRate: 0,
+  1505→      activeAgents: 0,
+  1506→      disconnectedAgents: 0,
+  1507→      elasticsearchClusterStatus: 'unknown',
+  1508→      indexSizeGB: 0,
+  1509→      lastEventTimestamp: null,
+  1510→    };
+  1511→  }
+  1512→}
+  1513→
+  1514→// ============================================================
+  1515→// Export singleton factory function
+  1516→// ============================================================
+  1517→
+  1518→let siemInstance: SiemIntegrationService | null = null;
+  1519→
+  1520→export function getSiemIntegration(config?: SiemIntegrationConfig): SiemIntegrationService {
+  1521→  if (!siemInstance && config) {
+  1522→    siemInstance = new SiemIntegrationService(config);
+  1523→  }
+  1524→  
+  1525→  if (!siemInstance) {
+  1526→    throw new SiemIntegrationError(
+  1527→      'SIEM integration not initialized. Call getSiemIntegration(config) first.',
+  1528→      'NOT_INITIALIZED'
+  1529→    );
+  1530→  }
+  1531→  
+  1532→  return siemInstance;
+  1533→}
+  1534→
+  1535→export default SiemIntegrationService;
+  1536→

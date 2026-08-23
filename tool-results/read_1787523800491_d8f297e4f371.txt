@@ -1,0 +1,2002 @@
+     1→/**
+     2→ * Suricata + Zeek + Arkime NSM Integration Client
+     3→ * Phase 11: Enterprise Network Security Monitoring
+     4→ * 
+     5→ * Features:
+     6→ * - Suricata IDS/IPS alert management and EVE JSON parsing
+     7→ * - Zeek (Bro) network metadata analysis and log ingestion
+     8→ * - Arkime (formerly Moloch) PCAP search and full packet capture
+     9→ * - Real-time network traffic analysis with protocol decoding
+    10→ * - Telco-specific: SS7/Diameter/SIP/GTP protocol monitoring
+    11→ * - Network-based IOC detection and threat hunting
+    12→ * - PCAP extraction for forensic analysis
+    13→ * 
+    14→ * Scale Targets:
+    15→ * - 100Gbps+ network throughput monitoring
+    16→ * - 1M+ alerts/day processing
+    17→ * - <1s alert-to-detection latency
+    18→ * - 30-day PCAP retention (adjustable)
+    19→ * 
+    20→ * @version 1.0.0
+    21→ * @license Proprietary - Djezzy National SOC Platform
+    22→ */
+    23→
+    24→import { EventEmitter } from 'events';
+    25→
+    26→// ============================================================
+    27→// Types & Interfaces
+    28→// ============================================================
+    29→
+    30→export interface SuricataConfig {
+    31→  apiUrl: string;              // Suricata API or socket path
+    32→  eveLogPath?: string;        // Path to EVE JSON log file/socket
+    33→  rulesPath?: string;         // Path to rules directory
+    34→  threshold?: number;         // Alert threshold for escalation
+    35→  timeout?: number;
+    36→}
+    37→
+    38→export interface ZeekConfig {
+    39→  controllerUrl?: string;     // Zeek cluster controller URL
+    40→  agentUrls?: string[];       // Individual Zeek agent URLs
+    41→  logDirectory?: string;      // Directory for Zeek logs
+    42→  scriptsPath?: string;       // Custom Zeek scripts path
+    43→  timeout?: number;
+    44→}
+    45→
+    46→export interface ArkimeConfig {
+    47→  apiUrl: string;             // Arkime viewer/ELK API URL
+    48→  apiKey?: string;            // Authentication key
+    49→  esNodes?: string[];          // Direct Elasticsearch nodes (optional)
+    50→  sessionTimeout?: number;    // Session view timeout in ms
+    51→  maxPcapSize?: number;       // Max PCAP download size in bytes
+    52→}
+    53→
+    54→export interface NsmIntegrationConfig {
+    55→  suricata: SuricataConfig;
+    56→  zeek: ZeekConfig;
+    57→  arkime: ArkimeConfig;
+    58→  kafka?: {
+    59→    brokers: string[];
+    60→    alertsTopic: string;      // e.g., "nsm.alerts"
+    61→    metadataTopic: string;    // e.g., "nsm.metadata"
+    62→    pcapsTopic: string;       // e.g., "nsm.pcaps"
+    63→  };
+    64→  enableAutoEscalation?: boolean;
+    65→  telcoProtocols?: {
+    66→    ss7Enabled: boolean;
+    67→    diameterEnabled: boolean;
+    68→    sipEnabled: boolean;
+    69→    gtpEnabled: boolean;
+    70→  };
+    71→}
+    72→
+    73→// Suricata Models
+    74→export interface SuricataAlert {
+    75→  alertId: string;
+    76→  timestamp: string;
+    77→  sourceIp: string;
+    78→  sourcePort: number;
+    79→  destinationIp: string;
+    80→  destinationPort: number;
+    81→  protocol: string;
+    82→  alert: {
+    83→    action: string;           // allowed, blocked, alerted
+    84→    gid: number;              // Rule group ID
+    85→    signature_id: number;     // Signature ID
+    86→    rev: number;              // Rule revision
+    87→    signature: string;        // Rule name/description
+    88→    category: string;         // Alert category
+    89→    severity: number;         // 1-7 (1=critical)
+    90→    metadata?: Record<string, any>;
+    91→  };
+    92→  // Extended fields from EVE JSON
+    93→  flow?: {
+    94→    id: string;               // Flow ID for correlation
+    95→    start_time: string;
+    96→    end_time?: string;
+    97→    app_proto?: string;
+    98→    pkts_toserver: number;
+    99→    pkts_toclient: number;
+   100→    bytes_toserver: number;
+   101→    bytes_toclient: number;
+   102→  };
+   103→  payload?: string;           // Packet payload (if captured)
+   104→  packet_info?: {
+   105→    linktype: number;
+   106→    version: number;
+   107→  };
+   108→  // Telco enrichment
+   109→  subscriberInfo?: {
+   110→    msisdn?: string;
+   111→    imsi?: string;
+   112→    imei?: string;
+   113→    cellId?: string;
+   114→    lac?: string;
+   115→  };
+   116→  geoLocation?: {
+   117→    srcCountry?: string;
+   118→    srcCity?: string;
+   119→    dstCountry?: string;
+   120→    dstCity?: string;
+   121→    srcCoords?: [number, number];
+   122→    dstCoords?: [number, number];
+   123→  };
+   124→  // SOC linkage
+   125→  incidentId?: string;
+   126→  caseId?: string;
+   127→  escalated?: boolean;
+   128→  falsePositive?: boolean;
+   129→}
+   130→
+   131→export interface SuricataRule {
+   132→  sid: number;                // Signature ID
+   133→  rev: number;                // Revision
+   134→  action: string;             // alert, pass, drop, reject
+   135→  protocol: string;           // tcp, udp, icmp, ip, any
+   136→  source: {                  // Source address/port
+   137→    ip: string;
+   138→    port: string | number;
+   139→    negated?: boolean;
+   140→  };
+   141→  destination: {             // Destination address/port
+   142→    ip: string;
+   143→    port: string | number;
+   144→    negated?: boolean;
+   145→  };
+   146→  options: Array<{
+   147→    keyword: string;
+   148→    arguments?: string;
+   149→  }>;
+   150→  // Metadata
+   151→  msg: string;                // Rule message
+   152→  classtype?: string;         // Classification type
+   153→  metadata?: Record<string, any>;
+   154→  priority?: number;          // Priority level
+   155→  // Status
+   156→  enabled: boolean;
+   157→  lastModified?: string;
+   158→  modifiedBy?: string;
+   159→}
+   160→
+   161→// Zeek Models
+   162→export interface ZeekLogEntry {
+   163→  _path: string;              // Log type: conn, dns, http, ssl, files, etc.
+   164→  _time: string;              // ISO timestamp
+   165→  _uid: string;               // Unique connection ID
+   166→  
+   167→  // Common connection fields (conn.log)
+   168→  id_orig_h?: string;         // Source IP
+   169→  id_orig_p?: number;         // Source port
+   170→  id_resp_h?: string;         // Dest IP
+   171→  id_resp_p?: number;         // Dest port
+   172→  proto?: string;             // tcp, udp, icmp
+   173→  service?: string;           // Detected service
+   174→  duration?: number;          // Connection duration
+   175→  orig_bytes?: number;        // Bytes client->server
+   176→  resp_bytes?: number;        // Bytes server->client
+   177→  conn_state?: string;        // Connection state
+   178→  local_orig?: boolean;       // Local originator
+   179→  local_resp?: boolean;       // Local responder
+   180→  missed_bytes?: number;      // Missed bytes in capture
+   181→  history?: string;           // Connection flags history
+   182→  
+   183→  // DNS fields (dns.log)
+   184→  query?: string;             // Domain queried
+   185→  qclass?: number;            // Query class
+   186→  qclass_name?: string;       // Query class name
+   187→  qtype?: number;             // Query type
+   188→  qtype_name?: string;        // Query type name
+   189→  rcode?: number;             // Response code
+   190→  rcode_name?: string;        // Response code name
+   191→  answers?: string[];          // DNS answers
+   192→  TTl?: number;               // TTL value
+   193→  
+   194→  // HTTP fields (http.log)
+   195→  method?: string;            // HTTP method
+   196→  host?: string;              // Host header
+   197→  uri?: string;               // URI
+   198→  referrer?: string;          // Referrer
+   199→  user_agent?: string;        // User agent
+   200→  status_code?: number;       // Status code
+   201→  status_msg?: string;        // Status message
+   202→  request_body_len?: number;  // Request body size
+   203→  response_body_len?: number; // Response body size
+   204→  
+   205→  // SSL/TLS fields (ssl.log)
+   206→  server_name?: string;       // SNI
+   207→  cipher?: string;            // Cipher suite
+   208→  version?: string;           // TLS version
+   209→  cert_chain_fuids?: string[]; // Certificate chain IDs
+   210→  subject?: string;           // Certificate subject
+   211→  issuer?: string;            // Certificate issuer
+   212→  
+   213→  // Files fields (files.log)
+   214→  fuid?: string;              // File unique ID
+   215→  filename?: string;          // File name
+   216→  source?: string;            // File source
+   217→  mime_type?: string;         // MIME type
+   218→  md5?: string;               // MD5 hash
+   219→  sha256?: string;            // SHA256 hash
+   220→  size?: number;              // File size
+   221→  
+   222→  // Telco-specific custom fields
+   223→  telecom_protocol?: 'ss7' | 'diameter' | 'sip' | 'gtp' | 'none';
+   224→  subscriber_msisdn?: string;
+   225→  cell_tower_id?: string;
+   226→  
+   227→  // Enrichment
+   228→  threat_intel_match?: {
+   229→    iocType: string;
+   230→    iocValue: string;
+   231→    source: string;
+   232→    confidence: number;
+   233→  };
+   234→}
+   235→
+   236→// Arkime Models
+   237→export interface ArkimeSession {
+   238→  sessionId: string;          // Unique session ID
+   239→  firstPacket: string;        // First packet timestamp
+   240→  lastPacket: string;         // Last packet timestamp
+   241→  sourceIp: string;
+   242→  sourcePort: number;
+   243→  destinationIp: string;
+   244→  destinationPort: number;
+   245→  protocol: string;
+   246→  packets: number;            // Total packets
+   247→  bytes: number;              // Total bytes
+   248→  rootNode: string;           // Root node ID
+   249→  // Arkime-specific
+   250→  hostname?: string;          // Source hostname (if available)
+   251→  serverHostname?: string;    // Dest hostname
+   252→  tags?: string[];            // Tags applied to session
+   253→  // Telco context
+   254→  subscriberInfo?: {
+   255→    msisdn?: string;
+   256→    imsi?: string;
+   257→  };
+   258→  networkSegment?: string;    // Core, RAN, Transport, etc.
+   259→}
+   260→
+   261→export interface PcapRequest {
+   262→  sessionId: string;
+   263→  startTime?: string;
+   264→  endTime?: string;
+   265→  maxBytes?: number;
+   266→  filters?: {
+   267→    sourceIp?: string;
+   268→    destIp?: string;
+   269→    sourcePort?: number;
+   270→    destPort?: number;
+   271→    protocol?: string;
+   272→    contains?: string;        // Content filter
+   273→    bpf?: string;             // BPF filter expression
+   274→  };
+   275→  format?: 'pcap' | 'pcapng';
+   276→  requestedBy: string;
+   277→  reason: string;
+   278→}
+   279→
+   280→// NSM Unified Models
+   281→export interface NsmEvent {
+   282→  eventId: string;
+   283→  source: 'suricata' | 'zeek' | 'arkime' | 'correlated';
+   284→  eventType: 'alert' | 'metadata' | 'anomaly' | 'exfiltration' | 'reconnaissance';
+   285→  severity: 'critical' | 'high' | 'medium' | 'low' | 'info';
+   286→  title: string;
+   287→  description: string;
+   288→  timestamp: string;
+   289→  // Network context
+   290→  sourceIp: string;
+   291→  sourcePort?: number;
+   292→  destinationIp: string;
+   293→  destinationPort?: number;
+   294→  protocol: string;
+   295→  // Raw data references
+   296→  suricataAlert?: SuricataAlert;
+   297→  zeekLog?: ZeekLogEntry;
+   298→  arkimeSession?: ArkimeSession;
+   299→  // Enrichment
+   300→  threatIntelMatch?: {
+   301→    iocType: 'ip' | 'domain' | 'hash' | 'url' | 'email';
+   302→    iocValue: string;
+   303→    feedName: string;
+   304→    confidence: number;
+   305→    severity: string;
+   306→    firstSeen: string;
+   307→    lastSeen: string;
+   308→    description: string;
+   309→  };
+   310→  geoData?: {
+   311→    srcCountry: string;
+   312→    srcCity: string;
+   313→    dstCountry: string;
+   314→    dstCity: string;
+   315→    asn: number;
+   316→    asName: string;
+   317→  };
+   318→  // Actions taken
+   319→  autoBlocked?: boolean;
+   320→  escalatedToIncident?: boolean;
+   321→  incidentId?: string;
+   322→  caseId?: string;
+   323→}
+   324→
+   325→// NSM Statistics
+   326→export interface NsmStatistics {
+   327→  suricata: {
+   328→    alertsPerSecond: number;
+   329→    totalAlertsToday: number;
+   330→    topSignatures: Array<{ sid: number; count: number }>;
+   331→    topSourceIps: Array<{ ip: string; count: number }>;
+   332→    topDestPorts: Array<{ port: number; count: number }>;
+   333→    droppedPackets: number;
+   334→    captureStatus: 'running' | 'stopped' | 'error';
+   335→  };
+   336→  zeek: {
+   337→    connectionsTracked: number;
+   338→    logsGenerated: {
+   339→      conn: number;
+   340→      dns: number;
+   341→      http: number;
+   342→      ssl: number;
+   343→      files: number;
+   344→    };
+   345→    unusualProtocolsDetected: number;
+   346→    dataTransferVolume: number; // bytes
+   347→  };
+   348→  arkime: {
+   349→    sessionsCaptured: number;
+   350→    pcapSizeGb: number;
+   351→    retentionDays: number;
+   352→    activeQueries: number;
+   353→  };
+   354→  overall: {
+   355→    eventsProcessedToday: number;
+   356→    uniqueSourceIps: number;
+   357→    uniqueDestinations: number;
+   358→    averageThroughputGbps: number;
+   359→    detectionLatencyMs: number;
+   360→  };
+   361→}
+   362→
+   363→// ============================================================
+   364→// NSM Client Class
+   365→// ============================================================
+   366→
+   367→export class SuricataZeekArkimeClient extends EventEmitter {
+   368→  private config: NsmIntegrationConfig;
+   369→  private isConnected: boolean = false;
+   370→  private eventBuffer: NsmEvent[] = [];
+   371→  private bufferFlushInterval: NodeJS.Timeout | null = null;
+   372→  
+   373→  // Statistics
+   374→  public stats: NsmStatistics = this.initializeStats();
+   375→
+   376→  constructor(config: NsmIntegrationConfig) {
+   377→    super();
+   378→    this.config = config;
+   379→
+   380→    // Set up internal event handlers
+   381→    this.on('error', (err) => {
+   382→      console.error('[NSM] Error:', err.message);
+   383→    });
+   384→
+   385→    this.on('alert', (event: NsmEvent) => {
+   386→      console.log(`[NSM] Alert (${event.severity}): ${event.title}`);
+   387→      
+   388→      // Auto-escalation logic
+   389→      if (this.config.enableAutoEscalation && event.severity === 'critical') {
+   390→        this.escalateEvent(event);
+   391→      }
+   392→    });
+   393→
+   394→    // Start buffer flush interval (every 5 seconds)
+   395→    this.bufferFlushInterval = setInterval(() => this.flushEventBuffer(), 5000);
+   396→  }
+   397→
+   398→  // ============================================================
+   399→  // Connection Management
+   400→  // ============================================================
+   401→
+   402→  /**
+   403→   * Initialize connections to all NSM components
+   404→   */
+   405→  async connect(): Promise<void> {
+   406→    try {
+   407→      console.log('[NSM] Initializing NSM integrations...');
+   408→
+   409→      // Test Suricata connection
+   410→      console.log('[NSM] Connecting to Suricata at', this.config.suricata.apiUrl);
+   411→      const suricataHealth = await this.fetchSuricata('/health');
+   412→      if (suricataHealth.ok) {
+   413→        console.log('[NSM] Suricata connected successfully');
+   414→      } else {
+   415→        console.warn('[NSM] Suricata health check returned:', suricataHealth.status);
+   416→      }
+   417→
+   418→      // Test Zeek controller (if configured)
+   419→      if (this.config.zeek.controllerUrl) {
+   420→        console.log('[NSM] Testing Zeek controller...');
+   421→        const zeekHealth = await this.fetchZeek('/health');
+   422→        if (zeekHealth.ok) {
+   423→          console.log('[NSM] Zeek controller connected');
+   424→        } else {
+   425→          console.warn('[NSM] Zeek controller unavailable, using log-based mode');
+   426→        }
+   427→      }
+   428→
+   429→      // Test Arkime connection
+   430→      console.log('[NSM] Connecting to Arkime at', this.config.arkime.apiUrl);
+   431→      const arkimeHealth = await this.fetchArkime('/api/session?startDate=2024-01-01&stopDate=2024-01-02&length=1');
+   432→      if (arkimeHealth.ok || arkimeHealth.status === 401) { // 401 means auth required but service is up
+   433→        console.log('[NSM] Arkime connected successfully');
+   434→      } else {
+   435→        console.warn('[NSM] Arkime health check returned:', arkimeHealth.status);
+   436→      }
+   437→
+   438→      this.isConnected = true;
+   439→
+   440→      // Start real-time event streams if configured
+   441→      if (this.config.suricata.eveLogPath) {
+   442→        this.startEveJsonStream();
+   443→      }
+   444→
+   445→      this.emit('connected', {
+   446→        suricata: true,
+   447→        zeek: !!this.config.zeek.controllerUrl,
+   448→        arkime: true,
+   449→        timestamp: new Date(),
+   450→      });
+   451→
+   452→    } catch (error) {
+   453→      this.isConnected = false;
+   454→      this.emit('error', error);
+   455→      throw error;
+   456→    }
+   457→  }
+   458→
+   459→  /**
+   460→   * Disconnect from all services
+   461→   */
+   462→  async disconnect(): Promise<void> {
+   463→    this.isConnected = false;
+   464→    
+   465→    if (this.bufferFlushInterval) {
+   466→      clearInterval(this.bufferFlushInterval);
+   467→      this.bufferFlushInterval = null;
+   468→    }
+   469→
+   470→    // Flush remaining events
+   471→    await this.flushEventBuffer();
+   472→
+   473→    this.emit('disconnected', { timestamp: new Date() });
+   474→    console.log('[NSM] Disconnected from all NSM services');
+   475→  }
+   476→
+   477→  get connectionStatus(): boolean {
+   478→    return this.isConnected;
+   479→  }
+   480→
+   481→  // ============================================================
+   482→  // Suricata Operations
+   483→  // ============================================================
+   484→
+   485→  /**
+   486→   * Get Suricata alerts with filtering and pagination
+   487→   */
+   488→  async getAlerts(params: {
+   489→    startTime?: string;
+   490→    endTime?: string;
+   491→    severity?: number[];       // 1-7 (1 is most severe)
+   492→    signatureId?: number[];
+   493→    sourceIp?: string;
+   494→    destIp?: string;
+   495→    destPort?: number[];
+   496→    protocol?: string[];
+   497→    action?: ('alerted' | 'blocked')[];
+   498→    limit?: number;
+   499→    offset?: number;
+   500→    sortBy?: 'timestamp' | 'severity' | 'source_ip';
+   501→    sortOrder?: 'asc' | 'desc';
+   502→  } = {}): Promise<{ alerts: SuricataAlert[]; total: number }> {
+   503→    const {
+   504→      startTime,
+   505→      endTime,
+   506→      severity,
+   507→      signatureId,
+   508→      sourceIp,
+   509→      destIp,
+   510→      destPort,
+   511→      protocol,
+   512→      action,
+   513→      limit = 100,
+   514→      offset = 0,
+   515→      sortBy = 'timestamp',
+   516→      sortOrder = 'desc',
+   517→    } = params;
+   518→
+   519→    try {
+   520→      // Build query parameters for Elasticsearch/EVE JSON query
+   521→      const queryParams: Record<string, any> = {
+   522→        size: limit,
+   523→        from: offset,
+   524→        sort: [{ [sortBy]: { order: sortOrder } }],
+   525→        _source: ['*'], // Return all fields
+   526→      };
+   527→
+   528→      // Build bool query for filtering
+   529→      const must: any[] = [];
+   530→      const filter: any[] = [];
+   531→
+   532→      // Time range
+   533→      if (startTime || endTime) {
+   534→        filter.push({
+   535→          range: {
+   536→            timestamp: {
+   537→              ...(startTime && { gte: startTime }),
+   538→              ...(endTime && { lte: endTime }),
+   539→            },
+   540→          },
+   541→        });
+   542→      }
+   543→
+   544→      // Severity filter
+   545→      if (severity && severity.length > 0) {
+   546→        must.push({ terms: { 'alert.severity': severity } });
+   547→      }
+   548→
+   549→      // Signature ID filter
+   550→      if (signatureId && signatureId.length > 0) {
+   551→        must.push({ terms: { 'alert.signature_id': signatureId } });
+   552→      }
+   553→
+   554→      // IP filters
+   555→      if (sourceIp) {
+   556→        must.push({ term: { 'src_ip': sourceIp } });
+   557→      }
+   558→      if (destIp) {
+   559→        must.push({ term: { 'dest_ip': destIp } });
+   560→      }
+   561→
+   562→      // Port filter
+   563→      if (destPort && destPort.length > 0) {
+   564→        must.push({ terms: { 'dest_port': destPort } });
+   565→      }
+   566→
+   567→      // Protocol filter
+   568→      if (protocol && protocol.length > 0) {
+   569→        must.push({ terms: { 'proto': protocol.map(p => p.toLowerCase()) } });
+   570→      }
+   571→
+   572→      // Action filter
+   573→      if (action && action.length > 0) {
+   574→        must.push({ terms: { 'alert.action': action } });
+   575→      }
+   576→
+   577→      // Combine into query
+   578→      if (must.length > 0 || filter.length > 0) {
+   579→        queryParams.query = { bool: { must, filter } };
+   580→      }
+   581→
+   582→      const response = await this.fetchSuricata('/alerts/search', {
+   583→        method: 'POST',
+   584→        body: JSON.stringify(queryParams),
+   585→      });
+   586→
+   587→      if (!response.ok) {
+   588→        throw new Error(`Suricata alert search failed: ${response.status}`);
+   589→      }
+   590→
+   591→      const data = await response.json();
+   592→      const alerts: SuricataAlert[] = (data.hits?.hits || []).map((hit: any) =>
+   593→        this.transformSuricataAlert(hit._source)
+   594→      );
+   595→
+   596→      return {
+   597→        alerts,
+   598→        total: data.hits?.total?.value || alerts.length,
+   599→      };
+   600→
+   601→    } catch (error) {
+   602→      this.emit('error', error);
+   603→      throw error;
+   604→    }
+   605→  }
+   606→
+   607→  /**
+   608→   * Get Suricata statistics for dashboard
+   609→   */
+   610→  async getSuricataStats(): Promise<NsmStatistics['suricata']> {
+   611→    try {
+   612→      const response = await this.fetchSuricata('/stats');
+   613→
+   614→      if (!response.ok) {
+   615→        throw new Error(`Failed to get Suricata stats: ${response.status}`);
+   616→      }
+   617→
+   618→      const data = await response.json();
+   619→
+   620→      return {
+   621→        alertsPerSecond: data.max_alert_threshold || 0,
+   622→        totalAlertsToday: data.total_alerts_today || 0,
+   623→        topSignatures: data.top_signatures || [],
+   624→        topSourceIps: data.top_src_ips || [],
+   625→        topDestPorts: data.top_dst_ports || [],
+   626→        droppedPackets: data.dropped_packets || 0,
+   627→        captureStatus: data.capture_status || 'running',
+   628→      };
+   629→
+   630→    } catch (error) {
+   631→      this.emit('error', error);
+   632→      return this.stats.suricata;
+   633→    }
+   634→  }
+   635→
+   636→  /**
+   637→   * Manage Suricata rules
+   638→   */
+   639→  async getRules(params: {
+   640→    enabled?: boolean;
+   641→    category?: string;
+   642→    search?: string;
+   643→    limit?: number;
+   644→  } = {}): Promise<SuricataRule[]> {
+   645→    const { enabled, category, search, limit = 500 } = params;
+   646→
+   647→    try {
+   648→      const response = await this.fetchSuricata(
+   649→        `/rules?limit=${limit}${enabled !== undefined ? `&enabled=${enabled}` : ''}` +
+   650→        `${category ? `&category=${category}` : ''}` +
+   651→        `${search ? `&search=${encodeURIComponent(search)}` : ''}`
+   652→      );
+   653→
+   654→      if (!response.ok) {
+   655→        throw new Error(`Failed to get rules: ${response.status}`);
+   656→      }
+   657→
+   658→      const data = await response.json();
+   659→      return (data.rules || []).map((r: any) => this.transformSuricataRule(r));
+   660→
+   661→    } catch (error) {
+   662→      this.emit('error', error);
+   663→      return [];
+   664→    }
+   665→  }
+   666→
+   667→  /**
+   668→   * Add/update a Suricata rule
+   669→   */
+   670→  async updateRule(rule: Partial<SuricataRule> & Pick<SuricataRule, 'sid'>): Promise<SuricataRule> {
+   671→    try {
+   672→      const response = await this.fetchSuricata(`/rules/${rule.sid}`, {
+   673→        method: 'PUT',
+   674→        body: JSON.stringify(rule),
+   675→      });
+   676→
+   677→      if (!response.ok) {
+   678→        throw new Error(`Failed to update rule ${rule.sid}: ${response.status}`);
+   679→      }
+   680→
+   681→      const updated = await response.json();
+   682→      this.emit('ruleUpdated', rule.sid);
+   683→
+   684→      return this.transformSuricataRule(updated);
+   685→
+   686→    } catch (error) {
+   687→      this.emit('error', error);
+   688→      throw error;
+   689→    }
+   690→  }
+   691→
+   692→  /**
+   693→   * Toggle rule enable/disable
+   694→   */
+   695→  async toggleRule(sid: number, enabled: boolean): Promise<void> {
+   696→    try {
+   697→      const response = await this.fetchSuricata(`/rules/${sid}/toggle`, {
+   698→        method: 'PATCH',
+   699→        body: JSON.stringify({ enabled }),
+   700→      });
+   701→
+   702→      if (!response.ok) {
+   703→        throw new Error(`Failed to toggle rule ${sid}: ${response.status}`);
+   704→      }
+   705→
+   706→      this.emit('ruleToggled', { sid, enabled });
+   707→
+   708→    } catch (error) {
+   709→      this.emit('error', error);
+   710→      throw error;
+   711→    }
+   712→  }
+   713→
+   714→  // ============================================================
+   715→  // Zeek Operations
+   716→  // ============================================================
+   717→
+   718→  /**
+   719→   * Query Zeek logs with flexible filtering
+   720→   */
+   721→  async queryZeekLogs<T extends ZeekLogEntry>(params: {
+   722→    logType: '_path';         // conn, dns, http, ssl, files, etc.
+   723→    startTime?: string;
+   724→    endTime?: string;
+   725→    filters?: Array<{
+   726→      field: keyof T;
+   727→      operator: 'eq' | 'neq' | 'contains' | 'in' | 'gt' | 'lt' | 'exists';
+   728→      value: any;
+   729→    }>;
+   730→    limit?: number;
+   731→    offset?: number;
+   732→  }): Promise<{ logs: T[]; total: number }> {
+   733→    const {
+   734→      logType,
+   735→      startTime,
+   736→      endTime,
+   737→      filters = [],
+   738→      limit = 100,
+   739→      offset = 0,
+   740→    } = params;
+   741→
+   742→    try {
+   743→      // Build Zeek query (using Zeek's JSON API or direct log search)
+   744→      const query: Record<string, any> = {
+   745→        log_type: logType,
+   746→        from: offset,
+   747→        count: limit,
+   748→        time_range: {
+   749→          ...(startTime && { from: startTime }),
+   750→          ...(endTime && { to: endTime }),
+   751→        },
+   752→        where: filters.map(f => ({
+   753→          field: f.field,
+   754→          op: f.operator,
+   755→          value: f.value,
+   756→        })),
+   757→      };
+   758→
+   759→      const response = await this.fetchZeek('/logs/query', {
+   760→        method: 'POST',
+   761→        body: JSON.stringify(query),
+   762→      });
+   763→
+   764→      if (!response.ok) {
+   765→        throw new Error(`Zeek log query failed: ${response.status}`);
+   766→      }
+   767→
+   768→      const data = await response.json();
+   769→      const logs: T[] = (data.logs || []).map((log: any) => ({
+   770→        ...log,
+   771→        _time: new Date(log._time * 1000).toISOString(), // Convert Unix epoch to ISO
+   772→      }));
+   773→
+   774→      return {
+   775→        logs,
+   776→        total: data.total || logs.length,
+   777→      };
+   778→
+   779→    } catch (error) {
+   780→      this.emit('error', error);
+   781→      throw error;
+   782→    }
+   783→  }
+   784→
+   785→  /**
+   786→   * Get Zeek connection summary with anomaly detection
+   787→   */
+   788→  async getConnectionSummary(params: {
+   789→    sourceIp?: string;
+   790→    destIp?: string;
+   791→    timeRangeMinutes?: number;
+   792→  } = {}): Promise<{
+   793→    totalConnections: number;
+   794→    uniqueDestinations: number;
+   795→    protocols: Record<string, number>;
+   796→    topTalkers: Array<{ ip: string; bytes: number; connections: number }>;
+   797→    anomalies: Array<{
+   798→      type: string;
+   799→      description: string;
+   800→      severity: string;
+   801→      evidence: Record<string, any>;
+   802→    }>;
+   803→  }> {
+   804→    const { sourceIp, destIp, timeRangeMinutes = 60 } = params;
+   805→
+   806→    try {
+   807→      // Query connection logs
+   808→      const { logs } = await this.queryZeekLogs<ZeekLogEntry>({
+   809→        logType: 'conn',
+   810→        startTime: new Date(Date.now() - timeRangeMinutes * 60000).toISOString(),
+   811→        filters: [
+   812→          ...(sourceIp ? [{ field: 'id_orig_h' as const, operator: 'eq' as const, value: sourceIp }] : []),
+   813→          ...(destIp ? [{ field: 'id_resp_h' as const, operator: 'eq' as const, value: destIp }] : []),
+   814→        ],
+   815→        limit: 10000,
+   816→      });
+   817→
+   818→      // Analyze connections
+   819→      const protocols: Record<string, number> = {};
+   820→      const talkerMap = new Map<string, { bytes: number; connections: number }>();
+   821→      const anomalies: Array<{
+   822→        type: string;
+   823→        description: string;
+   824→        severity: string;
+   825→        evidence: Record<string, any>;
+   826→      }> = [];
+   827→
+   828→      for (const conn of logs) {
+   829→        // Protocol distribution
+   830→        const proto = conn.proto || 'unknown';
+   831→        protocols[proto] = (protocols[proto] || 0) + 1;
+   832→
+   833→        // Top talkers
+   834→        const srcIp = conn.id_orig_h!;
+   835→        const existing = talkerMap.get(srcIp) || { bytes: 0, connections: 0 };
+   836→        existing.bytes += (conn.resp_bytes || 0) + (conn.orig_bytes || 0);
+   837→        existing.connections += 1;
+   838→        talkerMap.set(srcIp, existing);
+   839→
+   840→        // Anomaly detection
+   841→        this.detectConnectionAnomalies(conn, anomalies);
+   842→      }
+   843→
+   844→      // Sort talkers by bytes
+   845→      const topTalkers = Array.from(talkerMap.entries())
+   846→        .map(([ip, stats]) => ({ ip, ...stats }))
+   847→        .sort((a, b) => b.bytes - a.bytes)
+   848→        .slice(0, 20);
+   849→
+   850→      return {
+   851→        totalConnections: logs.length,
+   852→        uniqueDestinations: new Set(logs.map(l => l.id_resp_h)).size,
+   853→        protocols,
+   854→        topTalkers,
+   855→        anomalies,
+   856→      };
+   857→
+   858→    } catch (error) {
+   859→      this.emit('error', error);
+   860→      throw error;
+   861→    }
+   862→  }
+   863→
+   864→  /**
+   865→   * Get DNS query analytics
+   866→   */
+   867→  async getDnsAnalytics(params: {
+   868→    timeRangeHours?: number;
+   869→    domainFilter?: string;
+   870→    excludeInternal?: boolean;
+   871→  } = {}): Promise<{
+   872→    totalQueries: number;
+   873→    uniqueDomains: number;
+   874→    topDomains: Array<{ domain: string; queries: number; uniqueIps: number }>;
+   875→    suspiciousDomains: Array<{
+   876→      domain: string;
+   877→      queries: number;
+   878→      ips: string[];
+   879→      reason: string;
+   880→    }>;
+   881→    queryTypes: Record<string, number>;
+   882→  }> {
+   883→    const { timeRangeHours = 24, domainFilter, excludeInternal = true } = params;
+   884→
+   885→    try {
+   886→      const { logs } = await this.queryZeekLogs<ZeekLogEntry>({
+   887→        logType: 'dns',
+   888→        startTime: new Date(Date.now() - timeRangeHours * 3600000).toISOString(),
+   889→        filters: [
+   890→          ...(domainFilter ? [{ field: 'query' as const, operator: 'contains' as const, value: domainFilter }] : []),
+   891→        ],
+   892→        limit: 50000,
+   893→      });
+   894→
+   895→      const domainMap = new Map<string, { count: number; ips: Set<string> }>();
+   896→      const queryTypes: Record<string, number> = {};
+   897→      const suspiciousDomains: Array<{
+   898→        domain: string;
+   899→        queries: number;
+   900→        ips: string[];
+   901→        reason: string;
+   902→      }> = [];
+   903→
+   904→      for (const entry of logs) {
+   905→        const domain = entry.query?.toLowerCase() || '';
+   906→        if (!domain) continue;
+   907→
+   908→        // Skip internal domains if requested
+   909→        if (excludeInternal && (domain.endsWith('.local') || domain.endsWith('.internal'))) {
+   910→          continue;
+   911→        }
+   912→
+   913→        const existing = domainMap.get(domain) || { count: 0, ips: new Set() };
+   914→        existing.count += 1;
+   915→        if (entry.id_resp_h) existing.ips.add(entry.id_resp_h);
+   916→        domainMap.set(domain, existing);
+   917→
+   918→        // Query types
+   919→        const qt = entry.qtype_name || `type-${entry.qtype}`;
+   920→        queryTypes[qt] = (queryTypes[qt] || 0) + 1;
+   921→
+   922→        // Suspicious domain detection
+   923→        this.analyzeDnsDomain(entry, domain, suspiciousDomains);
+   924→      }
+   925→
+   926→      // Sort by query count
+   927→      const topDomains = Array.from(domainMap.entries())
+   928→        .map(([domain, data]) => ({ domain, queries: data.count, uniqueIps: data.ips.size }))
+   929→        .sort((a, b) => b.queries - a.queries)
+   930→        .slice(0, 50);
+   931→
+   932→      return {
+   933→        totalQueries: logs.length,
+   934→        uniqueDomains: domainMap.size,
+   935→        topDomains,
+   936→        suspiciousDomains: suspiciousDomains.slice(0, 20),
+   937→        queryTypes,
+   938→      };
+   939→
+   940→    } catch (error) {
+   941→      this.emit('error', error);
+   942→      throw error;
+   943→    }
+   944→  }
+   945→
+   946→  /**
+   947→   * Get file transfer analytics
+   948→   */
+   949→  async getFileTransfers(params: {
+   950→    timeRangeHours?: number;
+   951→    minSizeMb?: number;
+   952→    mimeTypes?: string[];
+   953→  } = {}): Promise<{
+   954→    totalFiles: number;
+   955→    totalSizeBytes: number;
+   956→    fileTypes: Record<string, number>;
+   957→    largeFiles: Array<ZeekLogEntry>;
+   958→    suspiciousFiles: Array<{
+   959→      file: ZeekLogEntry;
+   960→      reason: string;
+   961→      riskLevel: string;
+   962→    }>;
+   963→  }> {
+   964→    const { timeRangeHours = 24, minSizeMb = 10, mimeTypes } = params;
+   965→
+   966→    try {
+   967→      const { logs } = await this.queryZeekLogs<ZeekLogEntry>({
+   968→        logType: 'files',
+   969→        startTime: new Date(Date.now() - timeRangeHours * 3600000).toISOString(),
+   970→        limit: 10000,
+   971→      });
+   972→
+   973→      let totalSizeBytes = 0;
+   974→      const fileTypes: Record<string, number> = {};
+   975→      const largeFiles: ZeekLogEntry[] = [];
+   976→      const suspiciousFiles: Array<{
+   977→        file: ZeekLogEntry;
+   978→        reason: string;
+   979→        riskLevel: string;
+   980→      }> = [];
+   981→
+   982→      for (const file of logs) {
+   983→        const size = file.size || 0;
+   984→        const mime = file.mime_type || 'unknown';
+   985→        
+   986→        totalSizeBytes += size;
+   987→        fileTypes[mime] = (fileTypes[mime] || 0) + 1;
+   988→
+   989→        // Large file detection
+   990→        if (size >= minSizeMb * 1024 * 1024) {
+   991→          largeFiles.push(file);
+   992→        }
+   993→
+   994→        // Suspicious file detection
+   995→        this.analyzeFile(file, suspiciousFiles);
+   996→      }
+   997→
+   998→      // Filter by MIME type if specified
+   999→      let filteredLogs = logs;
+  1000→      if (mimeTypes && mimeTypes.length > 0) {
+  1001→        filteredLogs = logs.filter(f => 
+  1002→          f.mime_type && mimeTypes.some(m => f.mime_type!.includes(m))
+  1003→        );
+  1004→      }
+  1005→
+  1006→      return {
+  1007→        totalFiles: filteredLogs.length,
+  1008→        totalSizeBytes,
+  1009→        fileTypes,
+  1010→        largeFiles: largeFiles.sort((a, b) => (b.size || 0) - (a.size || 0)).slice(0, 50),
+  1011→        suspiciousFiles: suspiciousFiles.slice(0, 20),
+  1012→      };
+  1013→
+  1014→    } catch (error) {
+  1015→      this.emit('error', error);
+  1016→      throw error;
+  1017→    }
+  1018→  }
+  1019→
+  1020→  // ============================================================
+  1021→  // Arkime (PCAP) Operations
+  1022→  // ============================================================
+  1023→
+  1024→  /**
+  1025→   * Search sessions in Arkime for PCAP retrieval
+  1026→   */
+  1027→  async searchSessions(params: {
+  1028→    startTime: string;
+  1029→    endTime: string;
+  1030→    searchString?: string;    // Full-text search across packets
+  1031→    sourceIp?: string;
+  1032→    destIp?: string;
+  1033→    sourcePort?: number;
+  1034→    destPort?: number;
+  1035→    protocol?: string;
+  1036→    minPackets?: number;
+  1037→    minBytes?: number;
+  1038→    tags?: string[];
+  1039→    length?: number;         // Max results (default: 100)
+  1040→    start?: number;          // Pagination offset
+  1041→  }): Promise<{ sessions: ArkimeSession[]; totalRecords: number; graphHisto?: any[] }> {
+  1042→    const {
+  1043→      startTime,
+  1044→      endTime,
+  1045→      searchString,
+  1046→      sourceIp,
+  1047→      destIp,
+  1048→      sourcePort,
+  1049→      destPort,
+  1050→      protocol,
+  1051→      minPackets,
+  1052→      minBytes,
+  1053→      tags,
+  1054→      length = 100,
+  1055→      start = 0,
+  1056→    } = params;
+  1057→
+  1058→    try {
+  1059→      // Build Arkime session search expression
+  1060→      const expressions: string[] = [];
+  1061→      
+  1062→      if (searchString) expressions.push(searchString);
+  1063→      if (sourceIp) expressions.push(`ip == ${sourceIp}`);
+  1064→      if (destIp) expressions.push(`ip == ${destIp}`);
+  1065→      if (sourcePort) expressions.push(`port == ${sourcePort}`);
+  1066→      if (destPort) expressions.push(`port == ${destPort}`);
+  1067→      if (protocol) expressions.push(`protocol == ${protocol}`);
+  1068→      if (minPackets) expressions.push(`packets >= ${minPackets}`);
+  1069→      if (minBytes) expressions.push(`bytes >= ${minBytes}`);
+  1070→      if (tags && tags.length > 0) {
+  1071→        expressions.push(`tags == ${tags.join(',')}`);
+  1072→      }
+  1073→
+  1074→      const expression = expressions.join(' && ') || 'exists: ip';
+  1075→
+  1076→      const queryParams = new URLSearchParams({
+  1077→        startDate: startTime.split('T')[0],
+  1078→        stopDate: endTime.split('T')[0],
+  1079→        expression,
+  1080→        length: length.toString(),
+  1081→        start: start.toString(),
+  1082→        fields: 'id,firstPacket,lastPacket,sourceIp,sourcePort,destinationIp,destinationPort,protocol,packets,bytes,rootId,tags,hostname,serverHostname',
+  1083→      });
+  1084→
+  1085→      const response = await this.fetchArkime(`/api/sessions?${queryParams}`);
+  1086→
+  1087→      if (!response.ok) {
+  1088→        throw new Error(`Arkime session search failed: ${response.status}`);
+  1089→      }
+  1090→
+  1091→      const data = await response.json();
+  1092→      const sessions: ArkimeSession[] = (data.data || []).map(this.transformArkimeSession);
+  1093→
+  1094→      return {
+  1095→        sessions,
+  1096→        totalRecords: data.total || data.recordsFiltered || sessions.length,
+  1097→        graphHisto: data.graphHisto || data.map,
+  1098→      };
+  1099→
+  1100→    } catch (error) {
+  1101→      this.emit('error', error);
+  1102→      throw error;
+  1103→    }
+  1104→  }
+  1105→
+  1106→  /**
+  1107→   * Request PCAP download for a session
+  1108→   */
+  1109→  async requestPcap(request: PcapRequest): Promise<{
+  1110→    success: boolean;
+  1111→    downloadUrl?: string;
+  1112→    fileSize?: number;
+  1113→    expiresAt?: string;
+  1114→  }> {
+  1115→    try {
+  1116→      const queryParams = new URLSearchParams({
+  1117→        sessionId: request.sessionId,
+  1118→        ...(request.startTime && { startTime: request.startTime }),
+  1119→        ...(request.endTime && { endTime: request.endTime }),
+  1120→        format: request.format || 'pcap',
+  1121→        maxBytes: (request.maxBytes || 100 * 1024 * 1024).toString(), // 100MB default
+  1122→      });
+  1123→
+  1124→      // Build BPF filter if provided
+  1125→      if (request.filters) {
+  1126→        const bpfParts: string[] = [];
+  1127→        if (request.filters.sourceIp) bpfParts.push(`host ${request.filters.sourceIp}`);
+  1128→        if (request.filters.destIp) bpfParts.push(`host ${request.filters.destIp}`);
+  1129→        if (request.filters.sourcePort) bpfParts.push(`port ${request.filters.sourcePort}`);
+  1130→        if (request.filters.destPort) bpfParts.push(`port ${request.filters.destPort}`);
+  1131→        if (request.filters.protocol) bpfParts.push(`${request.filters.protocol}`);
+  1132→        if (request.filters.bpf) bpfParts.push(request.filters.bpf);
+  1133→        
+  1134→        if (bpfParts.length > 0) {
+  1135→          queryParams.set('bpf', bpfParts.join(' and '));
+  1136→        }
+  1137→      }
+  1138→
+  1139→      const response = await this.fetchArkime(`/api/pcap?${queryParams}`);
+  1140→
+  1141→      if (!response.ok) {
+  1142→        throw new Error(`PCAP request failed: ${response.status}`);
+  1143→      }
+  1144→
+  1145→      // Generate download URL
+  1146→      const downloadUrl = `/api/v1/nsm/pcap/${request.sessionId}?${queryParams}`;
+  1147→
+  1148→      // Log the PCAP access
+  1149→      this.emit('pcapRequested', {
+  1150→        sessionId: request.sessionId,
+  1151→        requestedBy: request.requestedBy,
+  1152→        reason: request.reason,
+  1153→        timestamp: new Date(),
+  1154→      });
+  1155→
+  1156→      return {
+  1157→        success: true,
+  1158→        downloadUrl,
+  1159→        expiresAt: new Date(Date.now() + 3600000).toISOString(), // 1 hour expiry
+  1160→      };
+  1161→
+  1162→    } catch (error) {
+  1163→      this.emit('error', error);
+  1164→      return { success: false };
+  1165→    }
+  1166→  }
+  1167→
+  1168→  /**
+  1169→   * Get session detail with packet-level information
+  1170→   */
+  1171→  async getSessionDetail(sessionId: string): Promise<{
+  1172→    session: ArkimeSession;
+  1173→    packets: Array<{
+  1174→      number: number;
+  1175→      timestamp: string;
+  1176→      sourceIp: string;
+  1177→      sourcePort: number;
+  1178→      destIp: string;
+  1179→      destPort: number;
+  1180→      protocol: string;
+  1181→      length: number;
+  1182→      flags?: string;
+  1183→      info?: string;
+  1184→    }>;
+  1185→    SPIGraph?: any;           // Session Packet Info graph data
+  1186→  }> {
+  1187→    try {
+  1188→      // Get session details
+  1189→      const sessionResponse = await this.fetchArkime(`/api/session/${sessionId}`);
+  1190→      if (!sessionResponse.ok) {
+  1191→        throw new Error(`Failed to get session: ${sessionResponse.status}`);
+  1192→      }
+  1193→      const sessionData = await sessionResponse.json();
+  1194→
+  1195→      // Get packets for this session
+  1196→      const packetsResponse = await this.fetchArkime(
+  1197→        `/api/session/${sessionId}/packets?length=10000`
+  1198→      );
+  1199→      if (!packetsResponse.ok) {
+  1200→        throw new Error(`Failed to get packets: ${packetsResponse.status}`);
+  1201→      }
+  1202→      const packetsData = await packetsResponse.json();
+  1203→
+  1204→      return {
+  1205→        session: this.transformArkimeSession(sessionData),
+  1206→        packets: (packetsData.packets || packetsData || []).map((p: any) => ({
+  1207→          number: p.num || p.number,
+  1208→          timestamp: p.timestamp || p.ts,
+  1209→          sourceIp: p.src_ip || p.sourceIp,
+  1210→          sourcePort: p.src_port || p.sourcePort,
+  1211→          destIp: p.dst_ip || p.destIp,
+  1212→          destPort: p.dst_port || p.destPort,
+  1213→          protocol: p.proto || p.protocol,
+  1214→          length: p.len || p.length,
+  1215→          flags: p.flags,
+  1216→          info: p.info,
+  1217→        })),
+  1218→        SPIGraph: sessionData.spiGraph || sessionData.spigraph,
+  1219→      };
+  1220→
+  1221→    } catch (error) {
+  1222→      this.emit('error', error);
+  1223→      throw error;
+  1224→    }
+  1225→  }
+  1226→
+  1227→  // ============================================================
+  1228→  // Correlation & Threat Hunting
+  1229→  // ============================================================
+  1230→
+  1231→  /**
+  1232→   * Correlate events across all NSM sources for unified view
+  1233→   */
+  1234→  async correlateEvents(params: {
+  1235→    sourceIp?: string;
+  1236→    destIp?: string;
+  1237→    domain?: string;
+  1238→    hash?: string;
+  1239→    timeRangeMinutes?: number;
+  1240→  }): Promise<NsmEvent[]> {
+  1241→    const { sourceIp, destIp, domain, hash, timeRangeMinutes = 60 } = params;
+  1242→    const correlatedEvents: NsmEvent[] = [];
+  1243→    const startTime = new Date(Date.now() - timeRangeMinutes * 60000).toISOString();
+  1244→
+  1245→    // Search Suricata alerts
+  1246→    if (sourceIp || destIp) {
+  1247→      try {
+  1248→        const { alerts } = await this.getAlerts({
+  1249→          startTime,
+  1250→          sourceIp,
+  1251→          destIp,
+  1252→          limit: 50,
+  1253→        });
+  1254→
+  1255→        for (const alert of alerts) {
+  1256→          correlatedEvents.push({
+  1257→            eventId: `sur-${alert.alertId}`,
+  1258→            source: 'suricata',
+  1259→            eventType: 'alert',
+  1260→            severity: this.mapSeverity(alert.alert.severity),
+  1261→            title: alert.alert.signature,
+  1262→            description: alert.alert.category,
+  1263→            timestamp: alert.timestamp,
+  1264→            sourceIp: alert.sourceIp,
+  1265→            sourcePort: alert.sourcePort,
+  1266→            destinationIp: alert.destinationIp,
+  1267→            destinationPort: alert.destinationPort,
+  1268→            protocol: alert.protocol,
+  1269→            suricataAlert: alert,
+  1270→          });
+  1271→        }
+  1272→      } catch (e) {
+  1273→        console.warn('[NSM] Suricata correlation error:', e.message);
+  1274→      }
+  1275→    }
+  1276→
+  1277→    // Search Zeek logs for DNS/HTTP/SSL context
+  1278→    if (domain || sourceIp || destIp) {
+  1279→      try {
+  1280→        // DNS lookups
+  1281→        if (domain) {
+  1282→          const { logs: dnsLogs } = await this.queryZeekLogs<ZeekLogEntry>({
+  1283→            logType: 'dns',
+  1284→            startTime,
+  1285→            filters: [{
+  1286→              field: 'query' as const,
+  1287→              operator: 'contains' as const,
+  1288→              value: domain,
+  1289→            }],
+  1290→            limit: 50,
+  1291→          });
+  1292→
+  1293→          for (const log of dnsLogs) {
+  1294→            correlatedEvents.push({
+  1295→              eventId: `dns-${log._uid}`,
+  1296→              source: 'zeek',
+  1297→              eventType: 'metadata',
+  1298→              severity: 'info',
+  1299→              title: `DNS Query: ${log.query}`,
+  1300→              description: `DNS ${log.qtype_name} query for ${log.query}`,
+  1301→              timestamp: log._time,
+  1302→              sourceIp: log.id_orig_h!,
+  1303→              sourcePort: log.id_orig_p,
+  1304→              destinationIp: log.id_resp_h!,
+  1305→              destinationPort: log.id_resp_p,
+  1306→              protocol: log.proto || 'udp',
+  1307→              zeekLog: log,
+  1308→            });
+  1309→          }
+  1310→        }
+  1311→
+  1312→        // HTTP connections
+  1313→        if (sourceIp || destIp) {
+  1314→          const { logs: httpLogs } = await this.queryZeekLogs<ZeekLogEntry>({
+  1315→            logType: 'http',
+  1316→            startTime,
+  1317→            filters: [
+  1318→              ...(sourceIp ? [{ field: 'id_orig_h' as const, operator: 'eq' as const, value: sourceIp }] : []),
+  1319→              ...(destIp ? [{ field: 'id_resp_h' as const, operator: 'eq' as const, value: destIp }] : []),
+  1320→            ],
+  1321→            limit: 50,
+  1322→          });
+  1323→
+  1324→          for (const log of httpLogs) {
+  1325→            correlatedEvents.push({
+  1326→              eventId: `http-${log._uid}`,
+  1327→              source: 'zeek',
+  1328→              eventType: log.status_code && log.status_code >= 400 ? 'anomaly' : 'metadata',
+  1329→              severity: log.status_code && log.status_code >= 500 ? 'medium' : 'info',
+  1330→              title: `HTTP ${log.method} ${log.host}${log.uri}`,
+  1331→              description: `${log.method} ${log.uri} -> ${log.status_code} ${log.status_msg}`,
+  1332→              timestamp: log._time,
+  1333→              sourceIp: log.id_orig_h!,
+  1334→              sourcePort: log.id_orig_p,
+  1335→              destinationIp: log.id_resp_h!,
+  1336→              destinationPort: log.id_resp_p,
+  1337→              protocol: 'tcp',
+  1338→              zeekLog: log,
+  1339→            });
+  1340→          }
+  1341→        }
+  1342→      } catch (e) {
+  1343→        console.warn('[NSM] Zeek correlation error:', e.message);
+  1344→      }
+  1345→    }
+  1346→
+  1347→    // Search Arkime for PCAP sessions
+  1348→    if (sourceIp || destIp) {
+  1349→      try {
+  1350→        const { sessions } = await this.searchSessions({
+  1351→          startTime,
+  1352→          endTime: new Date().toISOString(),
+  1353→          sourceIp,
+  1354→          destIp,
+  1355→          length: 20,
+  1356→        });
+  1357→
+  1358→        for (const session of sessions) {
+  1359→          correlatedEvents.push({
+  1360→            eventId: `ark-${session.sessionId}`,
+  1361→            source: 'arkime',
+  1362→            eventType: 'metadata',
+  1363→            severity: 'info',
+  1364→            title: `PCAP Session: ${session.sourceIp}:${session.sourcePort} → ${session.destinationIp}:${session.destinationPort}`,
+  1365→            description: `${session.packets} packets, ${session.bytes} bytes`,
+  1366→            timestamp: session.firstPacket,
+  1367→            sourceIp: session.sourceIp,
+  1368→            sourcePort: session.sourcePort,
+  1369→            destinationIp: session.destinationIp,
+  1370→            destinationPort: session.destinationPort,
+  1371→            protocol: session.protocol,
+  1372→            arkimeSession: session,
+  1373→          });
+  1374→        }
+  1375→      } catch (e) {
+  1376→        console.warn('[NSM] Arkime correlation error:', e.message);
+  1377→      }
+  1378→    }
+  1379→
+  1380→    // Sort by timestamp descending
+  1381→    correlatedEvents.sort((a, b) => 
+  1382→      new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()
+  1383→    );
+  1384→
+  1385→    return correlatedEvents;
+  1386→  }
+  1387→
+  1388→  /**
+  1389→   * Execute pre-built threat hunt queries
+  1390→   */
+  1391→  async runThreatHunt(huntType: keyof typeof ThreatHuntPresets, targetIp?: string): Promise<{
+  1392→    huntName: string;
+  1393→    findings: NsmEvent[];
+  1394→    riskScore: number;
+  1395→    recommendations: string[];
+  1396→  }> {
+  1397→    const preset = ThreatHuntPresets[huntType];
+  1398→    if (!preset) {
+  1399→      throw new Error(`Unknown hunt type: ${huntType}`);
+  1400→    }
+  1401→
+  1402→    const findings: NsmEvent[] = [];
+  1403→
+  1404→    // Execute each query in the preset
+  1405→    for (const query of preset.queries) {
+  1406→      switch (query.type) {
+  1407→        case 'suricata':
+  1408→          try {
+  1409→            const { alerts } = await this.getAlerts({
+  1410→              startTime: new Date(Date.now() - preset.timeRangeHours * 3600000).toISOString(),
+  1411→              ...(targetIp && { sourceIp: targetIp }),
+  1412→              signatureId: query.signatureIds,
+  1413→              limit: 100,
+  1414→            });
+  1415→            
+  1416→            findings.push(...alerts.map(a => ({
+  1417→              eventId: `hunt-sur-${a.alertId}`,
+  1418→              source: 'suricata' as const,
+  1419→              eventType: 'alert' as const,
+  1420→              severity: this.mapSeverity(a.alert.severity),
+  1421→              title: `[Hunt] ${a.alert.signature}`,
+  1422→              description: preset.description,
+  1423→              timestamp: a.timestamp,
+  1424→              sourceIp: a.sourceIp,
+  1425→              sourcePort: a.sourcePort,
+  1426→              destinationIp: a.destinationIp,
+  1427→              destinationPort: a.destinationPort,
+  1428→              protocol: a.protocol,
+  1429→              suricataAlert: a,
+  1430→            })));
+  1431→          } catch (e) {
+  1432→            console.error(`[NSM] Hunt query error (${query.type}):`, e.message);
+  1433→          }
+  1434→          break;
+  1435→
+  1436→        case 'zeek-dns':
+  1437→          try {
+  1438→            const { logs } = await this.queryZeekLogs<ZeekLogEntry>({
+  1439→              logType: 'dns',
+  1440→              startTime: new Date(Date.now() - preset.timeRangeHours * 3600000).toISOString(),
+  1441→              filters: targetIp ? [{
+  1442→                field: 'id_orig_h' as const,
+  1443→                operator: 'eq' as const,
+  1444→                value: targetIp,
+  1445→              }] : [],
+  1446→              limit: 200,
+  1447→            });
+  1448→
+  1449→            findings.push(...logs.filter(l => 
+  1450→              this.matchesDnsPattern(l, query.patterns || [])
+  1451→            ).map(l => ({
+  1452→              eventId: `hunt-dns-${l._uid}`,
+  1453→              source: 'zeek' as const,
+  1454→              eventType: 'reconnaissance' as const,
+  1455→              severity: 'medium',
+  1456→              title: `[Hunt] Suspicious DNS: ${l.query}`,
+  1457→              description: preset.description,
+  1458→              timestamp: l._time,
+  1459→              sourceIp: l.id_orig_h!,
+  1460→              sourcePort: l.id_orig_p,
+  1461→              destinationIp: l.id_resp_h!,
+  1462→              destinationPort: l.id_resp_p,
+  1463→              protocol: 'udp',
+  1464→              zeekLog: l,
+  1465→            })));
+  1466→          } catch (e) {
+  1467→            console.error(`[NSM] Hunt query error (${query.type}):`, e.message);
+  1468→          }
+  1469→          break;
+  1470→
+  1471→        case 'zeek-files':
+  1472→          try {
+  1473→            const { logs } = await this.queryZeekLogs<ZeekLogEntry>({
+  1474→              logType: 'files',
+  1475→              startTime: new Date(Date.now() - preset.timeRangeHours * 3600000).toISOString(),
+  1476→              limit: 100,
+  1477→            });
+  1478→
+  1479→            findings.push(...logs.filter(l => 
+  1480→              (l.size || 0) > (query.minSizeMb || 10) * 1024 * 1024 ||
+  1481→              query.mimeTypes?.includes(l.mime_type || '')
+  1482→            ).map(l => ({
+  1483→              eventId: `hunt-file-${l.fuid}`,
+  1484→              source: 'zeek' as const,
+  1485→              eventType: 'exfiltration' as const,
+  1486→              severity: 'high',
+  1487→              title: `[Hunt] Large/Suspicious File: ${l.filename}`,
+  1488→              description: `${l.filename} (${l.mime_type}, ${(l.size || 0) / 1024 / 1024} MB)`,
+  1489→              timestamp: l._time,
+  1490→              sourceIp: '', // Files don't always have IP context
+  1491→              protocol: 'tcp',
+  1492→              zeekLog: l,
+  1493→            })));
+  1494→          } catch (e) {
+  1495→            console.error(`[NSM] Hunt query error (${query.type}):`, e.message);
+  1496→          }
+  1497→          break;
+  1498→
+  1499→        case 'arkime':
+  1500→          if (targetIp) {
+  1501→            try {
+  1502→              const { sessions } = await this.searchSessions({
+  1503→                startTime: new Date(Date.now() - preset.timeRangeHours * 3600000).toISOString(),
+  1504→                endTime: new Date().toISOString(),
+  1505→                sourceIp: targetIp,
+  1506→                minBytes: query.minBytes || 1048576, // 1MB default
+  1507→                length: 30,
+  1508→              });
+  1509→
+  1510→              findings.push(...sessions.map(s => ({
+  1511→                eventId: `hunt-ark-${s.sessionId}`,
+  1512→                source: 'arkime' as const,
+  1513→                eventType: 'exfiltration' as const,
+  1514→                severity: s.bytes > 104857600 ? 'critical' : 'high', // >100MB = critical
+  1515→                title: `[Hunt] High-volume Session: ${s.bytes} bytes`,
+  1516→                description: `${s.sourceIp} → ${s.destinationIp}, ${s.packets} packets`,
+  1517→                timestamp: s.firstPacket,
+  1518→                sourceIp: s.sourceIp,
+  1519→                sourcePort: s.sourcePort,
+  1520→                destinationIp: s.destinationIp,
+  1521→                destinationPort: s.destinationPort,
+  1522→                protocol: s.protocol,
+  1523→                arkimeSession: s,
+  1524→              })));
+  1525→            } catch (e) {
+  1526→              console.error(`[NSM] Hunt query error (${query.type}):`, e.message);
+  1527→            }
+  1528→          }
+  1529→          break;
+  1530→      }
+  1531→    }
+  1532→
+  1533→    // Calculate risk score based on findings
+  1534→    const riskScore = Math.min(100, findings.reduce((score, f) => {
+  1535→      switch (f.severity) {
+  1536→        case 'critical': return score + 25;
+  1537→        case 'high': return score + 15;
+  1538→        case 'medium': return score + 8;
+  1539→        case 'low': return score + 3;
+  1540→        default: return score + 1;
+  1541→      }
+  1542→    }, 0));
+  1543→
+  1544→    return {
+  1545→      huntName: preset.name,
+  1546→      findings,
+  1547→      riskScore,
+  1548→      recommendations: preset.recommendations,
+  1549→    };
+  1550→  }
+  1551→
+  1552→  // ============================================================
+  1553→  // Statistics & Health
+  1554→  // ============================================================
+  1555→
+  1556→  /**
+  1557→   * Comprehensive NSM statistics
+  1558→   */
+  1559→  async getFullStats(): Promise<NsmStatistics> {
+  1560→    try {
+  1561→      // Gather stats from all sources in parallel
+  1562→      const [suricataStats] = await Promise.all([
+  1563→        this.getSuricataStats(),
+  1564→        // Zeek and Arkime stats would be fetched similarly
+  1565→      ]);
+  1566→
+  1567→      this.stats.suricata = suricataStats;
+  1568→      this.stats.overall.eventsProcessedToday = suricataStats.totalAlertsToday;
+  1569→
+  1570→      return this.stats;
+  1571→
+  1572→    } catch (error) {
+  1573→      this.emit('error', error);
+  1574→      return this.stats;
+  1575→    }
+  1576→  }
+  1577→
+  1578→  /**
+  1579→   * Health check for all NSM components
+  1580→   */
+  1581→  async healthCheck(): Promise<{
+  1582→    suricata: { status: 'healthy' | 'degraded' | 'unhealthy'; latency: number; alertsPerSec: number };
+  1583→    zeek: { status: 'healthy' | 'degraded' | 'unhealthy'; latency: number; logsPerSec: number };
+  1584→    arkime: { status: 'healthy' | 'degraded' | 'unhealthy'; latency: number; captureRunning: boolean };
+  1585→    overall: 'operational' | 'degraded' | 'down';
+  1586→  }> {
+  1587→    const checks = await Promise.allSettled([
+  1588→      this.checkSuricataHealth(),
+  1589→      this.checkZeekHealth(),
+  1590→      this.checkArkimeHealth(),
+  1591→    ]);
+  1592→
+  1593→    const suricata = checks[0].status === 'fulfilled' ? checks[0].value : { status: 'unhealthy' as const, latency: -1, alertsPerSec: 0 };
+  1594→    const zeek = checks[1].status === 'fulfilled' ? checks[1].value : { status: 'unhealthy' as const, latency: -1, logsPerSec: 0 };
+  1595→    const arkime = checks[2].status === 'fulfilled' ? checks[2].value : { status: 'unhealthy' as const, latency: -1, captureRunning: false };
+  1596→
+  1597→    const healthyCount = [suricata, zeek, arkime].filter(c => c.status === 'healthy').length;
+  1598→    
+  1599→    return {
+  1600→      suricata,
+  1601→      zeek,
+  1602→      arkime,
+  1603→      overall: healthyCount === 3 ? 'operational' : healthyCount >= 2 ? 'degraded' : 'down',
+  1604→    };
+  1605→  }
+  1606→
+  1607→  // ============================================================
+  1608→  // Private Helper Methods
+  1609→  // ============================================================
+  1610→
+  1611→  private async fetchSuricata(path: string, init: RequestInit = {}): Promise<Response> {
+  1612→    const url = `${this.config.suricata.apiUrl.replace(/\/$/, '')}${path}`;
+  1613→    return fetch(url, {
+  1614→      ...init,
+  1615→      headers: {
+  1616→        'Content-Type': 'application/json',
+  1617→        ...(init.headers as Record<string, string>),
+  1618→      },
+  1619→      signal: AbortSignal.timeout(this.config.suricata.timeout || 30000),
+  1620→    });
+  1621→  }
+  1622→
+  1623→  private async fetchZeek(path: string, init: RequestInit = {}): Promise<Response> {
+  1624→    if (!this.config.zeek.controllerUrl) {
+  1625→      throw new Error('Zeek controller not configured');
+  1626→    }
+  1627→    const url = `${this.config.zeek.controllerUrl.replace(/\/$/, '')}${path}`;
+  1628→    return fetch(url, {
+  1629→      ...init,
+  1630→      headers: {
+  1631→        'Content-Type': 'application/json',
+  1632→        ...(init.headers as Record<string, string>),
+  1633→      },
+  1634→      signal: AbortSignal.timeout(this.config.zeek.timeout || 30000),
+  1635→    });
+  1636→  }
+  1637→
+  1638→  private async fetchArkime(path: string, init: RequestInit = {}): Promise<Response> {
+  1639→    const url = `${this.config.arkime.apiUrl.replace(/\/$/, '')}${path}`;
+  1640→    const headers: HeadersInit = {
+  1641→      'Content-Type': 'application/json',
+  1642→      ...(init.headers as Record<string, string>),
+  1643→    };
+  1644→
+  1645→    if (this.config.arkime.apiKey) {
+  1646→      headers['Authorization'] = `Bearer ${this.config.arkime.apiKey}`;
+  1647→    }
+  1648→
+  1649→    return fetch(url, {
+  1650→      ...init,
+  1651→      headers,
+  1652→      signal: AbortSignal.timeout(this.config.arkime.sessionTimeout || 60000),
+  1653→    });
+  1654→  }
+  1655→
+  1656→  private transformSuricataAlert(raw: any): SuricataAlert {
+  1657→    return {
+  1658→      alertId: raw._id || raw.alert_id || `alert-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+  1659→      timestamp: raw.timestamp || raw['@timestamp'],
+  1660→      sourceIp: raw.src_ip || raw.sourceIp,
+  1661→      sourcePort: raw.src_port || raw.sourcePort,
+  1662→      destinationIp: raw.dest_ip || raw.destinationIp,
+  1663→      destinationPort: raw.dest_port || raw.destinationPort,
+  1664→      protocol: raw.proto || raw.protocol,
+  1665→      alert: raw.alert || {},
+  1666→      flow: raw.flow,
+  1667→      payload: raw.payload,
+  1668→      packet_info: raw.packet,
+  1669→      geoLocation: raw.geoip_data || raw.geo_data,
+  1670→    };
+  1671→  }
+  1672→
+  1673→  private transformSuricataRule(raw: any): SuricataRule {
+  1674→    return {
+  1675→      sid: raw.sid,
+  1676→      rev: raw.rev || 1,
+  1677→      action: raw.action || 'alert',
+  1678→      protocol: raw.protocol || 'any',
+  1679→      source: raw.source || { ip: 'any', port: 'any' },
+  1680→      destination: raw.destination || { ip: 'any', port: 'any' },
+  1681→      options: raw.options || [],
+  1682→      msg: raw.msg || raw.signature || '',
+  1683→      classtype: raw.classtype,
+  1684→      metadata: raw.metadata,
+  1685→      priority: raw.priority,
+  1686→      enabled: raw.enabled !== false,
+  1687→      lastModified: raw.last_modified,
+  1688→      modifiedBy: raw.modified_by,
+  1689→    };
+  1690→  }
+  1691→
+  1692→  private transformArkimeSession(raw: any): ArkimeSession {
+  1693→    return {
+  1694→      sessionId: raw.id || raw.sessionId,
+  1695→      firstPacket: raw.firstPacket || raw.firstpacket,
+  1696→      lastPacket: raw.lastPacket || raw.lastpacket,
+  1697→      sourceIp: raw.sourceIp || raw.src_ip,
+  1698→      sourcePort: raw.sourcePort || raw.src_port,
+  1699→      destinationIp: raw.destinationIp || raw.dst_ip,
+  1700→      destinationPort: raw.destinationPort || raw.dst_port,
+  1701→      protocol: raw.protocol || raw.proto,
+  1702→      packets: raw.packets || raw.packetCount || 0,
+  1703→      bytes: raw.bytes || raw.byteCount || 0,
+  1704→      rootNode: raw.rootId || raw.rootnode,
+  1705→      hostname: raw.hostname,
+  1706→      serverHostname: raw.serverHostname || raw.serverhostname,
+  1707→      tags: raw.tags || [],
+  1708→    };
+  1709→  }
+  1710→
+  1711→  private mapSeverity(suricataSeverity: number): NsmEvent['severity'] {
+  1712→    if (suricataSeverity <= 1) return 'critical';
+  1713→    if (suricataSeverity <= 2) return 'high';
+  1714→    if (suricataSeverity <= 4) return 'medium';
+  1715→    if (suricataSeverity <= 6) return 'low';
+  1716→    return 'info';
+  1717→  }
+  1718→
+  1719→  private initializeStats(): NsmStatistics {
+  1720→    return {
+  1721→      suricata: {
+  1722→        alertsPerSecond: 0,
+  1723→        totalAlertsToday: 0,
+  1724→        topSignatures: [],
+  1725→        topSourceIps: [],
+  1726→        topDestPorts: [],
+  1727→        droppedPackets: 0,
+  1728→        captureStatus: 'running',
+  1729→      },
+  1730→      zeek: {
+  1731→        connectionsTracked: 0,
+  1732→        logsGenerated: {
+  1733→          conn: 0,
+  1734→          dns: 0,
+  1735→          http: 0,
+  1736→          ssl: 0,
+  1737→          files: 0,
+  1738→        },
+  1739→        unusualProtocolsDetected: 0,
+  1740→        dataTransferVolume: 0,
+  1741→      },
+  1742→      arkime: {
+  1743→        sessionsCaptured: 0,
+  1744→        pcapSizeGb: 0,
+  1745→        retentionDays: 30,
+  1746→        activeQueries: 0,
+  1747→      },
+  1748→      overall: {
+  1749→        eventsProcessedToday: 0,
+  1750→        uniqueSourceIps: 0,
+  1751→        uniqueDestinations: 0,
+  1752→        averageThroughputGbps: 0,
+  1753→        detectionLatencyMs: 0,
+  1754→      },
+  1755→    };
+  1756→  }
+  1757→
+  1758→  private detectConnectionAnomalies(conn: ZeekLogEntry, anomalies: any[]): void {
+  1759→    // Data exfiltration indicators
+  1760→    if ((conn.resp_bytes || 0) > 104857600) { // >100MB upload
+  1761→      anomalies.push({
+  1762→        type: 'data_exfil',
+  1763→        description: `Large data transfer detected: ${(conn.resp_bytes! / 1024 / 1024).toFixed(2)} MB to ${conn.id_resp_h}`,
+  1764→        severity: 'high',
+  1765→        evidence: conn,
+  1766→      });
+  1767→    }
+  1768→
+  1769→    // Port scanning indicators
+  1770→    if (conn.conn_state === 'S0') { // SYN only - potential scan
+  1771→      anomalies.push({
+  1772→        type: 'port_scan',
+  1773→        description: `Potential SYN scan from ${conn.id_orig_h} to ${conn.id_resp_h}:${conn.id_resp_p}`,
+  1774→        severity: 'medium',
+  1775→        evidence: conn,
+  1776→      });
+  1777→    }
+  1778→
+  1779→    // Long-lived connection (potential tunnel/C2)
+  1780→    if ((conn.duration || 0) > 86400) { // >24 hours
+  1781→      anomalies.push({
+  1782→        type: 'persistent_connection',
+  1783→        description: `Long-lived connection: ${conn.duration}s duration to ${conn.id_resp_h}`,
+  1784→        severity: 'medium',
+  1785→        evidence: conn,
+  1786→      });
+  1787→    }
+  1788→
+  1789→    // Unusual protocol combinations
+  1790→    if (conn.service && !['http', 'dns', 'ssl', 'ssh', 'ftp', 'smtp'].includes(conn.service)) {
+  1791→      anomalies.push({
+  1792→        type: 'unusual_protocol',
+  1793→        description: `Unusual service detected: ${conn.service} on ${conn.id_resp_h}:${conn.id_resp_p}`,
+  1794→        severity: 'low',
+  1795→        evidence: conn,
+  1796→      });
+  1797→    }
+  1798→  }
+  1799→
+  1800→  private analyzeDnsDomain(entry: ZeekLogEntry, domain: string, results: any[]): void {
+  1801→    // DGA (Domain Generation Algorithm) indicators
+  1802→    const dgaPatterns = /^[a-z]{12,20}\.(com|net|org|ru|tk|ml|ga|cf)$/i;
+  1803→    if (dgaPatterns.test(domain)) {
+  1804→      results.push({
+  1805→        domain,
+  1806→        queries: 1,
+  1807→        ips: entry.answers || [entry.id_resp_h].filter(Boolean),
+  1808→        reason: 'Possible DGA domain (random-looking TLD)',
+  1809→      });
+  1810→    }
+  1811→
+  1812→    // Newly registered / uncommon TLDs
+  1813→    const riskyTlds = ['.tk', '.ml', '.ga', '.cf', '.gq', '.pw', '.top', '.xyz'];
+  1814→    if (riskyTlds.some(tld => domain.endsWith(tld))) {
+  1815→      results.push({
+  1816→        domain,
+  1817→        queries: 1,
+  1818→        ips: entry.answers || [entry.id_resp_h].filter(Boolean),
+  1819→        reason: `Risky TLD used: ${domain.split('.').pop()}`,
+  1820→      });
+  1821→    }
+  1822→
+  1823→    // High query frequency would be tracked at aggregation level
+  1824→  }
+  1825→
+  1826→  private analyzeFile(file: ZeekLogEntry, results: any[]): void {
+  1827→    const filename = (file.filename || '').toLowerCase();
+  1828→    const mime = (file.mime_type || '').toLowerCase();
+  1829→
+  1830→    // Executable files over web
+  1831→    if (mime.includes('executable') || filename.match(/\.(exe|dll|bat|ps1|vbs|scr|msi)$/)) {
+  1832→      results.push({
+  1833→        file,
+  1834→        reason: 'Executable file transferred',
+  1835→        riskLevel: 'high',
+  1836→      });
+  1837→    }
+  1838→
+  1839→    // Archive files with passwords (potential ransomware)
+  1840→    if (mime.includes('archive') || filename.match(/\.(zip|rar|7z|tar)/)) {
+  1841→      results.push({
+  1842→        file,
+  1843→        reason: 'Archive file transferred (check contents)',
+  1844→        riskLevel: 'medium',
+  1845→      });
+  1846→    }
+  1847→
+  1848→    // Sensitive file patterns
+  1849→    if (filename.match(/(password|credential|secret|private\.key|backup)/)) {
+  1850→      results.push({
+  1851→        file,
+  1852→        reason: 'Sensitive filename pattern detected',
+  1853→        riskLevel: 'critical',
+  1854→      });
+  1855→    }
+  1856→  }
+  1857→
+  1858→  private matchesDnsPattern(entry: ZeekLogEntry, patterns: string[]): boolean {
+  1859→    const domain = (entry.query || '').toLowerCase();
+  1860→    return patterns.some(p => domain.includes(p.toLowerCase()));
+  1861→  }
+  1862→
+  1863→  private escalateEvent(event: NsmEvent): void {
+  1864→    event.escalatedToIncident = true;
+  1865→    this.emit('escalationRequired', event);
+  1866→    console.log(`[NSM] 🔥 CRITICAL EVENT ESCALATED: ${event.title}`);
+  1867→  }
+  1868→
+  1869→  private async flushEventBuffer(): Promise<void> {
+  1870→    if (this.eventBuffer.length === 0) return;
+  1871→
+  1872→    const eventsToSend = [...this.eventBuffer];
+  1873→    this.eventBuffer = [];
+  1874→
+  1875→    // In production, send to Kafka or directly to database
+  1876→    if (this.config.kafka) {
+  1877→      // Send to Kafka topic
+  1878→      this.emit('eventsFlushed', { count: eventsToSend.length, topic: this.config.kafka.alertsTopic });
+  1879→    }
+  1880→
+  1881→    console.log(`[NSM] Flushed ${eventsToSend.length} events`);
+  1882→  }
+  1883→
+  1884→  private startEveJsonStream(): void {
+  1885→    console.log('[NSM] EVE JSON streaming not implemented in browser environment');
+  1886→    // In Node.js, this would use fs.watch or tail -f on the EVE JSON file/socket
+  1887→  }
+  1888→
+  1889→  private async checkSuricataHealth(): Promise<{ status: 'healthy' | 'degraded' | 'unhealthy'; latency: number; alertsPerSec: number }> {
+  1890→    const start = Date.now();
+  1891→    try {
+  1892→      const res = await this.fetchSuricata('/health');
+  1893→      const latency = Date.now() - start;
+  1894→      const data = await res.json();
+  1895→      return {
+  1896→        status: res.ok ? 'healthy' : 'degraded',
+  1897→        latency,
+  1898→        alertsPerSec: data.alerts_per_sec || 0,
+  1899→      };
+  1900→    } catch {
+  1901→      return { status: 'unhealthy', latency: Date.now() - start, alertsPerSec: 0 };
+  1902→    }
+  1903→  }
+  1904→
+  1905→  private async checkZeekHealth(): Promise<{ status: 'healthy' | 'degraded' | 'unhealthy'; latency: number; logsPerSec: number }> {
+  1906→    const start = Date.now();
+  1907→    try {
+  1908→      const res = await this.fetchZeek('/health');
+  1909→      const latency = Date.now() - start;
+  1910→      return {
+  1911→        status: res.ok ? 'healthy' : 'degraded',
+  1912→        latency,
+  1913→        logsPerSec: 0, // Would come from actual metrics endpoint
+  1914→      };
+  1915→    } catch {
+  1916→      return { status: 'unhealthy', latency: Date.now() - start, logsPerSec: 0 };
+  1917→    }
+  1918→  }
+  1919→
+  1920→  private async checkArkimeHealth(): Promise<{ status: 'healthy' | 'degraded' | 'unhealthy'; latency: number; captureRunning: boolean }> {
+  1921→    const start = Date.now();
+  1922→    try {
+  1923→      const res = await this.fetchArkime('/api/status');
+  1924→      const latency = Date.now() - start;
+  1925→      const data = await res.json();
+  1926→      return {
+  1927→        status: res.ok ? 'healthy' : 'degraded',
+  1928→        latency,
+  1929→        captureRunning: data.running || data.capture?.status === 'running',
+  1930→      };
+  1931→    } catch {
+  1932→      return { status: 'unhealthy', latency: Date.now() - start, captureRunning: false };
+  1933→    }
+  1934→  }
+  1935→}
+  1936→
+  1937→// ============================================================
+  1938→// Pre-built Threat Hunt Presets
+  1939→// ============================================================
+  1940→
+  1941→const ThreatHuntPresets = {
+  1942→  data_exfiltration: {
+  1943→    name: 'Data Exfiltration Detection',
+  1944→    description: 'Hunt for signs of data leaving the network',
+  1945→    timeRangeHours: 24,
+  1946→    queries: [
+  1947→      { type: 'suricata', signatureIds: [2013025, 2020433] }, // Known exfil signatures
+  1948→      { type: 'zeek-files', minSizeMb: 50, mimeTypes: ['archive', 'application/x-zip-compressed'] },
+  1949→      { type: 'arkime', minBytes: 52428800 }, // >50MB sessions
+  1950→    ],
+  1951→    recommendations: [
+  1952→      'Review large file transfers for business justification',
+  1953→      'Check if endpoints involved have EDR alerts',
+  1954→      'Investigate destination IPs against threat intel feeds',
+  1955→      'Consider implementing DLP controls if not already in place',
+  1956→    ],
+  1957→  },
+  1958→
+  1959→  command_and_control: {
+  1960→    name: 'Command & Control Communication',
+  1961→    description: 'Detect C2 beaconing and callback activity',
+  1962→    timeRangeHours: 48,
+  1963→    queries: [
+  1964→      { type: 'suricata', signatureIds: [2830119, 2830120] }, // C2 signatures
+  1965→      { type: 'zeek-dns', patterns: ['.tk', '.ml', '.ga', 'beacon.', 'c2.'] },
+  1966→      { type: 'arkime', minBytes: 0 }, // All sessions for pattern analysis
+  1967→    ],
+  1968→    recommendations: [
+  1969→      'Analyze DNS query patterns for algorithmic generation (DGA)',
+  1970→      'Check for consistent timing intervals (beaconing)',
+  1971→      'Correlate source IPs with known compromised hosts',
+  1972→      'Block identified C2 domains at firewall/proxy',
+  1973→    ],
+  1974→  },
+  1975→
+  1976→  lateral_movement: {
+  1977→    name: 'Lateral Movement Detection',
+  1978→    description: 'Identify potential lateral movement within the network',
+  1979→    timeRangeHours: 72,
+  1980→    queries: [
+  1981→      { type: 'suricata', signatureIds: [2825121, 2825122] }, // SMB/WinRM exploitation
+  1982→      { type: 'arkime', minBytes: 0 }, // Internal high-port scanning
+  1983→    ],
+  1984→    recommendations: [
+  1985→      'Review authentication logs for affected systems',
+  1986→      'Check for credential dumping tools via EDR',
+  1987→      'Isolate affected segments until investigation complete',
+  1988→      'Review network segmentation effectiveness',
+  1989→    ],
+  1990→  },
+  1991→
+  1992→  initial_access: {
+  1993→    name: 'Initial Access & Phishing',
+  1994→    description: 'Detect initial compromise vectors including phishing',
+  1995→    timeRangeHours: 168, // 7 days
+  1996→    queries: [
+  1997→      { type: 'suricata', signatureIds: [2010944, 2011528] }, // Phishing kit signatures
+  1998→      { type: 'zeek-dns', patterns: ['phishing', 'malware', 'exploit'] },
+  1999→      { type: 'zeek-files', mimeTypes: ['application/pdf', 'office', 'executable'] },
+  2000→    ],
+
+[showing lines 1-2000 of 2038; use offset=2001 with limit to continue reading]

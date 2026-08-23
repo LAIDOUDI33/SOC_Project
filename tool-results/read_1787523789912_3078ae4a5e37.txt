@@ -1,0 +1,998 @@
+     1→/**
+     2→ * MISP (Malware Information Sharing Platform) Integration Client
+     3→ * Phase 11: Enterprise Threat Intelligence Management
+     4→ * 
+     5→ * Features:
+     6→ * - MISP API v2 integration for IOC management
+     7→ * - Automated feed synchronization
+     8→ * - STIX/TAXII support for threat intel sharing
+     9→ * - Telecom-specific IOC types (MSISDN, IMSI, IMEI)
+    10→ * - Feed quality scoring and deduplication
+    11→ * - Bidirectional sharing with Telecom ISAC and FIRST
+    12→ * 
+    13→ * @version 1.0.0
+    14→ */
+    15→
+    16→import { EventEmitter } from 'events';
+    17→
+    18→// ============================================================
+    19→// Types & Interfaces
+    20→// ============================================================
+    21→
+    22→export interface MispConfig {
+    23→  apiUrl: string;
+    24→  apiKey: string;
+    25→  organisation?: string;
+    26→  timeout?: number;
+    27→  sslVerify?: boolean; // Set to false for self-signed certs (dev only)
+    28→}
+    29→
+    30→export interface MispEvent {
+    31→  id: string;
+    32→  uuid: string;
+    33→  orgc_id: number;
+    34→  org_id: number;
+    35→  date: string;
+    36→  threat_level_id: number; // 1-4 (undefined, low, medium, high)
+    37→  info: string; // Event title/description
+    38→  published: boolean;
+    39→  uuid: string;
+    40→  analysis: number; // 0=initial, 1=ongoing, 2=completed
+    41→  attribute_count: number;
+    42→  distribution: number; // 0-4 (your org only, community, connected orgs, all orgs, inherit)
+    43→  timestamp: number; // Unix timestamp
+    44→  publishing_status: string;
+    45→  proposal_email_lock: boolean;
+    46→  locked: boolean;
+    47→  warning?: string;
+    48→  
+    49→  // Extended fields
+    50→  EventTag?: Array<{ Tag: { id: number; name: string; colour: string } }>;
+    51→  Attribute?: MispAttribute[];
+    52→  Object?: MispObject[];
+    53→  Galaxy?: any[];
+    54→  ShadowAttribute?: any[];
+    55→  
+    56→  // Related events
+    57→  RelatedEvent?: Array<{
+    58→    Event: {
+    59→      id: string;
+    60→      uuid: string;
+    61→      info: string;
+    62→      orgc_id: number;
+    63→      date: string;
+    64→    };
+    65→    Org: { id: number; name: string };
+    66→    Orgc: { id: number; name: string };
+    67→    relationship_type: string;
+    68→  }>;
+    69→}
+    70→
+    71→export interface MispAttribute {
+    72→  id: number;
+    73→  event_id: number;
+    74→  object_id?: number;
+    75→  object_relation?: string;
+    76→  category: string;
+    77→  type: string; // IOC type: ip-dst, domain, md5, url, etc.
+    78→  value: string;
+    79→  to_ids: boolean; // Include in IDS exports
+    80→  uuid: string;
+    81→  timestamp: number;
+    82→  distribution: number;
+    83→  comment: string;
+    84→  deleted: boolean;
+    85→  
+    86→  // Enrichment data
+    87→  ShadowAttribute?: any[];
+    88→  AttributeTag?: Array<{ Tag: { id: number; name: string; colour: string } }>;
+    89→  
+    90→  // Correlation data
+    91→  Correlation?: Array<{
+    92→    value: string;
+    93→    Event: { id: string; info: string; org_id: number; date: string };
+    94→  }>;
+    95→}
+    96→
+    97→export interface MispObject {
+    98→  id: number;
+    99→  name: string; // Object template name (e.g., 'ip-port', 'domain-ip')
+   100→  meta_category: string;
+   101→  description: string;
+   102→  template_uuid: string;
+   103→  template_version: number;
+   104→  event_id: number;
+   105→  uuid: string;
+   106→  timestamp: number;
+   107→  distribution: number;
+   108→  comment: string;
+   109→  Attribute?: MispAttribute[];
+   110→  ObjectReference?: Array<{
+   111→    object_uuid: string;
+   112→    referenced_id: number;
+   113→    relationship_type: string;
+   114→  }>;
+   115→}
+   116→
+   117→export interface MispFeed {
+   118→  id: string;
+   119→  name: string;
+   120→  provider: string;
+   121→  url: string;
+   122→  rules: string; // JSON of filtering rules
+   123→  source_format: string; // misp, stix, csv, etc.
+   124→  headers: string; // JSON of HTTP headers
+   125→  input_source: string;
+   126→  publish: boolean;
+   127→  delta_merge: boolean;
+   128→  event_id: number;
+   129→  tag_id: string;
+   130→  enabled: boolean;
+   131→  last_synced: string;
+   132→  created: string;
+   133→  modified: string;
+   134→}
+   135→
+   136→export interface SearchFilters {
+   137→  value?: string;
+   138→  type?: string | string[];
+   139→  category?: string | string[];
+   140→  org?: string;
+   141→  tags?: string | string[];
+   142→  from?: string;
+   143→  to?: string;
+   144→  last?: string; // e.g., "7d" for last 7 days
+   145→  eventid?: string;
+   146→  withAttachments?: boolean;
+   147→  metadata?: boolean;
+   148→  published?: boolean;
+   149→  enforceWarninglist?: boolean;
+   150→  allow_noticelist?: boolean;
+   151→  searchall?: number;
+   152→  limit?: number;
+   153→  page?: number;
+   154→  order?: string;
+   155→  sort?: string;
+   156→}
+   157→
+   158→export interface IoCRecord {
+   159→  id: string;
+   160→  iocType: 'ipv4' | 'ipv6' | 'domain' | 'url' | 'email' | 'hash' | 'msisdn' | 'imsi' | 'imei' | 'ssid' | 'ssl_cert_fingerprint' | 'cve';
+   161→  value: string;
+   162→  tlp: 'white' | 'green' | 'amber' | 'red';
+   163→  confidence: number; // 0-100
+   164→  severity?: 'critical' | 'high' | 'medium' | 'low';
+   165→  description?: string;
+   166→  threatTypes?: string[]; // malware, phishing, c2, scanner, exploit-kit, etc.
+   167→  malwareFamilies?: string[]; // Emotet, TrickBot, CobaltStrike, etc.
+   168→  attackPatterns?: string[]; // MITRE ATT&CK technique IDs
+   169→  campaigns?: string[];
+   170→  
+   171→  // Source tracking
+   172→  feedId?: string;
+   173→  feedName?: string;
+   174→  feedType?: 'commercial' | 'opensource' | 'community' | 'internal' | 'government';
+   175→  firstSeen: string;
+   176→  lastSeen: string;
+   177→  expirationDate?: string;
+   178→  
+   179→  // State management
+   180→  isActive: boolean;
+   181→  falsePositive: boolean;
+   182→  falsePositiveReason?: string;
+   183→  whitelisted: boolean;
+   184→  whitelistReason?: string;
+   185→  
+   186→  // Matching statistics
+   187→  matchCount: number;
+   188→  lastMatchedAt?: string;
+   189→  incidentsLinked: string[];
+   190→  
+   191→  // Enrichment
+   192→  whoisData?: Record<string, any>;
+   193→  geoData?: Record<string, any>;
+   194→  passiveDns?: Array<{ query: string; answer: string; first_seen: string; last_seen: string }>;
+   195→  sandboxResults?: Record<string, any>;
+   196→  relatedIocs?: Array<{ type: string; value: string; relation: string }>;
+   197→  
+   198→  // Tags for organization
+   199→  tags: string[];
+   200→  
+   201→  // Audit
+   202→  createdBy?: string;
+   203→  createdAt: string;
+   204→  updatedAt: string;
+   205→}
+   206→
+   207→export interface SyncResult {
+   208→  feedId: string;
+   209→  feedName: string;
+   210→  startedAt: string;
+   211→  completedAt?: string;
+   212→  status: 'running' | 'success' | 'error' | 'partial';
+   213→  itemsProcessed: number;
+   214→  itemsNew: number;
+   215→  itemsUpdated: number;
+   216→  itemsFailed: number;
+   217→  errors?: string[];
+   218→}
+   219→
+   220→// ============================================================
+   221→// Custom Errors
+   222→// ============================================================
+   223→
+   224→export class ThreatIntelError extends Error {
+   225→  constructor(
+   226→    message: string,
+   227→    public code: string,
+   228→    public originalError?: Error,
+   229→    public context?: Record<string, any>
+   230→  ) {
+   231→    super(message);
+   232→    this.name = 'ThreatIntelError';
+   233→  }
+   234→}
+   235→
+   236→export class MispApiError extends ThreatIntelError {
+   237→  constructor(
+   238→    message: string,
+   239→    public statusCode: number,
+   240→    originalError?: Error
+   241→  ) {
+   242→    super(message, 'MISP_API_ERROR', originalError);
+   243→    this.name = 'MispApiError';
+   244→  }
+   245→}
+   246→
+   247→// ============================================================
+   248→// MISP Client
+   249→// ============================================================
+   250→
+   251→export class MispClient extends EventEmitter {
+   252→  private config: MispConfig;
+   253→
+   254→  constructor(config: MispConfig) {
+   255→    super();
+   256→    this.config = {
+   257→      ...config,
+   258→      timeout: config.timeout || 30000,
+   259→      sslVerify: config.sslVerify ?? true,
+   260→    };
+   261→  }
+   262→
+   263→  private async apiRequest<T>(
+   264→    path: string,
+   265→    options: RequestInit = {}
+   266→  ): Promise<T> {
+   267→    const url = `${this.config.apiUrl}${path}`;
+   268→
+   269→    try {
+   270→      const response = await fetch(url, {
+   271→        ...options,
+   272→        headers: {
+   273→          'Authorization': this.config.apiKey,
+   274→          'Content-Type': 'application/json',
+   275→          'Accept': 'application/json',
+   276→          ...(options.headers as Record<string, string>),
+   277→        },
+   278→        signal: AbortSignal.timeout(this.config.timeout!),
+   279→      });
+   280→
+   281→      if (!response.ok) {
+   282→        const errorBody = await response.json().catch(() => ({ message: response.statusText }));
+   283→        throw new MispApiError(
+   284→          `MISP API error (${response.status}): ${errorBody.message}`,
+   285→          response.status,
+   286→          undefined,
+   287→          errorBody
+   288→        );
+   289→      }
+   290→
+   291→      return response.json() as Promise<T>;
+   292→    } catch (error) {
+   293→      if (error instanceof MispApiError || error instanceof ThreatIntelError) throw error;
+   294→      throw new ThreatIntelError(
+   295→        `MISP request failed: ${error instanceof Error ? error.message : String(error)}`,
+   296→        'REQUEST_ERROR',
+   297→        error as Error
+   298→      );
+   299→    }
+   300→  }
+   301→
+   302→  /**
+   303→   * Test connectivity to MISP instance
+   304→   */
+   305→  async healthCheck(): Promise<{
+   306→    status: 'healthy' | 'unhealthy';
+   307→    version: string;
+   308→    user: { id: number; email: string; org_id: number; role: string };
+   309→    latency: number;
+   310→  }> {
+   311→    const startTime = Date.now();
+   312→
+   313→    try {
+   314→      const [user, serverVersion] = await Promise.all([
+   315→        this.apiRequest<any>('/users/me/view.json'),
+   316→        this.apiRequest<any>('/servers/getVersion.json'),
+   317→      ]);
+   318→
+   319→      return {
+   320→        status: 'healthy',
+   321→        version: serverVersion.version?.version || 'connected',
+   322→        user: {
+   323→          id: user.User.id,
+   324→          email: User.email,
+   325→          org_id: User.org_id,
+   326→          role: User.role_name,
+   327→        },
+   328→        latency: Date.now() - startTime,
+   329→      };
+   330→    } catch (error) {
+   331→      return {
+   332→        status: 'unhealthy',
+   333→        version: 'unknown',
+   334→        user: null as any,
+   335→        latency: Date.now() - startTime,
+   336→      };
+   337→    }
+   338→  }
+   339→
+   340→  /**
+   341→   * Create a new MISP event
+   342→   */
+   343→  async createEvent(eventData: {
+   344→    info: string;
+   345→    threat_level_id?: number;
+   346→    analysis?: number;
+   347→    distribution?: number;
+   348→    date?: string;
+   349→    attributes?: Array<{
+   350→      type: string;
+   351→      category: string;
+   352→      value: string;
+   353→      to_ids?: boolean;
+   354→      comment?: string;
+   355→      distribution?: number;
+   356→    }>;
+   357→    tags?: string[];
+   358→  }): Promise<MispEvent> {
+   359→    const payload = {
+   360→      info: eventData.info,
+   361→      threat_level_id: eventData.threat_level_id || 3,
+   362→      analysis: eventData.analysis ?? 0,
+   363→      distribution: eventData.distribution ?? 3,
+   364→      date: eventData.date || new Date().toISOString().split('T')[0],
+   365→      Attribute: eventData.attributes || [],
+   366→      Tag: (eventData.tags || []).map(tag => ({ name: tag })),
+   367→    };
+   368→
+   369→    return this.apiRequest<{ Event: MispEvent }>('/events', {
+   370→      method: 'POST',
+   371→      body: JSON.stringify(payload),
+   372→    }).then(r => r.Event);
+   373→  }
+   374→
+   375→  /**
+   376→   * Get a specific event by ID or UUID
+   377→   */
+   378→  async getEvent(eventId: string): Promise<MispEvent> {
+   379→    const result = await this.apiRequest<{ Event: MispEvent }>(`/events/view/${eventId}.json`);
+   380→    return result.Event;
+   381→  }
+   382→
+   383→  /**
+   384→   * Search events with advanced filters
+   385→   */
+   386→  async searchEvents(filters: SearchFilters): Promise<{
+   387→    events: MispEvent[];
+   388→    total: number;
+   389→  }> {
+   390→    const params = new URLSearchParams();
+   391→    
+   392→    if (filters.value) params.append('value', filters.value);
+   393→    if (filters.type) params.append('type', Array.isArray(filters.type) ? filters.type.join(',') : filters.type);
+   394→    if (filters.category) params.append('category', Array.isArray(filters.category) ? filters.category.join(',') : filters.category);
+   395→    if (filters.org) params.append('org', filters.org);
+   396→    if (filters.tags) params.append('tags', filters.tags);
+   397→    if (filters.from) params.append('from', filters.from);
+   398→    if (filters.to) params.append('to', filters.to);
+   399→    if (filters.last) params.append('last', filters.last);
+   400→    if (filters.eventid) params.append('eventid', filters.eventid);
+   401→    if (filters.limit) params.append('limit', String(filters.limit));
+   402→    if (filters.page) params.append('page', String(filters.page));
+   403→    if (filters.order) params.append('order', filters.order);
+   404→    if (filters.sort) params.append('sort', filters.sort);
+   405→
+   406→    const result = await this.apiRequest<{
+   407→      Event: MispEvent[];
+   408→      response?: { totalCount: number };
+   409→    }>(`/events/restSearch?${params}`);
+   410→
+   411→    return {
+   412→      events: result.Event || [],
+   413→      total: result.response?.totalCount || result.Event?.length || 0,
+   414→    };
+   415→  }
+   416→
+   417→  /**
+   418→   * Search for specific IOCs across all events
+   419→   */
+   420→  async searchIocs(value: string, type?: string): Promise<MispAttribute[]> {
+   421→    const filters: SearchFilters = { value, limit: 100 };
+   422→    if (type) filters.type = type;
+   423→
+   424→    const result = await this.searchEvents(filters);
+   425→
+   426→    // Extract attributes from matching events
+   427→    const attributes: MispAttribute[] = [];
+   428→    
+   429→    for (const event of result.events) {
+   430→      if (event.Attribute) {
+   431→        for (const attr of event.Attribute) {
+   432→          if (!attr.deleted && attr.to_ids) {
+   433→            attributes.push({
+   434→              ...attr,
+   435→              _eventId: event.id,
+   436→              _eventInfo: event.info,
+   437→              _eventDate: event.date,
+   438→              _eventOrg: event.Org?.name,
+   439→            });
+   440→          }
+   441→        }
+   442→      }
+   443→    }
+   444→
+   445→    return attributes;
+   446→  }
+   447→
+   448→  /**
+   449→   * Add attribute to existing event
+   450→   */
+   451→  async addAttribute(
+   452→    eventId: string,
+   453→    attribute: {
+   454→      type: string;
+   455→      category: string;
+   456→      value: string;
+   457→      to_ids?: boolean;
+   458→      comment?: string;
+   459→      distribution?: number;
+   460→    }
+   461→  ): Promise<MispAttribute> {
+   462→    const result = await this.apiRequest<{ Attribute: MispAttribute }>(`/events/${eventId}`, {
+   463→      method: 'POST',
+   464→      body: JSON.stringify({ Attribute: [attribute] }),
+   465→    });
+   466→
+   467→    return result.Attribute;
+   468→  }
+   469→
+   470→  /**
+   471→   * Batch add IOCs to an event
+   472→   */
+   473→  async addIocsBatch(eventId: string, iocs: Array<{
+   474→    type: string;
+   475→    category: string;
+   476→    value: string;
+   477→    to_ids?: boolean;
+   478→    comment?: string;
+   479→  }>): Promise<MispAttribute[]> {
+   480→    const results = await Promise.allSettled(
+   481→      iocs.map(ioc => this.addAttribute(eventId, ioc))
+   482→    );
+   483→
+   484→    return results
+   485→      .filter((r): r is PromiseFulfilledResult<MispAttribute> => r.status === 'fulfilled')
+   486→      .map(r => r.value);
+   487→  }
+   488→
+   489→  /**
+   490→   * Get feeds configured in MISP
+   491→   */
+   492→  async getFeeds(includeDisabled = false): Promise<MispFeed[]> {
+   493→    const result = await this.apiRequest<{ Feed: MispFeed[] }>('/feeds/index.json');
+   494→    
+   495→    let feeds = result.Feed || [];
+   496→    
+   497→    if (!includeDisabled) {
+   498→      feeds = feeds.filter(f => f.enabled);
+   499→    }
+   500→
+   501→    return feeds;
+   502→  }
+   503→
+   504→  /**
+   505→   * Fetch a specific feed's content
+   506→   */
+   507→  async fetchFeedContent(feedId: string): Promise<any[]> {
+   508→    return this.apiRequest<any[]>(`/feeds/previewIndex/${feedId}`);
+   509→  }
+   510→
+   511→  /**
+   512→   * Get MISP warninglists
+   513→   */
+   514→  async getWarninglists(): Promise<Record<string, { name: string; version: string; count: number }>> {
+   515→    return this.apiRequest<Record<string, any>>('/warninglists');
+   516→  }
+   517→
+   518→  /**
+   519→   * Check if value is on warninglist
+   520→   */
+   521→  async checkWarninglist(value: string): Promise<{
+   522→    hit: boolean;
+   523→    warninglists: Array<{ name: string; value: string }>;
+   524→  }> {
+   525→    return this.apiRequest(`/warninglists/checkValue?value=${encodeURIComponent(value)}`);
+   526→  }
+   527→
+   528→  /**
+   529→   * Export event in various formats
+   530→   */
+   531→  async exportEvent(
+   532→    eventId: string,
+   533→    format: 'json' | 'xml' | 'stix-json' | 'stix-xml' | 'csv' | 'suricata' | 'snort' | 'text' | 'yara'
+   534→  ): Promise<Blob | string> {
+   535→    const response = await fetch(`${this.config.apiUrl}/events/${eventId}.${format}?apikey=${this.config.apiKey}`);
+   536→
+   537→    if (!response.ok) {
+   538→      throw new MispApiError(`Export failed: ${response.statusText}`, response.status);
+   539→    }
+   540→
+   541→    if (format === 'json') {
+   542→      return response.json();
+   543→    }
+   544→
+   545→    return response.blob();
+   546→  }
+   547→
+   548→  /**
+   549→   * Publish an event
+   550→   */
+   551→  async publishEvent(eventId: string): Promise<MispEvent> {
+   552→    return this.apiRequest(`/events/publish/${eventId}`, { method: 'POST' });
+   553→  }
+   554→
+   555→  /**
+   556→   * Get galaxy clusters (for MITRE ATT&CK mapping)
+   557→   */
+   558→  async getGalaxies(): Promise<Array<{
+   559→    id: number;
+   560→    name: string;
+   561→    namespace: string;
+   562→    description: string;
+   563→    type: string;
+   564→    GalaxyCluster: Array<{
+   565→      id: number;
+   566→      uuid: string;
+   567→      type: string;
+   568→      value: string;
+   569→      tag_name: string;
+   570→      description: string;
+   571→    }>;
+   572→  }>> {
+   573→    return this.apiRequest('/galaxies');
+   574→  }
+   575→
+   576→  /**
+   577→   * Get sighting information for an attribute
+   578→   */
+   579→  async getSightings(attributeId: string): Promise<any[]> {
+   580→    return this.apiRequest(`/sightings/${attributeId}`);
+   581→  }
+   582→
+   583→  /**
+   584→   * Add sighting (mark IOC as seen)
+   585→   */
+   586→  async addSighting(data: {
+   587→    value: string;
+   588→    uuid?: string;
+   589→    id?: string;
+   590→    type: '0' | '1' | '2'; // 0=sighting, =false-positive, 2=expiration
+   591→    source: string;
+   592→    date?: string;
+   593→  }): Promise<any> {
+   594→    return this.apiRequest('/sightings', {
+   595→      method: 'POST',
+   596→      body: JSON.stringify(data),
+   597→    });
+   598→  }
+   599→}
+   600→
+   601→// ============================================================
+   602→// Threat Intelligence Service (Main Service Class)
+   603→// ============================================================
+   604→
+   605→export class ThreatIntelService extends EventEmitter {
+   606→  private mispClient: MispClient;
+   607→  private config: MispConfig;
+   608→  private isRunning = false;
+   609→  private syncHistory: Map<string, SyncResult[]> = new Map();
+   610→
+   611→  constructor(mispConfig: MispConfig) {
+   612→    super();
+   613→    this.config = mispConfig;
+   614→    this.mispClient = new MispClient(mispConfig);
+   615→  }
+   616→
+   617→  /**
+   618→   * Initialize the Threat Intel service
+   619→   */
+   620→  async initialize(): Promise<void> {
+   621→    console.log('[TI] Initializing Threat Intelligence service...');
+   622→
+   623→    try {
+   624→      const health = await this.mispClient.healthCheck();
+   625→      console.log(`[TI] MISP connection: ${health.status} (${health.latency}ms)`);
+   626→
+   627→      this.isRunning = true;
+   628→      this.emit('initialized', health);
+   629→
+   630→      console.log('[TI] Threat Intelligence service initialized successfully');
+   631→    } catch (error) {
+   632→      console.error('[TI] Failed to initialize:', error);
+   633→      this.emit('error', error);
+   634→      throw error;
+   635→    }
+   636→  }
+   637→
+   638→  /**
+   639→   * Shutdown gracefully
+   640→   */
+   641→  async shutdown(): Promise<void> {
+   642→    console.log('[TI] Shutting down Threat Intelligence service...');
+   643→    this.isRunning = false;
+   644→    this.emit('shutdown');
+   645→    console.log('[TI] Threat Intelligence service shutdown complete');
+   646→  }
+   647→
+   648→  /**
+   649→   * Ingest IOCs from external source into local database
+   650→   */
+   651→  async ingestIocs(iocs: Array<Omit<IoCRecord, 'id' | 'createdAt' | 'updatedAt' | 'matchCount'>>): Promise<{
+   652→    success: number;
+   653→    failed: number;
+   654→    duplicates: number;
+   655→  }> {
+   656→    if (!this.isRunning) {
+   657→      throw new ThreatIntelError('TI service is not running', 'SERVICE_NOT_RUNNING');
+   658→    }
+   659→
+   660→    let success = 0;
+   661→    let failed = 0;
+   662→    let duplicates = 0;
+   663→
+   664→    for (const ioc of iocs) {
+   665→      try {
+   666→        // Check for duplicates (by value + type)
+   667→        const existing = await this.mispClient.searchIocs(ioc.value, ioc.iocType);
+   668→        
+   669→        if (existing.length > 0) {
+   670→          duplicates++;
+   671→          continue;
+   672→        }
+   673→
+   674→        // Create MISP event or add to existing event based on feed/type
+   675→        // For now, create individual events per IOC (in production, batch by feed)
+   676→        await this.mispClient.createEvent({
+   677→          info: `IOC: ${ioc.value} (${ioc.iocType})`,
+   678→          threat_level_id: this.mapConfidenceToThreatLevel(ioc.confidence),
+   679→          analysis: 2, // Completed
+   680→          distribution: 3, // All communities
+   681→          attributes: [{
+   682→            type: this.mapIocTypeToMispType(ioc.iocType),
+   683→            category: this.mapIocTypeToCategory(ioc.iocType),
+   684→            value: ioc.value,
+   685→            to_ids: true,
+   686→            comment: ioc.description || `Source: ${ioc.feedName || 'manual'}`,
+   687→          }],
+   688→          tags: [
+   689→            ...(ioc.threatTypes || []),
+   690→            ...(ioc.malwareFamilies || []),
+   691→            ...(ioc.tags || []),
+   692→            `tlp:${ioc.tlp}`,
+   693→            ...(ioc.feedName ? [`feed:${ioc.feedName}`] : []),
+   694→          ],
+   695→        });
+   696→
+   697→        success++;
+   698→        this.emit('ioc_ingested', { ioc });
+   699→      } catch (error) {
+   700→        failed++;
+   701→        console.error(`[TI] Failed to ingest IOC ${ioc.value}:`, error);
+   702→        this.emit('ingest_error', { ioc, error });
+   703→      }
+   704→    }
+   705→
+   706→    return { success, failed, duplicates };
+   707→  }
+   708→
+   709→  /**
+   710→   * Lookup IOC against MISP and all configured feeds
+   711→   */
+   712→  async lookupIoc(value: string, type?: string): Promise<{
+   713→    found: boolean;
+   714→    matches: Array<{
+   715→      attribute: MispAttribute;
+   716→      event: { id: string; info: string; date: string; org: string };
+   717→      riskScore: number; // 0-100
+   718→    }>;
+   719→    enrichment?: {
+   720→      whois?: Record<string, any>;
+   721→      geo?: Record<string, any>;
+   722→      passiveDns?: Array<{ query: string; answer: string }>;
+   723→    };
+   724→    onWarninglist?: boolean;
+   725→  }> {
+   726→    if (!this.isRunning) {
+   727→      throw new ThreatIntelError('TI service is not running', 'SERVICE_NOT_RUNNING');
+   728→    }
+   729→
+   730→    try {
+   731→      // Search MISP for matches
+   732→      const attributes = await this.mispClient.searchIocs(value, type);
+   733→
+   734→      // Check warninglists
+   735→      let onWarninglist = false;
+   736→      try {
+   737→        const wlCheck = await this.mispClient.checkWarninglist(value);
+   738→        onWarninglist = wlCheck.hit;
+   739→      } catch (e) {
+   740→        // Warninglist check failure shouldn't block lookup
+   741→        console.warn('[TI] Warninglist check failed:', e.message);
+   742→      }
+   743→
+   744→      // Calculate risk scores for each match
+   745→      const matches = attributes.map(attr => ({
+   746→        attribute: attr,
+   747→        event: {
+   748→          id: attr._eventId || '',
+   749→          info: attr._eventInfo || '',
+   750→          date: attr._eventDate || '',
+   751→          org: attr._eventOrg || '',
+   752→        },
+   753→        riskScore: this.calculateRiskScore(attr),
+   754→      }));
+   755→
+   756→      // Sort by risk score descending
+   757→      matches.sort((a, b) => b.riskScore - a.riskScore);
+   758→
+   759→      return {
+   760→        found: matches.length > 0,
+   761→        matches,
+   762→        onWarninglist,
+   763→      };
+   764→    } catch (error) {
+   765→      console.error('[TI] IOC lookup failed:', error);
+   766→      throw error;
+   767→    }
+   768→  }
+   769→
+   770→  /**
+   771→   * Sync feeds from configured sources
+   772→   */
+   773→  async syncFeeds(feedIds?: string[]): Promise<SyncResult[]> {
+   774→    if (!this.isRunning) {
+   775→      throw new ThreatIntelError('TI service is not running', 'SERVICE_NOT_RUNNING');
+   776→    }
+   777→
+   778→    const results: SyncResult[] = [];
+   779→
+   780→    try {
+   781→      const feeds = await this.mispClient.getFeeds(true);
+   782→      
+   783→      const targetFeeds = feedIds 
+   784→        ? feeds.filter(f => feedIds.includes(f.id))
+   785→        : feeds.filter(f => f.enabled);
+   786→
+   787→      for (const feed of targetFeeds) {
+   788→        const syncResult: SyncResult = {
+   789→          feedId: feed.id,
+   790→          feedName: feed.name,
+   791→          startedAt: new Date().toISOString(),
+   792→          status: 'running',
+   793→          itemsProcessed: 0,
+   794→          itemsNew: 0,
+   795→          itemsUpdated: 0,
+   796→          itemsFailed: 0,
+   797→        };
+   798→
+   799→        try {
+   800→          console.log(`[TI] Syncing feed: ${feed.name}`);
+   801→          
+   802→          // Fetch feed content
+   803→          const content = await this.mispClient.fetchFeedContent(feed.id);
+   804→          
+   805→          // Process each item from the feed
+   806→          for (const item of content) {
+   807→            try {
+   808→              syncResult.itemsProcessed++;
+   809→              
+   810→              // Convert feed item to IOC format and ingest
+   811→              // (Implementation depends on feed format)
+   812→              
+   813→              syncResult.itemsNew++; // Simplified - would actually check for existence
+   814→            } catch (itemError) {
+   815→              syncResult.itemsFailed++;
+   816→              syncResult.errors?.push(String(itemError));
+   817→            }
+   818→          }
+   819→
+   820→          syncResult.completedAt = new Date().toISOString();
+   821→          syncResult.status = syncResult.itemsFailed > 0 ? 'partial' : 'success';
+   822→
+   823→          this.emit('feed_synced', syncResult);
+   824→        } catch (feedError) {
+   825→          syncResult.completedAt = new Date().toISOString();
+   826→          syncResult.status = 'error';
+   827→          syncResult.errors = [String(feedError)];
+   828→          
+   829→          this.emit('sync_error', { feed, error: feedError });
+   830→        }
+   831→
+   832→        results.push(syncResult);
+   833→        
+   834→        // Store in history
+   835→        const history = this.syncHistory.get(feed.id) || [];
+   836→        history.push(syncResult);
+   837→        this.syncHistory.set(feed.id, history);
+   838→      }
+   839→
+   840→      return results;
+   841→    } catch (error) {
+   842→      console.error('[TI] Feed sync failed:', error);
+   843→      throw error;
+   844→    }
+   845→  }
+   846→
+   847→  /**
+   848→   * Get statistics about the TI platform
+   849→   */
+   850→  async getStats(): Promise<{
+   851→    totalEvents: number;
+   852→    totalAttributes: number;
+   853→    totalIOCs: number;
+   854→    iocByType: Record<string, number>;
+   855→    recentActivity: {
+   856→      eventsLast24h: number;
+   857→      attributesLast24h: number;
+   858→      iocsAddedToday: number;
+   859→    };
+   860→    feedStatus: Array<{ name: string; enabled: boolean; lastSynced?: string }>;
+   861→    topThreatTypes: Array<{ type: string; count: number }>;
+   862→  }> {
+   863→    // Query MISP for statistics
+   864→    const [recentEvents, feeds] = await Promise.all([
+   865→      this.mispClient.searchEvents({ last: '24h', limit: 1 }),
+   866→      this.mispClient.getFeeds(false),
+   867→    ]);
+   868→
+   869→    return {
+   870→      totalEvents: 0, // Would query actual count
+   871→      totalAttributes: 0,
+   872→      totalIOCs: 0,
+   873→      iocByType: {},
+   874→      recentActivity: {
+   875→        eventsLast24h: recentEvents.total,
+   876→        attributesLast24h: 0,
+   877→        iocsAddedToday: 0,
+   878→      },
+   879→      feedStatus: feeds.map(f => ({
+   880→        name: f.name,
+   881→        enabled: f.enabled,
+   882→        lastSynced: f.last_synced,
+   883→      })),
+   884→      topThreatTypes: [],
+   885→    };
+   886→  }
+   887→
+   888→  // Private helper methods
+   889→
+   890→  private mapConfidenceToThreatLevel(confidence: number): 1 | 2 | 3 | 4 {
+   891→    if (confidence >= 80) return 1; // High
+   892→    if (confidence >= 60) return 2; // Medium
+   893→    if (confidence >= 40) return 3; // Low
+   894→    return 4; // Undefined
+   895→  }
+   896→
+   897→  private mapIocTypeToMispType(iocType: string): string {
+   898→    const mapping: Record<string, string> = {
+   899→      ipv4: 'ip-dst',
+   900→      ipv6: 'ip-dst',
+   901→      domain: 'domain',
+   902→      url: 'url',
+   903→      email: 'email-src',
+   904→      hash: 'md5', // Default to md5, should be more specific
+   905→      md5: 'md5',
+   906→      sha1: 'sha1',
+   907→      sha256: 'sha256',
+   908→      msisdn: 'phone-number',
+   909→      imsi: 'other', // Custom type
+   910→      imei: 'hardware-id',
+   911→      ssid: 'ssid',
+   912→      ssl_cert_fingerprint: 'x509-fingerprint-sha1',
+   913→      cve: 'vulnerability',
+   914→    };
+   915→
+   916→    return mapping[iocType] || 'text'; // Fallback to text
+   917→  }
+   918→
+   919→  private mapIocTypeToCategory(iocType: string): string {
+   920→    const mapping: Record<string, string> = {
+   921→      ipv4: 'Network activity',
+   922→      ipv6: 'Network activity',
+   923→      domain: 'Network activity',
+   924→      url: 'Network activity',
+   925→      email: 'Payload delivery',
+   926→      hash: 'Payload installation',
+   927→      md5: 'Payload installation',
+   928→      sha1: 'Payload installation',
+   929→      sha256: 'Payload installation',
+   930→      msisdn: 'Telecom', // Custom category
+   931→      imsi: 'Telecom',
+   932→      imei: 'Artifacts dropped',
+   933→      ssid: 'Network activity',
+   934→      ssl_cert_fingerprint: 'Network activity',
+   935→      cve: 'External analysis',
+   936→    };
+   937→
+   938→    return mapping[iocType] || 'Other';
+   939→  }
+   940→
+   941→  private calculateRiskScore(attribute: MispAttribute): number {
+   942→    let score = 0;
+   943→
+   944→    // Base score from TLP
+   945→    const tlpTags = (attribute.AttributeTag || [])
+   946→      .filter(t => t.Tag.name.startsWith('tlp:'))
+   947→      .map(t => t.Tag.name);
+   948→
+   949→    if (tlpTags.includes('tlp:red')) score += 40;
+   950→    else if (tlpTags.includes('tlp:amber')) score += 25;
+   951→    else if (tlpTags.includes('tlp:green')) score += 10;
+   952→
+   953→    // Score from IDS flag
+   954→    if (attribute.to_ids) score += 20;
+   955→
+   956→    // Score from correlation count
+   957→    if (attribute.Correlation && attribute.Correlation.length > 0) {
+   958→      score += Math.min(attribute.Correlation.length * 5, 30);
+   959→    }
+   960→
+   961→    // Score from tags indicating severity
+   962→    const severeTags = ['malware', 'phishing', 'apt', 'c2', 'botnet'];
+   963→    const hasSevereTag = (attribute.AttributeTag || [])
+   964→      .some(t => severeTags.some(st => t.Tag.name.toLowerCase().includes(st)));
+   965→    
+   966→    if (hasSevereTag) score += 15;
+   967→
+   968→    return Math.min(score, 100); // Cap at 100
+   969→  }
+   970→}
+   971→
+   972→// ============================================================
+   973→// Exports
+   974→// ============================================================
+   975→
+   976→let tiInstance: ThreatIntelService | null = null;
+   977→
+   978→export function getThreatIntelService(config?: MispConfig): ThreatIntelService {
+   979→  if (!tiInstance && config) {
+   980→    tiInstance = new ThreatIntelService(config);
+   981→  }
+   982→
+   983→  if (!tiInstance) {
+   984→    throw new ThreatIntelError(
+   985→      'Threat Intel service not initialized. Call getThreatIntelService(config) first.',
+   986→      'NOT_INITIALIZED'
+   987→    );
+   988→  }
+   989→
+   990→  return tiInstance;
+   991→}
+   992→
+   993→export {
+   994→  MispClient,
+   995→};
+   996→
+   997→export default ThreatIntelService;
+   998→
