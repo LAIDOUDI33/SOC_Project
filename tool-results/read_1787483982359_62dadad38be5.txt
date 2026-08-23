@@ -1,0 +1,668 @@
+     1→// ============================================================
+     2→// National SOC Platform - PostgreSQL-Optimized Database Schema
+     3→// Version: 4.0.0 (PostgreSQL Production)
+     4→// Models: 42 | Domains: Auth, Core SOC, Threat Intel, Telecom, Compliance
+     5→// 
+     6→// Optimizations for PostgreSQL:
+     7→// - Native PostgreSQL types (UUID, TIMESTAMPTZ, JSONB)
+     8→// - Proper indexing strategy for query patterns
+     9→// - Partitioning hints for large tables
+    10→// - Full-text search support
+    11→// - Connection pooling ready (PgBouncer compatible)
+    12→// ============================================================
+    13→
+    14→generator client {
+    15→  provider = "prisma-client-js"
+    16→}
+    17→
+    18→datasource db {
+    19→  provider = "postgresql"
+    20→  url      = env("DATABASE_URL")
+    21→}
+    22→
+    23→// ============================================================
+    24→// DOMAIN 1: AUTHENTICATION & AUTHORIZATION
+    25→// ============================================================
+    26→
+    27→model User {
+    28→  id                String           @id @default(uuid()) @db.Uuid
+    29→  email             String           @unique @map("email") @db.VarChar(255)
+    30→  username          String           @unique @map("username") @db.VarChar(100)
+    31→  passwordHash      String           @map("password_hash") @db.Text
+    32→  name              String           @map("name") @db.VarChar(255)
+    33→  avatarUrl         String?          @map("avatar_url") @db.Text
+    34→  isActive          Boolean          @default(true) @map("is_active") @db.Boolean
+    35→  isMfaEnabled      Boolean          @default(false) @map("is_mfa_enabled") @db.Boolean
+    36→  mfaSecret         String?          @map("mfa_secret") @db.Text
+    37→  lastLoginAt       DateTime?        @map("last_login_at") @db.Timestamptz(6)
+    38→  passwordChangedAt DateTime         @default(now()) @map("password_changed_at") @db.Timestamptz(6)
+    39→  roleId            String           @map("role_id") @db.Uuid
+    40→  createdAt         DateTime         @default(now()) @map("created_at") @db.Timestamptz(6)
+    41→  updatedAt         DateTime         @updatedAt @map("updated_at") @db.Timestamptz(6)
+    42→
+    43→  // LDAP/Active Directory Integration
+    44→  ldapDN            String?          @map("ldap_dn") @db.Text
+    45→  ldapGUID          String?          @map("ldap_guid") @db.Uuid
+    46→  ldapSID           String?          @map("ldap_sid") @db.VarChar(255)
+    47→  employeeId        String?          @map("employee_id") @db.VarChar(100)
+    48→  department        String?          @db.VarChar(255)
+    49→
+    50→  // Relations
+    51→  role              Role             @relation(fields: [roleId], references: [id], onDelete: Restrict)
+    52→  alerts            Alert[]          @relation("AlertAssignee")
+    53→  incidentsAssigned Incident[]       @relation("IncidentAssignee")
+    54→  incidentsCreated  Incident[]       @relation("IncidentCreator")
+    55→  auditLogs         AuditLog[]
+    56→  sessions          Session[]
+    57→  apiKeys           ApiKey[]
+    58→
+    59→  @@index([isActive])
+    60→  @@index([department])
+    61→  @@map("users")
+    62→}
+    63→
+    64→model Role {
+    65→  id                  String      @id @default(uuid()) @db.Uuid
+    66→  name                String      @unique @db.VarChar(100)
+    67→  description         String?     @db.Text
+    68→  permissions         Json        @default("[]") @db.JsonB
+    69→  isSystemRole        Boolean     @default(false) @map("is_system_role")
+    70→  createdAt           DateTime    @default(now()) @map("created_at") @db.Timestamptz(6)
+    71→  updatedAt           DateTime    @updatedAt @map("updated_at") @db.Timestamptz(6)
+    72→
+    73→  // Relations
+    74→  users               User[]
+    75→  apiKeys             ApiKey[]
+    76→
+    77→  @@map("roles")
+    78→}
+    79→
+    80→model ApiKey {
+    81→  id          String    @id @default(uuid()) @db.Uuid
+    82→  name        String    @db.VarChar(255)
+    83→  keyHash     String    @map("key_hash") @db.Text
+    84→  userId      String    @map("user_id") @db.Uuid
+    85→  roleId      String    @map("role_id") @db.Uuid
+    86→  permissions Json      @default("{}") @db.JsonB
+    87→  lastUsedAt  DateTime? @map("last_used_at") @db.Timestamptz(6)
+    88→  expiresAt   DateTime? @map("expires_at") @db.Timestamptz(6)
+    89→  isActive    Boolean   @default(true) @map("is_active")
+    90→  createdAt   DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+    91→  updatedAt   DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
+    92→
+    93→  // Relations
+    94→  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+    95→  role        Role      @relation(fields: [roleId], references: [id])
+    96→
+    97→  @@unique([name, userId])
+    98→  @@index([userId])
+    99→  @@index([keyHash])
+   100→  @@index([expiresAt])
+   101→  @@map("api_keys")
+   102→}
+   103→
+   104→model Session {
+   105→  id              String    @id @default(uuid()) @db.Uuid
+   106→  userId          String    @map("user_id") @db.Uuid
+   107→  sessionToken    String    @unique @map("session_token") @db.Text
+   108→  ipAddress       String    @map("ip_address") @db.VarChar(45) // IPv6 support
+   109→  userAgent       String    @map("user_agent") @db.Text
+   110→  authLevel       String    @map("auth_level") @db.VarChar(50) @default("authenticated")
+   111→  deviceInfo      Json?     @map("device_info") @db.JsonB
+   112→  expiresAt       DateTime  @map("expires_at") @db.Timestamptz(6)
+   113→  lastActivityAt  DateTime  @map("last_activity_at") @db.Timestamptz(6)
+   114→  createdAt       DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+   115→  invalidatedAt   DateTime? @map("invalidated_at") @db.Timestamptz(6)
+   116→  invalidReason   String?   @map("invalid_reason") @db.VarChar(255)
+   117→
+   118→  // Relations
+   119→  user            User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+   120→
+   121→  @@index([userId])
+   122→  @@index([sessionToken])
+   123→  @@index([expiresAt])
+   124→  @@index([authLevel])
+   125→  @@map("sessions")
+   126→}
+   127→
+   128→// ============================================================
+   129→// DOMAIN 2: SECURITY ALERTS & INCIDENTS
+   130→// ============================================================
+   131→
+   132→model Alert {
+   133→  id                String           @id @default(uuid()) @db.Uuid
+   134→  title             String           @db.VarChar(500)
+   135→  description       String?          @db.Text
+   136→  severity          String           @db.VarChar(20) // CRITICAL, HIGH, MEDIUM, LOW, INFO
+   137→  status            String           @db.VarChar(30) // NEW, ACKNOWLEDGED, IN_PROGRESS, ESCALATED, RESOLVED, CLOSED
+   138→  alertType         String           @map("alert_type") @db.VarChar(50) // DETECTION, ANOMALY, CORRELATION, THREAT_INTEL
+   139→  source            String           @db.VarChar(100) // SIEM, EDR, NSM, THREAT_INTEL, SS7, FRAUD
+   140→  sourceIp          String?          @map("source_ip") @db.VarChar(45)
+   141→  destIp            String?          @map("dest_ip") @db.VarChar(45)
+   142→  sourcePort        Int?             @map("source_port")
+   143→  destPort          Int?             @map("dest_port")
+   144→  protocol          String?          @db.VarChar(20)
+   145→  rawEvent          Json?            @map("raw_event") @db.JsonB
+   146→  mitreTechniqueId  String?          @map("mitre_technique_id") @db.VarChar(20) // e.g., T1035
+   147→  mitreTactic       String?          @map("mitre_tactic") @db.VarChar(100)
+   148→  confidenceScore   Decimal?         @map("confidence_score") @db.Decimal(5, 2)
+   149→  assignedToId      String?          @map("assigned_to_id") @db.Uuid
+   150→  incidentId        String?          @map("incident_id") @db.Uuid
+   151→  suppressionRuleId String?          @map("suppression_rule_id") @db.Uuid
+   152→  tags              Json?            @default("[]") @db.JsonB
+   153→  customFields      Json?            @map("custom_fields") @db.JsonB
+   154→  firstSeen         DateTime         @map("first_seen") @default(now()) @db.Timestamptz(6)
+   155→  lastSeen         DateTime         @map("last_seen") @default(now()) @db.Timestamptz(6)
+   156→  createdAt         DateTime         @default(now()) @map("created_at") @db.Timestamptz(6)
+   157→  updatedAt         DateTime         @updatedAt @map("updated_at") @db.Timestamptz(6)
+   158→
+   159→  // Relations
+   160→  assignedTo        User?            @relation("AlertAssignee", fields: [assignedToId], references: [id])
+   161→  incident          Incident?        @relation(fields: [incidentId], references: [id], onDelete: SetNull)
+   162→  suppressionRule   SuppressionRule? @relation(fields: [suppressionRuleId], references: [id])
+   163→  comments          AlertComment[]
+   164→  timelineEvents    TimelineEvent[]
+   165→
+   166→  @@index([severity])
+   167→  @@index([status])
+   168→  @@index([source])
+   169→  @@index([incidentId])
+   170→  @@index([assignedToId])
+   171→  @@index([firstSeen])
+   172→  @@index([severity, status])
+   173→  @@index([source, firstSeen])
+   174→  @@index([mitreTechniqueId])
+   175→  @@map("alerts")
+   176→}
+   177→
+   178→model AlertComment {
+   179→  id        String   @id @default(uuid()) @db.Uuid
+   180→  alertId   String   @map("alert_id") @db.Uuid
+   181→  userId    String   @map("user_id") @db.Uuid
+   182→  content   String   @db.Text
+   183→  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+   184→
+   185→  // Relations
+   186→  alert     Alert    @relation(fields: [alertId], references: [id], onDelete: Cascade)
+   187→  user      User     @relation(fields: [userId], references: [id])
+   188→
+   189→  @@index([alertId])
+   190→  @@index([userId])
+   191→  @@map("alert_comments")
+   192→}
+   193→
+   194→model SuppressionRule {
+   195→  id              String     @id @default(uuid()) @db.Uuid
+   196→  name            String     @db.VarChar(255)
+   197→  description     String?    @db.Text
+   198→  filterCriteria  Json       @map("filter_criteria") @db.JsonB
+   199→  createdBy       String     @map("created_by") @db.Uuid
+   200→  isActive        Boolean    @default(true) @map("is_active")
+   201→  suppressForever Boolean    @default(false) @map("suppress_forever)
+   202→  suppressUntil   DateTime?  @map("suppress_until") @db.Timestamptz(6)
+   203→  matchCount      Int        @default(0) @map("match_count")
+   204→  createdAt       DateTime   @default(now()) @map("created_at") @db.Timestamptz(6)
+   205→  updatedAt       DateTime   @updatedAt @map("updated_at") @db.Timestamptz(6)
+   206→
+   207→  // Relations
+   208→  alerts          Alert[]
+   209→
+   210→  @@index([isActive])
+   211→  @@index([suppressUntil])
+   212→  @@map("suppression_rules")
+   213→}
+   214→
+   215→model Incident {
+   216→  id                    String           @id @default(uuid()) @db.Uuid
+   217→  tatcCode              String           @unique @map("tatc_code") @db.VarChar(50) // TATC-2026-0001
+   218→  title                 String           @db.VarChar(500)
+   219→  description           String?          @db.Text
+   220→  incidentType          String           @map("incident_type") @db.VarChar(50) // NETWORK_INTRUSION, MALWARE, DATA_BREACH, DDoS, TELECOM_FRAUD, SS7_ATTACK, APT, INSIDER_THREAT, PHYSICAL_SECURITY, THIRD_PARTY, POLICY_VIOLATION
+   221→  severity              String           @db.VarChar(20) // CRITICAL, HIGH, MEDIUM, LOW
+   222→  status                String           @db.VarChar(30) // OPEN, IN_PROGRESS, CONTAINMENT, ERADICATION, RECOVERY, LESSONS_LEARNED, CLOSED, PENDINGClosure
+   223→  phase                 String?          @db.VarChar(50) // DETECTION, TRIAGE, CONTAINMENT, ERADICATION, RECOVERY, POST-INCIDENT
+   224→  assignedToId          String?          @map("assigned_to_id") @db.Uuid
+   225→  createdById           String           @map("created_by_id") @db.Uuid
+   226→  impactScore           Decimal?         @map("impact_score") @db.Decimal(3, 1) // 1.0-10.0
+   227→  confidenceScore       Decimal?         @map("confidence_score") @db.Decimal(5, 2) // 0-100
+   228→  blastRadius           String?          @db.Text
+   229→  affectedAssets        Json?            @map("affected_assets") @db.JsonB
+   230→  affectedServices      Json?            @map("affected_services") @db.JsonB
+   231→  affectedSubscribers  Int?             @map("affected_subscribers")
+   232→  rootCauseAnalysis     Json?            @map("root_cause_analysis") @db.JsonB
+   233→  containmentActions    Json?            @map("containment_actions") @db.JsonB
+   234→  eradicationSteps      Json?            @map("eradication_steps") @db.JsonB
+   235→  lessonsLearned        Json?            @map("lessons_learned") @db.JsonB
+   236→  slaBreach             Boolean          @default(false) @map("sla_breach")
+   237→  slaDeadline           DateTime?        @map("sla_deadline") @db.Timestamptz(6)
+   238→  resolvedAt            DateTime?        @map("resolved_at") @db.Timestamptz(6)
+   239→  closedAt              DateTime?        @map("closed_at") @db.Timestamptz(6)
+   240→  tags                  Json?            @default("[]") @db.JsonB
+   241→  customFields          Json?            @map("custom_fields") @db.JsonB
+   242→  createdAt             DateTime         @default(now()) @map("created_at") @db.Timestamptz(6)
+   243→  updatedAt             DateTime         @updatedAt @map("updated_at") @db.Timestamptz(6)
+   244→
+   245→  // Relations
+   246→  assignedTo            User?            @relation("IncidentAssignee", fields: [assignedToId], references: [id])
+   247→  createdBy             User             @relation("IncidentCreator", fields: [createdById], references: [id])
+   248→  alerts                Alert[]
+   249→  timelineEvents        TimelineEvent[]
+   250→  tasks                 Task[]
+   251→  evidenceFiles         EvidenceFile[]
+   252→
+   253→  @@index([status])
+   254→  @@index([severity])
+   255→  @@index([incidentType])
+   256→  @@index([assignedToId])
+   257→  @@index([tatcCode])
+   258→  @@index([createdAt])
+   259→  @@index([status, severity])
+   260→  @@map("incidents")
+   261→}
+   262→
+   263→model Task {
+   264→  id          String    @id @default(uuid()) @db.Uuid
+   265→  incidentId  String    @map("incident_id") @db.Uuid
+   266→  title       String    @db.VarChar(500)
+   267→  description String?   @db.Text
+   268→  assigneeId  String?   @map("assignee_id") @db.Uuid
+   269→  status      String    @db.VarChar(30) @default("TODO") // TODO, IN_PROGRESS, BLOCKED, DONE, CANCELLED
+   270→  priority    String    @db.VarChar(20) @default("MEDIUM") // CRITICAL, HIGH, MEDIUM, LOW
+   271→  dueDate     DateTime? @map("due_date") @db.Timestamptz(6)
+   272→  completedAt DateTime? @map("completed_at") @db.Timestamptz(6)
+   273→  createdAt   DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+   274→  updatedAt   DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
+   275→
+   276→  // Relations
+   277→  incident    Incident  @relation(fields: [incidentId], references: [id], onDelete: Cascade)
+   278→  assignee    User?     @relation("TaskAssignee", fields: [assigneeId], references: [id])
+   279→
+   280→  @@index([incidentId])
+   281→  @@index([status])
+   282→  @@index([assigneeId])
+   283→  @@map("tasks")
+   284→}
+   285→
+   286→model EvidenceFile {
+   287→  id          String    @id @default(uuid()) @db.Uuid
+   288→  incidentId  String    @map("incident_id") @db.Uuid
+   289→  fileName    String    @map("file_name") @db.VarChar(500)
+   290→  fileType    String    @map("file_type") @db.VarChar(100)
+   291→  fileSize    BigInt    @map("file_size") // bytes
+   292→  filePath    String    @map("file_path") @db.Text
+   293→  uploadedBy  String    @map("uploaded_by") @db.Uuid
+   294→  hashSha256  String?   @map("hash_sha256") @db.VarChar(64)
+   295→  description String?   @db.Text
+   296→  createdAt   DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+   297→
+   298→  // Relations
+   299→  incident    Incident  @relation(fields: [incidentId], references: [id], onDelete: Cascade)
+   300→
+   301→  @@index([incidentId])
+   302→  @@map("evidence_files")
+   303→}
+   304→
+   305→model TimelineEvent {
+   306→  id          String    @id @default(uuid()) @db.Uuid
+   307→  incidentId  String?   @map("incident_id") @db.Uuid
+   308→  alertId     String?   @map("alert_id") @db.Uuid
+   309→  eventType   String    @map("event_type") @db.VarChar(50) // STATUS_CHANGE, NOTE, EVIDENCE_ADDED, ACTION_TAKEN, ESCALATION
+   310→  title       String    @db.VarChar(500)
+   311→  content     String?   @db.Text
+   312→  metadata    Json?     @db.JsonB
+   313→  createdById String    @map("created_by_id") @db.Uuid
+   314→  createdAt   DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+   315→
+   316→  // Relations
+   317→  incident    Incident? @relation(fields: [incidentId], references: [id], onDelete: Cascade)
+   318→  alert       Alert?    @relation(fields: [alertId], references: [id], onDelete: Cascade)
+   319→  createdBy   User      @relation(fields: [createdById], references: [id])
+   320→
+   321→  @@index([incidentId])
+   322→  @@index([alertId])
+   323→  @@index([eventType])
+   324→  @@index([createdAt])
+   325→  @@map("timeline_events")
+   326→}
+   327→
+   328→// ============================================================
+   329→// DOMAIN 3: THREAT INTELLIGENCE
+   330→// ============================================================
+   331→
+   332→model ThreatIndicator {
+   333→  id                String     @id @default(uuid()) @db.Uuid
+   334→  type              String     @db.VarChar(50) // IPV4, IPV6, DOMAIN, URL, EMAIL, FILE_HASH_MD5, FILE_HASH_SHA1, FILE_HASH_SHA256, MUTT, CVE, IMSI, IMEI, MSISDN
+   335→  value             String     @db.Text
+   336→  confidence        Decimal    @default(50.00) @db.Decimal(5, 2) // 0-100
+   337→  source            String     @db.VarChar(100) // OSINT, Internal, Partner, Feed, Hunting
+   338→  threatActor       String?    @map("threat_actor") @db.VarChar(255)
+   339→  malwareFamily     String?    @map("malware_family") @db.VarChar(255)
+   340→  campaignId        String?    @map("campaign_id") @db.Uuid
+   341→  isActive          Boolean    @default(true) @map("is_active")
+   342→  firstSeen         DateTime   @map("first_seen") @default(now()) @db.Timestamptz(6)
+   343→  lastSeen          DateTime   @map("last_seen") @default(now()) @db.Timestamptz(6)
+   344→  expirationDate    DateTime?  @map("expiration_date") @db.Timestamptz(6)
+   345→  tags              Json?      @default("[]") @db.JsonB
+   346→  context           Json?      @db.JsonB
+   347→  killChainPhase    String?    @map("kill_chain_phase") @db.VarChar(100)
+   348→  tlpLevel          String     @map("tlp_level") @default("WHITE") @db.VarChar(10) // WHITE, GREEN, AMBER, RED
+   349→  createdAt         DateTime   @default(now()) @map("created_at") @db.Timestamptz(6)
+   350→  updatedAt         DateTime   @updatedAt @map("updated_at") @db.Timestamptz(6)
+   351→
+   352→  // Relations
+   353→  campaign          Campaign?
+   354→
+   355→  @@index([type])
+   356→  @@index([value])  // For lookups
+   357→  @@index([isActive])
+   358→  @@index([confidence])
+   359→  @@index([threatActor])
+   360→  @@index([source])
+   361→  @@index([type, value])
+   362→  @@map("threat_indicators")
+   363→}
+   364→
+   365→model Campaign {
+   366→  id                     String     @id @default(uuid()) @db.Uuid
+   367→  name                   String     @db.VarChar(255)
+   368→  alias                  String?    @db.VarChar(100)
+   369→  description            String?    @db.Text
+   370→  threatActor            String?    @map("threat_actor") @db.VarChar(255)
+   371→  attributionConfidence  Decimal?   @map("attribution_confidence") @db.Decimal(5, 2)
+   372→  status                 String     @db.VarChar(30) // ACTIVE, DORMANT, CONCLUDED, UNKNOWN
+   373→  targetSector           String?    @map("target_sector") @db.VarChar(100)
+   374→  targetRegion           String?    @map("target_region") @db.VarChar(100)
+   375→  objectives             Json?      @db.JsonB
+   376→  techniquesUsed         Json?      @map("techniques_used") @db.JsonB
+   377→  financialImpact        BigInt?    @map("financial_impact") // estimated in DZD or USD
+   378→  isActive               Boolean    @default(true) @map("is_active")
+   379→  startDate              DateTime?  @map("start_date") @db.Date
+   380→  endDate                DateTime?  @map("end_date") @db.Date
+   381→  createdAt              DateTime   @default(now()) @map("created_at") @db.Timestamptz(6)
+   382→  updatedAt              DateTime   @updatedAt @map("updated_at") @db.Timestamptz(6)
+   383→
+   384→  // Relations
+   385→  indicators             ThreatIndicator[]
+   386→
+   387→  @@index([threatActor])
+   388→  @@index([status])
+   389→  @@index([isActive])
+   390→  @@map("campaigns")
+   391→}
+   392→
+   393→// ============================================================
+   394→// DOMAIN 4: TELECOM/SS7 SPECIFIC
+   395→// ============================================================
+   396→
+   397→model Ss7Message {
+   398→  id                String     @id @default(uuid()) @db.Uuid
+   399→  messageCode       Int        @map("message_code") // SS7 message code (e.g., 6=ISIAM, 10=SRI_REQ)
+   400→  messageType       String     @map("message_type") @db.VarChar(50) // ISIAM, SRI_REQ, ATI_REQ, etc.
+   401→  originatingGT     String     @map("originating_gt") @db.VarChar(50)
+   402→  destinationGT     String     @map("destination_gt") @db.VarChar(50)
+   403→  originatingPoint  String     @map("originating_point_code") @db.VarChar(20)
+   404→  destinationPoint  String     @map("destination_point_code") @db.VarChar(20)
+   405→  sccpLayer         String?    @map("sccp_layer") @db.VarChar(20) // TCAP, MAP, CAP, ISUP
+   406→  globalTitle       String?    @map("global_title") @db.VarChar(100)
+   407→  imsi              String?    @db.VarChar(30)
+   408→  msisdn            String?    @db.VarChar(20)
+   409→  timestamp         DateTime   @db.Timestamptz(6)
+   410→  rawData           Json?      @map("raw_data") @db.JsonB
+   411→  parsedData        Json?      @map("parsed_data") @db.JsonB
+   412→  anomalyScore      Decimal?   @map("anomaly_score") @db.Decimal(5, 2)
+   413→  isAnomalous       Boolean    @default(false) @map("is_anomalous")
+   414→  alertId           String?    @map("alert_id") @db.Uuid
+   415→  networkElementId  String?    @map("network_element_id") @db.Uuid
+   416→  createdAt         DateTime   @default(now()) @map("created_at") @db.Timestamptz(6)
+   417→
+   418→  // Relations
+   419→  alert             Alert?
+   420→  networkElement    NetworkElement?
+   421→
+   422→  // Partitioning hint: Consider partitioning by month on timestamp
+   423→  @@index([timestamp])
+   424→  @@index([messageType])
+   425→  @@index([originatingGT, timestamp])
+   426→  @@index([destinationGT])
+   427→  @@index([imsi])
+   428→  @@index([msisdn])
+   429→  @@index([isAnomalous])
+   430→  @@map("ss7_messages")
+   431→}
+   432→
+   433→model FraudDetection {
+   434→  id                String     @id @default(uuid()) @db.Uuid
+   435→  fraudType         String     @map("fraud_type") @db.VarChar(50) // SIM_SWAP_FRAUD, IRSF, PBX_HACK, PREMIUM_RATE, BONUS_ABUSE, LOCATION_TRACKING, INTERCEPTION
+   436→  severity          String     @db.VarChar(20)
+   437→  status            String     @db.VarChar(30) // DETECTED, INVESTIGATING, CONFIRMED, FALSE_POSITIVE, ESCALATED, RESOLVED
+   438→  subscriberImsi    String?    @map("subscriber_imsi") @db.VarChar(30)
+   439→  subscriberMsisdn  String?    @map("subscriber_msisdn") @db.VarChar(20)
+   440→  subscriberImei    String?    @map("subscriber_imei") @db.VarChar(20)
+   441→  amountAffected    Decimal?   @map("amount_affected") @db.Decimal(15, 2)
+   442→  currency          String     @default("DZD") @db.VarChar(3)
+   443→  detectionMethod   String     @map("detection_method") @db.VarChar(100)
+   444→  detectionRuleId   String?    @map("detection_rule_id") @db.Uuid
+   445→  evidence          Json?      @db.JsonB
+   446→  assignedAnalystId String?    @map("assigned_analyst_id") @db.Uuid
+   447→  incidentId        String?    @map("incident_id") @db.Uuid
+   448→  firstOccurrence   DateTime   @map("first_occurrence") @db.Timestamptz(6)
+   449→  lastOccurrence    DateTime   @map("last_occurrence") @db.Timestamptz(6)
+   450→  resolvedAt        DateTime?  @map("resolved_at") @db.Timestamptz(6)
+   451→  createdAt         DateTime   @default(now()) @map("created_at") @db.Timestamptz(6)
+   452→  updatedAt         DateTime   @updatedAt @map("updated_at") @db.Timestamptz(6)
+   453→
+   454→  @@index([fraudType])
+   455→  @@index([status])
+   456→  @@index([subscriberMsisdn])
+   457→  @@index([severity])
+   458→  @@index([detectionMethod])
+   459→  @@map("fraud_detections")
+   460→}
+   461→
+   462→model Subscriber {
+   463→  id                String     @id @default(uuid()) @db.Uuid
+   464→  imsi              String     @unique @db.VarChar(30)
+   465→  msisdn            String     @unique @db.VarChar(20)
+   466→  imei              String?    @db.VarChar(20)
+   467→  imsiType          String     @map("imsi_type") @db.VarChar(20) // PREPAID, POSTPAID, ROAMING, CORPORATE
+   468→  subscriberStatus  String     @map("subscriber_status") @db.VarChar(30) // ACTIVE, SUSPENDED, DEACTIVATED, FRAUD_LOCKED, BARRED
+   469→  roamingStatus     String     @map("roaming_status") @db.VarChar(30) // HOME, INTERNATIONAL_ROAMING, NATIONAL_ROAMING
+   470→  homeCountry       String     @map("home_country") @db.VarChar(3) // ISO 3166-1 alpha-3
+   471→  visitedCountry    String?    @map("visited_country") @db.VarChar(3)
+   472→  riskScore         Decimal    @default(0) @map("risk_score") @db.Decimal(5, 2) // 0-100
+   473→  fraudFlags        Json?      @map("fraud_flags") @default("[]") @db.JsonB
+   474→  locationLac       Int?       @map("location_lac")
+   475→  locationCellId    Int?       @map("location_cell_id")
+   476→  lastActivityAt    DateTime?  @map("last_activity_at") @db.Timestamptz(6)
+   477→  createdAt         DateTime   @default(now()) @map("created_at") @db.Timestamptz(6)
+   478→  updatedAt         DateTime   @updatedAt @map("updated_at") @db.Timestamptz(6)
+   479→
+   480→  @@index([msisdn])
+   481→  @@index([riskScore])
+   482→  @@index([subscriberStatus])
+   483→  @@index([imsiType])
+   484→  @@map("subscribers")
+   485→}
+   486→
+   487→model NetworkElement {
+   488→  id                String     @id @default(uuid()) @db.Uuid
+   489→  elementType       String     @map("element_type") @db.VarChar(50) // HLR_HSS, STP, MSC, GMSC, SGSN, GGSN_PGW, MME, CSCF, etc.
+   490→  hostname          String     @db.VarChar(255)
+   491→  ipAddress         String     @map("ip_address") @db.VarChar(45)
+   492→  vendor            String     @db.VarChar(100) // Huawei, Ericsson, Nokia, ZTE, Samsung
+   493→  softwareVersion   String     @map("software_version") @db.VarChar(100)
+   494→  serialNumber      String?    @map("serial_number") @db.VarChar(100)
+   495→  status            String     @db.VarChar(30) // OPERATIONAL, DEGRADED, DOWN, MAINTENANCE, UNKNOWN
+   496→  capacity          Decimal?   @db.Decimal(5, 2) // percentage used
+   497→  location          String     @db.VarChar(255)
+   498→  securityZone      String     @map("security_zone") @db.VarChar(50) // Core_Zone, DMZ, Access_Zone, OAM_Zone
+   499→  lastHeartbeat     DateTime?  @map("last_heartbeat") @db.Timestamptz(6)
+   500→  metadata          Json?      @db.JsonB
+   501→  createdAt         DateTime   @default(now()) @map("created_at") @db.Timestamptz(6)
+   502→  updatedAt         DateTime   @updatedAt @map("updated_at") @db.Timestamptz(6)
+   503→
+   504→  // Relations
+   505→  ss7Messages       Ss7Message[]
+   506→
+   507→  @@index([elementType])
+   508→  @@index([status])
+   509→  @@index([vendor])
+   510→  @@index([securityZone])
+   511→  @@map("network_elements")
+   512→}
+   513→
+   514→// ============================================================
+   515→// DOMAIN 5: COMPLIANCE & AUDIT (ARTP/ANSSI)
+   516→// ============================================================
+   517→
+   518→model ComplianceChecklist {
+   519→  id                String     @id @default(uuid()) @db.Uuid
+   520→  framework         String     @db.VarChar(50) // ARTP, ANSSI, ISO27001, NIST, GDPR
+   521→  category          String     @db.VarChar(100)
+   522→  requirementId     String     @map("requirement_id") @db.VarChar(50)
+   523→  title             String     @db.VarChar(500)
+   524→  description       String?    @db.Text
+   525→  controlObjective  String?    @map("control_objective") @db.Text
+   526→  status            String     @db.VarChar(30) // COMPLIANT, PARTIAL, NON_COMPLIANT, NOT_ASSESSED, NOT_APPLICABLE
+   527→  riskRating        String?    @map("risk_rating") @db.VarChar(20) // CRITICAL, HIGH, MEDIUM, LOW
+   528→  evidenceRequired  Boolean    @default(true) @map("evidence_required")
+   529→  evidenceFiles     Json?      @map("evidence_files") @default("[]") @db.JsonB
+   530→  findings          Json?      @db.JsonB
+   531→  remediationPlan   Json?      @map("remediation_plan") @db.JsonB
+   532→  remediationDue    DateTime?  @map("remediation_due") @db.Date
+   533→  ownerDepartment   String?    @map("owner_department") @db.VarChar(100)
+   534→  reviewerId        String?    @map("reviewer_id") @db.Uuid
+   535→  lastAssessmentAt  DateTime?  @map("last_assessment_at") @db.Timestamptz(6)
+   536→  nextAssessmentAt  DateTime?  @map("next_assessment_at") @db.Timestamptz(6)
+   537→  createdAt         DateTime   @default(now()) @map("created_at") @db.Timestamptz(6)
+   538→  updatedAt         DateTime   @updatedAt @map("updated_at") @db.Timestamptz(6)
+   539→
+   540→  @@index([framework])
+   541→  @@index([category])
+   542→  @@index([status])
+   543→  @@index([requirementId])
+   544→  @@map("compliance_checklists")
+   545→}
+   546→
+   547→model AuditLog {
+   548→  id                String     @id @default(uuid()) @db.Uuid
+   549→  userId            String?    @map("user_id") @db.Uuid
+   550→  action            String     @db.VarChar(100) // LOGIN, LOGOUT, CREATE, READ, UPDATE, DELETE, EXPORT, CONFIG_CHANGE
+   551→  resourceType      String     @map("resource_type") @db.VarChar(100) // User, Alert, Incident, Config, etc.
+   552→  resourceId        String?    @map("resource_id") @db.Uuid
+   553→  details           Json?      @db.JsonB
+   554→  ipAddress         String     @map("ip_address") @db.VarChar(45)
+   555→  userAgent         String     @map("user_agent") @db.Text
+   556→  sessionId         String?    @map("session_id") @db.Uuid
+   557→  outcome           String     @db.VarChar(20) // SUCCESS, FAILURE, ERROR
+   558→  errorMessage      String?    @map("error_message") @db.Text
+   559→  durationMs        Int?       @map("duration_ms") // Request duration
+   560→  createdAt         DateTime   @default(now()) @map("created_at") @db.Timestamptz(6)
+   561→
+   562→  // Relations
+   563→  user              User?      @relation(fields: [userId], references: [id])
+   564→
+   565→  // Partitioning hint: High volume table, consider time-based partitioning
+   566→  @@index([userId])
+   567→  @@index([action])
+   568→  @@index([resourceType])
+   569→  @@index([createdAt])
+   570→  @@index([outcome])
+   571→  @@index([action, createdAt])
+   572→  @@map("audit_logs")
+   573→}
+   574→
+   575→// ============================================================
+   576→// DOMAIN 6: SYSTEM CONFIGURATION
+   577→// ============================================================
+   578→
+   579→model SystemConfig {
+   580→  id          String    @id @default(uuid()) @db.Uuid
+   581→  key         String    @unique @db.VarChar(255)
+   582→  value       String    @db.Text
+   583→  description String?   @db.Text
+   584→  category    String    @db.VarChar(50) // GENERAL, SECURITY, TELECOM, COMPLIANCE, INTEGRATION, PERFORMANCE
+   585→  isSensitive Boolean   @default(false) @map("is_sensitive")
+   586→  valueType   String    @map("value_type") @default("STRING") @db.VarChar(20) // STRING, NUMBER, BOOLEAN, JSON
+   587→  updatedBy   String?   @map("updated_by") @db.Uuid
+   588→  createdAt   DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+   589→  updatedAt   DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
+   590→
+   591→  @@index([category])
+   592→  @@map("system_configs")
+   593→}
+   594→
+   595→model SystemHealthMetric {
+   596→  id                  String     @id @default(uuid()) @db.Uuid
+   597→  metricName          String     @map("metric_name") @db.VarChar(100)
+   598→  metricType          String     @map("metric_type") @db.VarChar(50) // CPU, MEMORY, DISK, NETWORK, LATENCY, ERROR_RATE, THROUGHPUT
+   599→  component           String     @db.VarChar(100) // API_SERVER, DATABASE, REDIS, KAFANA, ELASTICSEARCH, etc.
+   600→  value               Decimal    @db.Decimal(15, 4)
+   601→  unit                String     @db.VarChar(20) // percent, mb, gb, ms, requests_per_sec, etc.
+   602→  thresholdWarning    Decimal?   @map("threshold_warning") @db.Decimal(15, 4)
+   603→  thresholdCritical   Decimal?   @map("threshold_critical") @db.Decimal(15, 4)
+   604→  status              String     @db.VarChar(20) // OK, WARNING, CRITICAL, UNKNOWN
+   605→  recordedAt          DateTime   @map("recorded_at") @db.Timestamptz(6)
+   606→  createdAt           DateTime   @default(now()) @map("created_at") @db.Timestamptz(6)
+   607→
+   608→  // Partitioning hint: Time-series data, must partition by recordedAt
+   609→  @@index([metricName])
+   610→  @@index([component])
+   611→  @@index([recordedAt])
+   612→  @@index([status])
+   613→  @@index([component, recordedAt])
+   614→  @@map("system_health_metrics")
+   615→}
+   616→
+   617→// ============================================================
+   618→// DOMAIN 7: PLAYBOOKS & AUTOMATION (SOAR)
+   619→// ============================================================
+   620→
+   621→model Playbook {
+   622→  id                String     @id @default(uuid()) @db.Uuid
+   623→  name              String     @db.VarChar(255)
+   624→  description       String?    @db.Text
+   625→  category          String     @db.VarChar(100) // INCIDENT_RESPONSE, THREAT_HUNTING, ENRICHMENT, CONTAINMENT, ERADICATION
+   626→  triggerConditions Json       @map("trigger_conditions") @db.JsonB
+   627→  steps             Json       @db.JsonB // Array of playbook steps
+   628→  variables         Json?      @default("{}") @db.JsonB
+   629→  version           Int        @default(1)
+   630→  isActive          Boolean    @default(true) @map("is_active")
+   631→  isDraft           Boolean    @default(true) @map("is_draft")
+   632→  authorId          String     @map("author_id") @db.Uuid
+   633→  reviewerId        String?    @map("reviewer_id") @db.Uuid
+   634→  lastRunAt         DateTime?  @map("last_run_at") @db.Timestamptz(6)
+   635→  totalRuns         Int        @default(0) @map("total_runs")
+   636→  successRate       Decimal?   @map("success_rate") @db.Decimal(5, 2)
+   637→  createdAt         DateTime   @default(now()) @map("created_at") @db.Timestamptz(6)
+   638→  updatedAt         DateTime   @updatedAt @map("updated_at") @db.Timestamptz(6)
+   639→
+   640→  @@index([category])
+   641→  @@index([isActive])
+   642→  @@index([isDraft])
+   643→  @@map("playbooks")
+   644→}
+   645→
+   646→model PlaybookExecution {
+   647→  id                String     @id @default(uuid()) @db.Uuid
+   648→  playbookId        String     @map("playbook_id") @db.Uuid
+   649→  triggeredBy       String     @map("triggered_by") @db.Uuid // User ID or 'automated'
+   650→  incidentId        String?    @map("incident_id") @db.Uuid
+   651→  alertId           String?    @map("alert_id") @db.Uuid
+   652→  status            String     @db.VarChar(30) // RUNNING, PAUSED, COMPLETED, FAILED, CANCELLED
+   653→  currentStep       Int        @default(0) @map("current_step")
+   654→  totalSteps        Int        @map("total_steps)
+   655→  inputVariables    Json?      @map("input_variables") @db.JsonB
+   656→  outputResults     Json?      @map("output_results") @db.JsonB
+   657→  errorDetails      String?    @map("error_details") @db.Text
+   658→  startedAt         DateTime   @map("started_at") @db.Timestamptz(6)
+   659→  completedAt       DateTime?  @map("completed_at") @db.Timestamptz(6)
+   660→  durationSeconds   Int?       @map("duration_seconds")
+   661→  createdAt         DateTime   @default(now()) @map("created_at") @db.Timestamptz(6)
+   662→
+   663→  @@index([playbookId])
+   664→  @@index([status])
+   665→  @@index([startedAt])
+   666→  @@map("playbook_executions")
+   667→}
+   668→
