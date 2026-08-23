@@ -1,0 +1,869 @@
+     1→/**
+     2→ * Djezzy National SOC Platform - Redis-Backed Hunt Session State Manager
+     3→ * 
+     4→ * Production-ready session state store for threat hunting operations.
+     5→ * Replaces the in-memory Map used in threat-hunting/sessions/route.ts
+     6→ * 
+     7→ * Features:
+     8→ * - Redis-backed storage with automatic fallback to in-memory Map
+     9→ * - TTL-based automatic cleanup of stale sessions
+    10→ * - Connection health check and reconnection logic
+    11→ * - Distributed session sharing across multiple instances
+    12→ * - Graceful degradation when Redis unavailable (development mode)
+    13→ * 
+    14→ * ANRT Compliance:
+    15→ * - All session data stored within Algeria (on-premise Redis)
+    16→ * - Automatic cleanup prevents data accumulation
+    17→ * - Audit logging for session operations
+    18→ * 
+    19→ * @module lib/production/redis-session-store
+    20→ * @version 1.0.0
+    21→ */
+    22→
+    23→import Redis from 'ioredis';
+    24→import { redisClient, getRedis, safeRedisCommand, RedisHealthStatus } from '@/lib/cache/redis-client';
+    25→
+    26→// ============================================================================
+    27→// Types and Interfaces
+    28→// ============================================================================
+    29→
+    30→/**
+    31→ * Hunt Session State Interface
+    32→ * Matches the interface used in threat-hunting/sessions/route.ts
+    33→ */
+    34→export interface HuntSessionState {
+    35→  /** Unique session identifier */
+    36→  id: string;
+    37→  /** Current session status (DRAFT, RUNNING, PAUSED, COMPLETED, CANCELLED) */
+    38→  status: string;
+    39→  /** Progress percentage (0-100) */
+    40→  progress: number;
+    41→  /** Total results found so far */
+    42→  totalResults: number;
+    43→  /** Timestamp of last activity */
+    44→  lastActivity: Date;
+    45→  /** When the session was started */
+    46→  startTime?: Date;
+    47→  /** When the session was completed */
+    48→  completedAt?: Date;
+    49→}
+    50→
+    51→/** Configuration options for the RedisSessionStore */
+    52→export interface RedisSessionStoreConfig {
+    53→  /** Redis key prefix for hunt sessions (default: 'hunt:session') */
+    54→  keyPrefix?: string;
+    55→  /** Default TTL in seconds for sessions (default: 1800 = 30 minutes) */
+    56→  defaultTTLSeconds?: number;
+    57→  /** Enable debug logging */
+    58→  enableDebugLogging?: boolean;
+    59→  /** Maximum number of sessions to keep in memory fallback */
+    60→  maxMemorySessions?: number;
+    61→  /** Cleanup interval in milliseconds (default: 300000 = 5 minutes) */
+    62→  cleanupIntervalMs?: number;
+    63→}
+    64→
+    65→/** Health status of the session store */
+    66→export interface SessionStoreHealthStatus {
+    67→  /** Whether the store is operational */
+    68→  healthy: boolean;
+    69→  /** Storage mode being used */
+    70→  mode: 'redis' | 'memory' | 'degraded';
+    71→  /** Number of active sessions */
+    72→  sessionCount: number;
+    73→  /** Redis health status (if using Redis) */
+    74→  redisStatus?: RedisHealthStatus;
+    75→  /** Memory usage stats (if using memory fallback) */
+    76→  memoryStats?: {
+    77→    usedSlots: number;
+    78→    maxSlots: number;
+    79→    usagePercent: number;
+    80→  };
+    81→  /** Timestamp of health check */
+    82→  checkedAt: Date;
+    83→  /** Error message if unhealthy */
+    84→  error?: string;
+    85→}
+    86→
+    87→// ============================================================================
+    88→// Constants and Defaults
+    89→// ============================================================================
+    90→
+    91→const DEFAULT_CONFIG: Required<Omit<RedisSessionStoreConfig, 'enableDebugLogging'>> = {
+    92→  keyPrefix: 'hunt:session',
+    93→  defaultTTLSeconds: 1800, // 30 minutes
+    94→  maxMemorySessions: 10000,
+    95→  cleanupIntervalMs: 300000, // 5 minutes
+    96→};
+    97→
+    98→// ============================================================================
+    99→// Logger Utility
+   100→// ============================================================================
+   101→
+   102→enum LogLevel {
+   103→  DEBUG = 'DEBUG',
+   104→  INFO = 'INFO',
+   105→  WARN = 'WARN',
+   106→  ERROR = 'ERROR',
+   107→}
+   108→
+   109→function log(level: LogLevel, message: string, ...args: unknown[]): void {
+   110→  const timestamp = new Date().toISOString();
+   111→  const prefix = `[HuntSessionStore][${timestamp}][${level}]`;
+   112→  
+   113→  switch (level) {
+   114→    case LogLevel.ERROR:
+   115→      console.error(prefix, message, ...args);
+   116→      break;
+   117→    case LogLevel.WARN:
+   118→      console.warn(prefix, message, ...args);
+   119→      break;
+   120→    case LogLevel.DEBUG:
+   121→      if (process.env.HUNT_SESSION_DEBUG === 'true') {
+   122→        console.debug(prefix, message, ...args);
+   123→      }
+   124→      break;
+   125→    default:
+   126→      console.log(prefix, message, ...args);
+   127→  }
+   128→}
+   129→
+   130→// ============================================================================
+   131→// Helper Functions
+   132→// ============================================================================
+   133→
+   134→/**
+   135→ * Serialize a HuntSessionState to JSON string
+   136→ * Handles Date objects properly
+   137→ */
+   138→function serializeState(state: HuntSessionState): string {
+   139→  return JSON.stringify({
+   140→    ...state,
+   141→    lastActivity: state.lastActivity instanceof Date ? state.lastActivity.toISOString() : state.lastActivity,
+   142→    startTime: state.startTime instanceof Date ? state.startTime.toISOString() : state.startTime,
+   143→    completedAt: state.completedAt instanceof Date ? state.completedAt.toISOString() : state.completedAt,
+   144→  });
+   145→}
+   146→
+   147→/**
+   148→ * Deserialize a JSON string to HuntSessionState
+   149→ * Converts ISO date strings back to Date objects
+   150→ */
+   151→function deserializeState(data: string | null): HuntSessionState | null {
+   152→  if (!data) return null;
+   153→  
+   154→  try {
+   155→    const parsed = JSON.parse(data) as Record<string, unknown>;
+   156→    
+   157→    return {
+   158→      id: parsed.id as string,
+   159→      status: parsed.status as string,
+   160→      progress: parsed.progress as number,
+   161→      totalResults: parsed.totalResults as number,
+   162→      lastActivity: new Date(parsed.lastActivity as string),
+   163→      startTime: parsed.startTime ? new Date(parsed.startTime as string) : undefined,
+   164→      completedAt: parsed.completedAt ? new Date(parsed.completedAt as string) : undefined,
+   165→    };
+   166→  } catch (error) {
+   167→    log(LogLevel.ERROR, 'Failed to deserialize session state:', error);
+   168→    return null;
+   169→  }
+   170→}
+   171→
+   172→/**
+   173→ * Build Redis key for a session
+   174→ */
+   175→function buildKey(prefix: string, sessionId: string): string {
+   176→  return `${prefix}:${sessionId}`;
+   177→}
+   178→
+   179→// ============================================================================
+   180→// RedisSessionStore Class
+   181→// ============================================================================
+   182→
+   183→/**
+   184→ * Redis-backed session state manager for threat hunting operations.
+   185→ * 
+   186→ * This class provides a drop-in replacement for the in-memory Map used
+   187→ * in threat-hunting/sessions/route.ts with the following benefits:
+   188→ * 
+   189→ * - **Production**: Sessions persist across server restarts and are shared
+   190→ *   across multiple instances in a cluster deployment.
+   191→ * - **Development**: Falls back gracefully to in-memory storage when Redis
+   192→ *   is not available.
+   193→ * - **Automatic Cleanup**: TTL-based expiration ensures stale sessions
+   194→ *   are automatically removed.
+   195→ * 
+   196→ * @example
+   197→ * ```typescript
+   198→ * import { huntSessionStore, RedisSessionStore } from '@/lib/production/redis-session-store';
+   199→ * 
+   200→ * // Using singleton instance
+   201→ * await huntSessionStore.set('session-123', { id: 'session-123', status: 'RUNNING', ... });
+   202→ * const state = await huntSessionStore.get('session-123');
+   203→ * 
+   204→ * // Or create custom instance
+   205→ * const store = new RedisSessionStore({ defaultTTLSeconds: 3600 });
+   206→ * ```
+   207→ */
+   208→export class RedisSessionStore {
+   209→  private config: Required<RedisSessionStoreConfig>;
+   210→  private memoryFallback: Map<string, HuntSessionState> = new Map();
+   211→  private useRedis: boolean = false;
+   212→  private redisInitialized: boolean = false;
+   213→  private initializationPromise: Promise<void> | null = null;
+   214→  private cleanupTimer: ReturnType<typeof setInterval> | null = null;
+   215→  private isHealthy: boolean = true;
+   216→  private lastError: string | null = null;
+   217→
+   218→  constructor(config?: RedisSessionStoreConfig) {
+   219→    this.config = {
+   220→      ...DEFAULT_CONFIG,
+   221→      ...config,
+   222→      enableDebugLogging: config?.enableDebugLogging ?? process.env.HUNT_SESSION_DEBUG === 'true',
+   223→    };
+   224→
+   225→    // Check if Redis URL is configured
+   226→    this.useRedis = !!process.env.REDIS_URL;
+   227→    
+   228→    // Initialize Redis connection if available
+   229→    if (this.useRedis) {
+   230→      this.initializeRedis().catch(error => {
+   231→        log(LogLevel.WARN, 'Redis initialization failed, using memory fallback:', error.message);
+   232→        this.useRedis = false;
+   233→        this.lastError = error.message;
+   234→      });
+   235→    }
+   236→
+   237→    // Start cleanup interval
+   238→    this.startCleanupInterval();
+   239→
+   240→    log(LogLevel.INFO, `HuntSessionStore initialized (mode: ${this.useRedis ? 'redis' : 'memory'})`);
+   241→  }
+   242→
+   243→  // ==========================================================================
+   244→  // Public API Methods
+   245→  // ==========================================================================
+   246→
+   247→  /**
+   248→   * Store or update a session's state
+   249→   * 
+   250→   * @param sessionId - Unique session identifier
+   251→   * @param state - Complete session state object
+   252→   * @param ttlSeconds - Optional custom TTL (overrides default)
+   253→   */
+   254→  async set(sessionId: string, state: HuntSessionState, ttlSeconds?: number): Promise<void> {
+   255→    try {
+   256→      if (this.useRedis && this.redisInitialized) {
+   257→        await this.setInRedis(sessionId, state, ttlSeconds);
+   258→      } else {
+   259→        this.setInMemory(sessionId, state);
+   260→      }
+   261→      
+   262→      log(LogLevel.DEBUG, `Session ${sessionId} stored (${state.status}, progress: ${state.progress}%)`);
+   263→    } catch (error) {
+   264→      // Fallback to memory on Redis error
+   265→      if (this.useRedis) {
+   266→        log(LogLevel.WARN, `Redis set failed for ${sessionId}, falling back to memory:`, error);
+   267→        this.setInMemory(sessionId, state);
+   268→      } else {
+   269→        throw error;
+   270→      }
+   271→    }
+   272→  }
+   273→
+   274→  /**
+   275→   * Retrieve a session's state by ID
+   276→   * 
+   277→   * @param sessionId - Unique session identifier
+   278→   * @returns Session state or null if not found
+   279→   */
+   280→  async get(sessionId: string): Promise<HuntSessionState | null> {
+   281→    try {
+   282→      if (this.useRedis && this.redisInitialized) {
+   283→        return await this.getFromRedis(sessionId);
+   284→      } else {
+   285→        return this.getFromMemory(sessionId);
+   286→      }
+   287→    } catch (error) {
+   288→      // Fallback to memory on Redis error
+   289→      if (this.useRedis) {
+   290→        log(LogLevel.WARN, `Redis get failed for ${sessionId}, falling back to memory:`, error);
+   291→        return this.getFromMemory(sessionId);
+   292→      }
+   293→      throw error;
+   294→    }
+   295→  }
+   296→
+   297→  /**
+   298→   * Delete a session by ID
+   299→   * 
+   300→   * @param sessionId - Unique session identifier
+   301→   */
+   302→  async delete(sessionId: string): Promise<void> {
+   303→    try {
+   304→      if (this.useRedis && this.redisInitialized) {
+   305→        await this.deleteFromRedis(sessionId);
+   306→      }
+   307→      
+   308→      // Always remove from memory fallback too
+   309→      this.deleteFromMemory(sessionId);
+   310→      
+   311→      log(LogLevel.DEBUG, `Session ${sessionId} deleted`);
+   312→    } catch (error) {
+   313→      // Still try to clean up memory
+   314→      this.deleteFromMemory(sessionId);
+   315→      log(LogLevel.WARN, `Redis delete failed for ${sessionId}:`, error);
+   316→    }
+   317→  }
+   318→
+   319→  /**
+   320→   * Check if a session exists
+   321→   * 
+   322→   * @param sessionId - Unique session identifier
+   323→   * @returns True if session exists
+   324→   */
+   325→  async has(sessionId: string): Promise<boolean> {
+   326→    try {
+   327→      if (this.useRedis && this.redisInitialized) {
+   328→        return await this.hasInRedis(sessionId);
+   329→      } else {
+   330→        return this.hasInMemory(sessionId);
+   331→      }
+   332→    } catch (error) {
+   333→      if (this.useRedis) {
+   334→        log(LogLevel.WARN, `Redis has check failed for ${sessionId}, falling back to memory:`, error);
+   335→        return this.hasInMemory(sessionId);
+   336→      }
+   337→      throw error;
+   338→    }
+   339→  }
+   340→
+   341→  /**
+   342→   * Get all active sessions
+   343→   * 
+   344→   * @returns Map of session IDs to their states
+   345→   */
+   346→  async getAll(): Promise<Map<string, HuntSessionState>> {
+   347→    try {
+   348→      if (this.useRedis && this.redisInitialized) {
+   349→        return await this.getAllFromRedis();
+   350→      } else {
+   351→        return new Map(this.memoryFallback);
+   352→      }
+   353→    } catch (error) {
+   354→      if (this.useRedis) {
+   355→        log(LogLevel.WARN, 'Redis getAll failed, falling back to memory:', error);
+   356→        return new Map(this.memoryFallback);
+   357→      }
+   358→      throw error;
+   359→    }
+   360→  }
+   361→
+   362→  /**
+   363→   * Clean up stale sessions that have exceeded the timeout
+   364→   * 
+   365→   * @param timeoutMs - Timeout in milliseconds (sessions inactive longer than this will be cleaned)
+   366→   * @returns Number of sessions cleaned up
+   367→   */
+   368→  async cleanupStale(timeoutMs: number): Promise<number> {
+   369→    const now = Date.now();
+   370→    let cleanedCount = 0;
+   371→
+   372→    try {
+   373→      if (this.useRedis && this.redisInitialized) {
+   374→        cleanedCount = await this.cleanupStaleFromRedis(timeoutMs, now);
+   375→      }
+   376→      
+   377→      // Always clean up memory fallback
+   378→      const memoryCleaned = this.cleanupStaleFromMemory(timeoutMs, now);
+   379→      cleanedCount += memoryCleaned;
+   380→      
+   381→      if (cleanedCount > 0) {
+   382→        log(LogLevel.INFO, `Cleaned up ${cleanedCount} stale sessions`);
+   383→      }
+   384→      
+   385→      return cleanedCount;
+   386→    } catch (error) {
+   387→      log(LogLevel.ERROR, 'Error during cleanup:', error);
+   388→      // Try memory cleanup at least
+   389→      return this.cleanupStaleFromMemory(timeoutMs, now);
+   390→    }
+   391→  }
+   392→
+   393→  /**
+   394→   * Get the count of active sessions
+   395→   * 
+   396→   * @returns Number of active sessions
+   397→   */
+   398→  async getCount(): Promise<number> {
+   399→    try {
+   400→      if (this.useRedis && this.redisInitialized) {
+   401→        return await this.getCountFromRedis();
+   402→      } else {
+   403→        return this.memoryFallback.size;
+   404→      }
+   405→    } catch (error) {
+   406→      if (this.useRedis) {
+   407→        log(LogLevel.WARN, 'Redis getCount failed, returning memory count:', error);
+   408→        return this.memoryFallback.size;
+   409→      }
+   410→      throw error;
+   411→    }
+   412→  }
+   413→
+   414→  /**
+   415→   * Perform health check on the session store
+   416→   * 
+   417→   * @returns Health status information
+   418→   */
+   419→  async healthCheck(): Promise<SessionStoreHealthStatus> {
+   420→    const now = new Date();
+   421→    
+   422→    try {
+   423→      if (this.useRedis && this.redisInitialized) {
+   424→        const redisStatus = await redisClient.healthCheck();
+   425→        
+   426→        const sessionCount = await this.getCount();
+   427→        
+   428→        this.isHealthy = redisStatus.healthy;
+   429→        this.lastError = redisStatus.error || null;
+   430→        
+   431→        return {
+   432→          healthy: redisStatus.healthy,
+   433→          mode: redisStatus.healthy ? 'redis' : 'degraded',
+   434→          sessionCount,
+   435→          redisStatus,
+   436→          checkedAt: now,
+   437→          error: redisStatus.error,
+   438→        };
+   439→      } else {
+   440→        // Memory-only mode
+   441→        return {
+   442→          healthy: true,
+   443→          mode: 'memory',
+   444→          sessionCount: this.memoryFallback.size,
+   445→          memoryStats: {
+   446→            usedSlots: this.memoryFallback.size,
+   447→            maxSlots: this.config.maxMemorySessions,
+   448→            usagePercent: Math.round((this.memoryFallback.size / this.config.maxMemorySessions) * 10000) / 100,
+   449→          },
+   450→          checkedAt: now,
+   451→        };
+   452→      }
+   453→    } catch (error) {
+   454→      this.isHealthy = false;
+   455→      this.lastError = error instanceof Error ? error.message : String(error);
+   456→      
+   457→      return {
+   458→        healthy: false,
+   459→        mode: this.useRedis ? 'degraded' : 'memory',
+   460→        sessionCount: this.memoryFallback.size,
+   461→        memoryStats: {
+   462→          usedSlots: this.memoryFallback.size,
+   463→          maxSlots: this.config.maxMemorySessions,
+   464→          usagePercent: Math.round((this.memoryFallback.size / this.config.maxMemorySessions) * 10000) / 100,
+   465→        },
+   466→        checkedAt: now,
+   467→        error: this.lastError,
+   468→      };
+   469→    }
+   470→  }
+   471→
+   472→  /**
+   473→   * Get current storage mode
+   474→   * 
+   475→   * @returns 'redis', 'memory', or 'degraded'
+   476→   */
+   477→  getMode(): 'redis' | 'memory' | 'degraded' {
+   478→    if (!this.useRedis) return 'memory';
+   479→    if (!this.isHealthy || !this.redisInitialized) return 'degraded';
+   480→    return 'redis';
+   481→  }
+   482→
+   483→  /**
+   484→   * Force reconnection to Redis
+   485→   * Useful after connection loss
+   486→   */
+   487→  async reconnect(): Promise<boolean> {
+   488→    if (!process.env.REDIS_URL) {
+   489→      log(LogLevel.WARN, 'Cannot reconnect: REDIS_URL not configured');
+   490→      return false;
+   491→    }
+   492→
+   493→    try {
+   494→      log(LogLevel.INFO, 'Attempting Redis reconnection...');
+   495→      this.redisInitialized = false;
+   496→      await this.initializeRedis();
+   497→      return this.redisInitialized;
+   498→    } catch (error) {
+   499→      log(LogLevel.ERROR, 'Redis reconnection failed:', error);
+   500→      return false;
+   501→    }
+   502→  }
+   503→
+   504→  /**
+   505→   * Gracefully shutdown the session store
+   506→   * Stops cleanup timers and releases resources
+   507→   */
+   508→  async shutdown(): Promise<void> {
+   509→    log(LogLevel.INFO, 'Shutting down HuntSessionStore...');
+   510→    
+   511→    if (this.cleanupTimer) {
+   512→      clearInterval(this.cleanupTimer);
+   513→      this.cleanupTimer = null;
+   514→    }
+   515→    
+   516→    this.memoryFallback.clear();
+   517→    log(LogLevel.INFO, 'HuntSessionStore shutdown complete');
+   518→  }
+   519→
+   520→  // ==========================================================================
+   521→  // Redis Implementation Methods
+   522→  // ==========================================================================
+   523→
+   524→  private async initializeRedis(): Promise<void> {
+   525→    if (this.initializationPromise) {
+   526→      return this.initializationPromise;
+   527→    }
+   528→
+   529→    this.initializationPromise = this.doInitializeRedis();
+   530→    return this.initializationPromise;
+   531→  }
+   532→
+   533→  private async doInitializeRedis(): Promise<void> {
+   534→    try {
+   535→      log(LogLevel.INFO, 'Initializing Redis connection for HuntSessionStore...');
+   536→      
+   537→      // Use existing Redis client manager
+   538→      await redisClient.initialize();
+   539→      
+   540→      // Test connection
+   541→      const client = await getRedis();
+   542→      if (!client) {
+   543→        throw new Error('Failed to get Redis client');
+   544→      }
+   545→      
+   546→      await client.ping();
+   547→      
+   548→      this.redisInitialized = true;
+   549→      this.isHealthy = true;
+   550→      this.lastError = null;
+   551→      
+   552→      log(LogLevel.INFO, '✅ Redis connection established for HuntSessionStore');
+   553→    } catch (error) {
+   554→      this.redisInitialized = false;
+   555→      this.isHealthy = false;
+   556→      this.lastError = error instanceof Error ? error.message : String(error);
+   557→      
+   558→      log(LogLevel.ERROR, '❌ Failed to initialize Redis for HuntSessionStore:', error);
+   559→      throw error;
+   560→    }
+   561→  }
+   562→
+   563→  private async setInRedis(sessionId: string, state: HuntSessionState, ttlSeconds?: number): Promise<void> {
+   564→    await safeRedisCommand(async (client: Redis) => {
+   565→      const key = buildKey(this.config.keyPrefix, sessionId);
+   566→      const serialized = serializeState(state);
+   567→      const ttl = ttlSeconds ?? this.config.defaultTTLSeconds;
+   568→      
+   569→      await client.setex(key, ttl, serialized);
+   570→    });
+   571→  }
+   572→
+   573→  private async getFromRedis(sessionId: string): Promise<HuntSessionState | null> {
+   574→    return safeRedisCommand(async (client: Redis) => {
+   575→      const key = buildKey(this.config.keyPrefix, sessionId);
+   576→      const data = await client.get(key);
+   577→      return deserializeState(data);
+   578→    }, null);
+   579→  }
+   580→
+   581→  private async deleteFromRedis(sessionId: string): Promise<void> {
+   582→    await safeRedisCommand(async (client: Redis) => {
+   583→      const key = buildKey(this.config.keyPrefix, sessionId);
+   584→      await client.del(key);
+   585→    });
+   586→  }
+   587→
+   588→  private async hasInRedis(sessionId: string): Promise<boolean> {
+   589→    return safeRedisCommand(async (client: Redis) => {
+   590→      const key = buildKey(this.config.keyPrefix, sessionId);
+   591→      const exists = await client.exists(key);
+   592→      return exists === 1;
+   593→    }, false);
+   594→  }
+   595→
+   596→  private async getAllFromRedis(): Promise<Map<string, HuntSessionState>> {
+   597→    return safeRedisCommand(async (client: Redis) => {
+   598→      const pattern = `${this.config.keyPrefix}:*`;
+   599→      const keys = await client.keys(pattern);
+   600→      
+   601→      const result = new Map<string, HuntSessionState>();
+   602→      
+   603→      if (keys.length === 0) return result;
+   604→      
+   605→      // Process in batches using pipeline
+   606→      const batchSize = 50;
+   607→      for (let i = 0; i < keys.length; i += batchSize) {
+   608→        const batch = keys.slice(i, i + batchSize);
+   609→        const pipeline = client.pipeline();
+   610→        
+   611→        for (const key of batch) {
+   612→          pipeline.get(key);
+   613→        }
+   614→        
+   615→        const results = await pipeline.exec();
+   616→        
+   617→        for (let j = 0; j < batch.length; j++) {
+   618→          if (results?.[j] && !results[j][0]) {
+   619→            // Extract session ID from key
+   620→            const sessionId = batch[j].replace(`${this.config.keyPrefix}:`, '');
+   621→            const state = deserializeState(results[j][1] as string);
+   622→            
+   623→            if (state) {
+   624→              result.set(sessionId, state);
+   625→            }
+   626→          }
+   627→        }
+   628→      }
+   629→      
+   630→      return result;
+   631→    }, new Map());
+   632→  }
+   633→
+   634→  private async cleanupStaleFromRedis(timeoutMs: number, now: number): Promise<number> {
+   635→    return safeRedisCommand(async (client: Redis) => {
+   636→      const pattern = `${this.config.keyPrefix}:*`;
+   637→      const keys = await client.keys(pattern);
+   638→      
+   639→      if (keys.length === 0) return 0;
+   640→      
+   641→      let cleanedCount = 0;
+   642→      const keysToDelete: string[] = [];
+   643→      
+   644→      // Process in batches
+   645→      const batchSize = 50;
+   646→      for (let i = 0; i < keys.length; i += batchSize) {
+   647→        const batch = keys.slice(i, i + batchSize);
+   648→        const pipeline = client.pipeline();
+   649→        
+   650→        for (const key of batch) {
+   651→          pipeline.get(key);
+   652→        }
+   653→        
+   654→        const results = await pipeline.exec();
+   655→        
+   656→        for (let j = 0; j < batch.length; j++) {
+   657→          if (results?.[j] && !results[j][0]) {
+   658→            const state = deserializeState(results[j][1] as string);
+   659→            
+   660→            if (state) {
+   661→              const lastActivityTime = state.lastActivity.getTime();
+   662→              if (now - lastActivityTime > timeoutMs) {
+   663→                keysToDelete.push(batch[j]);
+   664→              }
+   665→            } else {
+   666→              // Malformed data, delete it
+   667→              keysToDelete.push(batch[j]);
+   668→            }
+   669→          }
+   670→        }
+   671→      }
+   672→      
+   673→      // Delete stale keys
+   674→      if (keysToDelete.length > 0) {
+   675→        await client.del(...keysToDelete);
+   676→        cleanedCount = keysToDelete.length;
+   677→      }
+   678→      
+   679→      return cleanedCount;
+   680→    }, 0);
+   681→  }
+   682→
+   683→  private async getCountFromRedis(): Promise<number> {
+   684→    return safeRedisCommand(async (client: Redis) => {
+   685→      const pattern = `${this.config.keyPrefix}:*`;
+   686→      const keys = await client.keys(pattern);
+   687→      return keys.length;
+   688→    }, 0);
+   689→  }
+   690→
+   691→  // ==========================================================================
+   692→  // Memory Fallback Implementation Methods
+   693→  // ==========================================================================
+   694→
+   695→  private setInMemory(sessionId: string, state: HuntSessionState): void {
+   696→    // Enforce maximum size limit
+   697→    if (this.memoryFallback.size >= this.config.maxMemorySessions && !this.memoryFallback.has(sessionId)) {
+   698→      // Remove oldest entry
+   699→      const oldestKey = this.memoryFallback.keys().next().value;
+   700→      if (oldestKey) {
+   701→        this.memoryFallback.delete(oldestKey);
+   702→        log(LogLevel.DEBUG, `Evicted oldest session ${oldestKey} due to size limit`);
+   703→      }
+   704→    }
+   705→    
+   706→    this.memoryFallback.set(sessionId, state);
+   707→  }
+   708→
+   709→  private getFromMemory(sessionId: string): HuntSessionState | null {
+   710→    return this.memoryFallback.get(sessionId) ?? null;
+   711→  }
+   712→
+   713→  private deleteFromMemory(sessionId: string): void {
+   714→    this.memoryFallback.delete(sessionId);
+   715→  }
+   716→
+   717→  private hasInMemory(sessionId: string): boolean {
+   718→    return this.memoryFallback.has(sessionId);
+   719→  }
+   720→
+   721→  private cleanupStaleFromMemory(timeoutMs: number, now: number): number {
+   722→    let cleanedCount = 0;
+   723→    
+   724→    for (const [sessionId, state] of this.memoryFallback.entries()) {
+   725→      const lastActivityTime = state.lastActivity.getTime();
+   726→      if (now - lastActivityTime > timeoutMs) {
+   727→        this.memoryFallback.delete(sessionId);
+   728→        cleanedCount++;
+   729→      }
+   730→    }
+   731→    
+   732→    return cleanedCount;
+   733→  }
+   734→
+   735→  // ==========================================================================
+   736→  // Cleanup Interval Management
+   737→  // ==========================================================================
+   738→
+   739→  private startCleanupInterval(): void {
+   740→    if (this.cleanupTimer) {
+   741→      clearInterval(this.cleanupTimer);
+   742→    }
+   743→    
+   744→    // Run cleanup at configured interval
+   745→    this.cleanupTimer = setInterval(async () => {
+   746→      try {
+   747→        // Clean up sessions that have been inactive for 2x the default TTL
+   748→        const staleTimeout = this.config.defaultTTLSeconds * 2 * 1000;
+   749→        await this.cleanupStale(staleTimeout);
+   750→      } catch (error) {
+   751→        log(LogLevel.ERROR, 'Scheduled cleanup failed:', error);
+   752→      }
+   753→    }, this.config.cleanupIntervalMs);
+   754→    
+   755→    // Don't prevent Node.js from exiting
+   756→    if (this.cleanupTimer.unref) {
+   757→      this.cleanupTimer.unref();
+   758→    }
+   759→    
+   760→    log(LogLevel.DEBUG, `Cleanup interval started (${this.config.cleanupIntervalMs}ms)`);
+   761→  }
+   762→}
+   763→
+   764→// ============================================================================
+   765→// Singleton Instance
+   766→// ============================================================================
+   767→
+   768→/**
+   769→ * Global singleton instance of the RedisSessionStore.
+   770→ * 
+   771→ * Use this instance throughout your application for consistent
+   772→ * session state management. The store automatically detects
+   773→ * whether Redis is available and falls back to in-memory
+   774→ * storage when needed.
+   775→ * 
+   776→ * @example
+   777→ * ```typescript
+   778→ * import { huntSessionStore } from '@/lib/production/redis-session-store';
+   779→ * 
+   780→ * // Store session state
+   781→ * await huntSessionStore.set('session-123', {
+   782→ *   id: 'session-123',
+   783→ *   status: 'RUNNING',
+   784→ *   progress: 45,
+   785→ *   totalResults: 120,
+   786→ *   lastActivity: new Date(),
+   787→ *   startTime: new Date(),
+   788→ * });
+   789→ * 
+   790→ * // Retrieve session state
+   791→ * const state = await huntSessionStore.get('session-123');
+   792→ * 
+   793→ * // Check health
+   794→ * const health = await huntSessionStore.healthCheck();
+   795→ * console.log(`Mode: ${health.mode}, Sessions: ${health.sessionCount}`);
+   796→ * ```
+   797→ */
+   798→export const huntSessionStore = new RedisSessionStore({
+   799→  keyPrefix: 'hunt:session',
+   800→  defaultTTLSeconds: parseInt(process.env.HUNT_SESSION_TTL_SECONDS || '1800', 10),
+   801→  enableDebugLogging: process.env.HUNT_SESSION_DEBUG === 'true',
+   802→});
+   803→
+   804→// ============================================================================
+   805→// Convenience Functions (for easy migration from Map)
+   806→// ============================================================================
+   807→
+   808→/**
+   809→ * Set a session state (convenience wrapper)
+   810→ */
+   811→export async function setHuntSession(sessionId: string, state: HuntSessionState): Promise<void> {
+   812→  await huntSessionStore.set(sessionId, state);
+   813→}
+   814→
+   815→/**
+   816→ * Get a session state (convenience wrapper)
+   817→ */
+   818→export async function getHuntSession(sessionId: string): Promise<HuntSessionState | null> {
+   819→  return huntSessionStore.get(sessionId);
+   820→}
+   821→
+   822→/**
+   823→ * Delete a session (convenience wrapper)
+   824→ */
+   825→export async function deleteHuntSession(sessionId: string): Promise<void> {
+   826→  await huntSessionStore.delete(sessionId);
+   827→}
+   828→
+   829→/**
+   830→ * Check if session exists (convenience wrapper)
+   831→ */
+   832→export async function hasHuntSession(sessionId: string): Promise<boolean> {
+   833→  return huntSessionStore.has(sessionId);
+   834→}
+   835→
+   836→/**
+   837→ * Get all sessions (convenience wrapper)
+   838→ */
+   839→export async function getAllHuntSessions(): Promise<Map<string, HuntSessionState>> {
+   840→  return huntSessionStore.getAll();
+   841→}
+   842→
+   843→/**
+   844→ * Clean up stale sessions (convenience wrapper)
+   845→ */
+   846→export async function cleanupStaleHuntSessions(timeoutMs: number): Promise<number> {
+   847→  return huntSessionStore.cleanupStale(timeoutMs);
+   848→}
+   849→
+   850→/**
+   851→ * Get session count (convenience wrapper)
+   852→ */
+   853→export async function getHuntSessionCount(): Promise<number> {
+   854→  return huntSessionStore.getCount();
+   855→}
+   856→
+   857→/**
+   858→ * Check session store health (convenience wrapper)
+   859→ */
+   860→export async function checkHuntSessionHealth(): Promise<SessionStoreHealthStatus> {
+   861→  return huntSessionStore.healthCheck();
+   862→}
+   863→
+   864→// ============================================================================
+   865→// Exports
+   866→// ============================================================================
+   867→
+   868→export default RedisSessionStore;
+   869→

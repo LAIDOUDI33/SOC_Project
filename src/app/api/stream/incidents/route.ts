@@ -61,6 +61,13 @@ export async function GET(request: NextRequest) {
       processingTimeMs: Date.now() - startTime 
     });
 
+    // Get allowed origins from env or use request origin for development
+    const allowedOrigins = (process.env.ALLOWED_ORIGINS || 'http://localhost:3000').split(',');
+    const requestOrigin = request.headers.get('origin');
+    const corsOrigin = allowedOrigins.some(allowed => 
+      requestOrigin?.includes(allowed.trim())
+    ) ? requestOrigin : allowedOrigins[0];
+
     // Return SSE stream response
     return new Response(stream, {
       headers: {
@@ -70,8 +77,9 @@ export async function GET(request: NextRequest) {
         'X-Accel-Buffering': 'no', // Disable nginx buffering
         'X-Request-ID': requestId,
         'X-Connection-ID': connectionId,
-        'Access-Control-Allow-Origin': '*',
-        'Access-Control-Allow-Headers': 'Cache-Control, Last-Event-ID'
+        'Access-Control-Allow-Origin': corsOrigin,
+        'Access-Control-Allow-Headers': 'Cache-Control, Last-Event-ID, Authorization',
+        'Access-Control-Allow-Credentials': 'true'
       },
       status: 200
     });

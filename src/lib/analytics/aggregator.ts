@@ -163,11 +163,84 @@ export const TimeRanges = {
 };
 
 // ============================================================
-// CACHE LAYER
+// CACHE LAYER - LRU-Bounded Cache Implementation
 // ============================================================
 
-const analyticsCache = new Map<string, AnalyticsCache<any>>();
+const MAX_CACHE_SIZE = 1000; // Maximum cache entries before LRU eviction
 const DEFAULT_CACHE_TTL = 300; // 5 minutes
+
+// Cache statistics tracking
+interface CacheStats {
+  hits: number;
+  misses: number;
+  evictions: number;
+  currentSize: number;
+}
+
+let cacheStats: CacheStats = {
+  hits: 0,
+  misses: 0,
+  evictions: 0,
+  currentSize: 0
+};
+
+// Extended cache entry with LRU access timestamp
+interface LRUCacheEntry<T> extends AnalyticsCache<T> {
+  lastAccessedAt: Date;
+}
+
+const analyticsCache = new Map<string, LRUCacheEntry<any>>();
+// Track insertion order for LRU eviction (oldest first)
+const lruOrder: string[] = [];
+
+/**
+ * Get cache statistics for monitoring and debugging
+ */
+export function getCacheStats(): Readonly<CacheStats> & { maxSize: number } {
+  return {
+    ...cacheStats,
+    currentSize: analyticsCache.size,
+    maxSize: MAX_CACHE_SIZE
+  };
+}
+
+/**
+ * Reset cache statistics (useful for testing or periodic reset)
+ */
+export function resetCacheStats(): void {
+  cacheStats = {
+    hits: 0,
+    misses: 0,
+    evictions: 0,
+    currentSize: analyticsCache.size
+  };
+}
+
+/**
+ * Evict the least recently used cache entry
+ */
+function evictLRU(): void {
+  if (lruOrder.length === 0) return;
+  
+  // Get oldest key (front of array = least recently used)
+  const oldestKey = lruOrder.shift();
+  if (oldestKey && analyticsCache.has(oldestKey)) {
+    analyticsCache.delete(oldestKey);
+    cacheStats.evictions++;
+  }
+}
+
+/**
+ * Move key to end of LRU order (most recently used position)
+ */
+function markRecentlyUsed(key: string): void {
+  const index = lruOrder.indexOf(key);
+  if (index !== -1) {
+    // Remove from current position and add to end
+    lruOrder.splice(index, 1);
+  }
+  lruOrder.push(key);
+}
 
 function getCacheKey(category: string, subType: string, range: string): string {
   return `analytics:${category}:${subType}:${range}`;
@@ -175,32 +248,89 @@ function getCacheKey(category: string, subType: string, range: string): string {
 
 function getCached<T>(key: string): T | null {
   const cached = analyticsCache.get(key);
-  if (!cached) return null;
   
-  if (new Date() > cached.expiresAt) {
-    analyticsCache.delete(key);
+  if (!cached) {
+    cacheStats.misses++;
     return null;
   }
+  
+  // Check expiration
+  if (new Date() > cached.expiresAt) {
+    analyticsCache.delete(key);
+    // Remove from LRU order
+    const index = lruOrder.indexOf(key);
+    if (index !== -1) {
+      lruOrder.splice(index, 1);
+    }
+    cacheStats.misses++;
+    return null;
+  }
+  
+  // Update LRU access time and move to most recent position
+  cached.lastAccessedAt = new Date();
+  markRecentlyUsed(key);
+  cacheStats.hits++;
   
   return cached.data as T;
 }
 
 function setCache<T>(key: string, data: T, ttl: number = DEFAULT_CACHE_TTL): void {
+  // If key already exists, update in place without changing size
+  const exists = analyticsCache.has(key);
+  
   analyticsCache.set(key, {
     data,
     calculatedAt: new Date(),
     expiresAt: new Date(Date.now() + ttl * 1000),
-    ttl
+    ttl,
+    lastAccessedAt: new Date()
   });
+  
+  if (!exists) {
+    // New entry - check capacity and evict if needed
+    while (analyticsCache.size > MAX_CACHE_SIZE) {
+      evictLRU();
+    }
+    
+    // Add to LRU order as most recently used
+    markRecentlyUsed(key);
+  } else {
+    // Existing entry - just update its position in LRU order
+    markRecentlyUsed(key);
+  }
 }
 
-// Cleanup cache every 10 minutes
+/**
+ * Clear all cache entries (useful for forced refresh scenarios)
+ */
+export function clearAnalyticsCache(): void {
+  analyticsCache.clear();
+  lruOrder.length = 0;
+  cacheStats.currentSize = 0;
+}
+
+// Cleanup cache every 10 minutes:
+// - Removes expired entries
+// - Enforces max size limit (safety net for any edge cases)
 setInterval(() => {
   const now = new Date();
+  let expiredCount = 0;
+  
+  // First pass: remove expired entries
   for (const [key, cached] of analyticsCache.entries()) {
     if (now > cached.expiresAt) {
       analyticsCache.delete(key);
+      const index = lruOrder.indexOf(key);
+      if (index !== -1) {
+        lruOrder.splice(index, 1);
+      }
+      expiredCount++;
     }
+  }
+  
+  // Second pass: enforce max size limit (safety net)
+  while (analyticsCache.size > MAX_CACHE_SIZE) {
+    evictLRU();
   }
 }, 10 * 60 * 1000);
 
@@ -351,7 +481,7 @@ export async function calculateIncidentKPIs(timeRange: TimeRange): Promise<Incid
     
     totalSubscribersAffected: subscriberImpact._sum.subscribersAffected || 0,
     uniqueSubscribersAffected: 0, // Would need complex query
-    avgSubscribersPerIncidents: Math.round(subscriberImpact._avg.subscribersAffected || 0),
+    avgSubscribersPerIncident: Math.round(subscriberImpact._avg.subscribersAffected || 0),
     tatcCodesUsed: tatcCodes.map(t => t.tatcCode).filter(Boolean) as string[]
   };
 
