@@ -1,0 +1,1139 @@
+     1→'use client'
+     2→
+     3→import React, { useState, useMemo, useCallback } from 'react'
+     4→import {
+     5→  Shield, AlertTriangle, Activity, Clock, Users, Server,
+     6→  CheckCircle, XCircle, AlertCircle, ChevronRight, ChevronDown,
+     7→  RefreshCw, Zap, Eye, Play, Pause, Square, FileText, Upload,
+     8→  Download, MessageSquare, UserCheck, Lock, Globe, Phone,
+     9→  Calendar, MapPin, Tag, Link2, ClipboardList, Camera,
+    10→  HardDrive, Network, Terminal, Bug, Target, ArrowRight,
+    11→  Timer, Bell, Send, Plus, Trash2, Edit3, Filter, Search,
+    12→  LayoutGrid, List, MoreVertical, ExternalLink
+    13→} from 'lucide-react'
+    14→import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
+    15→import { Button } from '@/components/ui/button'
+    16→import { Badge } from '@/components/ui/badge'
+    17→import { Input } from '@/components/ui/input'
+    18→import { Textarea } from '@/components/ui/textarea'
+    19→import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
+    20→import {
+    21→  Table, TableBody, TableCell, TableHead, TableHeader, TableRow
+    22→} from '@/components/ui/table'
+    23→import {
+    24→  Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger
+    25→} from '@/components/ui/dialog'
+    26→import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
+    27→import { Progress } from '@/components/ui/progress'
+    28→import { ScrollArea } from '@/components/ui/scroll-area'
+    29→import { Separator } from '@/components/ui/separator'
+    30→import { Avatar, AvatarFallback } from '@/components/ui/avatar'
+    31→
+    32→// ============================================================
+    33→// TYPES & INTERFACES FOR INCIDENT RESPONSE
+    34→// ============================================================
+    35→
+    36→type IncidentSeverity = 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL'
+    37→type IncidentStatus = 'NEW' | 'TRIAGE' | 'IN_PROGRESS' | 'CONTAINED' | 'ERADICATED' | 'RECOVERY' | 'CLOSED' | 'ESCALATED'
+    38→type IncidentCategory = 'MALWARE' | 'PHISHING' | 'DDOS' | 'INTRUSION' | 'DATA_BREACH' | 'INSIDER_THREAT' | 'TELECOM_FRAUD' | 'POLICY_VIOLATION' | 'OTHER'
+    39→
+    40→interface IOCItem {
+    41→  id: string
+    42→  type: 'ip' | 'domain' | 'hash' | 'url' | 'email' | 'phone' | 'imsi' | 'imei'
+    43→  value: string
+    44→  isIndicatorsOfCompromise: boolean
+    45→  confidence: number
+    46→  source: string
+    47→}
+    48→
+    49→interface Task {
+    50→  id: string
+    51→  title: string
+    52→  description: string
+    53→  assignee: string
+    54→  status: 'TODO' | 'IN_PROGRESS' | 'BLOCKED' | 'COMPLETED'
+    55→  priority: 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL'
+    56→  dueDate: string
+    57→  completedAt?: string
+    58→}
+    59→
+    60→interface TimelineEvent {
+    61→  id: string
+    62→  timestamp: string
+    63→  type: 'DETECTION' | 'TRIAGE' | 'CONTAINMENT' | 'ERADICATION' | 'RECOVERY' | 'ESCALATION' | 'NOTIFICATION' | 'EVIDENCE' | 'NOTE'
+    64→  title: string
+    65→  description: string
+    66→  author: string
+    67→  attachments?: string[]
+    68→}
+    69→
+    70→interface EvidenceItem {
+    71→  id: string
+    72→  name: string
+    73→  type: 'LOG' | 'MEMORY_DUMP' | 'DISK_IMAGE' | 'PCAP' | 'SCREENSHOT' | 'REPORT' | 'OTHER'
+    74→  size: string
+    75→  hash: string
+    76→  collectedBy: string
+    77→  collectedAt: string
+    78→  description: string
+    79→}
+    80→
+    81→interface CommunicationLog {
+    82→  id: string
+    83→  timestamp: string
+    84→  channel: 'INTERNAL' | 'EMAIL' | 'PHONE' | 'TICKET' | 'SLACK' | 'EXTERNAL'
+    85→  from: string
+    86→  to: string
+    87→  subject: string
+    88→  content: string
+    89→  isEncrypted: boolean
+    90→}
+    91→
+    92→interface PlaybookStep {
+    93→  id: number
+    94→  phase: 'PREPARATION' | 'DETECTION_ANALYSIS' | 'CONTAINMENT' | 'ERADICATION' | 'RECOVERY' | 'LESSONS_LEARNED'
+    95→  name: string
+    96→  description: string
+    97→  status: 'PENDING' | 'IN_PROGRESS' | 'COMPLETED' | 'SKIPPED'
+    98→  assignee?: string
+    99→  completedAt?: string
+   100→  notes?: string
+   101→}
+   102→
+   103→interface Incident {
+   104→  id: string
+   105→  ticketNumber: string
+   106→  title: string
+   107→  description: string
+   108→  severity: IncidentSeverity
+   109→  status: IncidentStatus
+   110→  category: IncidentCategory
+   111→  reporter: string
+   112→  assignee: string
+   113→  team: string
+   114→  iocs: IOCItem[]
+   115→  tasks: Task[]
+   116→  timeline: TimelineEvent[]
+   117→  evidence: EvidenceItem[]
+   118→  communications: CommunicationLog[]
+   119→  playbookSteps: PlaybookStep[]
+   120→  createdAt: string
+   121→  updatedAt: string
+   122→  detectedAt: string
+   123→  containmentTarget?: string
+   124→  resolutionTarget?: string
+   125→  slaBreachRisk: boolean
+   126→  tags: string[]
+   127→  affectedAssets: string[]
+   128→  affectedUsers: number
+   129→  businessImpact: 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL'
+   130→}
+   131→
+   132→// ============================================================
+   133→// MOCK DATA FOR DEMONSTRATION
+   134→// ============================================================
+   135→
+   136→const mockIncidents: Incident[] = [
+   137→  {
+   138→    id: 'INC-2026-001',
+   139→    ticketNumber: 'SOC-0847',
+   140→    title: 'Ransomware Attack - Core Billing System',
+   141→    description: 'Ransomware detected on billing server BIL-PROD-03. Files encrypted with .djezzy_lock extension. Initial access suspected via phishing email opened by finance department.',
+   142→    severity: 'CRITICAL',
+   143→    status: 'CONTAINED',
+   144→    category: 'MALWARE',
+   145→    reporter: 'EDR System',
+   146→    assignee: 'Ahmed Benali (L1 IR)',
+   147→    team: 'CSIRT-Alpha',
+   148→    iocs: [
+   149→      { id: 'ioc1', type: 'hash', value: 'a1b2c3d4e5f6...', isIndicatorsOfCompromise: true, confidence: 95, source: 'EDR Telemetry' },
+   150→      { id: 'ioc2', type: 'ip', value: '185.220.101.45', isIndicatorsOfCompromise: true, confidence: 88, source: 'C2 Communication' },
+   151→      { id: 'ioc3', type: 'domain', value: 'evil-c2.ru', isIndicatorsOfCompromise: true, confidence: 92, source: 'DNS Logs' }
+   152→    ],
+   153→    tasks: [
+   154→      { id: 't1', title: 'Isolate affected host', description: 'Network isolation of BIL-PROD-03', assignee: 'Network Team', status: 'COMPLETED', priority: 'CRITICAL', dueDate: '2026-01-15T10:00:00Z', completedAt: '2026-01-15T09:45:00Z' },
+   155→      { id: 't2', title: 'Memory acquisition', description: 'Acquire volatile memory from compromised system', assignee: 'DFIR Team', status: 'COMPLETED', priority: 'HIGH', dueDate: '2026-01-15T11:00:00Z', completedAt: '2026-01-15T10:30:00Z' },
+   156→      { id: 't3', title: 'Malware analysis', description: 'Static and dynamic analysis of ransomware sample', assignee: 'Malware Lab', status: 'IN_PROGRESS', priority: 'HIGH', dueDate: '2026-01-15T16:00:00Z' },
+   157→      { id: 't4', title: 'Restore from backup', description: 'Restore encrypted files from clean backup', assignee: 'System Admins', status: 'TODO', priority: 'CRITICAL', dueDate: '2026-01-16T10:00:00Z' }
+   158→    ],
+   159→    timeline: [
+   160→      { id: 'tl1', timestamp: '2026-01-15T06:23:14Z', type: 'DETECTION', title: 'Initial Detection', description: 'EDR detected suspicious process execution on BIL-PROD-03', author: 'EDR System' },
+   161→      { id: 'tl2', timestamp: '2026-01-15T06:25:30Z', type: 'DETECTION', title: 'Alert Triggered', description: 'Ransomware behavior pattern matched - SOC Alert #847 created', author: 'SIEM Correlation' },
+   162→      { id: 'tl3', timestamp: '2026-01-15T06:30:00Z', type: 'TRIAGE', title: 'Triage Started', description: 'IR Analyst began initial assessment of incident', author: 'Ahmed Benali' },
+   163→      { id: 'tl4', timestamp: '2026-01-15T09:45:00Z', type: 'CONTAINMENT', title: 'Host Isolated', description: 'Affected system successfully isolated from network', author: 'Network Team' }
+   164→    ],
+   165→    evidence: [
+   166→      { id: 'ev1', name: 'BIL-PROD-03-memory.dmp', type: 'MEMORY_DUMP', size: '16.4 GB', hash: 'sha256:abc123...', collectedBy: 'DFIR Team', collectedAt: '2026-01-15T10:30:00Z', description: 'Full memory dump before shutdown' },
+   167→      { id: 'ev2', name: 'ransomware_sample.exe', type: 'OTHER', size: '2.3 MB', hash: 'sha256:def456...', collectedBy: 'EDR', collectedAt: '2026-01-15T06:24:00Z', description: 'Quarantined malware executable' },
+   168→      { id: 'ev3', name: 'network_capture.pcap', type: 'PCAP', size: '847 MB', hash: 'sha256:ghi789...', collectedBy: 'NDR', collectedAt: '2026-01-15T09:50:00Z', description: 'C2 communication capture' }
+   169→    ],
+   170→    communications: [
+   171→      { id: 'com1', timestamp: '2026-01-15T07:00:00Z', channel: 'INTERNAL', from: 'SOC Manager', to: 'CSIRT-Alpha', subject: 'Escalation - Critical Incident', content: 'This incident has been escalated to CRITICAL. All hands on deck.', isEncrypted: false },
+   172→      { id: 'com2', timestamp: '2026-01-15T08:00:00Z', channel: 'EMAIL', from: 'IR Lead', to: 'CISO; CTO', subject: 'Executive Briefing - Ransomware Incident', content: 'Executive summary of current ransomware situation attached.', isEncrypted: true }
+   173→    ],
+   174→    playbookSteps: [
+   175→      { id: 1, phase: 'PREPARATION', name: 'Assemble IR Team', description: 'Notify all required personnel', status: 'COMPLETED', assignee: 'SOC Manager', completedAt: '2026-01-15T06:35:00Z' },
+   176→      { id: 2, phase: 'DETECTION_ANALYSIS', name: 'Initial Triage', description: 'Assess scope and severity', status: 'COMPLETED', assignee: 'Ahmed Benali', completedAt: '2026-01-15T07:00:00Z' },
+   177→      { id: 3, phase: 'DETECTION_ANALYSIS', name: 'Identify IOCs', description: 'Extract all indicators of compromise', status: 'COMPLETED', assignee: 'Threat Intel', completedAt: '2026-01-15T08:30:00Z' },
+   178→      { id: 4, phase: 'CONTAINMENT', name: 'Containment Actions', description: 'Isolate affected systems', status: 'COMPLETED', assignee: 'Network Team', completedAt: '2026-01-15T09:45:00Z' },
+   179→      { id: 5, phase: 'ERADICATION', name: 'Malware Removal', description: 'Remove malicious artifacts', status: 'IN_PROGRESS', assignee: 'DFIR Team' },
+   180→      { id: 6, phase: 'RECOVERY', name: 'System Restoration', description: 'Restore systems from backup', status: 'PENDING' },
+   181→      { id: 7, phase: 'LESSONS_LEARNED', name: 'Post-Incident Review', description: 'Document lessons learned', status: 'PENDING' }
+   182→    ],
+   183→    createdAt: '2026-01-15T06:23:14Z',
+   184→    updatedAt: '2026-01-15T11:00:00Z',
+   185→    detectedAt: '2026-01-15T06:23:14Z',
+   186→    containmentTarget: '2026-01-15T12:00:00Z',
+   187→    resolutionTarget: '2026-01-17T18:00:00Z',
+   188→    slaBreachRisk: false,
+   189→    tags: ['ransomware', 'billing-system', 'critical'],
+   190→    affectedAssets: ['BIL-PROD-03', 'BIL-DB-01', 'BIL-APP-02'],
+   191→    affectedUsers: 450,
+   192→    businessImpact: 'CRITICAL'
+   193→  },
+   194→  {
+   195→    id: 'INC-2026-002',
+   196→    ticketNumber: 'SOC-0848',
+   197→    title: 'SIM Swap Fraud Campaign - Multiple Subscribers',
+   198→    description: 'Coordinated SIM swap attack targeting high-value subscribers. Attackers used social engineering to convince retail staff to perform unauthorized SIM swaps.',
+   199→    severity: 'HIGH',
+   200→    status: 'IN_PROGRESS',
+   201→    category: 'TELECOM_FRAUD',
+   202→    reporter: 'Fraud Detection System',
+   203→    assignee: 'Fatima Zahra (L2 Fraud)',
+   204→    team: 'Fraud Investigation Unit',
+   205→    iocs: [
+   206→      { id: 'ioc4', type: 'phone', value: '+213 555 01234', isIndicatorsOfCompromise: true, confidence: 90, source: 'Subscriber DB' },
+   207→      { id: 'ioc5', type: 'imsi', value: '608020100123456', isIndicatorsOfCompromise: true, confidence: 95, source: 'HLR Records' }
+   208→    ],
+   209→    tasks: [
+   210→      { id: 't5', title: 'Identify all affected subscribers', description: 'Query SSM for all SIM swaps in last 48h', assignee: 'Fraud Analyst', status: 'IN_PROGRESS', priority: 'HIGH', dueDate: '2026-01-15T14:00:00Z' },
+   211→      { id: 't6', title: 'Block fraudulent accounts', description: 'Suspend accounts involved in fraud', assignee: 'Security Ops', status: 'TODO', priority: 'CRITICAL', dueDate: '2026-01-15T12:00:00Z' }
+   212→    ],
+   213→    timeline: [
+   214→      { id: 'tl5', timestamp: '2026-01-15T09:00:00Z', type: 'DETECTION', title: 'Anomaly Detected', description: 'Unusual spike in SIM swap requests detected', author: 'ML Engine' }
+   215→    ],
+   216→    evidence: [],
+   217→    communications: [],
+   218→    playbookSteps: [],
+   219→    createdAt: '2026-01-15T09:00:00Z',
+   220→    updatedAt: '2026-01-15T11:30:00Z',
+   221→    detectedAt: '2026-01-15T08:45:00Z',
+   222→    containmentTarget: '2026-01-15T18:00:00Z',
+   223→    slaBreachRisk: true,
+   224→    tags: ['sim-swap', 'fraud', 'subscriber'],
+   225→    affectedAssets: ['SSM Portal', 'Retail POS Systems'],
+   226→    affectedUsers: 23,
+   227→    businessImpact: 'HIGH'
+   228→  },
+   229→  {
+   230→    id: 'INC-2026-003',
+   231→    ticketNumber: 'SOC-0849',
+   232→    title: 'Phishing Campaign - Corporate Email',
+   233→    description: 'Spear-phishing campaign targeting executive team. Emails contain malicious links to credential harvesting page.',
+   234→    severity: 'MEDIUM',
+   235→    status: 'NEW',
+   236→    category: 'PHISHING',
+   237→    reporter: 'Email Gateway',
+   238→    assignee: 'Unassigned',
+   239→    team: 'SOC Tier 1',
+   240→    iocs: [
+   241→      { id: 'ioc6', type: 'url', value: 'http://djezzy-login.secure-update.com', isIndicatorsOfCompromise: true, confidence: 85, source: 'Email Gateway' },
+   242→      { id: 'ioc7', type: 'email', value: 'ceo-support@secure-dz.com', isIndicatorsOfCompromise: true, confidence: 78, source: 'Email Headers' }
+   243→    ],
+   244→    tasks: [],
+   245→    timeline: [],
+   246→    evidence: [],
+   247→    communications: [],
+   248→    playbookSteps: [],
+   249→    createdAt: '2026-01-15T11:00:00Z',
+   250→    updatedAt: '2026-01-15T11:00:00Z',
+   251→    detectedAt: '2026-01-15T10:55:00Z',
+   252→    slaBreachRisk: false,
+   253→    tags: ['phishing', 'executive-targeted', 'credential-harvesting'],
+   254→    affectedAssets: ['Email Gateway'],
+   255→    affectedUsers: 12,
+   256→    businessImpact: 'MEDIUM'
+   257→  }
+   258→]
+   259→
+   260→const mockTeamMembers = [
+   261→  { id: 'u1', name: 'Ahmed Benali', role: 'L1 IR Analyst', availability: 'available' },
+   262→  { id: 'u2', name: 'Fatima Zahra', role: 'L2 Fraud Specialist', availability: 'busy' },
+   263→  { id: 'u3', name: 'Karim Hadj', role: 'Senior DFIR', availability: 'available' },
+   264→  { id: 'u4', name: 'Amina Ould', role: 'Threat Intelligence', availability: 'available' },
+   265→  { id: 'u5', name: 'Youssef Amrani', role: 'Malware Analyst', availability: 'off-duty' }
+   266→]
+   267→
+   268→// ============================================================
+   269→// HELPER COMPONENTS
+   270→// ============================================================
+   271→
+   272→const SeverityConfig: Record<IncidentSeverity, { color: string; bg: string; icon: React.ReactNode }> = {
+   273→  LOW: { color: 'text-blue-400', bg: 'bg-blue-500/10 border-blue-500/30', icon: <AlertCircle className="w-4 h-4" /> },
+   274→  MEDIUM: { color: 'text-yellow-400', bg: 'bg-yellow-500/10 border-yellow-500/30', icon: <AlertTriangle className="w-4 h-4" /> },
+   275→  HIGH: { color: 'text-orange-400', bg: 'bg-orange-500/10 border-orange-500/30', icon: <Shield className="w-4 h-4" /> },
+   276→  CRITICAL: { color: 'text-red-400', bg: 'bg-red-500/10 border-red-500/30', icon: <Bug className="w-4 h-4" /> }
+   277→}
+   278→
+   279→const StatusConfig: Record<IncidentStatus, { color: string; label: string }> = {
+   280→  NEW: { color: 'bg-purple-500/20 text-purple-300', label: 'New' },
+   281→  TRIAGE: { color: 'bg-blue-500/20 text-blue-300', label: 'In Triage' },
+   282→  IN_PROGRESS: { color: 'bg-yellow-500/20 text-yellow-300', label: 'In Progress' },
+   283→  CONTAINED: { color: 'bg-orange-500/20 text-orange-300', label: 'Contained' },
+   284→  ERADICATED: { color: 'bg-green-500/20 text-green-300', label: 'Eradicated' },
+   285→  RECOVERY: { color: 'bg-cyan-500/20 text-cyan-300', label: 'Recovery' },
+   286→  CLOSED: { color: 'bg-gray-500/20 text-gray-300', label: 'Closed' },
+   287→  ESCALATED: { color: 'bg-red-500/20 text-red-300', label: 'Escalated' }
+   288→}
+   289→
+   290→const CategoryIcons: Record<IncidentCategory, React.ReactNode> = {
+   291→  MALWARE: <Bug className="w-4 h-4" />,
+   292→  PHISHING: <Globe className="w-4 h-4" />,
+   293→  DDOS: <Zap className="w-4 h-4" />,
+   294→  INTRUSION: <Terminal className="w-4 h-4" />,
+   295→  DATA_BREACH: <HardDrive className="w-4 h-4" />,
+   296→  INSIDER_THREAT: <UserCheck className="w-4 h-4" />,
+   297→  TELECOM_FRAUD: <Phone className="w-4 h-4" />,
+   298→  POLICY_VIOLATION: <FileText className="w-4 h-4" />,
+   299→  OTHER: <AlertCircle className="w-4 h-4" />
+   300→}
+   301→
+   302→const SeverityBadge: React.FC<{ severity: IncidentSeverity }> = ({ severity }) => (
+   303→  <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold border ${SeverityConfig[severity].bg} ${SeverityConfig[severity].color}`}>
+   304→    {SeverityConfig[severity].icon}
+   305→    {severity}
+   306→  </span>
+   307→)
+   308→
+   309→const StatusBadge: React.FC<{ status: IncidentStatus }> = ({ status }) => (
+   310→  <span className={`inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium ${StatusConfig[status].color}`}>
+   311→    {StatusConfig[status].label}
+   312→  </span>
+   313→)
+   314→
+   315→const TimelineIcon: React.FC<{ type: TimelineEvent['type'] }> = ({ type }) => {
+   316→  const icons: Record<TimelineEvent['type'], string> = {
+   317→    DETECTION: 'text-red-400 bg-red-500/20',
+   318→    TRIAGE: 'text-blue-400 bg-blue-500/20',
+   319→    CONTAINMENT: 'text-orange-400 bg-orange-500/20',
+   320→    ERADICATION: 'text-yellow-400 bg-yellow-500/20',
+   321→    RECOVERY: 'text-green-400 bg-green-500/20',
+   322→    ESCALATION: 'text-purple-400 bg-purple-500/20',
+   323→    NOTIFICATION: 'text-cyan-400 bg-cyan-500/20',
+   324→    EVIDENCE: 'text-pink-400 bg-pink-500/20',
+   325→    NOTE: 'text-gray-400 bg-gray-500/20'
+   326→  }
+   327→  
+   328→  const iconMap: Record<TimelineEvent['type'], React.ReactNode> = {
+   329→    DETECTION: <AlertTriangle className="w-4 h-4" />,
+   330→    TRIAGE: <Search className="w-4 h-4" />,
+   331→    CONTAINMENT: <Shield className="w-4 h-4" />,
+   332→    ERADICATION: <Trash2 className="w-4 h-4" />,
+   333→    RECOVERY: <RefreshCw className="w-4 h-4" />,
+   334→    ESCALATION: <ArrowRight className="w-4 h-4" />,
+   335→    NOTIFICATION: <Bell className="w-4 h-4" />,
+   336→    EVIDENCE: <Camera className="w-4 h-4" />,
+   337→    NOTE: <FileText className="w-4 h-4" />
+   338→  }
+   339→
+   340→  return (
+   341→    <div className={`p-2 rounded-lg ${icons[type]}`}>
+   342→      {iconMap[type]}
+   343→    </div>
+   344→  )
+   345→}
+   346→
+   347→// ============================================================
+   348→// MAIN INCIDENT RESPONSE CENTER COMPONENT
+   349→// ============================================================
+   350→
+   351→export const IncidentResponseCenter: React.FC = () => {
+   352→  // State Management
+   353→  const [incidents, setIncidents] = useState<Incident[]>(mockIncidents)
+   354→  const [selectedIncident, setSelectedIncident] = useState<Incident | null>(null)
+   355→  const [activeTab, setActiveTab] = useState('overview')
+   356→  const [searchQuery, setSearchQuery] = useState('')
+   357→  const [filterSeverity, setFilterSeverity] = useState<string>('all')
+   358→  const [filterStatus, setFilterStatus] = useState<string>('all')
+   359→  const [showNewIncidentDialog, setShowNewIncidentDialog] = useState(false)
+   360→  const [viewMode, setViewMode] = useState<'list' | 'kanban'>('list')
+   361→
+   362→  // Computed Values
+   363→  const filteredIncidents = useMemo(() => {
+   364→    return incidents.filter(inc => {
+   365→      const matchesSearch = searchQuery === '' || 
+   366→        inc.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
+   367→        inc.ticketNumber.toLowerCase().includes(searchQuery.toLowerCase()) ||
+   368→        inc.description.toLowerCase().includes(searchQuery.toLowerCase())
+   369→      
+   370→      const matchesSeverity = filterSeverity === 'all' || inc.severity === filterSeverity
+   371→      const matchesStatus = filterStatus === 'all' || inc.status === filterStatus
+   372→      
+   373→      return matchesSearch && matchesSeverity && matchesStatus
+   374→    })
+   375→  }, [incidents, searchQuery, filterSeverity, filterStatus])
+   376→
+   377→  const stats = useMemo(() => ({
+   378→    total: incidents.length,
+   379→    newCount: incidents.filter(i => i.status === 'NEW').length,
+   380→    activeCount: incidents.filter(i => ['IN_PROGRESS', 'TRIAGE'].includes(i.status)).length,
+   381→    criticalCount: incidents.filter(i => i.severity === 'CRITICAL').length,
+   382→    containedCount: incidents.filter(i => i.status === 'CONTAINED').length,
+   383→    avgResolutionTime: '4h 23m' // Mock value
+   384→  }), [incidents])
+   385→
+   386→  // Handlers
+   387→  const handleUpdateIncidentStatus = useCallback((incidentId: string, newStatus: IncidentStatus) => {
+   388→    setIncidents(prev => prev.map(inc => 
+   389→      inc.id === incidentId ? { ...inc, status: newStatus, updatedAt: new Date().toISOString() } : inc
+   390→    ))
+   391→    if (selectedIncident?.id === incidentId) {
+   392→      setSelectedIncident(prev => prev ? { ...prev, status: newStatus, updatedAt: new Date().toISOString() } : null)
+   393→    }
+   394→  }, [selectedIncident])
+   395→
+   396→  const handleAssignIncident = useCallback((incidentId: string, assignee: string) => {
+   397→    setIncidents(prev => prev.map(inc => 
+   398→      inc.id === incidentId ? { ...inc, assignee, updatedAt: new Date().toISOString() } : inc
+   399→    ))
+   400→  }, [])
+   401→
+   402→  return (
+   403→    <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-white p-6">
+   404→      {/* Header */}
+   405→      <div className="max-w-[1920px] mx-auto">
+   406→        <div className="flex items-center justify-between mb-6">
+   407→          <div className="flex items-center gap-4">
+   408→            <div className="p-3 bg-gradient-to-br from-blue-600 to-indigo-700 rounded-xl shadow-lg shadow-blue-500/20">
+   409→              <Shield className="w-7 h-7 text-white" />
+   410→            </div>
+   411→            <div>
+   412→              <h1 className="text-3xl font-bold bg-gradient-to-r from-white to-gray-300 bg-clip-text text-transparent">
+   413→                Incident Response Center
+   414→              </h1>
+   415→              <p className="text-gray-400 mt-1">Djezzy National SOC - DFIR Operations</p>
+   416→            </div>
+   417→          </div>
+   418→          
+   419→          <div className="flex items-center gap-3">
+   420→            <Button variant="outline" size="sm">
+   421→              <Download className="w-4 h-4 mr-2" />
+   422→              Export Report
+   423→            </Button>
+   424→            <Dialog open={showNewIncidentDialog} onOpenChange={setShowNewIncidentDialog}>
+   425→              <DialogTrigger asChild>
+   426→                <Button size="sm" className="bg-gradient-to-r from-blue-500 to-indigo-500 hover:from-blue-600 hover:to-indigo-600">
+   427→                  <Plus className="w-4 h-4 mr-2" />
+   428→                  New Incident
+   429→                </Button>
+   430→              </DialogTrigger>
+   431→              <DialogContent className="bg-slate-900 border-slate-700 text-white max-w-2xl">
+   432→                <DialogHeader>
+   433→                  <DialogTitle>Create New Incident</DialogTitle>
+   434→                  <DialogDescription className="text-gray-400">
+   435→                    Log a new security incident for investigation
+   436→                  </DialogDescription>
+   437→                </DialogHeader>
+   438→                <div className="space-y-4 mt-4">
+   439→                  <div className="grid grid-cols-2 gap-4">
+   440→                    <div>
+   441→                      <label className="text-sm font-medium text-gray-300 mb-2 block">Title</label>
+   442→                      <Input placeholder="Incident title..." className="bg-slate-800 border-slate-600" />
+   443→                    </div>
+   444→                    <div>
+   445→                      <label className="text-sm font-medium text-gray-300 mb-2 block">Category</label>
+   446→                      <Select>
+   447→                        <SelectTrigger className="bg-slate-800 border-slate-600">
+   448→                          <SelectValue placeholder="Select category" />
+   449→                        </SelectTrigger>
+   450→                        <SelectContent>
+   451→                          {Object.keys(CategoryIcons).map(cat => (
+   452→                            <SelectItem key={cat} value={cat}>{cat.replace('_', ' ')}</SelectItem>
+   453→                          ))}
+   454→                        </SelectContent>
+   455→                      </Select>
+   456→                    </div>
+   457→                  </div>
+   458→                  <div>
+   459→                    <label className="text-sm font-medium text-gray-300 mb-2 block">Description</label>
+   460→                    <Textarea placeholder="Detailed description of the incident..." className="min-h-[100px] bg-slate-800 border-slate-600" />
+   461→                  </div>
+   462→                  <div className="grid grid-cols-2 gap-4">
+   463→                    <div>
+   464→                      <label className="text-sm font-medium text-gray-300 mb-2 block">Severity</label>
+   465→                      <Select defaultValue="MEDIUM">
+   466→                        <SelectTrigger className="bg-slate-800 border-slate-600">
+   467→                          <SelectValue />
+   468→                        </SelectTrigger>
+   469→                        <SelectContent>
+   470→                          <SelectItem value="LOW">Low</SelectItem>
+   471→                          <SelectItem value="MEDIUM">Medium</SelectItem>
+   472→                          <SelectItem value="HIGH">High</SelectItem>
+   473→                          <SelectItem value="CRITICAL">Critical</SelectItem>
+   474→                        </SelectContent>
+   475→                      </Select>
+   476→                    </div>
+   477→                    <div>
+   478→                      <label className="text-sm font-medium text-gray-300 mb-2 block">Assign To</label>
+   479→                      <Select>
+   480→                        <SelectTrigger className="bg-slate-800 border-slate-600">
+   481→                          <SelectValue placeholder="Select analyst" />
+   482→                        </SelectTrigger>
+   483→                        <SelectContent>
+   484→                          {mockTeamMembers.map(member => (
+   485→                            <SelectItem key={member.id} value={member.name}>{member.name} - {member.role}</SelectItem>
+   486→                          ))}
+   487→                        </SelectContent>
+   488→                      </Select>
+   489→                    </div>
+   490→                  </div>
+   491→                </div>
+   492→                <DialogFooter className="mt-6">
+   493→                  <Button variant="outline" onClick={() => setShowNewIncidentDialog(false)}>Cancel</Button>
+   494→                  <Button onClick={() => setShowNewIncidentDialog(false)} className="bg-blue-500 hover:bg-blue-600">Create Incident</Button>
+   495→                </DialogFooter>
+   496→              </DialogContent>
+   497→            </Dialog>
+   498→          </div>
+   499→        </div>
+   500→
+   501→        {/* Stats Cards */}
+   502→        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4 mb-6">
+   503→          <Card className="border-slate-700/50 bg-slate-800/40 backdrop-blur-sm">
+   504→            <CardContent className="p-4 text-center">
+   505→              <AlertTriangle className="w-5 h-5 mx-auto text-blue-400 mb-2" />
+   506→              <div className="text-2xl font-bold text-white">{stats.total}</div>
+   507→              <div className="text-xs text-gray-400">Total Incidents</div>
+   508→            </CardContent>
+   509→          </Card>
+   510→          <Card className="border-slate-700/50 bg-slate-800/40 backdrop-blur-sm">
+   511→            <CardContent className="p-4 text-center">
+   512→              <Zap className="w-5 h-5 mx-auto text-purple-400 mb-2" />
+   513→              <div className="text-2xl font-bold text-purple-400">{stats.newCount}</div>
+   514→              <div className="text-xs text-gray-400">New</div>
+   515→            </CardContent>
+   516→          </Card>
+   517→          <Card className="border-slate-700/50 bg-slate-800/40 backdrop-blur-sm">
+   518→            <CardContent className="p-4 text-center">
+   519→              <Activity className="w-5 h-5 mx-auto text-yellow-400 mb-2" />
+   520→              <div className="text-2xl font-bold text-yellow-400">{stats.activeCount}</div>
+   521→              <div className="text-xs text-gray-400">Active</div>
+   522→            </CardContent>
+   523→          </Card>
+   524→          <Card className="border-slate-700/50 bg-slate-800/40 backdrop-blur-sm">
+   525→            <CardContent className="p-4 text-center">
+   526→              <Bug className="w-5 h-5 mx-auto text-red-400 mb-2" />
+   527→              <div className="text-2xl font-bold text-red-400">{stats.criticalCount}</div>
+   528→              <div className="text-xs text-gray-400">Critical</div>
+   529→            </CardContent>
+   530→          </Card>
+   531→          <Card className="border-slate-700/50 bg-slate-800/40 backdrop-blur-sm">
+   532→            <CardContent className="p-4 text-center">
+   533→              <Shield className="w-5 h-5 mx-auto text-orange-400 mb-2" />
+   534→              <div className="text-2xl font-bold text-orange-400">{stats.containedCount}</div>
+   535→              <div className="text-xs text-gray-400">Contained</div>
+   536→            </CardContent>
+   537→          </Card>
+   538→          <Card className="border-slate-700/50 bg-slate-800/40 backdrop-blur-sm">
+   539→            <CardContent className="p-4 text-center">
+   540→              <Clock className="w-5 h-5 mx-auto text-green-400 mb-2" />
+   541→              <div className="text-2xl font-bold text-green-400">{stats.avgResolutionTime}</div>
+   542→              <div className="text-xs text-gray-400">Avg Resolution</div>
+   543→            </CardContent>
+   544→          </Card>
+   545→        </div>
+   546→
+   547→        {/* Main Content */}
+   548→        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+   549→          {/* Incident List */}
+   550→          <div className="lg:col-span-2">
+   551→            <Card className="border-slate-700/50 bg-slate-800/40 backdrop-blur-sm">
+   552→              <CardHeader className="pb-3">
+   553→                <div className="flex items-center justify-between">
+   554→                  <CardTitle className="text-lg flex items-center gap-2">
+   555→                    <ClipboardList className="w-5 h-5 text-blue-400" />
+   556→                    Active Incidents
+   557→                    <Badge variant="secondary" className="ml-2">{filteredIncidents.length}</Badge>
+   558→                  </CardTitle>
+   559→                  
+   560→                  <div className="flex items-center gap-2">
+   561→                    {/* View Mode Toggle */}
+   562→                    <div className="flex border border-slate-600 rounded">
+   563→                      <Button
+   564→                        variant={viewMode === 'list' ? 'secondary' : 'ghost'}
+   565→                        size="icon"
+   566→                        className="h-8 w-8"
+   567→                        onClick={() => setViewMode('list')}
+   568→                      >
+   569→                        <List className="w-4 h-4" />
+   570→                      </Button>
+   571→                      <Button
+   572→                        variant={viewMode === 'kanban' ? 'secondary' : 'ghost'}
+   573→                        size="icon"
+   574→                        className="h-8 w-8"
+   575→                        onClick={() => setViewMode('kanban')}
+   576→                      >
+   577→                        <LayoutGrid className="w-4 h-4" />
+   578→                      </Button>
+   579→                    </div>
+   580→                  </div>
+   581→                </div>
+   582→
+   583→                {/* Filters */}
+   584→                <div className="flex items-center gap-3 mt-4">
+   585→                  <div className="relative flex-1 max-w-md">
+   586→                    <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 w-4 h-4 text-gray-400" />
+   587→                    <Input
+   588→                      placeholder="Search incidents..."
+   589→                      value={searchQuery}
+   590→                      onChange={(e) => setSearchQuery(e.target.value)}
+   591→                      className="pl-10 bg-slate-900/50 border-slate-600"
+   592→                    />
+   593→                  </div>
+   594→                  <Select value={filterSeverity} onValueChange={setFilterSeverity}>
+   595→                    <SelectTrigger className="w-32 bg-slate-900/50 border-slate-600">
+   596→                      <SelectValue placeholder="Severity" />
+   597→                    </SelectTrigger>
+   598→                    <SelectContent>
+   599→                      <SelectItem value="all">All Severity</SelectItem>
+   600→                      <SelectItem value="CRITICAL">Critical</SelectItem>
+   601→                      <SelectItem value="HIGH">High</SelectItem>
+   602→                      <SelectItem value="MEDIUM">Medium</SelectItem>
+   603→                      <SelectItem value="LOW">Low</SelectItem>
+   604→                    </SelectContent>
+   605→                  </Select>
+   606→                  <Select value={filterStatus} onValueChange={setFilterStatus}>
+   607→                    <SelectTrigger className="w-36 bg-slate-900/50 border-slate-600">
+   608→                      <SelectValue placeholder="Status" />
+   609→                    </SelectTrigger>
+   610→                    <SelectContent>
+   611→                      <SelectItem value="all">All Status</SelectItem>
+   612→                      <SelectItem value="NEW">New</SelectItem>
+   613→                      <SelectItem value="IN_PROGRESS">In Progress</SelectItem>
+   614→                      <SelectItem value="CONTAINED">Contained</SelectItem>
+   615→                      <SelectItem value="CLOSED">Closed</SelectItem>
+   616→                    </SelectContent>
+   617→                  </Select>
+   618→                </div>
+   619→              </CardHeader>
+   620→              <CardContent>
+   621→                {viewMode === 'list' ? (
+   622→                  <ScrollArea className="h-[550px]">
+   623→                    <Table>
+   624→                      <TableHeader>
+   625→                        <TableRow className="border-slate-700/50 hover:bg-transparent">
+   626→                          <TableHead className="text-gray-400">Ticket</TableHead>
+   627→                          <TableHead className="text-gray-400">Title</TableHead>
+   628→                          <TableHead className="text-gray-400">Severity</TableHead>
+   629→                          <TableHead className="text-gray-400">Status</TableHead>
+   630→                          <TableHead className="text-gray-400">Assignee</TableHead>
+   631→                          <TableHead className="text-gray-400">Updated</TableHead>
+   632→                        </TableRow>
+   633→                      </TableHeader>
+   634→                      <TableBody>
+   635→                        {filteredIncidents.map(incident => (
+   636→                          <TableRow
+   637→                            key={incident.id}
+   638→                            onClick={() => setSelectedIncident(incident)}
+   639→                            className={`border-slate-700/50 cursor-pointer transition-colors ${
+   640→                              selectedIncident?.id === incident.id ? 'bg-slate-700/50' : 'hover:bg-slate-800/50'
+   641→                            }`}
+   642→                          >
+   643→                            <TableCell className="font-mono text-sm text-blue-400">{incident.ticketNumber}</TableCell>
+   644→                            <TableCell>
+   645→                              <div className="max-w-[250px]">
+   646→                                <p className="font-medium text-white truncate">{incident.title}</p>
+   647→                                <p className="text-xs text-gray-500 truncate flex items-center gap-1 mt-0.5">
+   648→                                  {CategoryIcons[incident.category]}
+   649→                                  {incident.category.replace('_', ' ')}
+   650→                                </p>
+   651→                              </div>
+   652→                            </TableCell>
+   653→                            <TableCell><SeverityBadge severity={incident.severity} /></TableCell>
+   654→                            <TableCell><StatusBadge status={incident.status} /></TableCell>
+   655→                            <TableCell className="text-sm text-gray-300">{incident.assignee.split(' ')[0]}</TableCell>
+   656→                            <TableCell className="text-sm text-gray-400">
+   657→                              {new Date(incident.updatedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+   658→                            </TableCell>
+   659→                          </TableRow>
+   660→                        ))}
+   661→                      </TableBody>
+   662→                    </Table>
+   663→                  </ScrollArea>
+   664→                ) : (
+   665→                  /* Kanban View */
+   666→                  <div className="grid grid-cols-4 gap-3 h-[550px] overflow-x-auto">
+   667→                    {(['NEW', 'TRIAGE', 'IN_PROGRESS', 'CONTAINED'] as IncidentStatus[]).map(status => (
+   668→                      <div key={status} className="bg-slate-900/50 rounded-lg p-3 min-w-[240px]">
+   669→                        <div className="flex items-center justify-between mb-3">
+   670→                          <h4 className="text-sm font-semibold text-gray-300">{StatusConfig[status].label}</h4>
+   671→                          <Badge variant="secondary" className="text-xs">
+   672→                            {filteredIncidents.filter(i => i.status === status).length}
+   673→                          </Badge>
+   674→                        </div>
+   675→                        <div className="space-y-2">
+   676→                          {filteredIncidents.filter(i => i.status === status).map(incident => (
+   677→                            <div
+   678→                              key={incident.id}
+   679→                              onClick={() => setSelectedIncident(incident)}
+   680→                              className={`p-3 rounded-lg border cursor-pointer transition-all ${
+   681→                                incident.slaBreachRisk ? 'border-red-500/50 bg-red-500/5' : 'border-slate-700/50 bg-slate-800/50'
+   682→                              } hover:border-slate-600`}
+   683→                            >
+   684→                              <div className="flex items-start justify-between gap-1">
+   685→                                <span className="text-xs font-mono text-blue-400">{incident.ticketNumber}</span>
+   686→                                <SeverityBadge severity={incident.severity} />
+   687→                              </div>
+   688→                              <p className="text-sm font-medium text-white mt-1 line-clamp-2">{incident.title}</p>
+   689→                              <p className="text-xs text-gray-400 mt-2">{incident.assignee.split(' ')[0]}</p>
+   690→                            </div>
+   691→                          ))}
+   692→                        </div>
+   693→                      </div>
+   694→                    ))}
+   695→                  </div>
+   696→                )}
+   697→              </CardContent>
+   698→            </Card>
+   699→          </div>
+   700→
+   701→          {/* Quick Info Panel */}
+   702→          <div className="space-y-6">
+   703→            {/* Team Availability */}
+   704→            <Card className="border-slate-700/50 bg-slate-800/40 backdrop-blur-sm">
+   705→              <CardHeader className="pb-3">
+   706→                <CardTitle className="text-base flex items-center gap-2">
+   707→                  <Users className="w-4 h-4 text-green-400" />
+   708→                  IR Team Status
+   709→                </CardTitle>
+   710→              </CardHeader>
+   711→              <CardContent>
+   712→                <div className="space-y-3">
+   713→                  {mockTeamMembers.map(member => (
+   714→                    <div key={member.id} className="flex items-center justify-between p-2 rounded-lg bg-slate-900/30">
+   715→                      <div className="flex items-center gap-3">
+   716→                        <Avatar className="h-8 w-8">
+   717→                          <AvatarFallback className="text-xs bg-slate-700 text-white">
+   718→                            {member.name.split(' ').map(n => n[0]).join('')}
+   719→                          </AvatarFallback>
+   720→                        </Avatar>
+   721→                        <div>
+   722→                          <p className="text-sm font-medium text-white">{member.name}</p>
+   723→                          <p className="text-xs text-gray-400">{member.role}</p>
+   724→                        </div>
+   725→                      </div>
+   726→                      <Badge 
+   727→                        variant={member.availability === 'available' ? 'default' : member.availability === 'busy' ? 'secondary' : 'outline'} 
+   728→                        className="text-xs"
+   729→                      >
+   730→                        {member.availability}
+   731→                      </Badge>
+   732→                    </div>
+   733→                  ))}
+   734→                </div>
+   735→              </CardContent>
+   736→            </Card>
+   737→
+   738→            {/* SLA Alerts */}
+   739→            <Card className="border-slate-700/50 bg-slate-800/40 backdrop-blur-sm">
+   740→              <CardHeader className="pb-3">
+   741→                <CardTitle className="text-base flex items-center gap-2">
+   742→                  <Timer className="w-4 h-4 text-red-400" />
+   743→                  SLA Warnings
+   744→                  <Badge variant="destructive" className="ml-2 text-xs">
+   745→                    {incidents.filter(i => i.slaBreachRisk).length}
+   746→                  </Badge>
+   747→                </CardTitle>
+   748→              </CardHeader>
+   749→              <CardContent>
+   750→                <div className="space-y-3">
+   751→                  {incidents.filter(i => i.slaBreachRisk).map(incident => (
+   752→                    <div key={incident.id} className="p-3 rounded-lg bg-red-500/10 border border-red-500/30">
+   753→                      <div className="flex items-center justify-between">
+   754→                        <span className="text-sm font-mono text-red-400">{incident.ticketNumber}</span>
+   755→                        <Badge variant="destructive" className="text-xs">At Risk</Badge>
+   756→                      </div>
+   757→                      <p className="text-xs text-gray-300 mt-1 line-clamp-1">{incident.title}</p>
+   758→                    </div>
+   759→                  ))}
+   760→                  {incidents.filter(i => i.slaBreachRisk).length === 0 && (
+   761→                    <p className="text-sm text-gray-400 text-center py-4">No SLA warnings</p>
+   762→                  )}
+   763→                </div>
+   764→              </CardContent>
+   765→            </Card>
+   766→          </div>
+   767→        </div>
+   768→
+   769→        {/* Incident Detail Modal */}
+   770→        {selectedIncident && (
+   771→          <Dialog open={!!selectedIncident} onOpenChange={() => setSelectedIncident(null)}>
+   772→            <DialogContent className="max-w-6xl max-h-[90vh] overflow-y-auto bg-slate-900 border-slate-700 text-white">
+   773→              <DialogHeader>
+   774→                <div className="flex items-center justify-between">
+   775→                  <div>
+   776→                    <DialogTitle className="flex items-center gap-3 text-xl">
+   777→                      <span className="font-mono text-blue-400">{selectedIncident.ticketNumber}</span>
+   778→                      {selectedIncident.title}
+   779→                    </DialogTitle>
+   780→                    <DialogDescription className="text-gray-400 mt-1 flex items-center gap-3">
+   781→                      <SeverityBadge severity={selectedIncident.severity} />
+   782→                      <StatusBadge status={selectedIncident.status} />
+   783→                      <span>| Created: {new Date(selectedIncident.createdAt).toLocaleString()}</span>
+   784→                    </DialogDescription>
+   785→                  </div>
+   786→                  {selectedIncident.slaBreachRisk && (
+   787→                    <Badge variant="destructive" className="animate-pulse">
+   788→                      ⚠️ SLA at Risk
+   789→                    </Badge>
+   790→                  )}
+   791→                </div>
+   792→              </DialogHeader>
+   793→
+   794→              <Tabs defaultValue="overview" className="mt-4">
+   795→                <TabsList className="bg-slate-800 flex-wrap h-auto">
+   796→                  <TabsTrigger value="overview">Overview</TabsTrigger>
+   797→                  <TabsTrigger value="playbook">Playbook</TabsTrigger>
+   798→                  <TabsTrigger value="tasks">Tasks ({selectedIncident.tasks.length})</TabsTrigger>
+   799→                  <TabsTrigger value="timeline">Timeline</TabsTrigger>
+   800→                  <TabsTrigger value="iocs">IOCs ({selectedIncident.iocs.length})</TabsTrigger>
+   801→                  <TabsTrigger value="evidence">Evidence ({selectedIncident.evidence.length})</TabsTrigger>
+   802→                  <TabsTrigger value="communications">Comms</TabsTrigger>
+   803→                </TabsList>
+   804→
+   805→                {/* Overview Tab */}
+   806→                <TabsContent value="overview" className="space-y-4 mt-4">
+   807→                  <div className="grid grid-cols-2 gap-4">
+   808→                    <div className="p-4 rounded-lg bg-slate-800/50 border border-slate-700">
+   809→                      <h4 className="text-sm font-semibold text-gray-300 mb-2">Description</h4>
+   810→                      <p className="text-sm text-gray-200">{selectedIncident.description}</p>
+   811→                    </div>
+   812→                    <div className="p-4 rounded-lg bg-slate-800/50 border border-slate-700 space-y-3">
+   813→                      <div className="flex justify-between">
+   814→                        <span className="text-sm text-gray-400">Category</span>
+   815→                        <span className="text-sm text-white flex items-center gap-1">
+   816→                          {CategoryIcons[selectedIncident.category]}
+   817→                          {selectedIncident.category.replace('_', ' ')}
+   818→                        </span>
+   819→                      </div>
+   820→                      <Separator className="bg-slate-700" />
+   821→                      <div className="flex justify-between">
+   822→                        <span className="text-sm text-gray-400">Assigned To</span>
+   823→                        <span className="text-sm text-white">{selectedIncident.assignee}</span>
+   824→                      </div>
+   825→                      <Separator className="bg-slate-700" />
+   826→                      <div className="flex justify-between">
+   827→                        <span className="text-sm text-gray-400">Team</span>
+   828→                        <span className="text-sm text-white">{selectedIncident.team}</span>
+   829→                      </div>
+   830→                      <Separator className="bg-slate-700" />
+   831→                      <div className="flex justify-between">
+   832→                        <span className="text-sm text-gray-400">Business Impact</span>
+   833→                        <SeverityBadge severity={selectedIncident.businessImpact as IncidentSeverity} />
+   834→                      </div>
+   835→                    </div>
+   836→                  </div>
+   837→
+   838→                  {/* Affected Assets & Users */}
+   839→                  <div className="grid grid-cols-2 gap-4">
+   840→                    <div className="p-4 rounded-lg bg-slate-800/50 border border-slate-700">
+   841→                      <h4 className="text-sm font-semibold text-gray-300 mb-2 flex items-center gap-2">
+   842→                        <Server className="w-4 h-4" /> Affected Assets
+   843→                      </h4>
+   844→                      <div className="flex flex-wrap gap-2">
+   845→                        {selectedIncident.affectedAssets.map(asset => (
+   846→                          <Badge key={asset} variant="outline" className="text-xs">{asset}</Badge>
+   847→                        ))}
+   848→                      </div>
+   849→                    </div>
+   850→                    <div className="p-4 rounded-lg bg-slate-800/50 border border-slate-700">
+   851→                      <h4 className="text-sm font-semibold text-gray-300 mb-2 flex items-center gap-2">
+   852→                        <Users className="w-4 h-4" /> Affected Users
+   853→                      </h4>
+   854→                      <div className="text-2xl font-bold text-white">{selectedIncident.affectedUsers.toLocaleString()}</div>
+   855→                    </div>
+   856→                  </div>
+   857→
+   858→                  {/* Tags */}
+   859→                  <div className="p-4 rounded-lg bg-slate-800/50 border border-slate-700">
+   860→                    <h4 className="text-sm font-semibold text-gray-300 mb-2 flex items-center gap-2">
+   861→                      <Tag className="w-4 h-4" /> Tags
+   862→                    </h4>
+   863→                    <div className="flex flex-wrap gap-2">
+   864→                      {selectedIncident.tags.map(tag => (
+   865→                        <Badge key={tag} variant="secondary" className="text-xs">{tag}</Badge>
+   866→                      ))}
+   867→                    </div>
+   868→                  </div>
+   869→
+   870→                  {/* Quick Actions */}
+   871→                  <div className="flex gap-3">
+   872→                    <Select value={selectedIncident.status} onValueChange={(v) => handleUpdateIncidentStatus(selectedIncident.id, v as IncidentStatus)}>
+   873→                      <SelectTrigger className="flex-1 bg-slate-800 border-slate-600">
+   874→                        <SelectValue placeholder="Update Status" />
+   875→                      </SelectTrigger>
+   876→                      <SelectContent>
+   877→                        {Object.entries(StatusConfig).map(([key, config]) => (
+   878→                          <SelectItem key={key} value={key}>{config.label}</SelectItem>
+   879→                        ))}
+   880→                      </SelectContent>
+   881→                    </Select>
+   882→                    <Button variant="outline" className="gap-2">
+   883→                      <MessageSquare className="w-4 h-4" />
+   884→                      Add Note
+   885→                    </Button>
+   886→                    <Button variant="outline" className="gap-2">
+   887→                      <Send className="w-4 h-4" />
+   888→                      Escalate
+   889→                    </Button>
+   890→                  </div>
+   891→                </TabsContent>
+   892→
+   893→                {/* Playbook Tab */}
+   894→                <TabsContent value="playbook" className="mt-4">
+   895→                  {selectedIncident.playbookSteps.length > 0 ? (
+   896→                    <div className="space-y-3">
+   897→                      {['PREPARATION', 'DETECTION_ANALYSIS', 'CONTAINMENT', 'ERADICATION', 'RECOVERY', 'LESSONS_LEARNED'].map(phase => {
+   898→                        const phaseSteps = selectedIncident.playbookSteps.filter(s => s.phase === phase)
+   899→                        if (phaseSteps.length === 0) return null
+   900→                        
+   901→                        return (
+   902→                          <div key={phase} className="p-4 rounded-lg bg-slate-800/50 border border-slate-700">
+   903→                            <h4 className="text-sm font-semibold text-gray-300 uppercase tracking-wider mb-3">{phase.replace('_', ' ')}</h4>
+   904→                            <div className="space-y-2">
+   905→                              {phaseSteps.map(step => (
+   906→                                <div key={step.id} className={`flex items-center gap-3 p-3 rounded-lg border ${
+   907→                                  step.status === 'COMPLETED' ? 'bg-green-500/10 border-green-500/30' :
+   908→                                  step.status === 'IN_PROGRESS' ? 'bg-yellow-500/10 border-yellow-500/30' :
+   909→                                  'bg-slate-900/50 border-slate-700'
+   910→                                }`}>
+   911→                                  <div className={`w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold ${
+   912→                                    step.status === 'COMPLETED' ? 'bg-green-500 text-white' :
+   913→                                    step.status === 'IN_PROGRESS' ? 'bg-yellow-500 text-black' :
+   914→                                    'bg-slate-700 text-gray-400'
+   915→                                  }`}>
+   916→                                    {step.status === 'COMPLETED' ? '✓' : step.id}
+   917→                                  </div>
+   918→                                  <div className="flex-1">
+   919→                                    <p className="text-sm font-medium text-white">{step.name}</p>
+   920→                                    <p className="text-xs text-gray-400">{step.description}</p>
+   921→                                  </div>
+   922→                                  <StatusBadge status={step.status} />
+   923→                                  {step.assignee && (
+   924→                                    <span className="text-xs text-gray-400">{step.assignee.split(' ')[0]}</span>
+   925→                                  )}
+   926→                                </div>
+   927→                              ))}
+   928→                            </div>
+   929→                          </div>
+   930→                        )
+   931→                      })}
+   932→                    </div>
+   933→                  ) : (
+   934→                    <div className="text-center py-12 text-gray-400">
+   935→                      <ClipboardList className="w-12 h-12 mx-auto mb-3 opacity-50" />
+   936→                      <p>No playbook steps defined yet</p>
+   937→                      <Button variant="outline" className="mt-3">Attach Playbook</Button>
+   938→                    </div>
+   939→                  )}
+   940→                </TabsContent>
+   941→
+   942→                {/* Tasks Tab */}
+   943→                <TabsContent value="tasks" className="mt-4">
+   944→                  {selectedIncident.tasks.length > 0 ? (
+   945→                    <Table>
+   946→                      <TableHeader>
+   947→                        <TableRow className="border-slate-700">
+   948→                          <TableHead className="text-gray-400">Task</TableHead>
+   949→                          <TableHead className="text-gray-400">Assignee</TableHead>
+   950→                          <TableHead className="text-gray-400">Priority</TableHead>
+   951→                          <TableHead className="text-gray-400">Due Date</TableHead>
+   952→                          <TableHead className="text-gray-400">Status</TableHead>
+   953→                        </TableRow>
+   954→                      </TableHeader>
+   955→                      <TableBody>
+   956→                        {selectedIncident.tasks.map(task => (
+   957→                          <TableRow key={task.id} className="border-slate-700/50">
+   958→                            <TableCell>
+   959→                              <div>
+   960→                                <p className="font-medium text-white text-sm">{task.title}</p>
+   961→                                <p className="text-xs text-gray-400">{task.description}</p>
+   962→                              </div>
+   963→                            </TableCell>
+   964→                            <TableCell className="text-sm text-gray-300">{task.assignee}</TableCell>
+   965→                            <TableCell>
+   966→                              <Badge variant={task.priority === 'CRITICAL' ? 'destructive' : task.priority === 'HIGH' ? 'default' : 'secondary'} className="text-xs">
+   967→                                {task.priority}
+   968→                              </Badge>
+   969→                            </TableCell>
+   970→                            <TableCell className="text-sm text-gray-400">
+   971→                              {new Date(task.dueDate).toLocaleDateString()}
+   972→                            </TableCell>
+   973→                            <TableCell>
+   974→                              <StatusBadge status={task.status} />
+   975→                            </TableCell>
+   976→                          </TableRow>
+   977→                        ))}
+   978→                      </TableBody>
+   979→                    </Table>
+   980→                  ) : (
+   981→                    <div className="text-center py-8 text-gray-400">
+   982→                      <ClipboardList className="w-12 h-12 mx-auto mb-3 opacity-50" />
+   983→                      <p>No tasks assigned yet</p>
+   984→                    </div>
+   985→                  )}
+   986→                </TabsContent>
+   987→
+   988→                {/* Timeline Tab */}
+   989→                <TabsContent value="timeline" className="mt-4">
+   990→                  <div className="relative space-y-4">
+   991→                    {selectedIncident.timeline.map((event, idx) => (
+   992→                      <div key={event.id} className="flex gap-4">
+   993→                        <div className="flex flex-col items-center">
+   994→                          <TimelineIcon type={event.type} />
+   995→                          {idx < selectedIncident.timeline.length - 1 && (
+   996→                            <div className="w-0.5 h-full bg-slate-700 mt-2" />
+   997→                          )}
+   998→                        </div>
+   999→                        <div className="flex-1 pb-4">
+  1000→                          <div className="flex items-center gap-2 mb-1">
+  1001→                            <span className="text-sm font-semibold text-white">{event.title}</span>
+  1002→                            <span className="text-xs text-gray-400">
+  1003→                              {new Date(event.timestamp).toLocaleString()}
+  1004→                            </span>
+  1005→                          </div>
+  1006→                          <p className="text-sm text-gray-300">{event.description}</p>
+  1007→                          <p className="text-xs text-gray-500 mt-1">by {event.author}</p>
+  1008→                        </div>
+  1009→                      </div>
+  1010→                    ))}
+  1011→                  </div>
+  1012→                </TabsContent>
+  1013→
+  1014→                {/* IOCs Tab */}
+  1015→                <TabsContent value="iocs" className="mt-4">
+  1016→                  {selectedIncident.iocs.length > 0 ? (
+  1017→                    <Table>
+  1018→                      <TableHeader>
+  1019→                        <TableRow className="border-slate-700">
+  1020→                          <TableHead className="text-gray-400">Type</TableHead>
+  1021→                          <TableHead className="text-gray-400">Value</TableHead>
+  1022→                          <TableHead className="text-gray-400">Confidence</TableHead>
+  1023→                          <TableHead className="text-gray-400">Source</TableHead>
+  1024→                          <TableHead className="text-gray-400">Actions</TableHead>
+  1025→                        </TableRow>
+  1026→                      </TableHeader>
+  1027→                      <TableBody>
+  1028→                        {selectedIncident.iocs.map(ioc => (
+  1029→                          <TableRow key={ioc.id} className="border-slate-700/50">
+  1030→                            <TableCell>
+  1031→                              <Badge variant="outline" className="text-xs">{ioc.type.toUpperCase()}</Badge>
+  1032→                            </TableCell>
+  1033→                            <TableCell className="font-mono text-sm text-white">{ioc.value}</TableCell>
+  1034→                            <TableCell>
+  1035→                              <div className="flex items-center gap-2">
+  1036→                                <Progress value={ioc.confidence} className="w-16 h-2" />
+  1037→                                <span className="text-xs text-gray-400">{ioc.confidence}%</span>
+  1038→                              </div>
+  1039→                            </TableCell>
+  1040→                            <TableCell className="text-sm text-gray-300">{ioc.source}</TableCell>
+  1041→                            <TableCell>
+  1042→                              <Button variant="ghost" size="sm" className="text-xs">
+  1043→                                <ExternalLink className="w-3 h-3 mr-1" />
+  1044→                                Enrich
+  1045→                              </Button>
+  1046→                            </TableCell>
+  1047→                          </TableRow>
+  1048→                        ))}
+  1049→                      </TableBody>
+  1050→                    </Table>
+  1051→                  ) : (
+  1052→                    <div className="text-center py-8 text-gray-400">
+  1053→                      <Fingerprint className="w-12 h-12 mx-auto mb-3 opacity-50" />
+  1054→                      <p>No IOCs extracted yet</p>
+  1055→                    </div>
+  1056→                  )}
+  1057→                </TabsContent>
+  1058→
+  1059→                {/* Evidence Tab */}
+  1060→                <TabsContent value="evidence" className="mt-4">
+  1061→                  {selectedIncident.evidence.length > 0 ? (
+  1062→                    <div className="grid grid-cols-2 gap-4">
+  1063→                      {selectedIncident.evidence.map(ev => (
+  1064→                        <div key={ev.id} className="p-4 rounded-lg bg-slate-800/50 border border-slate-700">
+  1065→                          <div className="flex items-start justify-between">
+  1066→                            <div className="flex items-center gap-3">
+  1067→                              <div className="p-2 rounded-lg bg-slate-700">
+  1068→                                {ev.type === 'PCAP' && <Network className="w-5 h-5 text-blue-400" />}
+  1069→                                {ev.type === 'MEMORY_DUMP' && <HardDrive className="w-5 h-5 text-purple-400" />}
+  1070→                                {ev.type === 'LOG' && <FileText className="w-5 h-5 text-green-400" />}
+  1071→                                {ev.type === 'OTHER' && <Camera className="w-5 h-5 text-orange-400" />}
+  1072→                              </div>
+  1073→                              <div>
+  1074→                                <p className="font-medium text-white text-sm">{ev.name}</p>
+  1075→                                <p className="text-xs text-gray-400">{ev.size}</p>
+  1076→                              </div>
+  1077→                            </div>
+  1078→                            <Badge variant="outline" className="text-xs">{ev.type}</Badge>
+  1079→                          </div>
+  1080→                          <p className="text-xs text-gray-400 mt-3">{ev.description}</p>
+  1081→                          <div className="flex items-center justify-between mt-3 pt-3 border-t border-slate-700">
+  1082→                            <span className="text-xs text-gray-500">Collected by {ev.collectedBy}</span>
+  1083→                            <Button variant="outline" size="sm" className="text-xs h-7">Download</Button>
+  1084→                          </div>
+  1085→                        </div>
+  1086→                      ))}
+  1087→                    </div>
+  1088→                  ) : (
+  1089→                    <div className="text-center py-8 text-gray-400">
+  1090→                      <Camera className="w-12 h-12 mx-auto mb-3 opacity-50" />
+  1091→                      <p>No evidence collected yet</p>
+  1092→                      <Button variant="outline" className="mt-3">Upload Evidence</Button>
+  1093→                    </div>
+  1094→                  )}
+  1095→                </TabsContent>
+  1096→
+  1097→                {/* Communications Tab */}
+  1098→                <TabsContent value="communications" className="mt-4">
+  1099→                  {selectedIncident.communications.length > 0 ? (
+  1100→                    <div className="space-y-3">
+  1101→                      {selectedIncident.communications.map(com => (
+  1102→                        <div key={com.id} className="p-4 rounded-lg bg-slate-800/50 border border-slate-700">
+  1103→                          <div className="flex items-center justify-between mb-2">
+  1104→                            <div className="flex items-center gap-2">
+  1105→                              <Badge variant="outline" className="text-xs">{com.channel}</Badge>
+  1106→                              <span className="text-sm font-medium text-white">{com.subject}</span>
+  1107→                            </div>
+  1108→                            <span className="text-xs text-gray-400">{new Date(com.timestamp).toLocaleString()}</span>
+  1109→                          </div>
+  1110→                          <p className="text-sm text-gray-300">{com.content}</p>
+  1111→                          <div className="flex items-center gap-4 mt-2 text-xs text-gray-500">
+  1112→                            <span>From: {com.from}</span>
+  1113→                            <span>To: {com.to}</span>
+  1114→                            {com.isEncrypted && <Badge variant="secondary" className="text-xs">🔒 Encrypted</Badge>}
+  1115→                          </div>
+  1116→                        </div>
+  1117→                      ))}
+  1118→                    </div>
+  1119→                  ) : (
+  1120→                    <div className="text-center py-8 text-gray-400">
+  1121→                      <MessageSquare className="w-12 h-12 mx-auto mb-3 opacity-50" />
+  1122→                      <p>No communications logged</p>
+  1123→                    </div>
+  1124→                  )}
+  1125→                </TabsContent>
+  1126→              </Tabs>
+  1127→            </DialogContent>
+  1128→          </Dialog>
+  1129→        )}
+  1130→      </div>
+  1131→    </div>
+  1132→  )
+  1133→}
+  1134→
+  1135→// Import Fingerprint for use in empty state
+  1136→import { Fingerprint } from 'lucide-react'
+  1137→
+  1138→export default IncidentResponseCenter
+  1139→

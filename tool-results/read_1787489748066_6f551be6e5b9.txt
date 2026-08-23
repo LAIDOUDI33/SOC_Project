@@ -1,0 +1,892 @@
+     1→/**
+     2→ * National SOC Platform - Correlation Rule Engine
+     3→ * 
+     4→ * Multi-source event correlation for advanced threat detection:
+     5→ * - Rule-based correlation (YARA-like syntax)
+     6→ * - Temporal correlation (events within time windows)
+     7→ * - Spatial correlation (same source/destination)
+     8→ * - Behavioral correlation (anomalous patterns)
+     9→ * - Telecom-specific correlation rules
+    10→ */
+    11→
+    12→// ============================================================
+    13→// TYPES & INTERFACES
+    14→// ============================================================
+    15→
+    16→export interface CorrelationEvent {
+    17→  id: string;
+    18→  timestamp: Date;
+    19→  source: EventSource;
+    20→  eventType: string;
+    21→  severity: 'info' | 'low' | 'medium' | 'high' | 'critical';
+    22→  
+    23→  // Key fields for correlation
+    24→  sourceIp?: string;
+    25→  destIp?: string;
+    26→  sourcePort?: number;
+    27→  destPort?: number;
+    28→  protocol?: string;
+    29→  username?: string;
+    30→  userId?: string;
+    31→  hostname?: string;
+    32→  
+    33→  // Telecom-specific fields
+    34→  imsi?: string;           // International Mobile Subscriber Identity
+    35→  msisdn?: string;         // Phone number
+    36→  imei?: string;           // Device IMEI
+    37→  lac?: number;            // Location Area Code
+    38→  cellId?: number;         // Cell ID
+    39→  
+    40→  // SS7 specific
+    41→  ss7MessageType?: string;
+    42→  ss7CallingNumber?: string;
+    43→  ss7CalledNumber?: string;
+    44→  ss7Gt?: string;          // Global Title
+    45→  
+    46→  // GTP specific
+    47→  gtpSessionId?: string;
+    48→  gtpImsi?: string;
+    49→  gtpMsisdn?: string;
+    50→  gtpApn?: string;
+    51→  
+    52→  // SIP specific
+    53→  sipFromUri?: string;
+    54→  sipToUri?: string;
+    55→  sipCallId?: string;
+    56→  sipMethod?: string;
+    57→  
+    58→  // Security-specific
+    59→  mitreTechnique?: string;
+    60→  alertType?: string;
+    61→  signatureId?: string;
+    62→  
+    63→  // Additional data
+    64→  rawEvent?: any;
+    65→  tags?: string[];
+    66→}
+    67→
+    68→export type EventSource = 
+    69→  | 'ids'
+    70→  | 'siem'
+    71→  | 'ss7_probe'
+    72→  | 'gtp_probe'
+    73→  | 'sip_probe'
+    74→  | 'diameter_probe'
+    75→  | 'firewall'
+    76→  | 'dns'
+    77→  | 'auth_log'
+    78→  | 'application'
+    79→  | 'threat_intel';
+    80→
+    81→export interface CorrelationRule {
+    82→  id: string;
+    83→  name: string;
+    84→  description: string;
+    85→  severity: CorrelationSeverity;
+    86→  category: RuleCategory;
+    87→  
+    88→  // Rule conditions
+    89→  conditions: CorrelationCondition[];
+    90→  
+    91→  // Time window for correlation (milliseconds)
+    92→  timeWindowMs: number;
+    93→  
+    94→  // How many events must match
+    95→  minEvents: number;
+    96→  maxEvents?: number;
+    97→  
+    98→  // Aggregation logic
+    99→  aggregation: AggregationType;
+   100→  
+   101→  // Actions to take when triggered
+   102→  actions: CorrelationAction[];
+   103→  
+   104→  // Metadata
+   105→  enabled: boolean;
+   106→  riskScore: number; // Base risk score when triggered
+   107→  artpReportable: boolean;
+   108→  createdAt: Date;
+   109→  updatedAt: Date;
+   110→}
+   111→
+   112→export interface CorrelationCondition {
+   113→  field: string;
+   114→  operator: ConditionOperator;
+   115→  value: any;
+   116→  sourceFilter?: EventSource[]; // Only match events from these sources
+   117→  negate?: boolean; // NOT condition
+   118→}
+   119→
+   120→export type ConditionOperator =
+   121→  | 'equals' | 'not_equals'
+   122→  | 'contains' | 'not_contains'
+   123→  | 'starts_with' | 'ends_with'
+   124→  | 'regex' | 'not_regex'
+   125→  | 'in' | 'not_in'
+   126→  | 'gt' | 'gte' | 'lt' | 'lte'
+   127→  | 'exists' | 'not_exists'
+   128→  | 'ip_in_range' | 'ip_not_in_range'
+   129→  | 'same_as' | 'different_from'; // Cross-event comparison
+   130→
+   131→export type AggregationType =
+   132→  | 'any'        // Any single event matches
+   133→  | 'all'        // All conditions on same event
+   134→  | 'sequence'   // Events in order
+   135→  | 'count'      // N events within window
+   136→  | 'rate'       // Rate exceeds threshold
+   137→  | 'diversity'  // Different values exceed threshold;
+   138→
+   139→export type CorrelationSeverity = 'low' | 'medium' | 'high' | 'critical';
+   140→export type RuleCategory = 
+   141→  | 'brute_force'
+   142→  | 'lateral_movement'
+   143→  | 'data_exfiltration'
+   144→  | 'telecom_fraud'
+   145→  | 'apt_indicators'
+   146→  | 'insider_threat'
+   147→  | 'ddos'
+   148→  | 'malware'
+   149→  | 'policy_violation';
+   150→
+   151→export interface CorrelationAction {
+   152→  type: 'create_alert' | 'escalate' | 'block' | 'notify' | 'tag' | 'run_playbook';
+   153→  params: Record<string, any>;
+   154→}
+   155→
+   156→export interface CorrelationResult {
+   157→  rule: CorrelationRule;
+   158→  matched: boolean;
+   159→  confidence: number; // 0-1
+   160→  triggeringEvents: CorrelationEvent[];
+   161→  summary: string;
+   162→  detectedAt: Date;
+   163→  riskScore: number;
+   164→  recommendedActions: string[];
+   165→}
+   166→
+   167→export interface CorrelationState {
+   168→  activeRules: CorrelationRule[];
+   169→  recentEvents: CorrelationEvent[];
+   170→  pendingCorrelations: Map<string, Partial<CorrelationResult>>;
+   171→  statistics: {
+   172→    totalEventsProcessed: number;
+   173→    totalCorrelationsTriggered: number;
+   174→    correlationsByCategory: Record<string, number>;
+   175→    averageProcessingTimeMs: number;
+   176→  };
+   177→}
+   178→
+   179→// ============================================================
+   180→// PRE-BUILT CORRELATION RULES FOR DJEZZY
+   181→// ============================================================
+   182→
+   183→/**
+   184→ * Pre-configured correlation rules for telecom security
+   185→ */
+   186→export const DJEZZY_CORRELATION_RULES: CorrelationRule[] = [
+   187→  // ========================================
+   188→  // BRUTE FORCE DETECTION
+   189→  // ========================================
+   190→  {
+   191→    id: 'BRUTE-001',
+   192→    name: 'SSH Brute Force Attack',
+   193→    description: 'Multiple failed SSH login attempts from same IP',
+   194→    severity: 'high',
+   195→    category: 'brute_force',
+   196→    conditions: [
+   197→      { field: 'eventType', operator: 'equals', value: 'auth_failure', sourceFilter: ['auth_log'] },
+   198→      { field: 'destPort', operator: 'equals', value: 22 },
+   199→    ],
+   200→    timeWindowMs: 5 * 60 * 1000, // 5 minutes
+   201→    minEvents: 10,
+   202→    aggregation: 'count',
+   203→    actions: [
+   204→      { type: 'block', params: { duration: 3600, blockSourceIp: true } },
+   205→      { type: 'notify', params: { channels: ['slack', 'pagerduty'] } },
+   206→    ],
+   207→    enabled: true,
+   208→    riskScore: 75,
+   209→    artpReportable: false,
+   210→    createdAt: new Date('2024-01-01'),
+   211→    updatedAt: new Date(),
+   212→  },
+   213→  {
+   214→    id: 'BRUTE-002',
+   215→    name: 'LDAP/AD Brute Force',
+   216→    description: 'Multiple LDAP bind failures for same account',
+   217→    severity: 'critical',
+   218→    category: 'brute_force',
+   219→    conditions: [
+   220→      { field: 'eventType', operator: 'equals', value: 'ldap_bind_failure', sourceFilter: ['auth_log'] },
+   221→      { field: 'username', operator: 'exists', value: true },
+   222→    ],
+   223→    timeWindowMs: 3 * 60 * 1000, // 3 minutes
+   224→    minEvents: 5,
+   225→    aggregation: 'count',
+   226→    actions: [
+   227→      { type: 'create_alert', params: { priority: 'P1', autoEscalate: true } },
+   228→      { type: 'notify', params: { channels: ['sms', 'email'] } },
+   229→    ],
+   230→    enabled: true,
+   231→    riskScore: 90,
+   232→    artpReportable: false,
+   233→    createdAt: new Date('2024-01-01'),
+   234→    updatedAt: new Date(),
+   235→  },
+   236→
+   237→  // ========================================
+   238→  // TELECOM FRAUD RULES
+   239→  // ========================================
+   240→  {
+   241→    id: 'FRAUD-001',
+   242→    name: 'SIM Box Detection',
+   243→    description: 'High volume of calls from single IMSI to many destinations',
+   244→    severity: 'critical',
+   245→    category: 'telecom_fraud',
+   246→    conditions: [
+   247→      { field: 'eventType', operator: 'equals', value: 'call_setup', sourceFilter: ['ss7_probe', 'sip_probe'] },
+   248→      { field: 'imsi', operator: 'exists', value: true },
+   249→      { field: 'ss7CalledNumber', operator: 'exists', value: true },
+   250→    ],
+   251→    timeWindowMs: 60 * 60 * 1000, // 1 hour
+   252→    minEvents: 50,
+   253→    maxEvents: 500,
+   254→    aggregation: 'diversity',
+   255→    actions: [
+   256→      { type: 'create_alert', params: { priority: 'P1', category: 'fraud' } },
+   257→      { type: 'block', params: { blockIMSI: true, reason: 'suspected_simbox' } },
+   258→      { type: 'run_playbook', params: { playbook: 'fraud-investigation' } },
+   259→    ],
+   260→    enabled: true,
+   261→    riskScore: 95,
+   262→    artpReportable: true, // Must report to ARTP!
+   263→    createdAt: new Date('2024-01-01'),
+   264→    updatedAt: new Date(),
+   265→  },
+   266→  {
+   267→    id: 'FRAUD-002',
+   268→    name: 'IRS F (International Revenue Share) Fraud',
+   269→    description: 'Unusual roaming pattern suggesting IRS manipulation',
+   270→    severity: 'high',
+   271→    category: 'telecom_fraud',
+   272→    conditions: [
+   273→      { field: 'eventType', operator: 'in', value: ['roaming_update', 'gtp_session_create'], sourceFilter: ['gtp_probe', 'ss7_probe'] },
+   274→      { field: 'gtpApn', operator: 'contains', value: 'roaming' },
+   275→    ],
+   276→    timeWindowMs: 24 * 60 * 60 * 1000, // 24 hours
+   277→    minEvents: 20,
+   278→    aggregation: 'sequence',
+   279→    actions: [
+   280→      { type: 'create_alert', params: { priority: 'P2', category: 'irs-fraud' } },
+   281→      { type: 'tag', params: { tags: ['artp-reportable', 'financial-fraud'] } },
+   282→    ],
+   283→    enabled: true,
+   284→    riskScore: 85,
+   285→    artpReportable: true,
+   286→    createdAt: new Date('2024-01-01'),
+   287→    updatedAt: new Date(),
+   288→  },
+   289→  {
+   290→    id: 'FRAUD-003',
+   291→    name: 'Wangiri Fraud Pattern',
+   292→    description: 'Short duration calls to premium numbers (missed call scam)',
+   293→    severity: 'medium',
+   294→    category: 'telecom_fraud',
+   295→    conditions: [
+   296→      { field: 'eventType', operator: 'equals', value: 'call_termination', sourceFilter: ['sip_probe'] },
+   297→      { field: 'sipToUri', operator: 'regex', value: '\\+?[0-9]{8,15}' }, // Premium number pattern
+   298→    ],
+   299→    timeWindowMs: 30 * 60 * 1000, // 30 minutes
+   300→    minEvents: 30,
+   301→    aggregation: 'count',
+   302→    actions: [
+   303→      { type: 'create_alert', params: { priority: 'P3', category: 'wangiri' } },
+   304→      { type: 'tag', params: { tags: ['fraud', 'premium-rate'] } },
+   305→    ],
+   306→    enabled: true,
+   307→    riskScore: 65,
+   308→    artpReportable: false,
+   309→    createdAt: new Date('202-24-01-01'),
+   310→    updatedAt: new Date(),
+   311→  },
+   312→
+   313→  // ========================================
+   314→  // LATERAL MOVEMENT
+   315→  // ========================================
+   316→  {
+   317→    id: 'LAT-001',
+   318→    name: 'Internal Network Scanning',
+   319→    description: 'Single host scanning multiple internal targets',
+   320→    severity: 'high',
+   321→    category: 'lateral_movement',
+   322→    conditions: [
+   323→      { field: 'sourceIp', operator: 'exists', value: true },
+   324→      { field: 'destIp', operator: 'exists', value: true },
+   325→      { field: 'eventType', operator: 'in', value: ['port_scan', 'connection_attempt'], sourceFilter: ['ids', 'firewall'] },
+   326→    ],
+   327→    timeWindowMs: 10 * 60 * 1000, // 10 minutes
+   328→    minEvents: 20,
+   329→    aggregation: 'diversity',
+   330→    actions: [
+   331→      { type: 'create_alert', params: { priority: 'P2', category: 'reconnaissance' } },
+   332→      { type: 'block', params: { blockSourceIp: true, duration: 1800 } },
+   333→    ],
+   334→    enabled: true,
+   335→    riskScore: 70,
+   336→    artpReportable: false,
+   337→    createdAt: new Date('2024-01-01'),
+   338→    updatedAt: new Date(),
+   339→  },
+   340→  {
+   341→    id: 'LAT-002',
+   342→    name: 'Credential Stuffing Across Systems',
+   343→    description: 'Same username failing auth on multiple systems',
+   344→    severity: 'critical',
+   345→    category: 'lateral_movement',
+   346→    conditions: [
+   347→      { field: 'username', operator: 'exists', value: true },
+   348→      { field: 'eventType', operator: 'equals', value: 'auth_failure' },
+   349→      { field: 'hostname', operator: 'exists', value: true },
+   350→    ],
+   351→    timeWindowMs: 15 * 60 * 1000, // 15 minutes
+   352→    minEvents: 5,
+   353→    aggregation: 'diversity',
+   354→    actions: [
+   355→      { type: 'create_alert', params: { priority: 'P1', category: 'credential-stuffing' } },
+   356→      { type: 'notify', params: { channels: ['soc-team', 'security-leads'] } },
+   357→      { type: 'run_playbook', params: { playbook: 'account-lockdown' } },
+   358→    ],
+   359→    enabled: true,
+   360→    riskScore: 88,
+   361→    artpReportable: false,
+   362→    createdAt: new Date('2024-01-01'),
+   363→    updatedAt: new Date(),
+   364→  },
+   365→
+   366→  // ========================================
+   367→  // DATA EXFILTRATION
+   368→  // ========================================
+   369→  {
+   370→    id: 'EXFIL-001',
+   371→    name: 'Large Data Transfer to External',
+   372→    description: 'Unusual outbound data volume to external destination',
+   373→    severity: 'high',
+   374→    category: 'data_exfiltration',
+   375→    conditions: [
+   376→      { field: 'eventType', operator: 'equals', value: 'data_transfer', sourceFilter: ['ids', 'firewall'] },
+   377→      { field: 'destIp', operator: 'ip_not_in_range', value: { start: '10.0.0.0', end: '10.255.255.255' } }, // Not internal
+   378→    ],
+   379→    timeWindowMs: 60 * 60 * 1000, // 1 hour
+   380→    minEvents: 1,
+   381→    aggregation: 'any',
+   382→    actions: [
+   383→      { type: 'create_alert', params: { priority: 'P2', category: 'exfiltration' } },
+   384→      { type: 'tag', params: { tags: ['dlp-alert', 'investigate'] } },
+   385→    ],
+   386→    enabled: true,
+   387→    riskScore: 72,
+   388→    artpReportable: false,
+   389→    createdAt: new Date('2024-01-01'),
+   390→    updatedAt: new Date(),
+   391→  },
+   392→  {
+   393→    id: 'EXFIL-002',
+   394→    name: 'Database Access Anomaly',
+   395→    description: 'Unusual query patterns or large result sets from DB',
+   396→    severity: 'medium',
+   397→    category: 'data_exfiltration',
+   398→    conditions: [
+   399→      { field: 'eventType', operator: 'in', value: ['db_query', 'db_export'], sourceFilter: ['application'] },
+   400→      { field: 'username', operator: 'exists', value: true },
+   401→    ],
+   402→    timeWindowMs: 30 * 60 * 1000, // 30 minutes
+   403→    minEvents: 10,
+   404→    aggregation: 'count',
+   405→    actions: [
+   406→      { type: 'create_alert', params: { priority: 'P3', category: 'data-access' } },
+   407→      { type: 'notify', params: { channels: ['dba-team'] } },
+   408→    ],
+   409→    enabled: true,
+   410→    riskScore: 55,
+   411→    artpReportable: false,
+   412→    createdAt: new Date('2024-01-01'),
+   413→    updatedAt: new Date(),
+   414→  },
+   415→
+   416→  // ========================================
+   417→  // DDoS / VOLUME ATTACKS
+   418→  // ========================================
+   419→  {
+   420→    id: 'DDOS-001',
+   421→    name: 'SS7 Flooding Attack',
+   422→    description: 'Abnormal SS7 message volume targeting network element',
+   423→    severity: 'critical',
+   424→    category: 'ddos',
+   425→    conditions: [
+   426→      { field: 'eventType', operator: 'equals', value: 'ss7_message', sourceFilter: ['ss7_probe'] },
+   427→      { field: 'ss7Gt', operator: 'exists', value: true },
+   428→    ],
+   429→    timeWindowMs: 60 * 1000, // 1 minute
+   430→    minEvents: 10000, // 10k messages/min threshold
+   431→    aggregation: 'count',
+   432→    actions: [
+   433→      { type: 'create_alert', params: { priority: 'P0', category: 'ddos' } },
+   434→      { type: 'notify', params: { channels: ['noc', 'soc', 'vendor'] } },
+   435→      { type: 'run_playbook', params: { playbook: 'ss7-mitigation' } },
+   436→    ],
+   437→    enabled: true,
+   438→    riskScore: 98,
+   439→    artpReportable: true, // Service affecting!
+   440→    createdAt: new Date('2024-01-01'),
+   441→    updatedAt: new Date(),
+   442→  },
+   443→  {
+   444→    id: 'DDOS-002',
+   445→    name: 'SIP INVITE Flood',
+   446→    description: 'High volume of SIP INVITE requests (DoS attempt)',
+   447→    severity: 'high',
+   448→    category: 'ddos',
+   449→    conditions: [
+   450→      { field: 'eventType', operator: 'equals', value: 'sip_request', sourceFilter: ['sip_probe'] },
+   451→      { field: 'sipMethod', operator: 'equals', value: 'INVITE' },
+   452→    ],
+   453→    timeWindowMs: 60 * 1000, // 1 minute
+   454→    minEvents: 5000,
+   455→    aggregation: 'count',
+   456→    actions: [
+   457→      { type: 'create_alert', params: { priority: 'P1', category: 'voip-dos' } },
+   458→      { type: 'block', params: { rateLimit: true, maxPerSecond: 100 } },
+   459→    ],
+   460→    enabled: true,
+   461→    riskScore: 82,
+   462→    artpReportable: false,
+   463→    createdAt: new Date('2024-01-01'),
+   464→    updatedAt: new Date(),
+   465→  },
+   466→
+   467→  // ========================================
+   468→  // APT INDICATORS
+   469→  // ========================================
+   470→  {
+   471→    id: 'APT-001',
+   472→    name: 'Living-off-the-Land (LotL) Indicators',
+   473→    description: 'Use of legitimate tools for malicious purposes',
+   474→    severity: 'high',
+   475→    category: 'apt_indicators',
+   476→    conditions: [
+   477→      { field: 'eventType', operator: 'in', value: ['process_execution', 'command_execution'], sourceFilter: ['edsr', 'siem'] },
+   478→      { field: 'rawEvent.commandLine', operator: 'regex', value: '(powershell|certutil|bitsadmin|wmic)' },
+   479→    ],
+   480→    timeWindowMs: 60 * 60 * 1000, // 1 hour
+   481→    minEvents: 3,
+   482→    aggregation: 'count',
+   483→    actions: [
+   484→      { type: 'create_alert', params: { priority: 'P1', category: 'apt', technique: 'T1059' } },
+   485→      { type: 'notify', params: { channels: ['threat-hunters', 'ir-team'] } },
+   486→      { type: 'tag', params: { tags: ['lotl', 'investigate-deeply'] } },
+   487→    ],
+   488→    enabled: true,
+   489→    riskScore: 80,
+   490→    artpReportable: false,
+   491→    createdAt: new Date('2024-01-01'),
+   492→    updatedAt: new Date(),
+   493→  },
+   494→];
+   495→
+   496→// ============================================================
+   497→// CORRELATION ENGINE
+   498→// ============================================================
+   499→
+   500→class CorrelationEngine {
+   501→  private rules: CorrelationRule[];
+   502→  private eventBuffer: CorrelationEvent[];
+   503→  private bufferSize: number;
+   504→  private stats: CorrelationState['statistics'];
+   505→
+   506→  constructor(rules: CorrelationRule[] = DJEZZY_CORRELATION_RULES, bufferMinutes: number = 60) {
+   507→    this.rules = rules.filter(r => r.enabled);
+   508→    this.eventBuffer = [];
+   509→    this.bufferSize = bufferMinutes * 60 * 1000; // Convert to ms
+   510→    this.stats = {
+   511→      totalEventsProcessed: 0,
+   512→      totalCorrelationsTriggered: 0,
+   513→      correlationsByCategory: {},
+   514→      averageProcessingTimeMs: 0,
+   515→    };
+   516→  }
+   517→
+   518→  /**
+   519→   * Process a new event through all correlation rules
+   520→   */
+   521→  processEvent(event: CorrelationEvent): CorrelationResult[] {
+   522→    const startTime = Date.now();
+   523→    
+   524→    // Add to buffer
+   525→    this.eventBuffer.push(event);
+   526→    this.stats.totalEventsProcessed++;
+   527→    
+   528→    // Clean old events
+   529→    this.cleanupBuffer();
+   530→    
+   531→    // Run all rules
+   532→    const results: CorrelationResult[] = [];
+   533→    
+   534→    for (const rule of this.rules) {
+   535→      try {
+   536→        const result = this.evaluateRule(rule);
+   537→        if (result.matched) {
+   538→          results.push(result);
+   539→          this.stats.totalCorrelationsTriggered++;
+   540→          this.stats.correlationsByCategory[rule.category] = 
+   541→            (this.stats.correlationsByCategory[rule.category] || 0) + 1;
+   542→        }
+   543→      } catch (error) {
+   544→        console.error(`Error evaluating rule ${rule.id}:`, error);
+   545→      }
+   546→    }
+   547→    
+   548→    // Update processing time stats
+   549→    const processingTime = Date.now() - startTime;
+   550→    this.stats.averageProcessingTimeMs = 
+   551→      (this.stats.averageProcessingTimeMs + processingTime) / 2;
+   552→    
+   553→    return results;
+   554→  }
+   555→
+   556→  /**
+   557→   * Process multiple events (batch mode)
+   558→   */
+   559→  processBatch(events: CorrelationEvent[]): CorrelationResult[] {
+   560→    const allResults: CorrelationResult[] = [];
+   561→    
+   562→    for (const event of events) {
+   563→      const results = this.processEvent(event);
+   564→      allResults.push(...results);
+   565→    }
+   566→    
+   567→    return allResults;
+   568→  }
+   569→
+   570→  /**
+   571→   * Evaluate a single correlation rule against current event buffer
+   572→   */
+   573→  private evaluateRule(rule: CorrelationRule): CorrelationResult {
+   574→    // Get events within the rule's time window
+   575→    const windowStart = Date.now() - rule.timeWindowMs;
+   576→    const relevantEvents = this.eventBuffer.filter(
+   577→      e => e.timestamp.getTime() >= windowStart
+   578→    );
+   579→
+   580→    if (relevantEvents.length < rule.minEvents) {
+   581→      return this.createEmptyResult(rule);
+   582→    }
+   583→
+   584→    // Apply source filters and conditions
+   585→    let matchingEvents = relevantEvents.filter(e => 
+   586→      this.matchesConditions(e, rule.conditions)
+   587→    );
+   588→
+   589→    // Apply aggregation logic
+   590→    matchingEvents = this.applyAggregation(matchingEvents, rule);
+   591→
+   592→    // Check if we have enough matches
+   593→    const matched = matchingEvents.length >= rule.minEvents &&
+   594→      (!rule.maxEvents || matchingEvents.length <= rule.maxEvents);
+   595→
+   596→    if (!matched) {
+   597→      return this.createEmptyResult(rule);
+   598→    }
+   599→
+   600→    // Calculate confidence based on how much we exceeded the minimum
+   601→    const excessRatio = matchingEvents.length / rule.minEvents;
+   602→    const confidence = Math.min(1, 0.5 + (excessRatio - 1) * 0.1);
+   603→
+   604→    // Generate summary
+   605→    const summary = this.generateSummary(rule, matchingEvents);
+   606→
+   607→    return {
+   608→      rule,
+   609→      matched: true,
+   610→      confidence,
+   611→      triggeringEvents: matchingEvents.slice(0, 10), // Keep top 10 for storage
+   612→      summary,
+   613→      detectedAt: new Date(),
+   614→      riskScore: rule.riskScore * confidence,
+   615→      recommendedActions: rule.actions.map(a => this.actionToString(a)),
+   616→    };
+   617→  }
+   618→
+   619→  /**
+   620→   * Check if an event matches all conditions
+   621→   */
+   622→  private matchesConditions(
+   623→    event: CorrelationEvent, 
+   624→    conditions: CorrelationCondition[]
+   625→  ): boolean {
+   626→    return conditions.every(condition => {
+   627→      const fieldValue = this.getFieldValue(event, condition.field);
+   628→      const matches = this.evaluateCondition(fieldValue, condition);
+   629→      
+   630→      return condition.negate ? !matches : matches;
+   631→    });
+   632→  }
+   633→
+   634→  /**
+   635→   * Get field value from event (supports nested paths)
+   636→   */
+   637→  private getFieldValue(event: CorrelationEvent, field: string): any {
+   638→    const parts = field.split('.');
+   639→    let value: any = event;
+   640→    
+   641→    for (const part of parts) {
+   642→      if (value === undefined || value === null) return undefined;
+   643→      value = value[part];
+   644→    }
+   645→    
+   646→    return value;
+   647→  }
+   648→
+   649→  /**
+   650→   * Evaluate a single condition against a value
+   651→   */
+   652→  private evaluateCondition(value: any, condition: CorrelationCondition): boolean {
+   653→    switch (condition.operator) {
+   654→      case 'equals':
+   655→        return value === condition.value;
+   656→      
+   657→      case 'not_equals':
+   658→        return value !== condition.value;
+   659→      
+   660→      case 'contains':
+   661→        return typeof value === 'string' && value.includes(condition.value);
+   662→      
+   663→      case 'not_contains':
+   664→        return typeof value === 'string' && !value.includes(condition.value);
+   665→      
+   666→      case 'starts_with':
+   667→        return typeof value === 'string' && value.startsWith(condition.value);
+   668→      
+   669→      case 'ends_with':
+   670→        return typeof value === 'string' && value.endsWith(condition.value);
+   671→      
+   672→      case 'regex':
+   673→        return typeof value === 'string' && new RegExp(condition.value).test(value);
+   674→      
+   675→      case 'not_regex':
+   676→        return typeof value === 'string' && !new RegExp(condition.value).test(value);
+   677→      
+   678→      case 'in':
+   679→        return Array.isArray(condition.value) && condition.value.includes(value);
+   680→      
+   681→      case 'not_in':
+   682→        return Array.isArray(condition.value) && !condition.value.includes(value);
+   683→      
+   684→      case 'gt':
+   685→        return typeof value === 'number' && value > condition.value;
+   686→      
+   687→      case 'gte':
+   688→        return typeof value === 'number' && value >= condition.value;
+   689→      
+   690→      case 'lt':
+   691→        return typeof value === 'number' && value < condition.value;
+   692→      
+   693→      case 'lte':
+   694→        return typeof value === 'number' && value <= condition.value;
+   695→      
+   696→      case 'exists':
+   697→        return value !== undefined && value !== null;
+   698→      
+   699→      case 'not_exists':
+   700→        return value === undefined || value === null;
+   701→      
+   702→      case 'ip_in_range':
+   703→        return this.isIPInRange(value, condition.value);
+   704→      
+   705→      case 'ip_not_in_range':
+   706→        return !this.isIPInRange(value, condition.value);
+   707→      
+   708→      default:
+   709→        console.warn(`Unknown operator: ${condition.operator}`);
+   710→        return false;
+   711→    }
+   712→  }
+   713→
+   714→  /**
+   715→   * Apply aggregation logic to filtered events
+   716→   */
+   717→  private applyAggregation(events: CorrelationEvent[], rule: CorrelationRule): CorrelationEvent[] {
+   718→    switch (rule.aggregation) {
+   719→      case 'any':
+   720→        return events.length > 0 ? [events[0]] : [];
+   721→      
+   722→      case 'all':
+   723→        return events; // Already filtered by all conditions
+   724→      
+   725→      case 'count':
+   726→        return events.slice(0, rule.maxEvents || events.length);
+   727→      
+   728→      case 'sequence':
+   729→        // Check if events are in sequence (by timestamp)
+   730→        const sorted = [...events].sort((a, b) => a.timestamp.getTime() - b.timestamp.getTime());
+   731→        return sorted;
+   732→      
+   733→      case 'diversity': {
+   734→        // Count unique values of the first varying field
+   735→        const diversityField = rule.conditions.find(c => c.field !== 'eventType')?.field;
+   736→        if (!diversityField) return events;
+   737→        
+   738→        const uniqueValues = new Set(
+   739→          events.map(e => this.getFieldValue(e, diversityField))
+   740→        );
+   741→        
+   742→        // Return events that contribute to diversity
+   743→        return events.filter((e, idx) => 
+   744→          [...uniqueValues].indexOf(this.getFieldValue(e, diversityField)) === idx
+   745→        ).slice(0, rule.maxEvents || events.length);
+   746→      }
+   747→      
+   748→      case 'rate':
+   749→        // Rate-based: check if events/timeWindow exceeds threshold
+   750→        return events;
+   751→      
+   752→      default:
+   753→        return events;
+   754→    }
+   755→  }
+   756→
+   757→  /**
+   758→   * Simple IP range check (CIDR notation not supported in this simplified version)
+   759→   */
+   760→  private isIPInRange(ip: string, range: { start: string; end: string }): boolean {
+   761→    if (!ip) return false;
+   762→    // Very simplified - just string comparison
+   763→    return ip >= range.start && ip <= range.end;
+   764→  }
+   765→
+   766→  /**
+   767→   * Clean up old events from buffer
+   768→   */
+   769→  private cleanupBuffer(): void {
+   770→    const cutoff = Date.now() - this.bufferSize;
+   771→    this.eventBuffer = this.eventBuffer.filter(e => e.timestamp.getTime() >= cutoff);
+   772→  }
+   773→
+   774→  /**
+   775→   * Create empty (non-matching) result
+   776→   */
+   777→  private createEmptyResult(rule: CorrelationRule): CorrelationResult {
+   778→    return {
+   779→      rule,
+   780→      matched: false,
+   781→      confidence: 0,
+   782→      triggeringEvents: [],
+   783→      summary: '',
+   784→      detectedAt: new Date(),
+   785→      riskScore: 0,
+   786→      recommendedActions: [],
+   787→    };
+   788→  }
+   789→
+   790→  /**
+   791→   * Generate human-readable summary
+   792→   */
+   793→  private generateSummary(rule: CorrelationRule, events: CorrelationEvent[]): string {
+   794→    const count = events.length;
+   795→    const timeSpan = this.getTimeSpan(events);
+   796→    
+   797→    return `${rule.name}: ${count} correlated events detected over ${timeSpan} (${rule.category})`;
+   798→  }
+   799→
+   800→  /**
+   801→   * Get time span of events
+   802→   */
+   803→  private getTimeSpan(events: CorrelationEvent[]): string {
+   804→    if (events.length < 2) return '< 1 minute';
+   805→    
+   806→    const timestamps = events.map(e => e.timestamp.getTime());
+   807→    const diffMs = Math.max(...timestamps) - Math.min(...timestamps);
+   808→    
+   809→    if (diffMs < 60000) return '< 1 minute';
+   810→    if (diffMs < 3600000) return `${Math.round(diffMs / 60000)} minutes`;
+   811→    return `${Math.round(diffMs / 3600000)} hours`;
+   812→  }
+   813→
+   814→  /**
+   815→   * Convert action to human-readable string
+   816→   */
+   817→  private actionToString(action: CorrelationAction): string {
+   818→    switch (action.type) {
+   819→      case 'create_alert':
+   820→        return `Create ${action.params.priority} alert${action.params.category ? ` (${action.params.category})` : ''}`;
+   821→      case 'block':
+   822→        return `Block ${action.params.blockSourceIp ? 'source IP' : ''}${action.params.blockIMSI ? ' IMSI' : ''}${action.params.duration ? ` for ${action.params.duration}s` : ''}`;
+   823→      case 'notify':
+   824→        return `Notify via ${action.params.channels?.join(', ') || 'default'}`;
+   825→      case 'tag':
+   826→        return `Tag with: ${action.params.tags?.join(', ') || ''}`;
+   827→      case 'escalate':
+   828→        return 'Escalate to next tier';
+   829→      case 'run_playbook':
+   830→        return `Run playbook: ${action.params.playbook || 'unknown'}`;
+   831→      default:
+   832→        return `Execute ${action.type}`;
+   833→    }
+   834→  }
+   835→
+   836→  /**
+   837→   * Get engine statistics
+   838→   */
+   839→  getStatistics(): CorrelationState['statistics'] {
+   840→    return { ...this.stats };
+   841→  }
+   842→
+   843→  /**
+   844→   * Add custom rule dynamically
+   845→   */
+   846→  addRule(rule: CorrelationRule): void {
+   847→    this.rules.push(rule);
+   848→    if (rule.enabled) {
+   849→      this.rules = this.rules.filter(r => r.enabled);
+   850→    }
+   851→  }
+   852→
+   853→  /**
+   854→   * Remove rule by ID
+   855→   */
+   856→  removeRule(ruleId: string): void {
+   857→    this.rules = this.rules.filter(r => r.id !== ruleId);
+   858→  }
+   859→
+   860→  /**
+   861→   * Enable/disable rule
+   862→   */
+   863→  toggleRule(ruleId: string, enabled: boolean): void {
+   864→    const rule = this.rules.find(r => r.id === ruleId);
+   865→    if (rule) {
+   866→      rule.enabled = enabled;
+   867→      rule.updatedAt = new Date();
+   868→    }
+   869→  }
+   870→}
+   871→
+   872→// ============================================================
+   873→// EXPORTS
+   874→// ============================================================
+   875→
+   876→export { CorrelationEngine };
+   877→export type { CorrelationState };
+   878→
+   879→// Export types
+   880→export {
+   881→  type CorrelationEvent,
+   882→  type EventSource,
+   883→  type CorrelationRule,
+   884→  type CorrelationCondition,
+   885→  type ConditionOperator,
+   886→  type AggregationType,
+   887→  type CorrelationSeverity,
+   888→  type RuleCategory,
+   889→  type CorrelationAction,
+   890→  type CorrelationResult,
+   891→};
+   892→

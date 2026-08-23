@@ -1,0 +1,1155 @@
+     1→'use client';
+     2→
+     3→import React, { useState, useMemo, useCallback } from 'react';
+     4→import { cn } from '@/lib/utils';
+     5→import {
+     6→  Clock,
+     7→  AlertTriangle,
+     8→  Shield,
+     9→  Target,
+    10→  User,
+    11→  Globe,
+    12→  Lock,
+    13→  Eye,
+    14→  ChevronLeft,
+    15→  ChevronRight,
+    16→  ZoomIn,
+    17→  ZoomOut,
+    18→  Filter,
+    19→  Download,
+    20→  Calendar,
+    21→  Sword,
+    22→  Bug,
+    23→  Wifi,
+    24→  Database,
+    25→  Mail,
+    26→  Search,
+    27→  XCircle,
+    28→  CheckCircle,
+    29→  Info,
+    30→  ExternalLink
+    31→} from 'lucide-react';
+    32→import {
+    33→  Card,
+    34→  CardContent,
+    35→  CardHeader,
+    36→  CardTitle,
+    37→} from '@/components/ui/card';
+    38→import { Button } from '@/components/ui/button';
+    39→import { Badge } from '@/components/ui/badge';
+    40→import {
+    41→  Select,
+    42→  SelectContent,
+    43→  SelectItem,
+    44→  SelectTrigger,
+    45→  SelectValue,
+    46→} from '@/components/ui/select';
+    47→import {
+    48→  Tooltip,
+    49→  TooltipContent,
+    50→  TooltipProvider,
+    51→  TooltipTrigger,
+    52→} from '@/components/ui/tooltip';
+    53→import { Separator } from '@/components/ui/separator';
+    54→import { ScrollArea } from '@/components/ui/scroll-area';
+    55→
+    56→// ============================================================
+    57→// TYPES & INTERFACES
+    58→// ============================================================
+    59→
+    60→export type ThreatSeverity = 'critical' | 'high' | 'medium' | 'low' | 'info';
+    61→export type ThreatCategory = 
+    62→  | 'initial-access'
+    63→  | 'execution'
+    64→  | 'persistence'
+    65→  | 'privilege-escalation'
+    66→  | 'defense-evasion'
+    67→  | 'credential-access'
+    68→  | 'discovery'
+    69→  | 'lateral-movement'
+    70→  | 'collection'
+    71→  | 'command-control'
+    72→  | 'exfiltration'
+    73→  | 'impact';
+    74→
+    75→export type ThreatActorType = 'apt' | 'cybercrime' | 'hacktivist' | 'insider' | 'unknown';
+    76→
+    77→interface TimelineEvent {
+    78→  id: string;
+    79→  timestamp: Date;
+    80→  title: string;
+    81→  description: string;
+    82→  severity: ThreatSeverity;
+    83→  category: ThreatCategory;
+    84→  actorType?: ThreatActorType;
+    85→  actorName?: string;
+    86→  mitreTechnique?: string;
+    87→  mitreTactic?: string;
+    88→  mitreId?: string;
+    89→  iocs?: string[];
+    90→  affectedAssets?: string[];
+    91→  status: 'active' | 'contained' | 'mitigated' | 'investigating';
+    92→  source?: string;
+    93→}
+    94→
+    95→interface ThreatTimelineProps {
+    96→  /** Array of timeline events to display */
+    97→  events?: TimelineEvent[];
+    98→  /** Time range to display (in hours) */
+    99→  timeRangeHours?: number;
+   100→  /** Callback when an event is clicked */
+   101→  onEventClick?: (event: TimelineEvent) => void;
+   102→  /** Enable auto-scroll to latest event */
+   103→  autoScroll?: boolean;
+   104→  /** Show MITRE ATT&CK information */
+   105→  showMitreInfo?: boolean;
+   106→  /** Additional CSS classes */
+   107→  className?: string;
+   108→}
+   109→
+   110→// ============================================================
+   111→// CONFIGURATION & CONSTANTS
+   112→// ============================================================
+   113→
+   114→/** Severity configuration */
+   115→const SEVERITY_CONFIG: Record<ThreatSeverity, {
+   116→  label: string;
+   117→  color: string;
+   118→  bgColor: string;
+   119→  icon: React.ElementType;
+   120→}> = {
+   121→  critical: {
+   122→    label: 'Critical',
+   123→    color: 'text-red-400',
+   124→    bgColor: 'bg-red-500/20',
+   125→    icon: XCircle,
+   126→  },
+   127→  high: {
+   128→    label: 'High',
+   129→    color: 'text-orange-400',
+   130→    bgColor: 'bg-orange-500/20',
+   131→    icon: AlertTriangle,
+   132→  },
+   133→  medium: {
+   134→    label: 'Medium',
+   135→    color: 'text-yellow-400',
+   136→    bgColor: 'bg-yellow-500/20',
+   137→    icon: Info,
+   138→  },
+   139→  low: {
+   140→    label: 'Low',
+   141→    color: 'text-blue-400',
+   142→    bgColor: 'bg-blue-500/20',
+   143→    icon: Shield,
+   144→  },
+   145→  info: {
+   146→    label: 'Info',
+   147→    color: 'text-slate-400',
+   148→    bgColor: 'bg-slate-500/20',
+   149→    icon: Eye,
+   150→  },
+   151→};
+   152→
+   153→/** Category configuration with MITRE ATT&CK mapping */
+   154→const CATEGORY_CONFIG: Record<ThreatCategory, {
+   155→  label: string;
+   156→  tactic: string;
+   157→  icon: React.ElementType;
+   158→  color: string;
+   159→}> = {
+   160→  'initial-access': {
+   161→    label: 'Initial Access',
+   162→    tactic: 'Initial Access',
+   163→    icon: Globe,
+   164→    color: '#ef4444',
+   165→  },
+   166→  execution: {
+   167→    label: 'Execution',
+   168→    tactic: 'Execution',
+   169→    icon: Sword,
+   170→    color: '#f97316',
+   171→  },
+   172→  persistence: {
+   173→    label: 'Persistence',
+   174→    tactic: 'Persistence',
+   175→    icon: Lock,
+   176→    color: '#eab308',
+   177→  },
+   178→  'privilege-escalation': {
+   179→    label: 'Privilege Escalation',
+   180→    tactic: 'Privilege Escalation',
+   181→    icon: User,
+   182→    color: '#84cc16',
+   183→  },
+   184→  'defense-evasion': {
+   185→    label: 'Defense Evasion',
+   186→    tactic: 'Defense Evasion',
+   187→    icon: Eye,
+   188→    color: '#22c55e',
+   189→  },
+   190→  'credential-access': {
+   191→    label: 'Credential Access',
+   192→    tactic: 'Credential Access',
+   193→    icon: Bug,
+   194→    color: '#14b8a6',
+   195→  },
+   196→  discovery: {
+   197→    label: 'Discovery',
+   198→    tactic: 'Discovery',
+   199→    icon: Search,
+   200→    color: '#06b6d4',
+   201→  },
+   202→  'lateral-movement': {
+   203→    label: 'Lateral Movement',
+   204→    tactic: 'Lateral Movement',
+   205→    icon: Wifi,
+   206→    color: '#3b82f6',
+   207→  },
+   208→  collection: {
+   209→    label: 'Collection',
+   210→    tactic: 'Collection',
+   211→    icon: Database,
+   212→    color: '#6366f1',
+   213→  },
+   214→  'command-control': {
+   215→    label: 'Command & Control',
+   216→    tactic: 'Command and Control',
+   217→    icon: Wifi,
+   218→    color: '#a855f7',
+   219→  },
+   220→  exfiltration: {
+   221→    label: 'Exfiltration',
+   222→    tactic: 'Exfiltration',
+   223→    icon: Mail,
+   224→    color: '#d946ef',
+   225→  },
+   226→  impact: {
+   227→    label: 'Impact',
+   228→    tactic: 'Impact',
+   229→    icon: XCircle,
+   230→    color: '#ec4899',
+   231→  },
+   232→};
+   233→
+   234→/** Threat actor configuration */
+   235→const ACTOR_CONFIG: Record<ThreatActorType, {
+   236→  label: string;
+   237→  color: string;
+   238→  bgColor: string;
+   239→}> = {
+   240→  apt: {
+   241→    label: 'APT Group',
+   242→    color: 'text-red-400',
+   243→    bgColor: 'bg-red-500/20',
+   244→  },
+   245→  cybercrime: {
+   246→    label: 'Cybercriminal',
+   247→    color: 'text-orange-400',
+   248→    bgColor: 'bg-orange-500/20',
+   249→  },
+   250→  hacktivist: {
+   251→    label: 'Hacktivist',
+   252→    color: 'text-purple-400',
+   253→    bgColor: 'bg-purple-500/20',
+   254→  },
+   255→  insider: {
+   256→    label: 'Insider Threat',
+   257→    color: 'text-yellow-400',
+   258→    bgColor: 'bg-yellow-500/20',
+   259→  },
+   260→  unknown: {
+   261→    label: 'Unknown',
+   262→    color: 'text-slate-400',
+   263→    bgColor: 'bg-slate-500/20',
+   264→  },
+   265→};
+   266→
+   267→/** Status configuration */
+   268→const STATUS_CONFIG: Record<TimelineEvent['status'], {
+   269→  label: string;
+   270→  color: string;
+   271→  variant: 'default' | 'secondary' | 'outline' | 'destructive';
+   272→}> = {
+   273→  active: { label: 'Active', color: 'text-red-400', variant: 'destructive' as const },
+   274→  contained: { label: 'Contained', color: 'text-yellow-400', variant: 'outline' as const },
+   275→  mitigated: { label: 'Mitigated', color: 'text-green-400', variant: 'default' as const },
+   276→  investigating: { label: 'Investigating', color: 'text-blue-400', variant: 'secondary' as const },
+   277→};
+   278→
+   279→// ============================================================
+   280→// SAMPLE DATA - Realistic Attack Campaign
+   281→// ============================================================
+   282→
+   283→/** Generate sample threat timeline data simulating APT campaign */
+   284→export const generateSampleTimeline = (): TimelineEvent[] => {
+   285→  const now = new Date();
+   286→
+   287→  return [
+   288→    // Phase 1: Initial Access
+   289→    {
+   290→      id: 'evt-1',
+   291→      timestamp: new Date(now.getTime() - 24 * 60 * 60 * 1000), // 24h ago
+   292→      title: 'Spear Phishing Email Detected',
+   293→      description:
+   294→        'Targeted phishing email sent to finance department impersonating CEO. Malicious attachment detected.',
+   295→      severity: 'high',
+   296→      category: 'initial-access',
+   297→      actorType: 'apt',
+   298→      actorName: 'APT28 (Fancy Bear)',
+   299→      mitreTechnique: 'Spearphishing Attachment',
+   300→      mitreTactic: 'Initial Access',
+   301→      mitreId: 'T1566.001',
+   302→      iocs: ['sha256:a3f2b8c1d4e5f6...', 'sender@malicious-domain.dz'],
+   303→      affectedAssets: ['mail-server-01'],
+   304→      status: 'mitigated',
+   305→      source: 'Proofpoint Email Security',
+   306→    },
+   307→    {
+   308→      id: 'evt-2',
+   309→      timestamp: new Date(now.getTime() - 23 * 60 * 60 * 1000),
+   310→      title: 'Malicious Document Execution',
+   311→      description:
+   312→        'Macro-enabled Excel document executed on workstation FIN-0142. C2 callback initiated.',
+   313→      severity: 'critical',
+   314→      category: 'execution',
+   315→      actorType: 'apt',
+   316→      actorName: 'APT28 (Fancy Bear)',
+   317→      mitreTechnique: 'Malicious File',
+   318→      mitreTactic: 'Execution',
+   319→      mitreId: 'T1204.002',
+   320→      iocs: ['192.168.100.47', 'fin-0142.djezzy.dz'],
+   321→      affectedAssets: ['FIN-0142'],
+   322→      status: 'contained',
+   323→      source: 'CrowdStrike EDR',
+   324→    },
+   325→
+   326→    // Phase 2: Persistence & Defense Evasion
+   327→    {
+   328→      id: 'evt-3',
+   329→      timestamp: new Date(now.getTime() - 22.5 * 60 * 60 * 1000),
+   330→      title: 'Scheduled Task Created for Persistence',
+   331→      description:
+   332→        'Adversary created scheduled task running every 30 minutes for persistence mechanism.',
+   333→      severity: 'high',
+   334→      category: 'persistence',
+   335→      actorType: 'apt',
+   336→      actorName: 'APT28 (Fancy Bear)',
+   337→      mitreTechnique: 'Scheduled Task/Job',
+   338→      mitreTactic: 'Persistence',
+   339→      mitreId: 'T1053.005',
+   340→      iocs: ['taskname: "Windows Update Service"'],
+   341→      affectedAssets: ['FIN-0142'],
+   342→      status: 'contained',
+   343→      source: 'CrowdStrike EDR',
+   344→    },
+   345→    {
+   346→      id: 'evt-4',
+   347→      timestamp: new Date(now.getTime() - 22 * 60 * 60 * 1000),
+   348→      title: 'Defense Evasion via DLL Sideloading',
+   349→      description:
+   350→        'Legitimate signed executable loaded malicious DLL from temp directory.',
+   351→      severity: 'high',
+   352→      category: 'defense-evasion',
+   353→      actorType: 'apt',
+   354→      actorName: 'APT28 (Fancy Bear)',
+   355→      mitreTechnique: 'DLL Side-Loading',
+   356→      mitreTactic: 'Defense Evasion',
+   357→      mitreId: 'T1574.002',
+   358→      iocs: ['C:\\Temp\\winhttp.dll'],
+   359→      affectedAssets: ['FIN-0142'],
+   360→      status: 'contained',
+   361→      source: 'SentinelOne',
+   362→    },
+   363→
+   364→    // Phase 3: Credential Access & Discovery
+   365→    {
+   366→      id: 'evt-5',
+   367→      timestamp: new Date(now.getTime() - 21 * 60 * 60 * 1000),
+   368→      title: 'LSASS Memory Dump Attempted',
+   369→      description:
+   370→        'Suspicious process attempted to access LSASS process memory for credential harvesting.',
+   371→      severity: 'critical',
+   372→      category: 'credential-access',
+   373→      actorType: 'apt',
+   374→      actorName: 'APT28 (Fancy Bear)',
+   375→      mitreTechnique: 'OS Credential Dumping',
+   376→      mitreTactic: 'Credential Access',
+   377→      mitreId: 'T1003.001',
+   378→      iocs: ['PID: 4892', 'procdump64.exe'],
+   379→      affectedAssets: ['FIN-0142', 'dc-01'],
+   380→      status: 'investigating',
+   381→      source: 'Windows Event Log',
+   382→    },
+   383→    {
+   384→      id: 'evt-6',
+   385→      timestamp: new Date(now.getTime() - 20 * 60 * 60 * 1000),
+   386→      title: 'Network Discovery Commands Executed',
+   387→      description:
+   388→        'Adversary ran net view and nltest commands to enumerate domain trusts and network shares.',
+   389→      severity: 'medium',
+   390→      category: 'discovery',
+   391→      actorType: 'apt',
+   392→      actorName: 'APT28 (Fancy Bear)',
+   393→      mitreTechnique: 'Network Share Discovery',
+   394→      mitreTactic: 'Discovery',
+   395→      mitreId: 'T1135',
+   396→      iocs: ['net view /domain', 'nltest /domain_trusts'],
+   397→      affectedAssets: ['FIN-0142'],
+   398→      status: 'contained',
+   399→      source: 'CrowdStrike EDR',
+   400→    },
+   401→
+   402→    // Phase 4: Lateral Movement
+   403→    {
+   404→      id: 'evt-7',
+   405→      timestamp: new Date(now.getTime() - 18 * 60 * 60 * 1000),
+   406→      title: 'Lateral Movement via RDP',
+   407→      description:
+   408→        'RDP connection from compromised workstation to HR server detected using stolen credentials.',
+   409→      severity: 'critical',
+   410→      category: 'lateral-movement',
+   411→      actorType: 'apt',
+   412→      actorName: 'APT28 (Fancy Bear)',
+   413→      mitreTechnique: 'Remote Services: RDP',
+   414→      mitreTactic: 'Lateral Movement',
+   415→      mitreId: 'T1021.001',
+   416→      iocs: ['hr-server-03.djezzy.dz', 'user: svc_backup'],
+   417→      affectedAssets: ['FIN-0142', 'HR-SERVER-03'],
+   418→      status: 'active',
+   419→      source: 'Windows Security Log',
+   420→    },
+   421→    {
+   422→      id: 'evt-8',
+   423→      timestamp: new Date(now.getTime() - 17 * 60 * 60 * 1000),
+   424→      title: 'PSExec Execution on Domain Controller',
+   425→      description:
+   426→        'PSExec tool used to execute commands remotely on domain controller - potential domain takeover attempt.',
+   427→      severity: 'critical',
+   428→      category: 'lateral-movement',
+   429→      actorType: 'apt',
+   430→      actorName: 'APT28 (Fancy Bear)',
+   431→      mitreTechnique: 'Remote Services: SMB/Windows Admin Shares',
+   432→      mitreTactic: 'Lateral Movement',
+   433→      mitreId: 'T1021.002',
+   434→      iocs: ['dc-01.djezzy.dz', 'psexec.exe -s cmd.exe'],
+   435→      affectedAssets: ['HR-SERVER-03', 'DC-01'],
+   436→      status: 'active',
+   437→      source: 'CrowdStrike EDR',
+   438→    },
+   439→
+   440→    // Phase 5: Collection & Exfiltration
+   441→    {
+   442→      id: 'evt-9',
+   443→      timestamp: new Date(now.getTime() - 15 * 60 * 60 * 1000),
+   444→      title: 'Large Data Archive Created',
+   445→      description:
+   446→        '7-zip used to compress sensitive files including customer database backup (2.3GB).',
+   447→      severity: 'critical',
+   448→      category: 'collection',
+   449→      actorType: 'apt',
+   450→      actorName: 'APT28 (Fancy Bear)',
+   451→      mitreTechnique: 'Data from Local System',
+   452→      mitreTactic: 'Collection',
+   453→      mitreId: 'T1005',
+   454→      iocs: ['C:\\Temp\\backup.7z', 'SHA256: b8c3d2e1...'],
+   455→      affectedAssets: ['DC-01'],
+   456→      status: 'active',
+   457→      source: 'EDR File Audit',
+   458→    },
+   459→    {
+   460→      id: 'evt-10',
+   461→      timestamp: new Date(now.getTime() - 14 * 60 * 60 * 1000),
+   462→      title: 'Data Exfiltration to External IP',
+   463→      description:
+   464→        'Large outbound data transfer (2.4GB) to known malicious IP address associated with APT28 infrastructure.',
+   465→      severity: 'critical',
+   466→      category: 'exfiltration',
+   467→      actorType: 'apt',
+   468→      actorName: 'APT28 (Fancy Bear)',
+   469→      mitreTechnique: 'Exfiltration Over Alternative Protocol',
+   470→      mitreTactic: 'Exfiltration',
+   471→      mitreId: 'T1048.003',
+   472→      iocs: ['91.121.87.44', 'dns: c2.evil-dz.com'],
+   473→      affectedAssets: ['DC-01', 'FW-EDGE-01'],
+   474→      status: 'active',
+   475→      source: 'NetFlow Analyzer',
+   476→    },
+   477→
+   478→    // Phase 6: Impact (Ransomware Deployment)
+   479→    {
+   480→      id: 'evt-11',
+   481→      timestamp: new Date(now.getTime() - 12 * 60 * 60 * 1000),
+   482→      title: 'Ransomware Payload Deployed',
+   483→      description:
+   484→        'WannaCry variant ransomware deployed across domain. Encryption of files in progress.',
+   485→      severity: 'critical',
+   486→      category: 'impact',
+   487→      actorType: 'apt',
+   488→      actorName: 'APT28 (Fancy Bear)',
+   489→      mitreTechnique: 'Data Encrypted for Impact',
+   490→      mitreTactic: 'Impact',
+   491→      mitreId: 'T1486',
+   492→      iocs: ['wcry.exe', 'RSA-2048 encryption'],
+   493→      affectedAssets: ['DC-01', 'FILE-SERVER-01', 'FILE-SERVER-02', 'HR-SERVER-03'],
+   494→      status: 'active',
+   495→      source: 'Ransomware Detection Module',
+   496→    },
+   497→    {
+   498→      id: 'evt-12',
+   499→      timestamp: new Date(now.getTime() - 11.5 * 60 * 60 * 1000),
+   500→      title: 'Ransom Note Dropped',
+   501→      description:
+   502→        'Ransom note dropped on all affected systems demanding payment in Bitcoin within 48 hours.',
+   503→      severity: 'critical',
+   504→      category: 'impact',
+   505→      actorType: 'apt',
+   506→      actorName: 'APT28 (Fancy Bear)',
+   507→      mitreTechnique: 'Inhibit System Recovery',
+   508→      mitreTactic: 'Impact',
+   509→      mitreId: 'T1490',
+   510→      iocs: ['!READ_ME!.txt', 'BTC wallet: bc1q...'],
+   511→      affectedAssets: ['All encrypted endpoints'],
+   512→      status: 'active',
+   513→      source: 'File Integrity Monitor',
+   514→    },
+   515→
+   516→    // Response Actions
+   517→    {
+   518→      id: 'evt-13',
+   519→      timestamp: new Date(now.getTime() - 10 * 60 * 60 * 1000),
+   520→      title: 'Incident Declared - IR Team Activated',
+   521→      description:
+   522→        'Major incident declared. CSIRT team activated. Executive notification sent.',
+   523→      severity: 'high',
+   524→      category: 'impact',
+   525→      actorType: 'unknown',
+   526→      mitreTechnique: 'Incident Response',
+   527→      iocs: ['INC-2024-0847'],
+   528→      affectedAssets: ['SOC-Platform'],
+   529→      status: 'mitigated',
+   530→      source: 'Incident Management System',
+   531→    },
+   532→    {
+   533→      id: 'evt-14',
+   534→      timestamp: new Date(now.getTime() - 8 * 60 * 60 * 1000),
+   535→      title: 'Network Isolation Implemented',
+   536→      description:
+   537→        'Affected segments isolated. Containment successful - no further lateral movement detected.',
+   538→      severity: 'medium',
+   539→      category: 'impact',
+   540→      actorType: 'unknown',
+   541→      iocs: ['VLAN-10 isolated', 'ACLs updated on core switches'],
+   542→      affectedAssets: ['CORE-SW-01', 'FW-EDGE-01'],
+   543→      status: 'mitigated',
+   544→      source: 'Network Operations Center',
+   545→    },
+   546→    {
+   547→      id: 'evt-15',
+   548→      timestamp: new Date(now.getTime() - 2 * 60 * 60 * 1000),
+   549→      title: 'Recovery Operations Initiated',
+   550→      description:
+   551→        'System restoration from clean backups begun. Estimated recovery time: 12 hours.',
+   552→      severity: 'low',
+   553→      category: 'impact',
+   554→      actorType: 'unknown',
+   555→      iocs: ['Backup set: 2024-08-20-full'],
+   556→      affectedAssets: ['BACKUP-SERVER-01'],
+   557→      status: 'mitigated',
+   558→      source: 'IT Operations',
+   559→    },
+   560→  ];
+   561→};
+   562→
+   563→// ============================================================
+   564→// COMPONENTS
+   565→// ============================================================
+   566→
+   567→/**
+   568→ * ThreatTimeline - Interactive threat intelligence timeline visualization
+   569→ *
+   570→ * Features:
+   571→ * - Chronological display of security events
+   572→ * - MITRE ATT&CK framework integration
+   573→ * - Severity-based color coding
+   574→ * - Threat actor attribution
+   575→ * - IOC extraction and display
+   576→ * - Filtering by category/severity/status
+   577→ * - Zoom controls for time range adjustment
+   578→ *
+   579→ * @example
+   580→ * ```tsx
+   581→ * <ThreatTimeline
+   582→ *   showMitreInfo={true}
+   583→ *   onEventClick={(event) => showEventDetails(event)}
+   584→ * />
+   585→ * ```
+   586→ */
+   587→export function ThreatTimeline({
+   588→  initialEvents,
+   589→  timeRangeHours = 24,
+   590→  onEventClick,
+   591→  autoScroll = false,
+   592→  showMitreInfo = true,
+   593→  className,
+   594→}: ThreatTimelineProps) {
+   595→  // State management
+   596→  const [events] = useState<TimelineEvent[]>(
+   597→    initialEvents || generateSampleTimeline()
+   598→  );
+   599→  const [selectedEventId, setSelectedEventId] = useState<string | null>(null);
+   600→  const [severityFilter, setSeverityFilter] = useState<string>('all');
+   601→  const [categoryFilter, setCategoryFilter] = useState<string>('all');
+   602→  const [statusFilter, setStatusFilter] = useState<string>('all');
+   603→  const [zoomLevel, setZoomLevel] = useState(1);
+   604→
+   605→  // Filter events
+   606→  const filteredEvents = useMemo(() => {
+   607→    return events.filter((event) => {
+   608→      if (severityFilter !== 'all' && event.severity !== severityFilter)
+   609→        return false;
+   610→      if (categoryFilter !== 'all' && event.category !== categoryFilter)
+   611→        return false;
+   612→      if (statusFilter !== 'all' && event.status !== statusFilter)
+   613→        return false;
+   614→      return true;
+   615→    });
+   616→  }, [events, severityFilter, categoryFilter, statusFilter]);
+   617→
+   618→  // Get selected event
+   619→  const selectedEvent = useMemo(
+   620→    () => events.find((e) => e.id === selectedEventId) || null,
+   621→    [events, selectedEventId]
+   622→  );
+   623→
+   624→  // Calculate statistics
+   625→  const stats = useMemo(() => {
+   626→    const total = events.length;
+   627→    const bySeverity = Object.keys(SEVERITY_CONFIG).reduce(
+   628→      (acc, key) => ({
+   629→        ...acc,
+   630→        [key]: events.filter((e) => e.severity === key).length,
+   631→      }),
+   632→      {} as Record<string, number>
+   633→    );
+   634→    const byStatus = Object.keys(STATUS_CONFIG).reduce(
+   635→      (acc, key) => ({
+   636→        ...acc,
+   637→        [key]: events.filter((e) => e.status === key).length,
+   638→      }),
+   639→      {} as Record<string, number>
+   640→    );
+   641→
+   642→    return { total, bySeverity, byStatus };
+   643→  }, [events]);
+   644→
+   645→  // Handle event click
+   646→  const handleEventClick = useCallback(
+   647→    (event: TimelineEvent) => {
+   648→      setSelectedEventId(event.id === selectedEventId ? null : event.id);
+   649→      onEventClick?.(event);
+   650→    },
+   651→    [selectedEventId, onEventClick]
+   652→  );
+   653→
+   654→  // Format time relative to now
+   655→  const formatTimeAgo = (date: Date): string => {
+   656→    const diffMs = Date.now() - date.getTime();
+   657→    const diffHours = Math.floor(diffMs / (1000 * 60 * 60));
+   658→    const diffMinutes = Math.floor(diffMs / (1000 * 60));
+   659→
+   660→    if (diffMinutes < 60) return `${diffMinutes}m ago`;
+   661→    if (diffHours < 24) return `${diffHours}h ago`;
+   662→    return `${Math.floor(diffHours / 24)}d ago`;
+   663→  };
+   664→
+   665→  // Format absolute time
+   666→  const formatTime = (date: Date): string => {
+   667→    return date.toLocaleTimeString('en-US', {
+   668→      hour: '2-digit',
+   669→      minute: '2-digit',
+   670→      hour12: false,
+   671→    });
+   672→  };
+   673→
+   674→  return (
+   675→    <TooltipProvider delayDuration={150}>
+   676→      <Card className={cn('overflow-hidden', className)}>
+   677→        <CardHeader className="pb-3">
+   678→          <div className="flex items-center justify-between">
+   679→            <CardTitle className="flex items-center gap-2 text-base">
+   680→              <Clock className="h-5 w-5 text-purple-400" />
+   681→              Threat Intelligence Timeline
+   682→            </CardTitle>
+   683→
+   684→            <div className="flex items-center gap-2">
+   685→              {/* Time Range */}
+   686→              <Badge variant="outline" className="border-slate-600 text-xs">
+   687→                Last {timeRangeHours} hours
+   688→              </Badge>
+   689→
+   690→              {/* Zoom Controls */}
+   691→              <div className="flex bg-slate-800 rounded p-0.5">
+   692→                <Button
+   693→                  variant="ghost"
+   694→                  size="icon"
+   695→                  className="h-6 w-6 text-slate-400 hover:text-white"
+   696→                  onClick={() => setZoomLevel(Math.max(0.5, zoomLevel - 0.25))}
+   697→                >
+   698→                  <ZoomOut className="h-3 w-3" />
+   699→                </Button>
+   700→                <span className="px-2 text-xs text-slate-400 min-w-[40px] text-center">
+   701→                  {Math.round(zoomLevel * 100)}%
+   702→                </span>
+   703→                <Button
+   704→                  variant="ghost"
+   705→                  size="icon"
+   706→                  className="h-6 w-6 text-slate-400 hover:text-white"
+   707→                  onClick={() => setZoomLevel(Math.min(2, zoomLevel + 0.25))}
+   708→                >
+   709→                  <ZoomIn className="h-3 w-3" />
+   710→                </Button>
+   711→              </div>
+   712→            </div>
+   713→          </div>
+   714→
+   715→          {/* Filters */}
+   716→          <div className="flex items-center gap-3 mt-3 flex-wrap">
+   717→            <Select value={severityFilter} onValueChange={setSeverityFilter}>
+   718→              <SelectTrigger className="w-[130px] h-8 bg-slate-800 border-slate-600 text-xs">
+   719→                <SelectValue placeholder="Severity" />
+   720→              </SelectTrigger>
+   721→              <SelectContent>
+   722→                <SelectItem value="all">All Severities</SelectItem>
+   723→                {Object.entries(SEVERITY_CONFIG).map(([key, config]) => (
+   724→                  <SelectItem key={key} value={key}>
+   725→                    {config.label} ({stats.bySeverity[key] || 0})
+   726→                  </SelectItem>
+   727→                ))}
+   728→              </SelectContent>
+   729→            </Select>
+   730→
+   731→            <Select value={categoryFilter} onValueChange={setCategoryFilter}>
+   732→              <SelectTrigger className="w-[150px] h-8 bg-slate-800 border-slate-600 text-xs">
+   733→                <SelectValue placeholder="Category" />
+   734→              </SelectTrigger>
+   735→              <SelectContent>
+   736→                <SelectItem value="all">All Categories</SelectItem>
+   737→                {Object.entries(CATEGORY_CONFIG).map(([key, config]) => (
+   738→                  <SelectItem key={key} value={key}>
+   739→                    {config.label}
+   740→                  </SelectItem>
+   741→                ))}
+   742→              </SelectContent>
+   743→            </Select>
+   744→
+   745→            <Select value={statusFilter} onValueChange={setStatusFilter}>
+   746→              <SelectTrigger className="w-[130px] h-8 bg-slate-800 border-slate-600 text-xs">
+   747→                <SelectValue placeholder="Status" />
+   748→              </SelectTrigger>
+   749→              <SelectContent>
+   750→                <SelectItem value="all">All Status</SelectItem>
+   751→                {Object.entries(STATUS_CONFIG).map(([key, config]) => (
+   752→                  <SelectItem key={key} value={key}>
+   753→                    {config.label} ({stats.byStatus[key] || 0})
+   754→                  </SelectItem>
+   755→                ))}
+   756→              </SelectContent>
+   757→            </Select>
+   758→          </div>
+   759→        </CardHeader>
+   760→
+   761→        <CardContent className="p-0">
+   762→          <div className="flex h-[600px]">
+   763→            {/* Timeline View */}
+   764→            <ScrollArea className="flex-1 p-4">
+   765→              <div className="relative space-y-1">
+   766→                {/* Timeline axis */}
+   767→                <div className="absolute left-0 top-0 bottom-0 w-16 border-r border-slate-700 pr-2 flex flex-col justify-between py-4 text-[10px] text-slate-500">
+   768→                  {Array.from({ length: Math.min(10, timeRangeHours) }, (_, i) => (
+   769→                    <span key={i}>{i * (timeRangeHours / 10)}h ago</span>
+   770→                  ))}
+   771→                </div>
+   772→
+   773→                {/* Events */}
+   774→                <div className="ml-20 space-y-2">
+   775→                  {filteredEvents.map((event, index) => {
+   776→                    const severityConfig = SEVERITY_CONFIG[event.severity];
+   777→                    const categoryConfig = CATEGORY_CONFIG[event.category];
+   778→                    const statusConfig = STATUS_CONFIG[event.status];
+   779→                    const isSelected = selectedEventId === event.id;
+   780→
+   781→                    return (
+   782→                      <div
+   783→                        key={event.id}
+   784→                        className={cn(
+   785→                          'relative flex gap-4 p-3 rounded-lg border cursor-pointer transition-all',
+   786→                          isSelected
+   787→                            ? 'border-blue-500 bg-blue-500/10'
+   788→                            : 'border-slate-700 bg-slate-900 hover:bg-slate-800 hover:border-slate-600'
+   789→                        )}
+   790→                        onClick={() => handleEventClick(event)}
+   791→                      >
+   792→                        {/* Timeline connector */}
+   793→                        <div className="absolute left-[-26px] top-1/2 w-4 h-0.5 bg-slate-700" />
+   794→
+   795→                        {/* Status dot */}
+   796→                        <div
+   797→                          className={cn(
+   798→                            'w-3 h-3 rounded-full mt-1 flex-shrink-0 ring-2 ring-offset-slate-900 ring-offset-2',
+   799→                            event.status === 'active'
+   800→                              ? 'bg-red-500 ring-red-500/30 animate-pulse'
+   801→                              : event.status === 'investigating'
+   802→                              ? 'bg-blue-500 ring-blue-500/30'
+   803→                              : event.status === 'contained'
+   804→                              ? 'bg-yellow-500 ring-yellow-500/30'
+   805→                              : 'bg-green-500 ring-green-500/30'
+   806→                          )}
+   807→                        />
+   808→
+   809→                        {/* Event Content */}
+   810→                        <div className="flex-1 min-w-0">
+   811→                          {/* Header */}
+   812→                          <div className="flex items-start justify-between gap-2 mb-2">
+   813→                            <div className="flex items-center gap-2 min-w-0">
+   814→                              <severityConfig.icon
+   815→                                className={cn('h-4 w-4 flex-shrink-0', severityConfig.color)}
+   816→                              />
+   817→                              <h3 className="font-medium text-sm text-white truncate">
+   818→                                {event.title}
+   819→                              </h3>
+   820→                            </div>
+   821→                            <div className="flex items-center gap-1 flex-shrink-0">
+   822→                              <Badge
+   823→                                variant={statusConfig.variant}
+   824→                                className="text-[10px] px-1.5 py-0"
+   825→                              >
+   826→                                {statusConfig.label}
+   827→                              </Badge>
+   828→                              <Badge
+   829→                                variant="outline"
+   830→                                className={cn(
+   831→                                  'text-[10px] px-1.5 py-0',
+   832→                                  severityConfig.bgColor,
+   833→                                  severityConfig.color,
+   834→                                  `border-current`
+   835→                                )}
+   836→                              >
+   837→                                {severityConfig.label}
+   838→                              </Badge>
+   839→                            </div>
+   840→                          </div>
+   841→
+   842→                          {/* Description */}
+   843→                          <p className="text-xs text-slate-400 mb-2 line-clamp-2">
+   844→                            {event.description}
+   845→                          </p>
+   846→
+   847→                          {/* Metadata Row */}
+   848→                          <div className="flex items-center gap-3 text-[10px] text-slate-500 flex-wrap">
+   849→                            <span className="flex items-center gap-1">
+   850→                              <Clock className="h-3 w-3" />
+   851→                              {formatTimeAgo(event.timestamp)} ({formatTime(event.timestamp)})
+   852→                            </span>
+   853→
+   854→                            {showMitreInfo && event.mitreId && (
+   855→                              <Tooltip>
+   856→                                <TooltipTrigger asChild>
+   857→                                  <span className="flex items-center gap-1 cursor-help text-purple-400 hover:text-purple-300">
+   858→                                    <Target className="h-3 w-3" />
+   859→                                    {event.mitreId}
+   860→                                  </span>
+   861→                                </TooltipTrigger>
+   862→                                <TooltipContent side="top">
+   863→                                  <div className="text-xs max-w-[250px]">
+   864→                                    <p className="font-semibold text-white mb-1">
+   865→                                      {event.mitreTechnique}
+   866→                                    </p>
+   867→                                    <p className="text-slate-300">
+   868→                                      Tactic: {event.mitreTactic}
+   869→                                    </p>
+   870→                                    {event.actorName && (
+   871→                                      <p className="text-orange-400 mt-1">
+   872→                                        Actor: {event.actorName}
+   873→                                      </p>
+   874→                                    )}
+   875→                                  </div>
+   876→                                </TooltipContent>
+   877→                              </Tooltip>
+   878→                            )}
+   879→
+   880→                            {event.actorType && (
+   881→                              <span
+   882→                                className={cn(
+   883→                                  'flex items-center gap-1',
+   884→                                  ACTOR_CONFIG[event.actorType]?.color
+   885→                                )}
+   886→                              >
+   887→                                <User className="h-3 w-3" />
+   888→                                {ACTOR_CONFIG[event.actorType]?.label}
+   889→                              </span>
+   890→                            )}
+   891→
+   892→                            <span
+   893→                              className="flex items-center gap-1"
+   894→                              style={{ color: categoryConfig.color }}
+   895→                            >
+   896→                              <categoryConfig.icon className="h-3 w-3" />
+   897→                              {categoryConfig.label}
+   898→                            </span>
+   899→
+   900→                            {event.source && (
+   901→                              <span className="flex items-center gap-1">
+   902→                                <Eye className="h-3 w-3" />
+   903→                                {event.source}
+   904→                              </span>
+   905→                            )}
+   906→                          </div>
+   907→
+   908→                          {/* IOCs Preview */}
+   909→                          {event.iocs && event.iocs.length > 0 && (
+   910→                            <div className="mt-2 flex flex-wrap gap-1">
+   911→                              {event.iocs.slice(0, 3).map((ioc, i) => (
+   912→                                <code
+   913→                                  key={i}
+   914→                                  className="text-[10px] px-1.5 py-0.5 rounded bg-slate-800 text-cyan-400 font-mono"
+   915→                                >
+   916→                                  {ioc.length > 25 ? ioc.substring(0, 24) + '...' : ioc}
+   917→                                </code>
+   918→                              ))}
+   919→                              {event.iocs.length > 3 && (
+   920→                                <span className="text-[10px] text-slate-500">
+   921→                                  +{event.iocs.length - 3} more
+   922→                                </span>
+   923→                              )}
+   924→                            </div>
+   925→                          )}
+   926→                        </div>
+   927→                      </div>
+   928→                    );
+   929→                  })}
+   930→
+   931→                  {filteredEvents.length === 0 && (
+   932→                    <div className="text-center py-12 text-slate-500">
+   933→                      <Search className="h-12 w-12 mx-auto mb-3 opacity-50" />
+   934→                      <p>No events match your filters</p>
+   935→                    </div>
+   936→                  )}
+   937→                </div>
+   938→              </div>
+   939→            </ScrollArea>
+   940→
+   941→            {/* Selected Event Details Panel */}
+   942→            {selectedEvent && (
+   943→              <div className="w-80 border-l border-slate-700 bg-slate-900/50 overflow-y-auto">
+   944→                <div className="p-4 space-y-4 sticky top-0 bg-slate-900/95 backdrop-blur-sm">
+   945→                  {/* Header */}
+   946→                  <div className="flex items-start justify-between">
+   947→                    <div className="flex items-center gap-2">
+   948→                      {React.createElement(
+   949→                        SEVERITY_CONFIG[selectedEvent.severity].icon,
+   950→                        {
+   951→                          className: cn(
+   952→                            'h-5 w-5',
+   953→                            SEVERITY_CONFIG[selectedEvent.severity].color
+   954→                          ),
+   955→                        }
+   956→                      )}
+   957→                      <h3 className="font-semibold text-white text-sm">
+   958→                        {selectedEvent.title}
+   959→                      </h3>
+   960→                    </div>
+   961→                    <Button
+   962→                      variant="ghost"
+   963→                      size="icon"
+   964→                      className="h-6 w-6 text-slate-500"
+   965→                      onClick={() => setSelectedEventId(null)}
+   966→                    >
+   967→                      ×
+   968→                    </Button>
+   969→                  </div>
+   970→
+   971→                  {/* Status & Severity Badges */}
+   972→                  <div className="flex items-center gap-2">
+   973→                    <Badge variant={STATUS_CONFIG[selectedEvent.status].variant}>
+   974→                      {STATUS_CONFIG[selectedEvent.status].label}
+   975→                    </Badge>
+   976→                    <Badge
+   977→                      variant="outline"
+   978→                      className={cn(
+   979→                        SEVERITY_CONFIG[selectedEvent.severity].bgColor,
+   980→                        SEVERITY_CONFIG[selectedEvent.severity].color,
+   981→                        'border-current'
+   982→                      )}
+   983→                    >
+   984→                      {SEVERITY_CONFIG[selectedEvent.severity].label}
+   985→                    </Badge>
+   986→                  </div>
+   987→
+   988→                  <Separator className="bg-slate-700" />
+   989→
+   990→                  {/* Description */}
+   991→                  <div>
+   992→                    <h4 className="text-xs font-medium text-slate-400 mb-1">
+   993→                      Description
+   994→                    </h4>
+   995→                    <p className="text-sm text-slate-300">
+   996→                      {selectedEvent.description}
+   997→                    </p>
+   998→                  </div>
+   999→
+  1000→                  {/* Timestamp */}
+  1001→                  <div>
+  1002→                    <h4 className="text-xs font-medium text-slate-400 mb-1">
+  1003→                      Timestamp
+  1004→                    </h4>
+  1005→                    <p className="text-sm text-white font-mono">
+  1006→                      {selectedEvent.timestamp.toLocaleString()}
+  1007→                    </p>
+  1008→                    <p className="text-xs text-slate-500 mt-1">
+  1009→                      {formatTimeAgo(selectedEvent.timestamp)}
+  1010→                    </p>
+  1011→                  </div>
+  1012→
+  1013→                  {/* MITRE ATT&CK Info */}
+  1014→                  {showMitreInfo && selectedEvent.mitreId && (
+  1015→                    <div>
+  1016→                      <h4 className="text-xs font-medium text-slate-400 mb-2 flex items-center gap-1">
+  1017→                        <Target className="h-3 w-3 text-purple-400" />
+  1018→                        MITRE ATT&CK Mapping
+  1019→                      </h4>
+  1020→                      <div className="space-y-2 bg-slate-800/50 rounded-lg p-3">
+  1021→                        <div className="flex justify-between text-xs">
+  1022→                          <span className="text-slate-400">Technique ID</span>
+  1023→                          <span className="text-purple-400 font-mono font-medium">
+  1024→                            {selectedEvent.mitreId}
+  1025→                          </span>
+  1026→                        </div>
+  1027→                        <div className="flex justify-between text-xs">
+  1028→                          <span className="text-slate-400">Technique</span>
+  1029→                          <span className="text-white">
+  1030→                            {selectedEvent.mitreTechnique}
+  1031→                          </span>
+  1032→                        </div>
+  1033→                        <div className="flex justify-between text-xs">
+  1034→                          <span className="text-slate-400">Tactic</span>
+  1035→                          <span className="text-white">
+  1036→                            {selectedEvent.mitreTactic}
+  1037→                          </span>
+  1038→                        </div>
+  1039→                        <Button
+  1040→                          variant="outline"
+  1041→                          size="sm"
+  1042→                          className="w-full mt-2 text-xs border-purple-500/50 text-purple-400 hover:bg-purple-500/10"
+  1043→                        >
+  1044→                          <ExternalLink className="h-3 w-3 mr-1" />
+  1045→                          View in MITRE ATT&CK Matrix
+  1046→                        </Button>
+  1047→                      </div>
+  1048→                    </div>
+  1049→                  )}
+  1050→
+  1051→                  {/* Threat Actor */}
+  1052→                  {selectedEvent.actorName && (
+  1053→                    <div>
+  1054→                      <h4 className="text-xs font-medium text-slate-400 mb-1">
+  1055→                        Threat Actor
+  1056→                      </h4>
+  1057→                      <div
+  1058→                        className={cn(
+  1059→                          'inline-flex items-center gap-2 px-2 py-1 rounded-lg text-xs font-medium',
+  1060→                          ACTOR_CONFIG[selectedEvent.actorType || 'unknown']?.bgColor,
+  1061→                          ACTOR_CONFIG[selectedEvent.actorType || 'unknown']?.color
+  1062→                        )}
+  1063→                      >
+  1064→                        <User className="h-3 w-3" />
+  1065→                        {selectedEvent.actorName}
+  1066→                      </div>
+  1067→                    </div>
+  1068→                  )}
+  1069→
+  1070→                  {/* IOCs */}
+  1071→                  {selectedEvent.iocs && selectedEvent.iocs.length > 0 && (
+  1072→                    <div>
+  1073→                      <h4 className="text-xs font-medium text-slate-400 mb-2 flex items-center gap-1">
+  1074→                        <Shield className="h-3 w-3 text-cyan-400" />
+  1075→                        Indicators of Compromise
+  1076→                      </h4>
+  1077→                      <div className="space-y-1">
+  1078→                        {selectedEvent.iocs.map((ioc, index) => (
+  1079→                          <code
+  1080→                            key={index}
+  1081→                            className="block text-xs px-2 py-1.5 rounded bg-slate-800 text-cyan-400 font-mono break-all"
+  1082→                          >
+  1083→                            {ioc}
+  1084→                          </code>
+  1085→                        ))}
+  1086→                      </div>
+  1087→                    </div>
+  1088→                  )}
+  1089→
+  1090→                  {/* Affected Assets */}
+  1091→                  {selectedEvent.affectedAssets &&
+  1092→                    selectedEvent.affectedAssets.length > 0 && (
+  1093→                      <div>
+  1094→                        <h4 className="text-xs font-medium text-slate-400 mb-2">
+  1095→                          Affected Assets
+  1096→                        </h4>
+  1097→                        <div className="flex flex-wrap gap-1">
+  1098→                          {selectedEvent.affectedAssets.map((asset, index) => (
+  1099→                            <Badge
+  1100→                              key={index}
+  1101→                              variant="outline"
+  1102→                              className="text-xs border-slate-600 text-slate-300"
+  1103→                            >
+  1104→                              {asset}
+  1105→                            </Badge>
+  1106→                          ))}
+  1107→                        </div>
+  1108→                      </div>
+  1109→                    )}
+  1110→
+  1111→                  {/* Source */}
+  1112→                  {selectedEvent.source && (
+  1113→                    <div>
+  1114→                      <h4 className="text-xs font-medium text-slate-400 mb-1">
+  1115→                        Source
+  1116→                      </h4>
+  1117→                      <p className="text-sm text-slate-300">
+  1118→                        {selectedEvent.source}
+  1119→                      </p>
+  1120→                    </div>
+  1121→                  )}
+  1122→
+  1123→                  {/* Actions */}
+  1124→                  <Separator className="bg-slate-700" />
+  1125→                  <div className="space-y-2">
+  1126→                    <Button
+  1127→                      variant="outline"
+  1128→                      size="sm"
+  1129→                      className="w-full border-slate-600 text-xs"
+  1130→                    >
+  1131→                      <Search className="h-3 w-3 mr-2" />
+  1132→                      Pivot Investigation
+  1133→                    </Button>
+  1134→                    <Button
+  1135→                      variant="outline"
+  1136→                      size="sm"
+  1137→                      className="w-full border-slate-600 text-xs"
+  1138→                    >
+  1139→                      <Download className="h-3 w-3 mr-2" />
+  1140→                      Export IOCs
+  1141→                    </Button>
+  1142→                  </div>
+  1143→                </div>
+  1144→              </div>
+  1145→            )}
+  1146→          </div>
+  1147→        </CardContent>
+  1148→      </Card>
+  1149→    </TooltipProvider>
+  1150→  );
+  1151→}
+  1152→
+  1153→// Named export for barrel file
+  1154→export default ThreatTimeline;
+  1155→

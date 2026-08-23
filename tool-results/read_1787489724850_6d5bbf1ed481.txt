@@ -1,0 +1,995 @@
+     1→'use client'
+     2→
+     3→import React, { useState, useEffect } from 'react'
+     4→import {
+     5→  Search, Plus, Save, Play, Pause, RotateCcw,
+     6→  Filter, Tag, MessageSquare, Clock, User, Target,
+     7→  Shield, Crosshair, GitBranch, Database, FileText,
+     8→  ChevronRight, ChevronDown, ChevronUp, X, Check,
+     9→  AlertTriangle, Brain, Network, Lock, Eye, Download,
+    10→  Share2, Bookmark, MoreHorizontal, Grid3X3, List,
+    11→  Terminal, Code, Fingerprint, Bug, Sword, Radar
+    12→} from 'lucide-react'
+    13→import {
+    14→  Card, CardContent, CardDescription, CardHeader, CardTitle
+    15→} from '@/components/ui/card'
+    16→import { Button } from '@/components/ui/button'
+    17→import { Badge } from '@/components/ui/badge'
+    18→import { Input } from '@/components/ui/input'
+    19→import { Textarea } from '@/components/ui/textarea'
+    20→import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
+    21→import {
+    22→  Select, SelectContent, SelectItem, SelectTrigger, SelectValue
+    23→} from '@/components/ui/select'
+    24→import { Separator } from '@/components/ui/separator'
+    25→import { ScrollArea } from '@/components/ui/scroll-area'
+    26→import {
+    27→  Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger
+    28→} from '@/components/ui/dialog'
+    29→import StatusIndicator from '@/components/shared/StatusIndicator'
+    30→import SmartFilter from '@/components/shared/SmartFilter'
+    31→// Import demo data for realistic Djezzy SOC threat hunting data
+    32→import { 
+    33→  huntSessions as demoHuntSessions, 
+    34→  huntIOCs 
+    35→} from '@/lib/demo-data'
+    36→
+    37→// ============================================================
+    38→// TYPES FOR THREAT HUNTING
+    39→// ============================================================
+    40→
+    41→interface Hypothesis {
+    42→  id: string
+    43→  title: string
+    44→  description: string
+    45→  status: 'draft' | 'active' | 'completed' | 'archived'
+    46→  author: string
+    47→  createdAt: Date
+    48→  updatedAt: Date
+    49→  tags: string[]
+    50→  iocsFound: number
+    51→  relatedAlerts: number
+    52→  mitreTactics?: string[]
+    53→  mitreTechniques?: string[]
+    54→}
+    55→
+    56→interface HuntSession {
+    57→  id: string
+    58→  hypothesisId: string
+    59→  name: string
+    60→  status: 'running' | 'paused' | 'completed' | 'failed'
+    61→  startedAt: Date
+    62→  resultsCount: number
+    63→  queriesExecuted: number
+    64→}
+    65→
+    66→interface QueryCondition {
+    67→  id: string
+    68→  field: string
+    69→  operator: 'equals' | 'contains' | 'not_equals' | 'greater_than' | 'less_than' | 'regex' | 'exists'
+    70→  value: string
+    71→  logic: 'AND' | 'OR'
+    72→}
+    73→
+    74→interface HuntResult {
+    75→  id: string
+    76→  timestamp: Date
+    77→  source: string
+    78→  eventType: string
+    79→  severity: 'info' | 'low' | 'medium' | 'high' | 'critical'
+    80→  summary: string
+    81→  iocs: string[]
+    82→  rawLog?: string
+    83→}
+    84→
+    85→// ============================================================
+    86→// MITRE ATT&CK DATA
+    87→// ============================================================
+    88→
+    89→const MITRE_TACTICS = [
+    90→  { id: 'TA0043', name: 'Reconnaissance', description: 'The adversary is trying to gather information' },
+    91→  { id: 'TA0042', name: 'Resource Development', description: 'The adversary is trying to establish resources' },
+    92→  { id: 'TA0001', name: 'Initial Access', description: 'The adversary is trying to get into your network' },
+    93→  { id: 'TA0002', name: 'Execution', description: 'The adversary is trying to run malicious code' },
+    94→  { id: 'TA0003', name: 'Persistence', description: 'The adversary is trying to maintain their foothold' },
+    95→  { id: 'TA0004', name: 'Privilege Escalation', description: 'The adversary is trying to gain higher-level permissions' },
+    96→  { id: 'TA0005', name: 'Defense Evasion', description: 'The adversary is trying to avoid being detected' },
+    97→  { id: 'TA0006', name: 'Credential Access', description: 'The adversary is trying to steal account names and passwords' },
+    98→  { id: 'TA0007', name: 'Discovery', description: 'The adversary is trying to figure out your environment' },
+    99→  { id: 'TA0008', name: 'Lateral Movement', description: 'The adversary is trying to move through your environment' },
+   100→  { id: 'TA0009', name: 'Collection', description: 'The adversary is trying to gather data of interest' },
+   101→  { id: 'TA0011', name: 'Command and Control', description: 'The adversary is trying to communicate with compromised systems' },
+   102→  { id: 'TA0010', name: 'Exfiltration', description: 'The adversary is trying to steal data' },
+   103→  { id: 'TA0040', name: 'Impact', description: 'The adversary is trying to manipulate, interrupt, or destroy your systems' }
+   104→]
+   105→
+   106→const MITRE_TECHNIQUES = [
+   107→  // Initial Access
+   108→  { id: 'T1566', name: 'Spearphishing Attachment', tactic: 'TA0001' },
+   109→  { id: 'T1566.001', name: 'Spearphishing Attachment', tactic: 'TA0001' },
+   110→  { id: 'T1566.002', name: 'Spearphishing Link', tactic: 'TA0001' },
+   111→  { id: 'T1190', name: 'Exploit Public-Facing Application', tactic: 'TA0001' },
+   112→  { id: 'T1078', name: 'Valid Accounts', tactic: 'TA0001' },
+   113→  // Execution
+   114→  { id: 'T1059', name: 'Command and Scripting Interpreter', tactic: 'TA0002' },
+   115→  { id: 'T1059.001', name: 'PowerShell', tactic: 'TA0002' },
+   116→  { id: 'T1059.003', name: 'Windows Command Shell', tactic: 'TA0002' },
+   117→  { id: 'T1059.004', name: 'Unix Shell', tactic: 'TA0002' },
+   118→  { id: 'T1203', name: 'Exploitation for Client Execution', tactic: 'TA0002' },
+   119→  // Persistence
+   120→  { id: 'T1547', name: 'Boot or Logon Autostart Execution', tactic: 'TA0003' },
+   121→  { id: 'T1547.001', name: 'Registry Run Keys / Startup Folder', tactic: 'TA0003' },
+   122→  { id: 'T1547.003', name: 'Time Providers', tactic: 'TA0003' },
+   123→  { id: 'T1053', name: 'Scheduled Task/Job', tactic: 'TA0003' },
+   124→  // Defense Evasion
+   125→  { id: 'T1027', name: 'Obfuscated Files or Information', tactic: 'TA0005' },
+   126→  { id: 'T1006', name: 'Direct Volume Access', tactic: 'TA0005' },
+   127→  { id: 'T1112', name: 'Modify Registry', tactic: 'TA0005' },
+   128→  // Credential Access
+   129→  { id: 'T1003', name: 'OS Credential Dumping', tactic: 'TA0006' },
+   130→  { id: 'T1552', name: 'Unsecured Credentials', tactic: 'TA0006' },
+   131→  { id: 'T1558', name: 'Steal or Forge Kerberos Tickets', tactic: 'TA0006' },
+   132→  // Discovery
+   133→  { id: 'T1083', name: 'File and Directory Discovery', tactic: 'TA0007' },
+   134→  { id: 'T1049', name: 'System Network Connections Discovery', tactic: 'TA0007' },
+   135→  { id: 'T1018', name: 'Remote System Discovery', tactic: 'TA0007' },
+   136→  // Lateral Movement
+   137→  { id: 'T1021', name: 'Remote Services', tactic: 'TA0008' },
+   138→  { id: 'T1021.001', name: 'Remote Desktop Protocol', tactic: 'TA0008' },
+   139→  { id: 'T1021.002', name: 'SMB/Windows Admin Shares', tactic: 'TA0008' },
+   140→  { id: 'T1570', name: 'Lateral Tool Transfer', tactic: 'TA0008' },
+   141→  // Collection
+   142→  { id: 'T1005', name: 'Data from Local System', tactic: 'TA0009' },
+   143→  { id: 'T1039', name: 'Data from Network Shared Drive', tactic: 'TA0009' },
+   144→  { id: 'T1114', name: 'Email Collection', tactic: 'TA0009' },
+   145→  // Command & Control
+   146→  { id: 'T1071', name: 'Application Layer Protocol', tactic: 'TA0011' },
+   147→  { id: 'T1071.001', name: 'Web Protocols', tactic: 'TA0011' },
+   148→  { id: 'T1090', name: 'Proxy', tactic: 'TA0011' },
+   149→  { id: 'T1090.001', name: 'Internal Proxy', tactic: 'TA0011' },
+   150→  // Exfiltration
+   151→  { id: 'T1048', name: 'Exfiltration Over Alternative Protocol', tactic: 'TA0010' },
+   152→  { id: 'T1041', name: 'Exfiltration Over C2 Channel', tactic: 'TA0010' },
+   153→  { id: 'T1530', name: 'Data from Cloud Storage Object', tactic: 'TA0010' }
+   154→]
+   155→
+   156→const FIELD_OPTIONS = [
+   157→  { value: 'source_ip', label: 'Source IP' },
+   158→  { value: 'dest_ip', label: 'Destination IP' },
+   159→  { value: 'source_port', label: 'Source Port' },
+   160→  { value: 'dest_port', label: 'Destination Port' },
+   161→  { value: 'protocol', label: 'Protocol' },
+   162→  { value: 'event_type', label: 'Event Type' },
+   163→  { value: 'severity', label: 'Severity' },
+   164→  { value: 'signature', label: 'Signature' },
+   165→  { value: 'username', label: 'Username' },
+   166→  { value: 'hostname', label: 'Hostname' },
+   167→  { value: 'process_name', label: 'Process Name' },
+   168→  { value: 'file_path', label: 'File Path' },
+   169→  { value: 'hash_md5', label: 'MD5 Hash' },
+   170→  { value: 'hash_sha256', label: 'SHA256 Hash' },
+   171→  { value: 'domain', label: 'Domain' },
+   172→  { value: 'url', label: 'URL' },
+   173→  { value: 'imsi', label: 'IMSI (Telecom)' },
+   174→  { value: 'msisdn', label: 'MSISDN (Phone)' }
+   175→]
+   176→
+   177→const OPERATOR_OPTIONS = [
+   178→  { value: 'equals', label: 'Equals (=)' },
+   179→  { value: 'not_equals', label: 'Not Equals (!=)' },
+   180→  { value: 'contains', label: 'Contains' },
+   181→  { value: 'greater_than', label: 'Greater Than (>)' },
+   182→  { value: 'less_than', label: 'Less Than (<)' },
+   183→  { value: 'regex', label: 'Regex Match' },
+   184→  { value: 'exists', label: 'Exists' }
+   185→]
+   186→
+   187→// ============================================================
+   188→// MOCK DATA GENERATORS
+   189→// ============================================================
+   190→
+   191→const generateMockHypotheses = (): Hypothesis[] => [
+   192→  {
+   193→    id: 'hyp-001',
+   194→    title: 'Suspicious PowerShell Activity on Domain Controllers',
+   195→    description: 'Investigate anomalous PowerShell execution patterns on critical infrastructure systems',
+   196→    status: 'active',
+   197→    author: 'Analyst Ahmed',
+   198→    createdAt: new Date(Date.now() - 86400000 * 2),
+   199→    updatedAt: new Date(),
+   200→    tags: ['powershell', 'domain-controller', 'lateral-movement'],
+   201→    iocsFound: 12,
+   202→    relatedAlerts: 47,
+   203→    mitreTactics: ['TA0002', 'TA0008'],
+   204→    mitreTechniques: ['T1059.001', 'T1021.002']
+   205→  },
+   206→  {
+   207→    id: 'hyp-002',
+   208→    title: 'Potential Data Exfiltration via DNS Tunneling',
+   209→    description: 'Hunt for DNS queries that may indicate data exfiltration using tunneling techniques',
+   210→    status: 'active',
+   211→    author: 'Analyst Fatima',
+   212→    createdAt: new Date(Date.now() - 86400000 * 5),
+   213→    updatedAt: new Date(Date.now() - 3600000),
+   214→    tags: ['dns', 'exfiltration', 'network'],
+   215→    iocsFound: 5,
+   216→    relatedAlerts: 23,
+   217→    mitreTactics: ['TA0010', 'TA0011'],
+   218→    mitreTechniques: ['T1048', 'T1071.001']
+   219→  },
+   220→  {
+   221→    id: 'hyp-003',
+   222→    title: 'SS7 Signaling Anomaly Detection',
+   223→    description: 'Investigate unusual SS7 signaling patterns that may indicate subscriber tracking attacks',
+   224→    status: 'completed',
+   225→    author: 'Telecom Analyst Omar',
+   226→    createdAt: new Date(Date.now() - 86400000 * 10),
+   227→    updatedAt: new Date(Date.now() - 86400000 * 1),
+   228→    tags: ['ss7', 'telecom', 'subscriber-tracking'],
+   229→    iocsFound: 28,
+   230→    relatedAlerts: 156,
+   231→    mitreTactics: ['TA0009', 'TA0040'],
+   232→    mitreTechniques: ['T1005', 'T1530']
+   233→  },
+   234→  {
+   235→    id: 'hyp-004',
+   236→    title: 'SIM Swap Fraud Pattern Analysis',
+   237→    description: 'Identify patterns associated with SIM swap attacks targeting high-value accounts',
+   238→    status: 'draft',
+   239→    author: 'Fraud Analyst Leila',
+   240→    createdAt: new Date(Date.now() - 3600000 * 12),
+   241→    updatedAt: new Date(Date.now() - 3600000 * 12),
+   242→    tags: ['sim-swap', 'fraud', 'telecom'],
+   243→    iocsFound: 0,
+   244→    relatedAlerts: 8,
+   245→    mitreTactics: ['TA0001', 'TA0040'],
+   246→    mitreTechniques: ['T1566', 'T1078']
+   247→  },
+   248→  {
+   249→    id: 'hyp-005',
+   250→    title: 'Credential Stuffing Attack Investigation',
+   251→    description: 'Analyze authentication logs for credential stuffing patterns against customer portals',
+   252→    status: 'active',
+   253→    author: 'SOC Analyst Karim',
+   254→    createdAt: new Date(Date.now() - 86400000 * 3),
+   255→    updatedAt: new Date(Date.now() - 7200000),
+   256→    tags: ['credentials', 'authentication', 'web-app'],
+   257→    iocsFound: 34,
+   258→    relatedAlerts: 892,
+   259→    mitreTactics: ['TA0001', 'TA0006'],
+   260→    mitreTechniques: ['T1110', 'T1003']
+   261→  }
+   262→]
+   263→
+   264→const generateMockSessions = (): HuntSession[] => [
+   265→  { id: 'sess-001', hypothesisId: 'hyp-001', name: 'PS Hunt - DCs Week 48', status: 'running', startedAt: new Date(Date.now() - 7200000), resultsCount: 234, queriesExecuted: 15 },
+   266→  { id: 'sess-002', hypothesisId: 'hyp-002', name: 'DNS Exfil Detection', status: 'paused', startedAt: new Date(Date.now() - 86400000), resultsCount: 89, queriesExecuted: 8 },
+   267→  { id: 'sess-003', hypothesisId: 'hyp-003', name: 'SS7 Anomaly Q4', status: 'completed', startedAt: new Date(Date.now() - 86400000 * 10), resultsCount: 1247, queriesExecuted: 42 },
+   268→  { id: 'sess-004', hypothesisId: 'hyp-005', name: 'Auth Attack Analysis', status: 'running', startedAt: new Date(Date.now() - 14400000), resultsCount: 5678, queriesExecuted: 24 }
+   269→]
+   270→
+   271→const generateMockResults = (): HuntResult[] => Array.from({ length: 20 }, (_, i) => ({
+   272→  id: `result-${i + 1}`,
+   273→  timestamp: new Date(Date.now() - Math.random() * 86400000 * 7),
+   274→  source: ['SIEM/Wazuh', 'EDR/GRR', 'Network/Suricata', 'Telecom Probe'][Math.floor(Math.random() * 4)],
+   275→  eventType: ['Process Creation', 'Network Connection', 'Authentication', 'DNS Query', 'SS7 Message'][Math.floor(Math.random() * 5)],
+   276→  severity: ['info', 'low', 'medium', 'high', 'critical'][Math.floor(Math.random() * 5)] as HuntResult['severity'],
+   277→  summary: `Detected suspicious activity matching hunt criteria - Event #${1000 + i}`,
+   278→  iocs: [`192.168.${Math.floor(Math.random() * 255)}.${Math.floor(Math.random() * 255)}`, `IOC-HASH-${Math.random().toString(36).substr(2, 8).toUpperCase()}`],
+   279→  rawLog: undefined
+   280→}))
+   281→
+   282→// ============================================================
+   283→// COMPONENTS
+   284→// ============================================================
+   285→
+   286→function HypothesisForm({
+   287→  onSubmit,
+   288→  onCancel
+   289→}: {
+   290→  onSubmit: (hypothesis: Omit<Hypothesis, 'id' | 'createdAt' | 'updatedAt' | 'iocsFound' | 'relatedAlerts'>) => void
+   291→  onCancel: () => void
+   292→}) {
+   293→  const [title, setTitle] = useState('')
+   294→  const [description, setDescription] = useState('')
+   295→  const [selectedTactics, setSelectedTactics] = useState<string[]>([])
+   296→  const [selectedTechniques, setSelectedTechniques] = useState<string[]>([])
+   297→  const [tags, setTags] = useState('')
+   298→  const [showMitreSelector, setShowMitreSelector] = useState(false)
+   299→
+   300→  const handleSubmit = (e: React.FormEvent) => {
+   301→    e.preventDefault()
+   302→    onSubmit({
+   303→      title,
+   304→      description,
+   305→      status: 'draft',
+   306→      author: 'Current Analyst',
+   307→      tags: tags.split(',').map(t => t.trim()).filter(Boolean),
+   308→      mitreTactics: selectedTactics.length > 0 ? selectedTactics : undefined,
+   309→      mitreTechniques: selectedTechniques.length > 0 ? selectedTechniques : undefined
+   310→    })
+   311→  }
+   312→
+   313→  return (
+   314→    <form onSubmit={handleSubmit} className="space-y-4">
+   315→      <div className="space-y-2">
+   316→        <label className="text-sm font-medium text-slate-300">Hypothesis Title</label>
+   317→        <Input
+   318→          value={title}
+   319→          onChange={(e) => setTitle(e.target.value)}
+   320→          placeholder="Enter a clear, testable hypothesis..."
+   321→          className="bg-slate-800 border-slate-600"
+   322→          required
+   323→        />
+   324→      </div>
+   325→
+   326→      <div className="space-y-2">
+   327→        <label className="text-sm font-medium text-slate-300">Description</label>
+   328→        <Textarea
+   329→          value={description}
+   330→          onChange={(e) => setDescription(e.target.value)}
+   331→          placeholder="Describe what you are hunting for and why..."
+   332→          rows={3}
+   333→          className="bg-slate-800 border-slate-600 resize-none"
+   334→        />
+   335→      </div>
+   336→
+   337→      {/* MITRE ATT&CK Selector */}
+   338→      <div className="space-y-2">
+   339→        <label className="text-sm font-medium text-slate-300 flex items-center gap-2">
+   340→          <Crosshair className="h-4 w-4" />
+   341→          MITRE ATT&amp;CK Mapping
+   342→        </label>
+   343→        <Button
+   344→          type="button"
+   345→          variant="outline"
+   346→          size="sm"
+   347→          onClick={() => setShowMitreSelector(!showMitreSelector)}
+   348→          className="border-slate-600 text-slate-300 hover:bg-slate-700"
+   349→        >
+   350→          <Target className="h-4 w-4 mr-2" />
+   351→          {showMitreSelector ? 'Hide' : 'Show'} MITRE Selector
+   352→          {(selectedTactics.length > 0 || selectedTechniques.length > 0) && (
+   353→            <Badge variant="secondary" className="ml-2 bg-blue-500/20 text-blue-400">
+   354→              {selectedTactics.length + selectedTechniques.length}
+   355→            </Badge>
+   356→          )}
+   357→        </Button>
+   358→
+   359→        {showMitreSelector && (
+   360→          <div className="p-4 rounded-lg bg-slate-800/50 border border-slate-700 space-y-4">
+   361→            {/* Tactics Selection */}
+   362→            <div>
+   363→              <p className="text-xs font-medium text-slate-400 mb-2">Tactics</p>
+   364→              <ScrollArea className="h-[150px]">
+   365→                <div className="flex flex-wrap gap-2">
+   366→                  {MITRE_TACTICS.map(tactic => (
+   367→                    <button
+   368→                      key={tactic.id}
+   369→                      type="button"
+   370→                      onClick={() => {
+   371→                        if (selectedTactics.includes(tactic.id)) {
+   372→                          setSelectedTactics(selectedTactics.filter(t => t !== tactic.id))
+   373→                        } else {
+   374→                          setSelectedTactics([...selectedTactics, tactic.id])
+   375→                        }
+   376→                      }}
+   377→                      className={`px-2 py-1 rounded text-xs transition-colors ${
+   378→                        selectedTactics.includes(tactic.id)
+   379→                          ? 'bg-purple-500/30 text-purple-300 border border-purple-500/50'
+   380→                          : 'bg-slate-700 text-slate-400 border border-slate-600 hover:bg-slate-600'
+   381→                      }`}
+   382→                      title={tactic.description}
+   383→                    >
+   384→                      {tactic.name}
+   385→                    </button>
+   386→                  ))}
+   387→                </div>
+   388→              </ScrollArea>
+   389→            </div>
+   390→
+   391→            {/* Techniques Selection */}
+   392→            <div>
+   393→              <p className="text-xs font-medium text-slate-400 mb-2">
+   394→                Techniques (filtered by selected tactics)
+   395→              </p>
+   396→              <ScrollArea className="h-[150px]">
+   397→                <div className="flex flex-wrap gap-2">
+   398→                  {MITRE_TECHNIQUES
+   399→                    .filter(tech => 
+   400→                      selectedTactics.length === 0 || selectedTactics.includes(tech.tactic)
+   401→                    )
+   402→                    .map(tech => (
+   403→                      <button
+   404→                        key={tech.id}
+   405→                        type="button"
+   406→                        onClick={() => {
+   407→                          if (selectedTechniques.includes(tech.id)) {
+   408→                            setSelectedTechniques(selectedTechniques.filter(t => t !== tech.id))
+   409→                          } else {
+   410→                            setSelectedTechniques([...selectedTechniques, tech.id])
+   411→                          }
+   412→                        }}
+   413→                        className={`px-2 py-1 rounded text-xs transition-colors ${
+   414→                          selectedTechniques.includes(tech.id)
+   415→                            ? 'bg-orange-500/30 text-orange-300 border border-orange-500/50'
+   416→                            : 'bg-slate-700 text-slate-400 border border-slate-600 hover:bg-slate-600'
+   417→                        }`}
+   418→                      >
+   419→                        {tech.name}
+   420→                      </button>
+   421→                    ))}
+   422→                </div>
+   423→              </ScrollArea>
+   424→            </div>
+   425→          </div>
+   426→        )}
+   427→      </div>
+   428→
+   429→      <div className="space-y-2">
+   430→        <label className="text-sm font-medium text-slate-300">Tags (comma-separated)</label>
+   431→        <Input
+   432→          value={tags}
+   433→          onChange={(e) => setTags(e.target.value)}
+   434→          placeholder="powershell, lateral-movement, detection"
+   435→          className="bg-slate-800 border-slate-600"
+   436→        />
+   437→      </div>
+   438→
+   439→      <div className="flex justify-end gap-2 pt-4">
+   440→        <Button type="button" variant="ghost" onClick={onCancel} className="text-slate-400">
+   441→          Cancel
+   442→        </Button>
+   443→        <Button type="submit" className="bg-blue-600 hover:bg-blue-700">
+   444→          <Plus className="h-4 w-4 mr-2" />
+   445→          Create Hypothesis
+   446→        </Button>
+   447→      </div>
+   448→    </form>
+   449→  )
+   450→}
+   451→
+   452→function QueryBuilder({
+   453→  conditions,
+   454→  setConditions,
+   455→  onExecute
+   456→}: {
+   457→  conditions: QueryCondition[]
+   458→  setConditions: React.Dispatch<React.SetStateAction<QueryCondition[]>>
+   459→  onExecute: () => void
+   460→}) {
+   461→  const addCondition = () => {
+   462→    setConditions([
+   463→      ...conditions,
+   464→      {
+   465→        id: `cond-${Date.now()}`,
+   466→        field: '',
+   467→        operator: 'equals',
+   468→        value: '',
+   469→        logic: conditions.length > 0 ? 'AND' : 'AND'
+   470→      }
+   471→    ])
+   472→  }
+   473→
+   474→  const removeCondition = (id: string) => {
+   475→    setConditions(conditions.filter(c => c.id !== id))
+   476→  }
+   477→
+   478→  const updateCondition = (id: string, updates: Partial<QueryCondition>) => {
+   479→    setConditions(conditions.map(c => c.id === id ? { ...c, ...updates } : c))
+   480→  }
+   481→
+   482→  return (
+   483→    <Card className="bg-slate-900 border-slate-700">
+   484→      <CardHeader className="pb-3">
+   485→        <CardTitle className="text-white text-base flex items-center gap-2">
+   486→          <Terminal className="h-4 w-4 text-green-400" />
+   487→          Query Builder
+   488→        </CardTitle>
+   489→      </CardHeader>
+   490→      <CardContent className="space-y-3">
+   491→        {conditions.map((condition, index) => (
+   492→          <div key={condition.id} className="flex items-center gap-2 p-3 rounded-lg bg-slate-800/50 border border-slate-700">
+   493→            {index > 0 && (
+   494→              <Select
+   495→                value={condition.logic}
+   496→                onValueChange={(v) => updateCondition(condition.id, { logic: v as 'AND' | 'OR' })}
+   497→              >
+   498→                <SelectTrigger className="w-[70px] h-8 bg-slate-700 border-slate-600 text-xs">
+   499→                  <SelectValue />
+   500→                </SelectTrigger>
+   501→                <SelectContent>
+   502→                  <SelectItem value="AND">AND</SelectItem>
+   503→                  <SelectItem value="OR">OR</SelectItem>
+   504→                </SelectContent>
+   505→              </Select>
+   506→            )}
+   507→            {index === 0 && <div className="w-[70px]" />}
+   508→            
+   509→            <Select
+   510→              value={condition.field}
+   511→              onValueChange={(v) => updateCondition(condition.id, { field: v })}
+   512→            >
+   513→              <SelectTrigger className="flex-1 h-8 bg-slate-700 border-slate-600 text-xs min-w-[140px]">
+   514→                <SelectValue placeholder="Field" />
+   515→              </SelectTrigger>
+   516→              <SelectContent>
+   517→                {FIELD_OPTIONS.map(opt => (
+   518→                  <SelectItem key={opt.value} value={opt.value}>{opt.label}</SelectItem>
+   519→                ))}
+   520→              </SelectContent>
+   521→            </Select>
+   522→
+   523→            <Select
+   524→              value={condition.operator}
+   525→              onValueChange={(v) => updateCondition(condition.id, { operator: v as QueryCondition['operator'] })}
+   526→            >
+   527→              <SelectTrigger className="w-[130px] h-8 bg-slate-700 border-slate-600 text-xs">
+   528→                <SelectValue />
+   529→              </SelectTrigger>
+   530→              <SelectContent>
+   531→                {OPERATOR_OPTIONS.map(opt => (
+   532→                  <SelectItem key={opt.value} value={opt.value}>{opt.label}</SelectItem>
+   533→                ))}
+   534→              </SelectContent>
+   535→            </Select>
+   536→
+   537→            <Input
+   538→              value={condition.value}
+   539→              onChange={(e) => updateCondition(condition.id, { value: e.target.value })}
+   540→              placeholder="Value"
+   541→              className="flex-1 h-8 bg-slate-700 border-slate-600 text-sm"
+   542→            />
+   543→
+   544→            <Button
+   545→              variant="ghost"
+   546→              size="icon"
+   547→              className="h-8 w-8 text-slate-500 hover:text-red-400"
+   548→              onClick={() => removeCondition(condition.id)}
+   549→            >
+   550→              <X className="h-4 w-4" />
+   551→            </Button>
+   552→          </div>
+   553→        ))}
+   554→
+   555→        <div className="flex items-center justify-between pt-2">
+   556→          <Button
+   557→            variant="outline"
+   558→            size="sm"
+   559→            onClick={addCondition}
+   560→            className="border-slate-600 text-slate-300 hover:bg-slate-700"
+   561→          >
+   562→            <Plus className="h-4 w-4 mr-2" />
+   563→            Add Condition
+   564→          </Button>
+   565→          
+   566→          <Button
+   567→            size="sm"
+   568→            onClick={onExecute}
+   569→            disabled={conditions.some(c => !c.field || !c.value)}
+   570→            className="bg-emerald-600 hover:bg-emerald-700"
+   571→          >
+   572→            <Play className="h-4 w-4 mr-2" />
+   573→            Execute Query
+   574→          </Button>
+   575→        </div>
+   576→      </CardContent>
+   577→    </Card>
+   578→  )
+   579→}
+   580→
+   581→function HypothesesList({
+   582→  hypotheses,
+   583→  onSelect,
+   584→  activeId
+   585→}: {
+   586→  hypotheses: Hypothesis[]
+   587→  onSelect: (id: string) => void
+   588→  activeId?: string
+   589→}) {
+   590→  const getStatusColor = (status: Hypothesis['status']) => {
+   591→    switch (status) {
+   592→      case 'active': return 'text-green-400 bg-green-500/10 border-green-500/30'
+   593→      case 'completed': return 'text-blue-400 bg-blue-500/10 border-blue-500/30'
+   594→      case 'draft': return 'text-yellow-400 bg-yellow-500/10 border-yellow-500/30'
+   595→      case 'archived': return 'text-slate-400 bg-slate-500/10 border-slate-500/30'
+   596→    }
+   597→  }
+   598→
+   599→  return (
+   600→    <div className="space-y-2">
+   601→      {hypotheses.map(hypothesis => (
+   602→        <Card
+   603→          key={hypothesis.id}
+   604→          className={`cursor-pointer transition-all duration-200 ${
+   605→            activeId === hypothesis.id
+   606→              ? 'bg-slate-800 border-blue-500/50 shadow-lg shadow-blue-500/10'
+   607→              : 'bg-slate-900 border-slate-700 hover:border-slate-600'
+   608→          }`}
+   609→          onClick={() => onSelect(hypothesis.id)}
+   610→        >
+   611→          <CardContent className="p-4">
+   612→            <div className="flex items-start justify-between gap-3">
+   613→              <div className="flex-1 min-w-0">
+   614→                <div className="flex items-center gap-2 mb-1">
+   615→                  <h4 className="font-medium text-white truncate">{hypothesis.title}</h4>
+   616→                  <Badge variant="outline" className={`text-xs ${getStatusColor(hypothesis.status)}`}>
+   617→                    {hypothesis.status}
+   618→                  </Badge>
+   619→                </div>
+   620→                <p className="text-xs text-slate-400 line-clamp-2 mb-2">{hypothesis.description}</p>
+   621→                
+   622→                {/* MITRE Tags */}
+   623→                {hypothesis.mitreTechniques && hypothesis.mitreTechniques.length > 0 && (
+   624→                  <div className="flex flex-wrap gap-1 mb-2">
+   625→                    {hypothesis.mitreTechniques.slice(0, 3).map(techId => {
+   626→                      const tech = MITRE_TECHNIQUES.find(t => t.id === techId)
+   627→                      return tech ? (
+   628→                        <Badge key={techId} variant="outline" className="text-[10px] border-orange-500/40 text-orange-400 px-1.5 py-0">
+   629→                          {tech.name}
+   630→                        </Badge>
+   631→                      ) : null
+   632→                    })}
+   633→                    {hypothesis.mitreTechniques.length > 3 && (
+   634→                      <Badge variant="outline" className="text-[10px] border-slate-600 text-slate-400 px-1.5 py-0">
+   635→                        +{hypothesis.mitreTechniques.length - 3} more
+   636→                      </Badge>
+   637→                    )}
+   638→                  </div>
+   639→                )}
+   640→
+   641→                <div className="flex items-center gap-3 text-xs text-slate-500">
+   642→                  <span className="flex items-center gap-1">
+   643→                    <User className="h-3 w-3" />
+   644→                    {hypothesis.author}
+   645→                  </span>
+   646→                  <span className="flex items-center gap-1">
+   647→                    <Clock className="h-3 w-3" />
+   648→                    {Math.ceil((Date.now() - hypothesis.updatedAt.getTime()) / 3600000)}h ago
+   649→                  </span>
+   650→                </div>
+   651→              </div>
+   652→
+   653→              <div className="flex flex-col items-end gap-2 text-right">
+   654→                <div className="flex items-center gap-3 text-xs">
+   655→                  <span className="text-red-400 font-medium">{hypothesis.iocsFound} IOCs</span>
+   656→                  <span className="text-cyan-400 font-medium">{hypothesis.relatedAlerts} alerts</span>
+   657→                </div>
+   658→                <ChevronRight className="h-4 w-4 text-slate-500" />
+   659→              </div>
+   660→            </div>
+   661→          </CardContent>
+   662→        </Card>
+   663→      ))}
+   664→    </div>
+   665→  )
+   666→}
+   667→
+   668→function SessionsTable({ sessions }: { sessions: HuntSession[] }) {
+   669→  const getStatusIcon = (status: HuntSession['status']) => {
+   670→    switch (status) {
+   671→      case 'running':
+   672→        return <StatusIndicator status="good" size="sm" showLabel />
+   673→      case 'paused':
+   674→        return <StatusIndicator status="warning" size="sm" showLabel />
+   675→      case 'completed':
+   676→        return <StatusIndicator status="excellent" size="sm" showLabel />
+   677→      case 'failed':
+   678→        return <StatusIndicator status="critical" size="sm" showLabel />
+   679→    }
+   680→  }
+   681→
+   682→  return (
+   683→    <Card className="bg-slate-900 border-slate-700">
+   684→      <CardHeader className="pb-3">
+   685→        <CardTitle className="text-white text-base flex items-center gap-2">
+   686→          <Brain className="h-4 w-4 text-purple-400" />
+   687→          Active Hunt Sessions
+   688→        </CardTitle>
+   689→      </CardHeader>
+   690→      <CardContent>
+   691→        <div className="overflow-x-auto">
+   692→          <table className="w-full text-sm">
+   693→            <thead>
+   694→              <tr className="border-b border-slate-700">
+   695→                <th className="text-left py-2 px-3 text-slate-400 font-medium">Session Name</th>
+   696→                <th className="text-left py-2 px-3 text-slate-400 font-medium">Status</th>
+   697→                <th className="text-left py-2 px-3 text-slate-400 font-medium">Started</th>
+   698→                <th className="text-right py-2 px-3 text-slate-400 font-medium">Results</th>
+   699→                <th className="text-right py-2 px-3 text-slate-400 font-medium">Queries</th>
+   700→                <th className="text-right py-2 px-3 text-slate-400 font-medium">Actions</th>
+   701→              </tr>
+   702→            </thead>
+   703→            <tbody>
+   704→              {sessions.map(session => (
+   705→                <tr key={session.id} className="border-b border-slate-800 hover:bg-slate-800/30">
+   706→                  <td className="py-2 px-3">
+   707→                    <span className="text-white font-medium">{session.name}</span>
+   708→                  </td>
+   709→                  <td className="py-2 px-3">{getStatusIcon(session.status)}</td>
+   710→                  <td className="py-2 px-3 text-slate-400">
+   711→                    {new Date(session.startedAt).toLocaleDateString()}
+   712→                  </td>
+   713→                  <td className="py-2 px-3 text-right text-cyan-400 font-mono">
+   714→                    {session.resultsCount.toLocaleString()}
+   715→                  </td>
+   716→                  <td className="py-2 px-3 text-right text-slate-400 font-mono">
+   717→                    {session.queriesExecuted}
+   718→                  </td>
+   719→                  <td className="py-2 px-3 text-right">
+   720→                    <div className="flex items-center justify-end gap-1">
+   721→                      {session.status === 'running' && (
+   722→                        <Button variant="ghost" size="icon" className="h-7 w-7 text-yellow-400 hover:text-yellow-300">
+   723→                          <Pause className="h-4 w-4" />
+   724→                        </Button>
+   725→                      )}
+   726→                      {session.status === 'paused' && (
+   727→                        <Button variant="ghost" size="icon" className="h-7 w-7 text-green-400 hover:text-green-300">
+   728→                          <Play className="h-4 w-4" />
+   729→                        </Button>
+   730→                      )}
+   731→                      <Button variant="ghost" size="icon" className="h-7 w-7 text-slate-400 hover:text-white">
+   732→                        <Eye className="h-4 w-4" />
+   733→                      </Button>
+   734→                    </div>
+   735→                  </td>
+   736→                </tr>
+   737→              ))}
+   738→            </tbody>
+   739→          </table>
+   740→        </div>
+   741→      </CardContent>
+   742→    </Card>
+   743→  )
+   744→}
+   745→
+   746→function ResultsPanel({ results }: { results: HuntResult[] }) {
+   747→  const getSeverityColor = (severity: HuntResult['severity']) => {
+   748→    switch (severity) {
+   749→      case 'critical': return 'bg-red-500/20 text-red-400 border-red-500/30'
+   750→      case 'high': return 'bg-orange-500/20 text-orange-400 border-orange-500/30'
+   751→      case 'medium': return 'bg-yellow-500/20 text-yellow-400 border-yellow-500/30'
+   752→      case 'low': return 'bg-blue-500/20 text-blue-400 border-blue-500/30'
+   753→      default: return 'bg-slate-500/20 text-slate-400 border-slate-500/30'
+   754→    }
+   755→  }
+   756→
+   757→  return (
+   758→    <Card className="bg-slate-900 border-slate-700">
+   759→      <CardHeader className="pb-3">
+   760→        <div className="flex items-center justify-between">
+   761→          <CardTitle className="text-white text-base flex items-center gap-2">
+   762→            <Database className="h-4 w-4 text-cyan-400" />
+   763→            Hunt Results
+   764→            <Badge variant="secondary" className="bg-cyan-500/20 text-cyan-400 ml-2">
+   765→              {results.length} found
+   766→            </Badge>
+   767→          </CardTitle>
+   768→          <div className="flex items-center gap-2">
+   769→            <Button variant="outline" size="sm" className="border-slate-600 text-slate-300 hover:bg-slate-700 h-8">
+   770→              <Download className="h-4 w-4 mr-2" />
+   771→              Export
+   772→            </Button>
+   773→          </div>
+   774→        </div>
+   775→      </CardHeader>
+   776→      <CardContent>
+   777→        <ScrollArea className="h-[400px]">
+   778→          <div className="space-y-2">
+   779→            {results.map(result => (
+   780→              <div
+   781→                key={result.id}
+   782→                className="p-3 rounded-lg bg-slate-800/50 border border-slate-700 hover:border-slate-600 transition-colors"
+   783→              >
+   784→                <div className="flex items-start justify-between gap-3 mb-2">
+   785→                  <div className="flex items-center gap-2">
+   786→                    <Badge variant="outline" className={`text-xs ${getSeverityColor(result.severity)}`}>
+   787→                      {result.severity.toUpperCase()}
+   788→                    </Badge>
+   789→                    <span className="text-xs text-slate-400">{result.source}</span>
+   790→                  </div>
+   791→                  <span className="text-xs text-slate-500">
+   792→                    {result.timestamp.toLocaleString()}
+   793→                  </span>
+   794→                </div>
+   795→                <p className="text-sm text-slate-300 mb-2">{result.summary}</p>
+   796→                <div className="flex flex-wrap gap-1">
+   797→                  {result.iocs.map((ioc, idx) => (
+   798→                    <Badge key={idx} variant="outline" className="text-[10px] border-red-500/40 text-red-400 px-1.5 py-0 font-mono">
+   799→                      <Fingerprint className="h-3 w-3 mr-1" />
+   800→                      {ioc}
+   801→                    </Badge>
+   802→                  ))}
+   803→                </div>
+   804→              </div>
+   805→            ))}
+   806→          </div>
+   807→        </ScrollArea>
+   808→      </CardContent>
+   809→    </Card>
+   810→  )
+   811→}
+   812→
+   813→// ============================================================
+   814→// MAIN THREAT HUNTING DASHBOARD COMPONENT
+   815→// ============================================================
+   816→
+   817→export default function ThreatHuntingDashboard() {
+   818→  const [hypotheses, setHypotheses] = useState<Hypothesis[]>([])
+   819→  const [sessions, setSessions] = useState<HuntSession[]>([])
+   820→  const [results, setResults] = useState<HuntResult[]>([])
+   821→  const [activeHypothesis, setActiveHypothesis] = useState<string | null>(null)
+   822→  const [queryConditions, setQueryConditions] = useState<QueryCondition[]>([
+   823→    { id: 'cond-1', field: '', operator: 'equals', value: '', logic: 'AND' }
+   824→  ])
+   825→  const [showCreateDialog, setShowCreateDialog] = useState(false)
+   826→  const [isLoading, setIsLoading] = useState(true)
+   827→
+   828→  useEffect(() => {
+   829→    setIsLoading(true)
+   830→    setTimeout(() => {
+   831→      setHypotheses(generateMockHypotheses())
+   832→      setSessions(generateMockSessions())
+   833→      setResults(generateMockResults())
+   834→      setIsLoading(false)
+   835→    }, 600)
+   836→  }, [])
+   837→
+   838→  const handleCreateHypothesis = (data: Omit<Hypothesis, 'id' | 'createdAt' | 'updatedAt' | 'iocsFound' | 'relatedAlerts'>) => {
+   839→    const newHypothesis: Hypothesis = {
+   840→      ...data,
+   841→      id: `hyp-${Date.now()}`,
+   842→      createdAt: new Date(),
+   843→      updatedAt: new Date(),
+   844→      iocsFound: 0,
+   845→      relatedAlerts: 0
+   846→    }
+   847→    setHypotheses([newHypothesis, ...hypotheses])
+   848→    setShowCreateDialog(false)
+   849→  }
+   850→
+   851→  const handleExecuteQuery = () => {
+   852→    console.log('Executing query:', queryConditions)
+   853→    // Simulate query execution
+   854→    setResults(generateMockResults())
+   855→  }
+   856→
+   857→  if (isLoading) {
+   858→    return (
+   859→      <div className="min-h-screen bg-slate-950 p-6 flex items-center justify-center">
+   860→        <div className="text-center space-y-4">
+   861→          <Radar className="h-12 w-12 animate-spin text-purple-500 mx-auto" />
+   862→          <p className="text-slate-400">Loading Threat Hunting Workspace...</p>
+   863→        </div>
+   864→      </div>
+   865→    )
+   866→  }
+   867→
+   868→  return (
+   869→    <div className="min-h-screen bg-slate-950">
+   870→      {/* Header */}
+   871→      <header className="border-b border-slate-800 bg-slate-900/50 backdrop-blur-sm sticky top-0 z-40">
+   872→        <div className="px-6 py-4">
+   873→          <div className="flex items-center justify-between">
+   874→            <div>
+   875→              <h1 className="text-2xl font-bold text-white flex items-center gap-3">
+   876→                <Crosshair className="h-7 w-7 text-purple-400" />
+   877→                Threat Hunting Dashboard
+   878→              </h1>
+   879→              <p className="text-slate-400 text-sm mt-1">
+   880→                Proactive Threat Detection &amp; Hypothesis-Driven Investigations
+   881→              </p>
+   882→            </div>
+   883→            <div className="flex items-center gap-3">
+   884→              <Dialog open={showCreateDialog} onOpenChange={setShowCreateDialog}>
+   885→                <DialogTrigger asChild>
+   886→                  <Button className="bg-purple-600 hover:bg-purple-700">
+   887→                    <Plus className="h-4 w-4 mr-2" />
+   888→                    New Hypothesis
+   889→                  </Button>
+   890→                </DialogTrigger>
+   891→                <DialogContent className="bg-slate-900 border-slate-700 max-w-2xl max-h-[90vh] overflow-y-auto">
+   892→                  <DialogHeader>
+   893→                    <DialogTitle className="text-white flex items-center gap-2">
+   894→                      <Sword className="h-5 w-5 text-purple-400" />
+   895→                      Create New Hunt Hypothesis
+   896→                    </DialogTitle>
+   897→                  </DialogHeader>
+   898→                  <HypothesisForm
+   899→                    onSubmit={handleCreateHypothesis}
+   900→                    onCancel={() => setShowCreateDialog(false)}
+   901→                  />
+   902→                </DialogContent>
+   903→              </Dialog>
+   904→            </div>
+   905→          </div>
+   906→        </div>
+   907→      </header>
+   908→
+   909→      {/* Main Content */}
+   910→      <main className="p-6">
+   911→        <Tabs defaultValue="workspace" className="space-y-6">
+   912→          <TabsList className="bg-slate-800 border-slate-700">
+   913→            <TabsTrigger value="workspace" className="data-[state=active]:bg-slate-700">
+   914→              <Radar className="h-4 w-4 mr-2" />
+   915→              Workspace
+   916→            </TabsTrigger>
+   917→            <TabsTrigger value="sessions" className="data-[state=active]:bg-slate-700">
+   918→              <Brain className="h-4 w-4 mr-2" />
+   919→              Sessions
+   920→            </TabsTrigger>
+   921→            <TabsTrigger value="library" className="data-[state=active]:bg-slate-700">
+   922→              <Bookmark className="h-4 w-4 mr-2" />
+   923→              Library
+   924→            </TabsTrigger>
+   925→          </TabsList>
+   926→
+   927→          {/* Workspace Tab */}
+   928→          <TabsContent value="workspace" className="space-y-6">
+   929→            <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+   930→              {/* Left Column - Hypotheses List */}
+   931→              <div className="lg:col-span-1 space-y-4">
+   932→                <SmartFilter
+   933→                  onFilterChange={(filters) => console.log('Filters:', filters)}
+   934→                  placeholder="Search hypotheses..."
+   935→                  showSeverityFilter={false}
+   936→                  showStatusFilter={true}
+   937→                  showSourceFilter={false}
+   938→                />
+   939→                <HypothesesList
+   940→                  hypotheses={hypotheses}
+   941→                  onSelect={setActiveHypothesis}
+   942→                  activeId={activeHypothesis || undefined}
+   943→                />
+   944→              </div>
+   945→
+   946→              {/* Right Column - Query Builder & Results */}
+   947→              <div className="lg:col-span-2 space-y-6">
+   948→                <QueryBuilder
+   949→                  conditions={queryConditions}
+   950→                  setConditions={setQueryConditions}
+   951→                  onExecute={handleExecuteQuery}
+   952→                />
+   953→                <ResultsPanel results={results} />
+   954→              </div>
+   955→            </div>
+   956→          </TabsContent>
+   957→
+   958→          {/* Sessions Tab */}
+   959→          <TabsContent value="sessions">
+   960→            <SessionsTable sessions={sessions} />
+   961→          </TabsContent>
+   962→
+   963→          {/* Library Tab */}
+   964→          <TabsContent value="library">
+   965→            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+   966→              {[
+   967→                { title: 'Living off the Land', count: 45, icon: <Code className="h-5 w-5" />, color: 'text-blue-400' },
+   968→                { title: 'Telecom Fraud Patterns', count: 32, icon: <Phone className="h-5 w-5" />, color: 'text-orange-400' },
+   969→                { title: 'Insider Threat Indicators', count: 28, icon: <User className="h-5 w-5" />, color: 'text-purple-400' },
+   970→                { title: 'APT Detection Rules', count: 67, icon: <Bug className="h-5 w-5" />, color: 'text-red-400' },
+   971→                { title: 'Data Exfiltration Signs', count: 41, icon: <Download className="h-5 w-5" />, color: 'text-cyan-400' },
+   972→                { title: 'Credential Attacks', count: 53, icon: <Lock className="h-5 w-5" />, color: 'text-yellow-400' }
+   973→              ].map((template, index) => (
+   974→                <Card key={index} className="bg-slate-900 border-slate-700 hover:border-slate-600 cursor-pointer transition-all">
+   975→                  <CardContent className="pt-6">
+   976→                    <div className="flex items-start gap-4">
+   977→                      <div className={`p-3 rounded-lg bg-slate-800 ${template.color}`}>
+   978→                        {template.icon}
+   979→                      </div>
+   980→                      <div className="flex-1">
+   981→                        <h4 className="font-medium text-white mb-1">{template.title}</h4>
+   982→                        <p className="text-sm text-slate-400">{template.count} hunt templates available</p>
+   983→                      </div>
+   984→                    </div>
+   985→                  </CardContent>
+   986→                </Card>
+   987→              ))}
+   988→            </div>
+   989→          </TabsContent>
+   990→        </Tabs>
+   991→      </main>
+   992→    </div>
+   993→  )
+   994→}
+   995→
