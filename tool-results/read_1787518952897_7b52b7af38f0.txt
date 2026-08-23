@@ -1,0 +1,922 @@
+     1→# National SOC Platform - Operational Runbooks & Playbooks
+     2→
+     3→## Document Information
+     4→| Field | Value |
+     5→|-------|-------|
+     6→| **Version** | 1.0.0 |
+     7→| **Last Updated** | 2024 |
+     8→| **Classification** | Internal Use - SOC Operations |
+     9→| **Target Audience** | SOC Analysts, Incident Responders, Threat Hunters |
+    10→
+    11→---
+    12→
+    13→## Table of Contents
+    14→
+    15→1. [Introduction](#introduction)
+    16→2. [Quick Reference Cards](#quick-reference-cards)
+    17→3. [Incident Management Runbooks](#incident-management-runbooks)
+    18→4. [Threat Hunting Playbooks](#threat-hunting-playbooks)
+    19→5. [Telecom-Specific Procedures](#telecom-specific-procedures)
+    20→6. [Escalation Matrix](#escalation-matrix)
+    21→7. [Communication Templates](#communication-templates)
+    22→
+    23→---
+    24→
+    25→## Introduction
+    26→
+    27→### Purpose
+    28→This document provides standardized operational procedures for the National Security Operations Center (SOC) platform, specifically designed for **telecom-scale operations (20M+ subscribers)**.
+    29→
+    30→### Scope
+    31→- Incident Management procedures
+    32→- Threat Intelligence workflows
+    33→- Telecom-specific attack response
+    34→- Real-time monitoring and alerting
+    35→- Analytics-driven decision making
+    36→
+    37→### Key Performance Targets
+    38→| Metric | Target | Critical Threshold |
+    39→|--------|--------|-------------------|
+    40→| MTTR (Critical) | < 2 hours | > 4 hours |
+    41→| MTTR (High) | < 8 hours | > 16 hours |
+    42→| MTTA (Acknowledge) | < 15 minutes | > 30 minutes |
+    43→| SLA Compliance | > 95% | < 90% |
+    44→| False Positive Rate | < 15% | > 25% |
+    45→
+    46→---
+    47→
+    48→## Quick Reference Cards
+    49→
+    50→### Severity Classification Matrix
+    51→
+    52→| Level | Name | Response Time | Examples |
+    53→|-------|------|---------------|----------|
+    54→| **P1** | CRITICAL | Immediate (<15 min) | DDoS affecting >100K subscribers, Network outage, Data breach confirmed |
+    55→| **P2** | HIGH | < 1 hour | SS7 attack detected, SIM swap fraud campaign, Major phishing |
+    56→| **P3** | MEDIUM | < 4 hours | Suspicious activity pattern, Malware detection, Policy violation |
+    57→| **P4** | LOW | < 24 hours | Minor anomaly, Information gathering, Low-risk indicators |
+    58→
+    59→### TATC Code Reference
+    60→TATC (Telecom Attack/Threat Classification) codes standardize incident categorization:
+    61→
+    62→```
+    63→Format: TATC-YYYY-NNN
+    64→- YYYY: Year of classification
+    65→- NNN: Sequential number within year
+    66→
+    67→Categories:
+    68→- TATC-2024-001 to 099: Network Infrastructure Attacks
+    69→- TATC-2024-100 to 199: Subscriber Compromise/Fraud
+    70→- TATC-200-299: Protocol Abuse (SS7/GTP/SIP)
+    71→- TATC-300-399: Data Exfiltration/Breach
+    72→- TATC-400-499: Denial of Service
+    73→- TATC-500-599: Insider Threat
+    74→- TATC-600-699: Third-party/Supply Chain
+    75→- TATC-700-799: Emerging/Unknown
+    76→```
+    77→
+    78→---
+    79→
+    80→## Incident Management Runbooks
+    81→
+    82→### RB-001: New Incident Creation
+    83→
+    84→**Trigger**: Alert triage determines incident creation required
+    85→
+    86→#### Procedure
+    87→
+    88→```mermaid
+    89→flowchart TD
+    90→    A[Alert Received] --> B{Triage Decision}
+    91→    B -->|False Positive| C[Close Alert]
+    92→    B -->|True Positive<br/>Low Risk| D[Log & Monitor]
+    93→    B -->|True Positive<br/>Action Required| E[Create Incident]
+    94→    E --> F[Assign TATC Code]
+    95→    F --> G[Determine Severity]
+    96→    G --> H[Assess Subscriber Impact]
+    97→    H --> I[Create in System]
+    98→    I --> J[Assign Analyst]
+    99→    J --> K[Begin Investigation]
+   100→```
+   101→
+   102→#### Steps
+   103→
+   104→1. **Initial Assessment**
+   105→   - Review alert source and initial data
+   106→   - Determine if incident criteria met
+   107→   - Estimate potential subscriber impact
+   108→
+   109→2. **Classification**
+   110→   ```
+   111→   POST /api/incidents
+   112→   {
+   113→     "action": "create",
+   114→     "data": {
+   115→       "title": "[SEVERITY] Brief description",
+   116→       "description": "Detailed technical description",
+   117→       "severity": "CRITICAL|HIGH|MEDIUM|LOW",
+   118→       "category": "NETWORK_ATTACK|FRAUD|PROTOCOL_ABUSE|...",
+   119→       "subscribersAffected": <estimated_count>,
+   120→       "sourceIp": "<if applicable>",
+   121→       "msisdn": "<if subscriber involved>",
+   122→       "tatcCode": "<auto-assigned or manual>"
+   123→     }
+   124→   }
+   125→   ```
+   126→
+   127→3. **Initial Documentation**
+   128→   - Add all known IOCs (IPs, domains, hashes, MSISDNs)
+   129→   - Link related alerts
+   130→   - Set initial phase to `DETECTION`
+   131→
+   132→4. **Notification**
+   133→   - P1/P2: Immediate notification to on-call lead
+   134→   - Update dashboard with new incident
+   135→
+   136→#### Quality Gates
+   137→- [ ] All required fields populated
+   138→- [ ] Severity justification documented
+   139→- [ ] Initial subscriber impact assessed
+   140→- [ ] Related alerts linked
+   141→- [ ] Analyst assigned
+   142→
+   143→---
+   144→
+   145→### RB-002: Critical Incident Response (P1)
+   146→
+   147→**Trigger**: Incident classified as CRITICAL severity
+   148→
+   149→#### Timeline Targets
+   150→| Phase | Target | Maximum |
+   151→|-------|--------|---------|
+   152→| Acknowledgment | 5 min | 15 min |
+   153→| Initial Containment | 30 min | 60 min |
+   154→| Stakeholder Notification | 15 min | 30 min |
+   155→| War Room Activation | 30 min | 60 min |
+   156→| Status Update | Every 30 min | Every 60 min |
+   157→
+   158→#### Procedure
+   159→
+   160→**Phase 1: Immediate Actions (0-15 minutes)**
+   161→
+   162→```bash
+   163→# 1. Acknowledge incident immediately
+   164→PUT /api/incidents/{id}
+   165→{
+   166→  "action": "update",
+   167→  "data": {
+   168→    "status": "IN_PROGRESS",
+   169→    "phase": "TRIAGE"
+   170→  }
+   171→}
+   172→
+   173→# 2. Send initial notification via SSE
+   174→# System auto-emits: incident:status_changed event
+   175→```
+   176→
+   177→**Actions Checklist:**
+   178→- [ ] Acknowledge incident in system
+   179→- [ ] Notify on-call manager (call + SMS + platform notification)
+   180→- [ ] Begin evidence preservation
+   181→- [ ] Activate logging for related systems
+   182→- [ ] Assess scope (subscribers affected, network segments)
+   183→- [ ] Document all actions taken
+   184→
+   185→**Phase 2: Containment (15-60 minutes)**
+   186→
+   187→```mermaid
+   188→flowchart LR
+   189→    A[Assess Scope] --> B{Network Impact?}
+   190→    B -->|Yes| C[Coordinate NOC]
+   191→    B -->|No| D[Local Containment]
+   192→    C --> E[Implement Filters]
+   193→    D --> E
+   194→    E --> F[Monitor Effectiveness]
+   195→    F --> G{Contained?}
+   196→    G -->|Yes| H[Eradication Phase]
+   197→    G -->|No| I[Escalate Measures]
+   198→    I --> F
+   199→```
+   200→
+   201→**Containment Options by Type:**
+   202→
+   203→| Attack Type | Primary Containment | Secondary Measures |
+   204→|-------------|-------------------|-------------------|
+   205→| DDoS | Upstream filtering, Rate limiting | CDN activation, Anycast |
+   206→| SS7 Attack | Firewall rules, GT blocking | Operator coordination |
+   207→| SIM Swap Fraud | Account freezes, MSISDN blacklist | KYC verification queue |
+   208→| Malware | Network segmentation, IDS rules | Endpoint isolation |
+   209→| Data Breach | Access revocation, Credential reset | Forensic imaging |
+   210→
+   211→**Phase 3: Communication Protocol**
+   212→
+   213→**Internal Updates (every 30 min):**
+   214→```
+   215→INCIDENT UPDATE: {TATC_CODE} - {Title}
+   216→
+   217→Status: {current_status}
+   218→Phase: {current_phase}
+   219→Timeline:
+   220→  - Detected: {timestamp}
+   221→  - Acknowledged: {timestamp}
+   222→  - Containment Started: {timestamp}
+   223→  
+   224→Subscriber Impact:
+   225→  - Potentially Affected: {number}
+   226→  - Confirmed Affected: {number}
+   227→  - Services Impacted: {list}
+   228→
+   229→Actions Taken:
+   230→  1. {action_1}
+   231→  2. {action_2}
+   232→
+   233→Next Steps:
+   234→  - {next_action_1}
+   235→  - {next_action_2}
+   236→
+   237→Lead: {analyst_name}
+   238→Next Update: {scheduled_time}
+   239→```
+   240→
+   241→---
+   242→
+   243→### RB-003: SS7/SIGTRAN Attack Response
+   244→
+   245→**Trigger**: Detection of anomalous SS7 signaling patterns
+   246→
+   247→#### Background
+   248→SS7 (Signaling System No. 7) is the protocol used by telecom networks for call setup, SMS, and other services. Attacks can include location tracking, call interception, and fraud.
+   249→
+   250→#### Indicators of Compromise (IOCs)
+   251→
+   252→| Attack Type | SS7 Message Pattern | Anomaly Indicators |
+   253→|-------------|-------------------|-------------------|
+   254→| Location Tracking | SRI (Send Routing Info) bursts | >100/min from same OPC |
+   255→| Call Interception | PRN (Provide Roaming Number) | Unusual DPC destinations |
+   256→| SMS Interception | ForwardInfo IMSI | Targeted high-value MSISDNs |
+   257→| Fraud | USSD requests to premium | Revenue-generating patterns |
+   258→| DoS | MAP_ERROR floods | Error rate >10% |
+   259→
+   260→#### Response Procedure
+   261→
+   262→**Step 1: Verify and Classify**
+   263→```sql
+   264→-- Query recent SS7 anomalies
+   265→SELECT 
+   266→  message_type,
+   267→  COUNT(*) as count,
+   268→  opc,
+   269→  dpc,
+   270→  global_title as target_msisdn,
+   271→  MAX(anomaly_score) as max_score
+   272→FROM ss7_messages 
+   273→WHERE timestamp >= NOW() - INTERVAL '1 hour'
+   274→  AND anomaly_score > 70
+   275→GROUP BY message_type, opc, dpc, global_title
+   276→HAVING count > 50
+   277→ORDER BY max_score DESC;
+   278→```
+   279→
+   280→**Step 2: Assess Impact**
+   281→- Identify targeted subscribers (MSISDNs)
+   282→- Determine data accessed (location, calls, SMS)
+   283→- Calculate financial impact (fraud cases)
+   284→- Check for VIP/government targets
+   285→
+   286→**Step 3: Mitigation**
+   287→```bash
+   288→# Block malicious OPCs (Originating Point Codes)
+   289→# Coordinate with signaling firewall team
+   290→
+   291→PUT /api/incidents/{id}
+   292→{
+   293→  "action": "addUpdate",
+   294→  "data": {
+   295→    "content": "SS7 mitigation initiated:\n- Blocked OPC: {opc}\n- Firewall rule ID: {rule_id}\n- Coordination ticket: {ticket}",
+   296→    "isInternal": true
+   297→  }
+   298→}
+   299→```
+   300→
+   301→**Step 4: Operator Coordination**
+   302→For cross-operator attacks, initiate GSMA coordination:
+   303→1. Document all evidence (PCAPs, CDRs)
+   304→2. Contact peer security team via secure channel
+   305→3. Share IOCs through trusted TI platform
+   306→4. Coordinate takedown/mitigation timing
+   307→
+   308→---
+   309→
+   310→### RB-004: SIM Swap Fraud Investigation
+   311→
+   312→**Trigger**: Detection of unauthorized SIM swap or fraud pattern
+   313→
+   314→#### Red Flags
+   315→- SIM swap request followed by access to banking apps
+   316→- Multiple failed authentication then successful swap
+   317→- Unusual registration on new device (IMEI change)
+   318→- Location mismatch during swap
+   319→
+   320→#### Investigation Steps
+   321→
+   322→**1. Timeline Reconstruction**
+   323→```sql
+   324→-- Get subscriber activity timeline
+   325→SELECT 
+   326→  event_type,
+   327→  event_timestamp,
+   328→  source_ip,
+   329→  device_imei,
+   330→  location_cell_id
+   331→FROM subscriber_events 
+   332→WHERE msisdn = '{target_msisdn}'
+   333→  AND event_timestamp BETWEEN '{start_date}' AND '{end_date}'
+   334→ORDER BY event_timestamp;
+   335→```
+   336→
+   337→**2. Verify Legitimacy**
+   338→- Contact subscriber via pre-registered alternate method
+   339→- Verify identity using security questions/biometrics
+   340→- Check store CCTV if physical swap
+   341→- Review agent notes if assisted swap
+   342→
+   343→**3. Account Recovery**
+   344→- Freeze accounts if compromise confirmed
+   345→- Revert SIM to original (if possible)
+   346→- Reset all credentials
+   347→- Enable enhanced monitoring
+   348→
+   349→**4. Evidence Preservation**
+   350→```
+   351→Evidence Checklist:
+   352→□ SIM swap request form
+   353→□ Agent authentication records
+   354→□ Device IMEI history
+   355→□ Location data at time of swap
+   356→□ Account access logs post-swap
+   357→□ Financial transaction log
+   358→□ Customer verification recording
+   359→```
+   360→
+   361→---
+   362→
+   363→## Threat Hunting Playbooks
+   364→
+   365→### TH-001: MSISDN-Based Hunt
+   366→
+   367→**Objective**: Investigate suspicious phone numbers for fraud/malicious activity
+   368→
+   369→#### Pre-requisites
+   370→- Valid MSISDN(s) to investigate
+   371→- Appropriate authorization (privacy/compliance)
+   372→- Clear investigation scope
+   373→
+   374→#### Query Template
+   375→```json
+   376→POST /api/threat-hunting/sessions
+   377→{
+   378→  "name": "MSISDN Investigation - {msisdn}",
+   379→  "queryType": "MSISDN_LOOKUP",
+   380→  "parameters": {
+   381→    "msisdn": "{target_msisdn}",
+   382→    "timeRange": "30d",
+   383→    "dataSources": [
+   384→      "cdrs",           // Call detail records
+   385→      "sms_logs",       // SMS metadata
+   386→      "data_sessions",  // GTP/IP sessions
+   387→      "ss7_events",     // Signaling events
+   388→      "subscriber_db",  // Account information
+   389→      "fraud_scoring"   // Risk scores
+   390→    ]
+   391→  },
+   392→  "analystId": "{your_user_id}"
+   393→}
+   394→```
+   395→
+   396→#### Analysis Points
+   397→
+   398→**Behavioral Analysis:**
+   399→- Call patterns (frequency, destinations, duration)
+   400→- SMS patterns (short codes, international, bulk)
+   401→- Data usage (volume, destinations, protocols)
+   402→- Roaming behavior (unusual locations?)
+   403→- Device changes (IMEI history)
+   404→
+   405→**Risk Indicators:**
+   406→| Indicator | Normal Range | Suspicious |
+   407→|-----------|--------------|------------|
+   408→| Calls/day | 5-50 | >200 |
+   409→| International % | 5-20% | >60% |
+   410→| Unique contacts/day | 3-20 | >100 |
+   411→| Data roaming countries/month | 0-3 | >10 |
+   412→| IMEI changes/year | 0-2 | >5 |
+   413→
+   414→#### Output Report Structure
+   415→```markdown
+   416→# MSISDN Investigation Report
+   417→
+   418→## Executive Summary
+   419→- **MSISDN**: {number}
+   420→- **Investigation Date**: {date}
+   421→- **Analyst**: {name}
+   422→- **Risk Score**: {0-100}
+   423→- **Recommendation**: {CONTINUE_MONITORING / ESCALATE / CLOSE}
+   424→
+   425→## Subscriber Profile
+   426→- Registration Date: {date}
+   427→- Account Type: {prepaid/postpaid/corporate}
+   428→- Current Status: {active/suspended/fraud}
+   429→- Last Activity: {date/time}
+   430→
+   431→## Activity Summary (Last 30 Days)
+   432→- Total Calls: {count}
+   433→- Total SMS: {count}
+   434→- Data Sessions: {count}
+   435→- Unique Destinations: {count}
+   436→- Countries Roamed: {list}
+   437→
+   438→## Findings
+   439→### Finding 1: {title}
+   440→- **Severity**: {level}
+   441→- **Description**: {details}
+   442→- **Evidence**: {references}
+   443→- **IOC Extracted**: {list}
+   444→
+   445→## Recommendations
+   446→1. {recommendation}
+   447→2. {recommendation}
+   448→
+   449→## Attached Artifacts
+   450→- Session ID: {hunt_session_id}
+   451→- Export ID: {export_reference}
+   452→```
+   453→
+   454→---
+   455→
+   456→### TH-002: IOC Pivot Investigation
+   457→
+   458→**Objective**: Expand from single indicator to full threat picture
+   459→
+   460→#### Pivot Chain Methodology
+   461→
+   462→```mermaid
+   463→graph TD
+   464→    A[Starting IOC] --> B{IOC Type?}
+   465→    B -->|IP Address| C[Domain Resolution]
+   466→    B -->|Domain| D[Related Domains<br/>PassiveDNS]
+   467→    B -->|Hash| E[Sandbox Analysis]
+   468→    B -->|MSISDN| F[CDR Correlation]
+   469→    
+   470→    C --> G[IP Neighbors]
+   471→    D --> G
+   472→    E --> H[C2 Servers]
+   473→    F --> I[Associated Numbers]
+   474→    
+   475→    G --> J[Infrastructure Map]
+   476→    H --> J
+   477→    I --> K[Actor Attribution]
+   478→    
+   479→    J --> L[Threat Report]
+   480→    K --> L
+   481→```
+   482→
+   483→#### Execution Steps
+   484→
+   485→**Step 1: Enrich Starting IOC**
+   486→```bash
+   487→# Get IOC details and relationships
+   488→GET /api/threats/{ioc_id}/relationships
+   489→
+   490→# Common pivots:
+   491→# IP → Other domains on same server
+   492→# Domain → Registrant email → Other domains
+   493→# Hash → Family samples
+   494→# MSISDN → Same device (IMEI) or same cell tower
+   495→```
+   496→
+   497→**Step 2: Automated Expansion**
+   498→```json
+   499→POST /api/threat-hunting/sessions
+   500→{
+   501→  "name": "IOC Pivot - {type}:{value}",
+   502→  "queryType": "IOC_PIVOT",
+   503→  "parameters": {
+   504→    "startingIoc": {
+   505→      "type": "{ipv4|domain|hash|msisdn}",
+   506→      "value": "{value}"
+   507→    },
+   508→    "pivotDepth": 2,
+   509→    "maxResults": 500,
+   510→    "includeExternal": true,
+   511→    "enrichmentServices": [
+   512→      "virustotal",
+   513→      "abuseipdb",
+   514→      "whoisrdap",
+   515→      "shodan",
+   516→      "internal_threat_feed"
+   517→    ]
+   518→  }
+   519→}
+   520→```
+   521→
+   522→**Step 3: Manual Analysis**
+   523→Review automated findings for:
+   524→- False positives to exclude
+   525→- High-value leads to pursue
+   526→- Patterns indicating organized activity
+   527→- Links to known threat actors/groups
+   528→
+   529→**Step 4: Create Campaign/Update IOCs**
+   530→```bash
+   531→# If new campaign discovered
+   532→POST /api/threats
+   533→{
+   534→  "action": "createCampaign",
+   535→  "data": {
+   536→    "name": "{campaign_name}",
+   537→    "threatActor": "{attribution}",
+   538→    "ttps": [{technique_id, confidence}],
+   539→    "iocs": [{ioc_ids}]
+   540→  }
+   541→}
+   542→
+   543→# Bulk add new IOCs from hunt
+   544→POST /api/threats
+   545→{
+   546→  "action": "bulkImport",
+   547→  "data": {
+   548→    "indicators": [{new_iocs}],
+   549→    "campaignId": "{campaign_id}",
+   550→    "source": "INTERNAL_HUNT",
+   551→    "confidence": 85
+   552→  }
+   553→}
+   554→```
+   555→
+   556→---
+   557→
+   558→### TH-003: Campaign Tracking Playbook
+   559→
+   560→**Objective**: Monitor and track active threat campaigns against telecom infrastructure
+   561→
+   562→#### Dashboard Monitoring Setup
+   563→
+   564→**Key Metrics to Track:**
+   565→1. **Campaign Activity Volume**
+   566→   - New IOCs per hour
+   567→   - Alerts triggered per hour
+   568→   - Subscribers encountering campaign IOCs
+   569→
+   570→2. **Campaign Reach**
+   571→   - Unique affected subscribers
+   572→   - Geographic distribution
+   573→   - Service types impacted
+   574→
+   575→3. **Campaign Evolution**
+   576→   - New TTPs observed
+   577→   - Infrastructure changes
+   578→   - Timing patterns
+   579→
+   580→#### Automated Hunting Queries
+   581→
+   582→```yaml
+   583→# Campaign Monitoring Rules
+   584→name: "High-Volume IOC Campaign Detection"
+   585→schedule: "*/15 * * * *"  # Every 15 minutes
+   586→query: |
+   587→  SELECT 
+   588→    campaign_id,
+   589→    COUNT(new_iocs_last_15m) as ioc_velocity,
+   590→    COUNT(alerts_triggered) as alert_velocity,
+   591→    COUNT(DISTINCT affected_subscribers) as reach
+   592→  FROM campaign_metrics
+   593→  WHERE timestamp >= NOW() - INTERVAL '15 minutes'
+   594→  GROUP BY campaign_id
+   595→  HAVING ioc_velocity > 10 OR alert_velocity > 50 OR reach > 1000
+   596→
+   597→actions:
+   598→  - type: notify_analysts
+   599→    channels: [sse, slack, email]
+   600→    condition: alert_velocity > 100
+   601→  
+   602→  - type: auto_contain
+   603→    condition: reach > 10000 AND confidence > 90
+   604→    approval_required: true
+   605→```
+   606→
+   607→---
+   608→
+   609→## Telecom-Specific Procedures
+   610→
+   611→### TP-001: Subscriber Impact Assessment
+   612→
+   613→When incidents affect subscribers, follow this assessment procedure:
+   614→
+   615→#### Impact Tiers
+   616→| Tier | Subscribers Affected | Action Required |
+   617→|------|---------------------|-----------------|
+   618→| **MASSIVE** | >1M (5%+) | Emergency protocol, regulatory notification |
+   619→| **LARGE** | 100K-1M | Priority response, customer comms prep |
+   620→| **MODERATE** | 1K-100K | Standard incident, monitor closely |
+   621→| **LIMITED** | <1K | Normal handling, individual outreach if needed |
+   622→
+   623→#### Assessment Query
+   624→```sql
+   625→-- Count potentially affected subscribers
+   626→WITH affected_subscribers AS (
+   627→  -- Define your affected population based on incident type
+   628→  SELECT DISTINCT msisdn
+   629→  FROM {relevant_table}
+   630→  WHERE {incident_criteria}
+   631→    AND event_time >= '{incident_start}'
+   632→    AND event_time <= '{incident_end}'
+   633→)
+   634→SELECT 
+   635→  COUNT(*) as total_affected,
+   636→  COUNT(CASE WHEN subscriber_type = 'PREPAID' THEN 1 END) as prepaid,
+   637→  COUNT(CASE WHEN subscriber_type = 'POSTPAID' THEN 1 END) as postpaid,
+   638→  COUNT(CASE WHEN is_vip = TRUE THEN 1 END) as vip_count,
+   639→  COUNT(CASE WHEN is_corporate = TRUE THEN 1 END) as corporate_count
+   640→FROM affected_subscribers s
+   641→JOIN subscriber_master m ON s.msisdn = m.msisdn;
+   642→```
+   643→
+   644→---
+   645→
+   646→### TP-002: Regulatory Compliance Incidents
+   647→
+   648→Certain incidents require regulatory notification:
+   649→
+   650→#### Notification Triggers
+   651→- Data breach affecting >100 subscribers
+   652→- Network outage >1 hour affecting >10K subscribers
+   653→- Confirmed fraud >$50K
+   654→- Government/targeted official compromise
+   655→- Cross-border attack attribution
+   656→
+   657→#### GSMA Reporting (for telecom-specific)
+   658→If incident involves signaling attacks (SS7/Diameter):
+   659→
+   660→1. **Immediate**: Document in internal system
+   661→2. **Within 24 hours**: Preliminary report to GSMA ISAO
+   662→3. **Within 72 hours**: Detailed technical report
+   663→4. **Ongoing**: Coordination with affected operators
+   664→
+   665→---
+   666→
+   667→## Escalation Matrix
+   668→
+   669→### Technical Escalation
+   670→
+   671→| Current Level | Escalate To | Trigger |
+   672→|---------------|------------|---------|
+   673→| L1 Analyst | L2 Senior Analyst | Stuck >30 min, P1/P2 |
+   674→| L2 Analyst | L3 Team Lead | Stuck >1 hour, multi-team |
+   675→| Team Lead | SOC Manager | Resource need, major incident |
+   676→| SOC Manager | CISO | Regulatory, executive visibility |
+   677→| CISO | CEO/Board | Material breach, media risk |
+   678→
+   679→### Business Escalation
+   680→
+   681→| Situation | Notify | Timeline |
+   682→|-----------|--------|----------|
+   683→| P1 Incident | Duty Manager + Dept Head | Immediate |
+   684→| Customer impact >10K | Customer Care Lead | <1 hour |
+   685→| Media/risk | Corp Comms + Legal | <1 hour |
+   686→| Regulatory trigger | Legal + Compliance | <2 hours |
+   687→| Revenue impact >$100K | Finance + Exec | <4 hours |
+   688→
+   689→---
+   690→
+   691→## Communication Templates
+   692→
+   693→### TMPL-001: Initial Incident Notification
+   694→
+   695→```
+   696→SUBJECT: [URGENT] {SEVERITY} Incident Declared - {TATC_CODE}
+   697→
+   698→INCIDENT DETAILS:
+   699→---------------
+   700→Title: {incident_title}
+   701→Severity: {severity}
+   702→Status: {status}
+   703→Declared: {timestamp}
+   704→Analyst: {analyst_name}
+   705→
+   706→CURRENT SITUATION:
+   707→-----------------
+   708→{brief_description_of_what_we_know}
+   709→
+   710→SUBSCRIBER IMPACT:
+   711→-----------------
+   712→Potentially Affected: {number}
+   713→Confirmed Affected: {number}
+   714→Services Impacted: {services_list}
+   715→
+   716→IMMEDIATE ACTIONS:
+   717→-----------------
+   718→1. {action_taken_1}
+   719→2. {action_taken_2}
+   720→
+   721→NEXT STEPS:
+   722→----------
+   723→1. {planned_action_1}
+   724→2. {planned_action_2}
+   725→
+   726→NEXT UPDATE: {scheduled_update_time}
+   727→
+   728→CONTACT:
+   729→-------
+   730→Incident Lead: {name} ({phone}/{slack})
+   731→War Room: {location/link}
+   732→Conference: {dial-in}
+   733→
+   734→---
+   735→This is an automated notification from the National SOC Platform
+   736→```
+   737→
+   738→### TMPL-002: Status Update (Periodic)
+   739→
+   740→```
+   741→SUBJECT: UPDATE: {TATC_CODE} - {Status} ({time_since_start})
+   742→
+   743→SUMMARY:
+   744→-------
+   745→Time Active: {duration}
+   746→Current Phase: {phase}
+   747→Overall Status: {improving/stable/degrading}
+   748→
+   749→KEY METRICS:
+   750→-----------
+   751→┌─────────────────────┬──────────┬──────────┐│ Metric               │ Previous │ Current  │
+   752→├─────────────────────┼──────────┼──────────┤
+   753→│ Subscribers Affected│ {prev}   │ {curr}   │
+   754→│ Services Restored   │ {prev}   │ {curr}   │
+   755→│ Alerts/Hour         │ {prev}   │ {curr}   │
+   756→│ Containment %        │ {prev}   │ {curr}   │
+   757→└─────────────────────┴──────────┴──────────┘
+   758→
+   759→PROGRESS SINCE LAST UPDATE:
+   760→--------------------------✅ {completed_item_1}
+   761→✅ {completed_item_2}
+   762→⏳ {in_progress_item}
+   763→❌ {blocked_item} - {blocker_reason}
+   764→
+   765→DECISIONS NEEDED:
+   766→----------------{decision_required_1}
+   767→{decision_required_2}
+   768→
+   769→NEXT UPDATE: {scheduled_time}
+   770→```
+   771→
+   772→### TMPL-003: Post-Incident Report (PIR)
+   773→
+   774→```markdown
+   775→# Post-Incident Report
+   776→
+   777→## 1. Executive Summary
+   778→**Incident ID:** {TATC_CODE}
+   779→**Title:** {title}
+   780→**Duration:** {start_date} to {close_date} ({total_duration})
+   781→**Final Severity:** {severity}
+   782→
+   783→### Impact Summary
+   784→- **Subscribers Affected:** {final_count}
+   785→- **Revenue Impact:** ${amount}
+   786→- **Reputation Risk:** {low/medium/high}
+   787→- **Regulatory Exposure:** {yes/no - details}
+   788→
+   789→---
+   790→
+   791→## 2. Timeline
+   792→
+   793→| Time (UTC) | Event | Owner |
+   794→|------------|-------|-------|
+   795→| {timestamp} | {event} | {owner} |
+   796→| {timestamp} | {event} | {owner} |
+   797→
+   798→---
+   799→
+   800→## 3. Root Cause Analysis
+   801→
+   802→### What Happened
+   803→{description}
+   804→
+   805→### Why It Happened
+   806→{root_cause - use 5 whys or fishbone}
+   807→
+   808→### Contributing Factors
+   809→- {factor_1}
+   810→- {factor_2}
+   811→
+   812→---
+   813→
+   814→## 4. Response Assessment
+   815→
+   816→### What Went Well
+   817→- ✅ {positive_1}
+   818→- ✅ {positive_2}
+   819→
+   820→### What Could Be Improved
+   821→- ❌ {negative_1}
+   822→- ❌ {negative_2}
+   823→
+   824→### Metrics vs Targets
+   825→| Metric | Target | Actual | Met? |
+   826→|--------|--------|--------|------|
+   827→| MTTA | 15 min | {actual} | {✅/❌} |
+   828→| MTTR | 4 hrs | {actual} | {✅/❌} |
+   829→| SLA | 95% | {actual}% | {✅/❌} |
+   830→
+   831→---
+   832→
+   833→## 5. Lessons Learned & Action Items
+   834→
+   835→### Action Items
+   836→| # | Action | Owner | Due Date | Status |
+   837→|---|--------|-------|----------|--------|
+   838→| 1 | {action} | {name} | {date} | Open |
+   839→| 2 | {action} | {name} | {date} | Open |
+   840→
+   841→### Process Improvements
+   842→- {improvement_1}
+   843→- {improvement_2}
+   844→
+   845→---
+   846→
+   847→## 6. Attachments
+   848→- [Evidence package]({link})
+   849→- [Log exports]({link})
+   850→- [Communication timeline]({link})
+   851→
+   852→---
+   853→
+   854→**Report Prepared By:** {analyst_name}
+   855→**Report Date:** {date}
+   856→**Approved By:** {manager_name}
+   857→```
+   858→
+   859→---
+   860→
+   861→## Appendix
+   862→
+   863→### A. API Quick Reference
+   864→
+   865→| Operation | Method | Endpoint | Purpose |
+   866→|-----------|--------|----------|---------|
+   867→| Create Incident | POST | `/api/incidents` | Create new incident |
+   868→| Update Incident | PUT | `/api/incidents/{id}` | Update status/phase |
+   869→| Add Comment | PUT | `/api/incidents/{id}` | action=addUpdate |
+   870→| Link Alert | PUT | `/api/incidents/{id}` | action=linkAlert |
+   871→| Query Incidents | GET | `/api/incidents` | List/search incidents |
+   872→| Add IOC | POST | `/api/threats` | action=addIndicator |
+   873→| Validate IOC | POST | `/api/threats` | action=validateIOC |
+   874→| Bulk Import | POST | `/api/threats` | action=bulkImport |
+   875→| Create Hunt | POST | `/api/threat-hunting/sessions` | Start hunt session |
+   876→| Get Analytics | GET | `/api/analytics` | Dashboard data |
+   877→| Stream Events | GET | `/api/stream/*` | SSE real-time feed |
+   878→| Health Check | GET | `/api/incidents/health` | Module status |
+   879→
+   880→### B. Useful Queries
+   881→
+   882→**Active Critical/High Incidents:**
+   883→```sql
+   884→SELECT * FROM incidents 
+   885→WHERE status IN ('NEW', 'IN_PROGRESS', 'ESCALATED')
+   886→  AND severity IN ('CRITICAL', 'HIGH')
+   887→ORDER BY 
+   888→  CASE severity 
+   889→    WHEN 'CRITICAL' THEN 1 
+   890→    WHEN 'HIGH' THEN 2 
+   891→  END,
+   892→  created_at ASC;
+   893→```
+   894→
+   895→**Today's Incident Metrics:**
+   896→```sql
+   897→SELECT 
+   898→  COUNT(*) as total_incidents,
+   899→  COUNT(CASE WHEN severity = 'CRITICAL' THEN 1 END) as critical,
+   900→  COUNT(CASE WHEN status = 'RESOLVED' THEN 1 END) as resolved,
+   901→  SUM(subscribers_affected) as total_impact
+   902→FROM incidents 
+   903→WHERE DATE(created_at) = CURRENT_DATE;
+   904→```
+   905→
+   906→### C. Contact Directory
+   907→
+   908→| Role | Name | Phone | Slack | Email |
+   909→|------|------|-------|------|-------|
+   910→| SOC Manager | - | - | @soc-manager | soc@telco.com |
+   911→| On-Call L2 | - | - | @oncall-l2 | - |
+   912→| NOC Liaison | - | - | @noc-liaison | noc@telco.com |
+   913→| Legal | - | - | @legal-sec | legal@telco.com |
+   914→| Corp Comms | - | - | @comms | comms@telco.com |
+   915→| CISO | - | - | @ciso | ciso@telco.com |
+   916→
+   917→---
+   918→
+   919→*Document maintained by SOC Operations Team*
+   920→*Last review: {date}*
+   921→*Next scheduled review: {date + 6 months}*
+   922→

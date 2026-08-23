@@ -1,0 +1,877 @@
+     1→/**
+     2→ * National SOC Platform - Fraud Detection Engine
+     3→ * 
+     4→ * Advanced fraud detection for Djezzy telecom network:
+     5→ * - SIM Swap Detection
+     6→ * - IRSF (International Revenue Share Fraud)
+     7→ * - Wangiri (One-ring) Detection
+     8→ * - PBX Hijacking / Toll Fraud
+     9→ * - IMEI Cloning
+    10→ * - Data Tunneling Abuse
+    11→ * - Roaming Abuse
+    12→ * - Call Spam / Robocalling
+    13→ * 
+    14→ * Uses ML-enhanced scoring and ARTP-compliant reporting
+    15→ */
+    16→
+    17→import { db } from '@/lib/db';
+    18→
+    19→// ============================================================
+    20→// Types & Interfaces
+    21→// ============================================================
+    22→
+    23→export interface FraudCase {
+    24→  id: string;
+    25→  caseNumber: string;
+    26→  type: FraudType;
+    27→  severity: 'low' | 'medium' | 'high' | 'critical';
+    28→  status: 'OPEN' | 'INVESTIGATING' | 'ESCALATED' | 'RESOLVED' | 'CLOSED';
+    29→  confidence: number;
+    30→  description: string;
+    31→  subscriber?: {
+    32→    msisdn: string;
+    33→    imsi: string;
+    34→    riskScore: number;
+    35→  };
+    36→  evidence: EvidenceItem[];
+    37→  financialImpact?: {
+    38→    estimatedLossDZD: number;
+    39→    currency: 'DZD';
+    40→  };
+    41→  artpReportable: boolean;
+    42→  artpDeadline?: Date;
+    43→  timeline: CaseEvent[];
+    44→  assignedTo?: string;
+    45→  createdAt: Date;
+    46→  updatedAt: Date;
+    47→}
+    48→
+    49→export interface EvidenceItem {
+    50→  id: string;
+    51→  type: 'ss7_message' | 'gtp_session' | 'sip_call' | 'diameter_session' | 'subscriber_record';
+    52→  timestamp: Date;
+    53→  description: string;
+    54→  data: Record<string, any>;
+    55→  riskContribution: number; // How much this evidence contributes to overall score
+    56→}
+    57→
+    58→export interface CaseEvent {
+    59→  timestamp: Date;
+    60→  action: string;
+    61→  performedBy: string;
+    62→  notes?: string;
+    63→}
+    64→
+    65→export type FraudType = 
+    66→  | 'SIM_SWAP'
+    67→  | 'IRSF'
+    68→  | 'WANGIRI'
+    69→  | 'PBX_HIJACKING'
+    70→  | 'TOLL_FRAUD'
+    71→  | 'IMEI_CLONING'
+    72→  | 'DATA_TUNNELING'
+    73→  | 'ROAMING_ABUSE'
+    74→  | 'CALL_SPAM'
+    75→  | 'PREMIUM_RATE_ABUSE'
+    76→  | 'LOCATION_SPOOFING'
+    77→  | 'AUTHENTICATION_STORM'
+    78→  | 'SUBSCRIBER_TAKEOVER';
+    79→
+    80→export interface FraudRule {
+    81→  id: string;
+    82→  name: string;
+    83→  type: FraudType;
+    84→  enabled: boolean;
+    85→  severity: 'low' | 'medium' | 'high' | 'critical';
+    86→  conditions: RuleCondition[];
+    87→  actions: RuleAction[];
+    88→  artpReportable: boolean;
+    89→  cooldownMinutes: number; // Minimum time between alerts for same subscriber
+    90→}
+    91→
+    92→export interface RuleCondition {
+    93→  field: string;
+    94→  operator: 'eq' | 'neq' | 'gt' | 'gte' | 'lt' | 'lte' | 'contains' | 'in' | 'regex';
+    95→  value: any;
+    96→  weight: number; // Contribution to confidence score
+    97→}
+    98→
+    99→export interface RuleAction {
+   100→  type: 'alert' | 'block' | 'limit' | 'monitor' | 'notify' | 'report_artp';
+   101→  parameters?: Record<string, any>;
+   102→}
+   103→
+   104→// ============================================================
+   105→// Predefined Fraud Rules (Djezzy-specific)
+   106→// ============================================================
+   107→
+   108→const DEFAULT_FRAUD_RULES: FraudRule[] = [
+   109→  {
+   110→    id: 'sim-swap-001',
+   111→    name: 'Multiple Location Updates',
+   112→    type: 'SIM_SWAP',
+   113→    enabled: true,
+   114→    severity: 'critical',
+   115→    conditions: [
+   116→      { field: 'updateLocationCount', operator: 'gte', value: 3, weight: 40 },
+   117→      { field: 'timeWindow', operator: 'lte', value: 3600000, weight: 30 }, // 1 hour
+   118→      { field: 'differentMSCs', operator: 'gte', value: 2, weight: 30 }
+   119→    ],
+   120→    actions: [
+   121→      { type: 'alert', parameters: { priority: 'P1' } },
+   122→      { type: 'block', parameters: { blockType: 'SIM_TEMPORARY', durationHours: 24 } },
+   123→      { type: 'report_artp' }
+   124→    ],
+   125→    artpReportable: true,
+   126→    cooldownMinutes: 60
+   127→  },
+   128→  {
+   129→    id: 'irsf-001',
+   130→    name: 'High-Risk International Calls',
+   131→    type: 'IRSF',
+   132→    enabled: true,
+   133→    severity: 'high',
+   134→    conditions: [
+   135→      { field: 'calledCountryCode', operator: 'neq', value: '+213', weight: 20 },
+   136→      { field: 'callerRiskScore', operator: 'gte', value: 60, weight: 30 },
+   137→      { field: 'callDuration', operator: 'gte', value: 120, weight: 25 }, // > 2 min
+   138→      { field: 'callFrequency', operator: 'gte', value: 5, weight: 25 }
+   139→    ],
+   140→    actions: [
+   141→      { type: 'alert', parameters: { priority: 'P2' } },
+   142→      { type: 'limit', parameters: { limitType: 'INTERNATIONAL_CALLS', maxPerDay: 10 } },
+   143→      { type: 'monitor', parameters: { monitorDurationDays: 7 } }
+   144→    ],
+   145→    artpReportable: true,
+   146→    cooldownMinutes: 120
+   147→  },
+   148→  {
+   149→    id: 'wangiri-001',
+   150→    name: 'Wangiri Pattern Detection',
+   151→    type: 'WANGIRI',
+   152→    enabled: true,
+   153→    severity: 'medium',
+   154→    conditions: [
+   155→      { field: 'shortCallCount', operator: 'gte', value: 15, weight: 35 },
+   156→      { field: 'timeWindow', operator: 'lte', value: 3600000, weight: 25 },
+   157→      { field: 'uniqueCalledNumbers', operator: 'gte', value: 10, weight: 25 },
+   158→      { field: 'avgCallDuration', operator: 'lte', value: 5, weight: 15 }
+   159→    ],
+   160→    actions: [
+   161→      { type: 'alert', parameters: { priority: 'P3' } },
+   162→      { type: 'limit', parameters: { limitType: 'OUTGOING_CALLS', maxPerHour: 20 } }
+   163→    ],
+   164→    artpReportable: false,
+   165→    cooldownMinutes: 180
+   166→  },
+   167→  {
+   168→    id: 'imei-clone-001',
+   169→    name: 'IMEI Multiple Active Sessions',
+   170→    type: 'IMEI_CLONING',
+   171→    enabled: true,
+   172→    severity: 'critical',
+   173→    conditions: [
+   174→      { field: 'activeSessionsWithSameIMEI', operator: 'gte', value: 2, weight: 60 },
+   175→      { field: 'differentIMSIs', operator: 'gte', value: 2, weight: 40 }
+   176→    ],
+   177→    actions: [
+   178→      { type: 'alert', parameters: { priority: 'P1' } },
+   179→      { type: 'block', parameters: { blockType: 'IMEI_BLACKLIST' } },
+   180→      { type: 'report_artp' }
+   181→    ],
+   182→    artpReportable: true,
+   183→    cooldownMinutes: 30
+   184→  },
+   185→  {
+   186→    id: 'roaming-abuse-001',
+   187→    name: 'Excessive Data While Roaming',
+   188→    type: 'ROAMING_ABUSE',
+   189→    enabled: true,
+   190→    severity: 'medium',
+   191→    conditions: [
+   192→      { field: 'isRoaming', operator: 'eq', value: true, weight: 20 },
+   193→      { field: 'dataVolumeGB', operator: 'gte', value: 2, weight: 35 },
+   194→      { field: 'timeWindow', operator: 'lte', value: 86400000, weight: 25 }, // 24h
+   195→      { field: 'homeDataAvgGB', operator: 'gte', value: 5, weight: 20 } // Much more than home usage
+   196→    ],
+   197→    actions: [
+   198→      { type: 'alert', parameters: { priority: 'P3' } },
+   199→      { type: 'notify', parameters: { notifySubscriber: true, notifyType: 'SMS' } },
+   200→      { type: 'limit', parameters: { limitType: 'ROAMING_DATA', maxPerDayGB: 1 } }
+   201→    ],
+   202→    artpReportable: false,
+   203→    cooldownMinutes: 1440 // 24 hours
+   204→  },
+   205→  {
+   206→    id: 'call-spam-001',
+   207→    name: 'High Volume Outgoing Calls',
+   208→    type: 'CALL_SPAM',
+   209→    enabled: true,
+   210→    severity: 'high',
+   211→    conditions: [
+   212→      { field: 'outgoingCallCount', operator: 'gte', value: 100, weight: 35 },
+   213→      { field: 'timeWindow', operator: 'lte', value: 300000, weight: 25 }, // 5 min
+   214→      { field: 'uniqueCalledNumbers', operator: 'gte', value: 50, weight: 25 },
+   215→      { field: 'averageCallInterval', operator: 'lte', value: 3, weight: 15 } // < 3 seconds between calls
+   216→    ],
+   217→    actions: [
+   218→      { type: 'alert', parameters: { priority: 'P2' } },
+   219→      { type: 'block', parameters: { blockType: 'OUTGOING_CALLS_TEMPORARY', durationMinutes: 60 } },
+   220→      { type: 'report_artp' }
+   221→    ],
+   222→    artpReportable: true,
+   223→    cooldownMinutes: 60
+   224→  },
+   225→  {
+   226→    id: 'auth-storm-001',
+   227→    name: 'Authentication Attack',
+   228→    type: 'AUTHENTICATION_STORM',
+   229→    enabled: true,
+   230→    severity: 'critical',
+   231→    conditions: [
+   232→      { field: 'authAttempts', operator: 'gte', value: 10, weight: 40 },
+   233→      { field: 'timeWindow', operator: 'lte', value: 60000, weight: 35 }, // 1 minute
+   234→      { field: 'authFailureRate', operator: 'gte', value: 80, weight: 25 } // > 80% failure rate
+   235→    ],
+   236→    actions: [
+   237→      { type: 'alert', parameters: { priority: 'P1' } },
+   238→      { type: 'block', parameters: { blockType: 'IMSI_TEMPORARY', durationMinutes: 30 } },
+   239→      { type: 'report_artp' }
+   240→    ],
+   241→    artpReportable: true,
+   242→    cooldownMinutes: 15
+   243→  }
+   244→];
+   245→
+   246→// ============================================================
+   247→// Fraud Detection Engine Class
+   248→// ============================================================
+   249→
+   250→class FraudDetectionEngine {
+   251→  private rules: Map<string, FraudRule> = new Map();
+   252→  private recentAlerts: Map<string, Date> = new Map(); // subscriberId -> last alert time
+   253→
+   254→  constructor() {
+   255→    // Load default rules
+   256→    this.loadRules(DEFAULT_FRAUD_RULES);
+   257→  }
+   258→
+   259→  /**
+   260→   * Load fraud detection rules
+   261→   */
+   262→  loadRules(rules: FraudRule[]): void {
+   263→    for (const rule of rules) {
+   264→      this.rules.set(rule.id, rule);
+   265→    }
+   266→    console.log(`Loaded ${rules.length} fraud detection rules`);
+   267→  }
+   268→
+   269→  /**
+   270→   * Analyze event for fraud patterns
+   271→   */
+   272→  async analyzeEvent(
+   273→    eventType: 'ss7' | 'gtp' | 'sip' | 'diameter',
+   274→    eventData: Record<string, any>
+   275→  ): Promise<FraudDetectionResult[]> {
+   276→    const results: FraudDetectionResult[] = [];
+   277→    
+   278→    // Get subscriber identifier
+   279→    const subscriberId = eventData.imsi || eventData.msisdn || eventData.callingParty;
+   280→
+   281→    if (!subscriberId) return results;
+   282→
+   283→    // Check each rule
+   284→    for (const [ruleId, rule] of this.rules) {
+   285→      if (!rule.enabled) continue;
+   286→
+   287→      try {
+   288→        const matchResult = await this.evaluateRule(rule, eventType, eventData);
+   289→        
+   290→        if (matchResult.matched) {
+   291→          // Check cooldown
+   292→          const lastAlert = this.recentAlerts.get(`${subscriberId}:${ruleId}`);
+   293→          if (lastAlert && Date.now() - lastAlert.getTime() < rule.cooldownMinutes * 60000) {
+   294→            continue; // Still in cooldown period
+   295→          }
+   296→
+   297→          // Create fraud case or alert
+   298→          const result = await this.createFraudAlert(rule, matchResult, eventData);
+   299→          results.push(result);
+   300→
+   301→          // Update last alert time
+   302→          this.recentAlerts.set(`${subscriberId}:${ruleId}`, new Date());
+   303→        }
+   304→      } catch (error) {
+   305→        console.error(`Error evaluating rule ${ruleId}:`, error);
+   306→      }
+   307→    }
+   308→
+   309→    return results;
+   310→  }
+   311→
+   312→  /**
+   313→   * Evaluate a single rule against event data
+   314→   */
+   315→  private async evaluateRule(
+   316→    rule: FraudRule,
+   317→    eventType: string,
+   318→    eventData: Record<string, any>
+   319→  ): Promise<{ matched: boolean; confidence: number; matchedConditions: RuleCondition[] }> {
+   320→    const matchedConditions: RuleCondition[] = [];
+   321→    let totalWeight = 0;
+   322→    let matchedWeight = 0;
+   323→
+   324→    for (const condition of rule.conditions) {
+   325→      totalWeight += condition.weight;
+   326→      
+   327→      const fieldValue = await this.getFieldValue(condition.field, eventType, eventData);
+   328→      const matches = this.evaluateCondition(fieldValue, condition);
+   329→      
+   330→      if (matches) {
+   331→        matchedConditions.push(condition);
+   332→        matchedWeight += condition.weight;
+   333→      }
+   334→    }
+   335→
+   336→    // All conditions must match (AND logic)
+   337→    const allMatched = matchedConditions.length === rule.conditions.length;
+   338→    const confidence = allMatched ? Math.round((matchedWeight / totalWeight) * 100) : 0;
+   339→
+   340→    return {
+   341→      matched: allMatched && confidence >= 50, // Minimum 50% confidence to trigger
+   342→      confidence,
+   343→      matchedConditions
+   344→    };
+   345→  }
+   346→
+   347→  /**
+   348→   * Get field value from event data or database query
+   349→   */
+   350→  private async getFieldValue(
+   351→    field: string,
+   352→    eventType: string,
+   353→    eventData: Record<string, any>
+   354→  ): Promise<any> {
+   355→    switch (field) {
+   356→      // Direct fields from event
+   357→      case 'callingParty':
+   358→        return eventData.callingParty || eventData.msisdn;
+   359→      case 'calledParty':
+   360→        return eventData.calledParty || eventData.calledParty;
+   361→      case 'imsi':
+   362→        return eventData.imsi;
+   363→      case 'msisdn':
+   364→        return eventData.msisdn;
+   365→      case 'callDuration':
+   366→        return eventData.duration || eventData.callDuration || 0;
+   367→      case 'isRoaming':
+   368→        return eventData.isRoaming === true || eventData.visitedPLMN?.startsWith('6');
+   369→      case 'dataVolumeGB':
+   370→        return ((eventData.bytesUp || 0) + (eventData.bytesDown || 0)) / 1073741824;
+   371→      case 'calledCountryCode':
+   372→        const called = eventData.calledParty || '';
+   373→        return called.substring(0, called.indexOf(' ') || 3);
+   374→      
+   375→      // Computed fields requiring database queries
+   376→      case 'updateLocationCount':
+   377→        return await this.countRecentOperations(eventData.imsi, 'UpdateLocation', 3600000);
+   378→      case 'differentMSCs':
+   379→        return await this.countDifferentMSCs(eventData.imsi, 3600000);
+   380→      case 'shortCallCount':
+   381→        return await this.countShortCalls(eventData.callingParty, 3600000);
+   382→      case 'uniqueCalledNumbers':
+   383→        return await this.countUniqueCalledNumbers(eventData.callingParty, 3600000);
+   384→      case 'avgCallDuration':
+   385→        return await this.getAverageCallDuration(eventData.callingParty, 3600000);
+   386→      case 'activeSessionsWithSameIMEI':
+   387→        return await this.countActiveSessionsByIMEI(eventData.imei);
+   388→      case 'differentIMSIs':
+   389→        return await this.countDifferentIMSIByIMEI(eventData.imei);
+   390→      case 'outgoingCallCount':
+   391→        return await this.countOutgoingCalls(eventData.callingParty, 300000);
+   392→      case 'uniqueCalledNumbers': // For call spam
+   393→        return await this.countUniqueCalledNumbers(eventData.callingParty, 300000);
+   394→      case 'averageCallInterval':
+   395→        return await this.getAverageCallInterval(eventData.callingParty, 300000);
+   396→      case 'authAttempts':
+   397→        return await this.countAuthAttempts(eventData.imsi, 60000);
+   398→      case 'authFailureRate':
+   399→        return await this.getAuthFailureRate(eventData.imsi, 60000);
+   400→      case 'callerRiskScore':
+   401→        const sub = await this.getSubscriber(eventData.imsi || eventData.msisdn);
+   402→        return sub?.riskScore || 0;
+   403→      case 'homeDataAvgGB':
+   404→        return await this.getAverageHomeDataUsage(eventData.imsi, 86400000 * 7); // 7 days
+   405→      
+   406→      default:
+   407→        return eventData[field];
+   408→    }
+   409→  }
+   410→
+   411→  /**
+   412→   * Evaluate single condition
+   413→   */
+   414→  private evaluateCondition(value: any, condition: RuleCondition): boolean {
+   415→    if (value === undefined || value === null) return false;
+   416→
+   417→    switch (condition.operator) {
+   418→      case 'eq':
+   419→        return value === condition.value;
+   420→      case 'neq':
+   421→        return value !== condition.value;
+   422→      case 'gt':
+   423→        return Number(value) > Number(condition.value);
+   424→      case 'gte':
+   425→        return Number(value) >= Number(condition.value);
+   426→      case 'lt':
+   427→        return Number(value) < Number(condition.value);
+   428→      case 'lte':
+   429→        return Number(value) <= Number(condition.value);
+   430→      case 'contains':
+   431→        return String(value).includes(String(condition.value));
+   432→      case 'in':
+   433→        return Array.isArray(condition.value) && condition.value.includes(value);
+   434→      case 'regex':
+   435→        return new RegExp(condition.value).test(String(value));
+   436→      default:
+   437→        return false;
+   438→    }
+   439→  }
+   440→
+   441→  /**
+   442→   * Create fraud alert from matched rule
+   443→   */
+   444→  private async createFraudAlert(
+   445→    rule: FraudRule,
+   446→    evaluation: { matched: boolean; confidence: number; matchedConditions: RuleCondition[] },
+   447→    eventData: Record<string, any>
+   448→  ): Promise<FraudDetectionResult> {
+   449→    
+   450→    const caseNumber = `FRD-${Date.now().toString(36).toUpperCase()}`;
+   451→    const subscriberId = eventData.imsi || eventData.msisdn || eventData.callingParty;
+   452→
+   453→    // Calculate estimated financial impact (if applicable)
+   454→    const financialImpact = await this.estimateFinancialImpact(rule.type, eventData);
+   455→
+   456→    // Determine ARTP deadline (24 hours from detection)
+   457→    const artpDeadline = rule.artpReportable 
+   458→      ? new Date(Date.now() + 24 * 60 * 60 * 1000)
+   459→      : undefined;
+   460→
+   461→    // Execute rule actions
+   462→    await this.executeActions(rule.actions, subscriberId, eventData);
+   463→
+   464→    // Create database record
+   465→    const fraudCase = await db.fraudCase.create({
+   466→      data: {
+   467→        caseNumber,
+   468→        type: rule.type,
+   469→        severity: rule.severity.toUpperCase(),
+   470→        status: 'OPEN',
+   471→        confidence: evaluation.confidence,
+   472→        description: this.generateDescription(rule, eventData),
+   473→        subscriberId,
+   474→        evidence: JSON.stringify(evaluation.matchedConditions.map(c => ({
+   475→          type: 'detection_rule',
+   476→          timestamp: new Date(),
+   477→          description: `${c.field} ${c.operator} ${c.value}`,
+   478→          data: { field: c.field, actualValue: eventData[c.field] },
+   479→          riskContribution: c.weight
+   480→        }))),
+   481→        estimatedLossDZD: financialImpact,
+   482→        artpReportable: rule.artpReportable,
+   483→        artpDeadline,
+   484→        metadata: JSON.stringify({
+   485→          ruleId: rule.id,
+   486→          ruleName: rule.name,
+   487→          eventType: 'telecom',
+   488→          sourceEvent: eventData,
+   489→          detectedAt: new Date()
+   490→        })
+   491→      }
+   492→    });
+   493→
+   494→    // Also create security alert
+   495→    await db.alert.create({
+   496→      data: {
+   497→        title: `[FRAUD] ${rule.name}`,
+   498→        description: this.generateDescription(rule, eventData),
+   499→        severity: rule.severity.toUpperCase() as any,
+   500→        status: 'NEW',
+   501→        source: 'FRAUD_DETECTION_ENGINE',
+   502→        category: 'FRAUD_DETECTION',
+   503→        rawEvent: {
+   504→          fraudCaseId: fraudCase.id,
+   505→          caseNumber,
+   506→          ruleName: rule.name,
+   507→          fraudType: rule.type,
+   508→          confidence: evaluation.confidence,
+   509→          eventData
+   510→        },
+   511→        tags: ['fraud', rule.type.toLowerCase(), rule.severity],
+   512→        context: {
+   513→          artpReportable: rule.artpReportable,
+   514→          artpDeadline: artpDeadline?.toISOString(),
+   515→          financialImpactDZD: financialImpact,
+   516→          recommendedActions: rule.actions.map(a => a.type)
+   517→        }
+   518→      }
+   519→    });
+   520→
+   521→    return {
+   522→      caseId: fraudCase.id,
+   523→      caseNumber,
+   524→      type: rule.type,
+   525→      severity: rule.severity,
+   526→      confidence: evaluation.confidence,
+   527→      actionsTaken: rule.actions.map(a => a.type),
+   528→      artpReportable: rule.artpReportable,
+   529→      artpDeadline
+   530→    };
+   531→  }
+   532→
+   533→  /**
+   534→   * Generate human-readable description
+   535→   */
+   536→  private generateDescription(rule: FraudRule, eventData: Record<string, any>): string {
+   537→    const templates: Record<FraudType, string> = {
+   538→      SIM_SWAP: `Potential SIM swap detected for IMSI ${eventData.imsi}. Multiple location updates observed in short timeframe.`,
+   539→      IRSF: `International Revenue Share Fraud suspected from MSISDN ${eventData.msisdn || eventData.callingParty}. High-risk international calling pattern.`,
+   540→      WANGIRI: `Wangiri (one-ring) pattern detected from ${eventData.callingParty}. Multiple short calls to premium numbers.`,
+   541→      PBX_HIJACKING: `PBX hijacking suspected. Unauthorized PBX software detected from ${eventData.callingParty}.`,
+   542→      TOLL_FRAUD: `Toll fraud detected. Unusual call routing pattern suggesting illegal termination.`,
+   543→      IMEI_CLONING: `IMEI cloning detected! IMEI ${eventData.imei} active on multiple devices simultaneously.`,
+   544→      DATA_TUNNELING: `Data tunneling abuse detected. Suspicious APN usage: ${eventData.apn}.`,
+   545→      ROAMING_ABUSE: `Excessive roaming data usage detected for ${eventData.msisdn || eventData.imsi}. Potential roaming abuse.`,
+   546→      CALL_SPAM: `Call spam operation detected from ${eventData.callingParty}. Abnormally high outgoing call volume.`,
+   547→      PREMIUM_RATE_ABUSE: `Premium rate service abuse suspected. Long-duration calls to premium numbers.`,
+   548→      LOCATION_SPOOFING: `Location spoofing detected. Impossible movement pattern for subscriber.`,
+   549→      AUTHENTICATION_STORM: `Authentication attack detected against IMSI ${eventData.imsi}. Brute force attempt likely.`,
+   550→      SUBSCRIBER_TAKEOVER: `Subscriber takeover suspected. Anomalous authentication behavior.`
+   551→    };
+   552→
+   553→    return templates[rule.type] || `Fraud detected: ${rule.name}`;
+   554→  }
+   555→
+   556→  /**
+   557→   * Estimate financial impact in DZD
+   558→   */
+   559→  private async estimateFinancialImpact(fraudType: FraudType, eventData: Record<string, any>): Promise<number> {
+   560→    // Simplified estimation - would use ML model in production
+   561→    const baseImpacts: Record<FraudType, number> = {
+   562→      SIM_SWAP: 50000,       // Average loss per SIM swap incident
+   563→      IRSF: 200000,         // International fraud can be costly
+   564→      WANGIRI: 5000,        // Lower per-incident but high volume
+   565→      PBX_HIJACKING: 500000,// Can be very expensive
+   566→      TOLL_FRAUD: 100000,
+   567→      IMEI_CLONING: 75000,
+   568→      DATA_TUNNELING: 15000,
+   569→      ROAMING_ABUSE: 25000,
+   570→      CALL_SPAM: 8000,
+   571→      PREMIUM_RATE_ABUSE: 35000,
+   572→      LOCATION_SPOOFING: 40000,
+   573→      AUTHENTICATION_STORM: 10000,
+   574→      SUBSCRIBER_TAKEOVER: 60000
+   575→    };
+   576→
+   577→    let impact = baseImpacts[fraudType] || 10000;
+   578→
+   579→    // Adjust based on duration/volume
+   580→    if (eventData.duration) {
+   581→      impact *= Math.min(eventData.duration / 3600, 24); // Scale by hours, max 24x
+   582→    }
+   583→    if (eventData.bytesUp || eventData.bytesDown) {
+   584→      const gb = ((eventData.bytesUp || 0) + (eventData.bytesDown || 0)) / 1073741824;
+   585→      impact *= Math.min(gb / 10, 50); // Scale by GB, max 50x
+   586→    }
+   587→
+   588→    return Math.round(impact);
+   589→  }
+   590→
+   591→  /**
+   592→   * Execute rule actions
+   593→   */
+   594→  private async executeActions(
+   595→    actions: RuleAction[],
+   596→    subscriberId: string,
+   597→    eventData: Record<string, any>
+   598→  ): Promise<void> {
+   599→    for (const action of actions) {
+   600→      switch (action.type) {
+   601→        case 'alert':
+   602→          console.log(`[ALERT] Fraud alert generated for ${subscriberId}`);
+   603→          break;
+   604→        
+   605→        case 'block':
+   606→          await this.executeBlockAction(subscriberId, action.parameters);
+   607→          break;
+   608→        
+   609→        case 'limit':
+   610→          await this.executeLimitAction(subscriberId, action.parameters);
+   611→          break;
+   612→        
+   613→        case 'monitor':
+   614→          await this.executeMonitorAction(subscriberId, action.parameters);
+   615→          break;
+   616→        
+   617→        case 'notify':
+   618→          await this.executeNotifyAction(subscriberId, action.parameters);
+   619→          break;
+   620→        
+   621→        case 'report_artp':
+   622→          console.log(`[ARTP] Report required for fraud case involving ${subscriberId}`);
+   623→          break;
+   624→      }
+   625→    }
+   626→  }
+   627→
+   628→  private async executeBlockAction(subscriberId: string, params: any): Promise<void> {
+   629→    // In production, this would integrate with:
+   630→    // - HLR/HLR for SIM blocking
+   631→    // - PGW for GTP session termination
+   632→    // - SBC for SIP blocking
+   633→    
+   634→    console.log(`[BLOCK] Blocking ${subscriberId}:`, params);
+   635→    
+   636→    // Log the action
+   637→    await db.auditLog.create({
+   638→      data: {
+   639→        userId: 'system-fraud-engine',
+   640→        action: 'BLOCK_SUBSCRIBER',
+   641→        resource: 'Subscriber',
+   642→        resourceId: subscriberId,
+   643→        outcome: 'SUCCESS',
+   644→        category: 'FRAUD_RESPONSE',
+   645→        errorMessage: null,
+   646→        requestDetails: params
+   647→      }
+   648→    });
+   649→  }
+   650→
+   651→  private async executeLimitAction(subscriberId: string, params: any): Promise<void> {
+   652→    console.log(`[LIMIT] Limiting ${subscriberId}:`, params);
+   653→  }
+   654→
+   655→  private async executeMonitorAction(subscriberId: string, params: any): Promise<void> {
+   656→    console.log(`[MONITOR] Monitoring ${subscriberId}:`, params);
+   657→  }
+   658→
+   659→  private async executeNotifyAction(subscriberId: string, params: any): Promise<void> {
+   660→    console.log(`[NOTIFY] Notifying about ${subscriberId}:`, params);
+   661→  }
+   662→
+   663→  // Database helper methods (would be optimized with caching in production)
+   664→  private async countRecentOperations(imsi: string, operation: string, windowMs: number): Promise<number> {
+   665→    const since = new Date(Date.now() - windowMs);
+   666→    return await db.sS7Message.count({
+   667→      where: { imsi, messageType: operation, timestamp: { gte: since } }
+   668→    });
+   669→  }
+   670→
+   671→  private async countDifferentMSCs(imsi: string, windowMs: number): Promise<number> {
+   672→    const since = new Date(Date.now() - windowMs);
+   673→    const messages = await db.sS7Message.findMany({
+   674→      where: { imsi, timestamp: { gte: since } },
+   675→      select: { destinationNe: true },
+   676→      distinct: ['destinationNe']
+   677→    });
+   678→    return messages.length;
+   679→  }
+   680→
+   681→  private async countShortCalls(calling: string, windowMs: number): Promise<number> {
+   682→    const since = new Date(Date.now() - windowMs);
+   683→    return await db.sIPSession.count({
+   684→      where: { callingParty: calling, durationSeconds: { lt: 3 }, inviteTimestamp: { gte: since } }
+   685→    });
+   686→  }
+   687→
+   688→  private async countUniqueCalledNumbers(calling: string, windowMs: number): Promise<number> {
+   689→    const since = new Date(Date.now() - windowMs);
+   690→    const calls = await db.sIPSession.findMany({
+   691→      where: { callingParty: calling, inviteTimestamp: { gte: since } },
+   692→      select: { calledParty: true },
+   693→      distinct: ['calledParty']
+   694→    });
+   695→    return calls.length;
+   696→  }
+   697→
+   698→  private async getAverageCallDuration(calling: string, windowMs: number): Promise<number> {
+   699→    const since = new Date(Date.now() - windowMs);
+   700→    const result = await db.sIPSession.aggregate({
+   701→      where: { callingParty: calling, inviteTimestamp: { gte: since } },
+   702→      _avg: { durationSeconds: true }
+   703→    });
+   704→    return Math.round(result._avg.durationSeconds || 0);
+   705→  }
+   706→
+   707→  private async countActiveSessionsByIMEI(imei: string): Promise<number> {
+   708→    return await db.gTPSession.count({
+   709→      where: { imei, sessionStatus: 'ACTIVE' }
+   710→    });
+   711→  }
+   712→
+   713→  private async countDifferentIMSIByIMEI(imei: string): Promise<number> {
+   714→    const sessions = await db.gTPSession.findMany({
+   715→      where: { imei, sessionStatus: 'ACTIVE' },
+   716→      select: { imsi: true },
+   717→      distinct: ['imsi']
+   718→    });
+   719→    return sessions.length;
+   720→  }
+   721→
+   722→  private async countOutgoingCalls(calling: string, windowMs: number): Promise<number> {
+   723→    const since = new Date(Date.now() - windowMs);
+   724→    return await db.sIPSession.count({
+   725→      where: { callingParty: calling, inviteTimestamp: { gte: since } }
+   726→    });
+   727→  }
+   728→
+   729→  private async getAverageCallInterval(calling: string, windowMs: number): Promise<number> {
+   730→    const since = new Date(Date.now() - windowMs);
+   731→    const calls = await db.sIPSession.findMany({
+   732→      where: { callingParty: calling, inviteTimestamp: { gte: since } },
+   733→      orderBy: { inviteTimestamp: 'asc' },
+   734→      select: { inviteTimestamp: true }
+   735→    });
+   736→
+   737→    if (calls.length < 2) return 999; // No interval calculable
+   738→
+   739→    let totalInterval = 0;
+   740→    for (let i = 1; i < calls.length; i++) {
+   741→      totalInterval += calls[i].inviteTimestamp.getTime() - calls[i-1].inviteTimestamp.getTime();
+   742→    }
+   743→
+   744→    return Math.round(totalInterval / (calls.length - 1) / 1000); // In seconds
+   745→  }
+   746→
+   747→  private async countAuthAttempts(imsi: string, windowMs: number): Promise<number> {
+   748→    const since = new Date(Date.now() - windowMs);
+   749→    return await db.diameterSession.count({
+   750→      where: { imsi, commandCode: 'Authentication-Information', started_at: { gte: since } }
+   751→    });
+   752→  }
+   753→
+   754→  private async getAuthFailureRate(imsi: string, windowMs: number): Promise<number> {
+   755→    const since = new Date(Date.now() - windowMs);
+   756→    const [total, failures] = await Promise.all([
+   757→      db.diameterSession.count({ where: { imsi, started_at: { gte: since } } }),
+   758→      db.diameterSession.count({ where: { imsi, resultCode: { ne: '2001' }, started_at: { gte: since } } })
+   759→    ]);
+   760→    
+   761→    return total > 0 ? Math.round((failures / total) * 100) : 0;
+   762→  }
+   763→
+   764→  private async getSubscriber(identifier: string) {
+   765→    if (identifier?.startsWith('213')) {
+   766→      return await db.subscriber.findUnique({ where: { imsi: identifier } });
+   767→    } else if (identifier?.startsWith('+')) {
+   768→      return await db.subscriber.findUnique({ where: { msisdn: identifier } });
+   769→    }
+   770→    return null;
+   771→  }
+   772→
+   773→  private async getAverageHomeDataUsage(imsi: string, windowMs: number): Promise<number> {
+   774→    const since = new Date(Date.now() - windowMs);
+   775→    const result = await db.gTPSession.aggregate({
+   776→      where: { 
+   777→        imsi, 
+   778→        isRoaming: false,
+   779→        started_at: { gte: since }
+   780→      },
+   781→      _sum: { bytesUp: true, bytesDown: true }
+   782→    });
+   783→    
+   784→    const totalBytes = (result._sum.bytesUp || 0) + (result._sum.bytesDown || 0);
+   785→    return totalBytes / 1073741824; // Convert to GB
+   786→  }
+   787→
+   788→  /**
+   789→   * Get fraud statistics dashboard
+   790→   */
+   791→  async getFraudStatistics(timeframe: string = '24h'): Promise<any> {
+   792→    const now = new Date();
+   793→    const timeRangeMap: Record<string, Date> = {
+   794→      '1h': new Date(now.getTime() - 3600000),
+   795→      '6h': new Date(now.getTime() - 21600000),
+   796→      '24h': new Date(now.getTime() - 86400000),
+   797→      '7d': new Date(now.getTime() - 604800000),
+   798→      '30d': new Date(now.getTime() - 2592000000)
+   799→    };
+   800→    const since = timeRangeMap[timeframe] || timeRangeMap['24h'];
+   801→
+   802→    const [
+   803→      totalCases,
+   804→      casesBySeverity,
+   805→      casesByType,
+   806→      casesByStatus,
+   807→      totalEstimatedLoss,
+   808→      artpReportableCases,
+   809→      resolvedCases
+   810→    ] = await Promise.all([
+   811→      db.fraudCase.count({ where: { createdAt: { gte: since } } }),
+   812→      db.fraudCase.groupBy({ by: ['severity'], _count: { id: true }, where: { createdAt: { gte: since } } }),
+   813→      db.fraudCase.groupBy({ by: ['type'], _count: { id: true }, where: { createdAt: { gte: since } } }),
+   814→      db.fraudCase.groupBy({ by: ['status'], _count: { id: true }, where: { createdAt: { gte: since } } }),
+   815→      db.fraudCase.aggregate({ _sum: { estimatedLossDZD: true }, where: { createdAt: { gte: since } } }),
+   816→      db.fraudCase.count({ where: { artpReportable: true, status: { notIn: ['RESOLVED', 'CLOSED'] }, createdAt: { gte: since } } }),
+   817→      db.fraudCase.count({ where: { status: 'RESOLVED', resolvedAt: { gte: since } } })
+   818→    ]);
+   819→
+   820→    return {
+   821→      period: timeframe,
+   822→      since: since.toISOString(),
+   823→      summary: {
+   824→        totalCases,
+   825→        totalEstimatedLossDZD: Math.round((totalEstimatedLoss._sum.estimatedLossDZD || 0)),
+   826→        artpReportableCases,
+   827→        resolutionRate: totalCases > 0 ? Math.round((resolvedCases / totalCases) * 100) : 0
+   828→      },
+   829→      breakdown: {
+   830→        bySeverity: casesBySeverity.reduce((acc, s) => ({ ...acc, [s.severity.toLowerCase()]: s._count.id }), {}),
+   831→        byType: casesByType.reduce((acc, t) => ({ ...acc, [t.type]: t._count.id }), {}),
+   832→        byStatus: casesByStatus.reduce((acc, s) => ({ ...acc, [s.status.toLowerCase()]: s._count.id }), {})
+   833→      }
+   834→    };
+   835→  }
+   836→
+   837→  /**
+   838→   * Get open fraud cases
+   839→   */
+   840→  async getOpenCases(limit: number = 50, offset: number = 0): Promise<FraudCase[]> {
+   841→    const cases = await db.fraudCase.findMany({
+   842→      where: { status: { notIn: ['RESOLVED', 'CLOSED'] } },
+   843→      take: limit,
+   844→      skip: offset,
+   845→      orderBy: [{ severity: 'desc' }, { createdAt: 'desc' }],
+   846→      include: {
+   847→        subscriber: {
+   848→          select: { msisdn: true, imsi: true, riskScore: true }
+   849→        }
+   850→      }
+   851→    });
+   852→
+   853→    return cases.map(c => ({
+   854→      ...c,
+   855→      evidence: JSON.parse(c.evidence || '[]'),
+   856→      timeline: JSON.parse(c.timeline || '[]')
+   857→    }));
+   858→  }
+   859→}
+   860→
+   861→interface FraudDetectionResult {
+   862→  caseId: string;
+   863→  caseNumber: string;
+   864→  type: FraudType;
+   865→  severity: string;
+   866→  confidence: number;
+   867→  actionsTaken: string[];
+   868→  artpReportable: boolean;
+   869→  artpDeadline?: Date;
+   870→}
+   871→
+   872→// Export singleton instance
+   873→export const fraudEngine = new FraudDetectionEngine();
+   874→
+   875→// Export types
+   876→export type { FraudCase, FraudRule, EvidenceItem, CaseEvent };
+   877→
