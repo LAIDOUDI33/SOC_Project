@@ -1,0 +1,1315 @@
+     1→# Backup & Recovery Runbook
+     2→
+     3→**Document ID:** SOC-RB-006  
+     4→**Version:** 1.5  
+     5→**Classification:** Internal Use Only  
+     6→**Last Updated:** January 2025  
+     7→**Owner:** Djezzy National SOC Operations Team
+     8→
+     9→---
+    10→
+    11→## Table of Contents
+    12→
+    13→1. [Purpose and Scope](#purpose-and-scope)
+    14→2. [Backup Architecture Overview](#backup-architecture-overview)
+    15→3. [Backup Schedule and RPO/RTO Targets](#backup-schedule-and-rporto-targets)
+    16→4. [Backup Procedures](#backup-procedures)
+    17→5. [Recovery Procedures by System](#recovery-procedures-by-system)
+    18→6. [Disaster Recovery Procedures](#disaster-recovery-procedures)
+    19→7. [Backup Verification Testing](#backup-verification-testing)
+    20→8. [Troubleshooting](#troubleshooting)
+    21→
+    22→---
+    23→
+    24→## Purpose and Scope
+    25→
+    26→This runbook defines comprehensive backup and recovery procedures for all components of the Djezzy National SOC Platform. It ensures data integrity, enables rapid recovery from failures, and supports business continuity objectives.
+    27→
+    28→### Criticality Classification
+    29→
+    30→| System | RPO Target | RTO Target | Business Impact if Lost |
+    31→|--------|-----------|-----------|----------------------|
+    32→| **PostgreSQL Database** | 15 minutes | 1 hour | Complete data loss |
+    33→| **Elasticsearch Indices** | 1 hour | 4 hours | Log/alert history loss |
+    34→| **Redis Cache** | N/A (Rebuildable) | 30 minutes | Performance degradation |
+    35→| **Application Configs** | Real-time (Git) | 15 minutes | Configuration drift |
+    36→| **Helm Charts/Values** | Real-time (Git) | 10 minutes | Deployment inability |
+    37→| **Kubernetes Resources** | Continuous | 30 minutes | Cluster state loss |
+    38→| **SSL/TLS Certificates** | Pre-expiry | 5 minutes | Service unavailability |
+    39→
+    40→---
+    41→
+    42→## Backup Architecture Overview
+    43→
+    44→### Data Flow Diagram
+    45→
+    46→```
+    47→┌─────────────────────────────────────────────────────────────────────┐
+    48→│                    BACKUP ARCHITECTURE                              │
+    49→├─────────────────────────────────────────────────────────────────────┤
+    50→│                                                                     │
+    51→│   ┌───────────┐    ┌───────────┐    ┌───────────┐                 │
+    52→│   │PostgreSQL │    │Elasticsearch│   │   Redis   │                 │
+    53→│   │  Primary  │    │  Cluster   │    │  Cluster  │                 │
+    54→│   └─────┬─────┘    └─────┬─────┘    └─────┬─────┘                 │
+    55→│         │                │                │                        │
+    56→│         ▼                ▼                ▼                        │
+    57→│   ┌──────────────────────────────────────────┐                    │
+    58→│   │           BACKUP AGENTS                  │                    │
+    59→│   │  ┌─────────┐ ┌──────────┐ ┌──────────┐  │                    │
+    60→│   │  │ pg_dump │ │ Snapshot │ │ RDB dump │  │                    │
+    61→│   │  │ WAL arch│ │ S3 repo  │ │ AOF/RDB  │  │                    │
+    62→│   │  └─────────┘ └──────────┘ └──────────┘  │                    │
+    63→│   └──────────────────┬───────────────────────┘                    │
+    64→│                      │                                             │
+    65→│                      ▼                                             │
+    66→│   ┌──────────────────────────────────────────────────────────┐   │
+    67→│   │              BACKUP STORAGE TIER                          │   │
+    68→│   │                                                          │   │
+    69→│   │  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐      │   │
+    70→│   │  │   HOT       │  │   WARM      │  │   COLD      │      │   │
+    71→│   │  │ (Last 24h)  │  │ (7 days)    │  │ (90 days)   │      │   │
+    72→│   │  │ SSD/NVMe    │  │ HDD Storage │  │ Object/Glacier│     │   │
+    73→│   │  │ Fast Restore│  │ Standard    │  │ Archive Only │      │   │
+    74→│   │  └─────────────┘  └─────────────┘  └─────────────┘      │   │
+    75→│   │                                                          │   │
+    76→│   └──────────────────────┬───────────────────────────────────┘   │
+    77→│                          │                                       │
+    78→│                          ▼                                       │
+    79→│   ┌──────────────────────────────────────────────────────────┐   │
+    80→│   │            OFFSITE / DR REPLICATION                       │   │
+    81→│   │                     │                                     │   │
+    82→│   │  ┌──────────────────┴──────────────────┐                 │   │
+    83→│   │  │         DR SITE (Oran)             │                 │   │
+    84→│   │  │   Replicated: Async, 15-min lag    │                 │   │
+    85→│   │  └────────────────────────────────────┘                 │   │
+    86→│   └──────────────────────────────────────────────────────────┘   │
+    87→│                                                                     │
+    88→└─────────────────────────────────────────────────────────────────────┘
+    89→```
+    90→
+    91→### Storage Infrastructure
+    92→
+    93→| Component | Primary Location | DR Location | Retention |
+    94→|-----------|-----------------|-------------|-----------|
+    95→| PostgreSQL Backups | /backups/postgresql (NFS) | dr-backups:/postgresql | 30 days |
+    96→| Elasticsearch Snapshots | MinIO S3 bucket | Cross-region replica | 14 days |
+    97→| Redis Snapshots | /backups/redis (Local + NFS) | dr-backups:/redis | 7 days |
+    98→| Application Artifacts | GitLab Repository | Geo-replicated | Indefinite |
+    99→| Kubernetes Manifests | Git Repository | Geo-replicated | Indefinite |
+   100→| Configuration Secrets | HashiCorp Vault | Vault cluster replication | Per secret TTL |
+   101→
+   102→---
+   103→
+   104→## Backup Schedule and RPO/RTO Targets
+   105→
+   106→### Detailed Backup Schedule
+   107→
+   108→```yaml
+   109→# backup_schedule.yml - Comprehensive backup schedule definition
+   110→backup_schedules:
+   111→
+   112→  postgresql:
+   113→    # Full database backups
+   114→    full_backup:
+   115→      schedule: "0 2 * * *"          # Daily at 02:00 UTC
+   116→      method: pg_basebackup
+   117→      retention_days: 14
+   118→      compression: gzip
+   119→      encryption: aes256
+   120→      
+   121→    # WAL archives for point-in-time recovery
+   122→    wal_archive:
+   123→      schedule: "continuous"          # Continuous streaming
+   124→      method: pg_receivewal
+   125→      retention_days: 7
+   126→      
+   127→    # Logical backups for portability
+   128→    logical_backup:
+   129→      schedule: "0 6 * * *"          # Daily at 06:00 UTC
+   130→      method: pg_dump
+   131→      format: custom
+   132→      retention_days: 30
+   133→      
+   134→    # Schema-only backup (weekly)
+   135→    schema_backup:
+   136→      schedule: "0 3 * * 0"           # Weekly Sunday 03:00 UTC
+   137→      method: pg_dump --schema-only
+   138→      retention_days: 90
+   139→
+   140→  elasticsearch:
+   141→    # Index snapshots
+   142→    snapshot:
+   143→      schedule: "0 1 * * *"           # Daily at 01:00 UTC
+   144→      method: snapshot repository
+   145→      repository: soc_backups
+   146→      retention_days: 14
+   147→      indices:
+   148→        - "alerts-*"
+   149→        - "incidents-*"
+   150→        - "audit-*"
+   151→        - "metrics-*"
+   152→        
+   153→    # Cluster state backup
+   154→    cluster_state:
+   155→      schedule: "0 */6 * * *"         # Every 6 hours
+   156→      method: include_global_state: true
+   157→
+   158→  redis:
+   159→    # RDB snapshots
+   160→    rdb_snapshot:
+   161→      schedule: "*/15 * * * *"        # Every 15 minutes
+   162→      save_rules:
+   163→        - "900 1"                      # After 900 sec if 1+ key changed
+   164→        - "300 10"                     # After 300 sec if 10+ keys changed
+   165→        - "60 10000"                   # After 60 sec if 10000+ keys changed
+   166→      retention_copies: 3
+   167→      
+   168→    # AOF persistence
+   169→    aof_persistence:
+   170→      enabled: true
+   171→      appendfsync: everysec
+   172→      auto_aof_rewrite_percentage: 100
+   173→      auto_aof_rewrite_min_size: 64mb
+   174→
+   175→  application:
+   176→    # Kubernetes resources
+   177→    kubernetes_resources:
+   178→      schedule: "continuous"           # Via Velero
+   179→      frequency: hourly
+   180→      included_namespaces:
+   181→        - soc-platform
+   182→        - monitoring
+   183→      excluded_resources:
+   184→        - events
+   185→        - replicasets
+   186→        
+   187→    # Helm release state
+   188→    helm_releases:
+   189→      schedule: "*/30 * * * *"         # Every 30 minutes
+   190→      method: helm get values > backup
+   191→```
+   192→
+   193→### RPO/RTO Matrix with Current Achievement
+   194→
+   195→```
+   196→┌────────────────────────────────────────────────────────────────────┐
+   197→│                   RPO / RTO TARGETS vs ACTUAL                       │
+   198→├────────────────────┬──────────┬──────────┬──────────┬──────────────┤
+   199→│ System             │ RPO      │ RTO      │ Actual   │ Status       │
+   200→│                    │ Target   │ Target   │ Achieved │              │
+   201→├────────────────────┼──────────┼──────────┼──────────┼──────────────┤
+   202→│ PostgreSQL         │ 15 min   │ 1 hour   │ 12 min   │ ✅ Meeting   │
+   203→│ Elasticsearch      │ 1 hour   │ 4 hours  │ 45 min   │ ✅ Meeting   │
+   204→│ Redis Cache        │ 15 min   │ 30 min   │ 5 min    │ ✅ Meeting   │
+   205→│ Application State  │ 1 hour   │ 2 hours  │ 55 min   │ ✅ Meeting   │
+   206→│ Secrets/Vault      │ Real-time│ 5 min    │ <1 min   │ ✅ Meeting   │
+   207→│ SSL Certificates   │ N/A      │ 5 min    │ 2 min    │ ✅ Meeting   │
+   208→└────────────────────┴──────────┴──────────┴──────────┴──────────────┘
+   209→```
+   210→
+   211→---
+   212→
+   213→## Backup Procedures
+   214→
+   215→### Automated Backup Execution
+   216→
+   217→The Djezzy SOC platform uses automated backup jobs running in Kubernetes:
+   218→
+   219→#### PostgreSQL Backup Job
+   220→
+   221→```yaml
+   222→# k8s/manifests/postgresql-backup-cronjob.yaml
+   223→apiVersion: batch/v1
+   224→kind: CronJob
+   225→metadata:
+   226→  name: postgresql-backup
+   227→  namespace: soc-platform
+   228→spec:
+   229→  schedule: "0 2 * * *"  # Daily at 02:00 UTC
+   230→  concurrencyPolicy: Forbid
+   231→  successfulJobsHistoryLimit: 7
+   232→  failedJobsHistoryLimit: 3
+   233→  jobTemplate:
+   234→    spec:
+   235→      template:
+   236→        spec:
+   237→          containers:
+   238→          - name: pg-backup
+   239→            image: postgres:16-alpine
+   240→            env:
+   241→            - name: PGHOST
+   242→              value: "postgres-service"
+   243→            - name: PGUSER
+   244→              valueFrom:
+   245→                secretKeyRef:
+   246→                  name: postgres-credentials
+   247→                  key: username
+   248→            - name: PGPASSWORD
+   249→              valueFrom:
+   250→                secretKeyRef:
+   251→                  name: postgres-credentials
+   252→                  key: password
+   253→            - name: PGDATABASE
+   254→              value: "soc_platform"
+   255→            - name: BACKUP_RETENTION_DAYS
+   256→              value: "14"
+   257→            - name: ENCRYPTION_KEY
+   258→              valueFrom:
+   259→                secretKeyRef:
+   260→                  name: backup-keys
+   261→                  key: encryption-key
+   262→            command:
+   263→            - /bin/sh
+   264→            - -c
+   265→            - |
+   266→              set -euo pipefail
+   267→              
+   268→              BACKUP_DATE=$(date +%Y%m%d_%H%M%S)
+   269→              BACKUP_FILE="soc_platform_${BACKUP_DATE}.dump"
+   270→              BACKUP_PATH="/backups/${BACKUP_FILE}"
+   271→              ENCRYPTED_PATH="${BACKUP_PATH}.enc"
+   272→              
+   273→              echo "Starting PostgreSQL backup: ${BACKUP_DATE}"
+   274→              
+   275→              # Create compressed custom format backup
+   276→              pg_dump \
+   277→                -Fc \
+   278→                -f "${BACKUP_PATH}" \
+   279→                --verbose \
+   280→                2>&1 | tee /tmp/pg_backup.log
+   281→              
+   282→              echo "Backup size: $(du -h ${BACKUP_PATH} | cut -f1)"
+   283→              
+   284→              # Encrypt backup
+   285→              openssl enc -aes-256-cbc \
+   286→                -salt \
+   287→                -pbkdf2 \
+   288→                -in "${BACKUP_PATH}" \
+   289→                -out "${ENCRYPTED_PATH}" \
+   290→                -pass pass:"${ENCRYPTION_KEY}"
+   291→              
+   292→              # Remove unencrypted file
+   293→              rm "${BACKUP_PATH}"
+   294→              
+   295→              # Calculate checksum
+   296→              sha256sum "${ENCRYPTED_PATH}" > "${ENCRYPTED_PATH}.sha256"
+   297→              
+   298→              # Clean up old backups beyond retention
+   299→              find /backups -name "*.dump.enc" -mtime +${BACKUP_RETENTION_DAYS} -delete
+   300→              find /backups -name "*.sha256" -mtime +${BACKUP_RETENTION_DAYS} -delete
+   301→              
+   302→              echo "Backup completed successfully: ${ENCRYPTED_PATH}"
+   303→              
+   304→              # Upload to remote storage (if configured)
+   305→              if [ -n "${S3_BUCKET:-}" ]; then
+   306→                aws s3 cp "${ENCRYPTED_PATH}" "s3://${S3_BUCKET}/postgresql/" 
+   307→                aws s3 cp "${ENCRYPTED_PATH}.sha256" "s3://${S3_BUCKET}/postgresql/"
+   308→                echo "Uploaded to S3"
+   309→              fi
+   310→          
+   311→          volumeMounts:
+   312→          - name: backup-volume
+   313→            mountPath: /backups
+   314→          restartPolicy: OnFailure
+   315→          activeDeadlineSeconds: 3600  # 1 hour timeout
+   316→      volumes:
+   317→      - name: backup-volume
+   318→        persistentVolumeClaim:
+   319→          claimName: backup-pvc
+   320→```
+   321→
+   322→#### Elasticsearch Snapshot Job
+   323→
+   324→```bash
+   325→#!/bin/bash
+   326→# elasticsearch_snapshot.sh - Automated ES snapshot procedure
+   327→
+   328→set -euo pipefail
+   329→
+   330→ES_URL="http://elasticsearch.soc.djezzy.local:9200"
+   331→REPOSITORY_NAME="soc_backups"
+   332→SNAPSHOT_NAME="snap_$(date +%Y%m%d_%H%M%S)"
+   333→RETENTION_DAYS=14
+   334→
+   335→echo "=== Elasticsearch Snapshot Procedure ==="
+   336→echo "Snapshot Name: $SNAPSHOT_NAME"
+   337→echo "Repository: $REPOSITORY_NAME"
+   338→echo "Timestamp: $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
+   339→
+   340→# Step 1: Verify repository exists
+   341→echo "[1/5] Verifying snapshot repository..."
+   342→REPO_STATUS=$(curl -sf "$ES_URL/_snapshot/$REPOSITORY_NAME" | jq -r '.[].type // empty')
+   343→
+   344→if [ -z "$REPO_STATUS" ]; then
+   345→  echo "Repository does not exist, creating..."
+   346→  curl -X PUT "$ES_URL/_snapshot/$REPOSITORY_NAME" \
+   347→    -H 'Content-Type: application/json' \
+   348→    -d "{
+   349→      \"type\": \"s3\",
+   350→      \"settings\": {
+   351→        \"bucket\": \"djezzy-soc-es-backups\",
+   352→        \"region\": \"dz\",
+   353→        \"compress\": true,
+   354→        \"chunk_size\": \"64m\"
+   355→      }
+   356→    }"
+   357→fi
+   358→
+   359→echo "Repository status: OK"
+   360→
+   361→# Step 2: Flush indices to ensure data is written
+   362→echo "[2/5] Flushing indices for consistent snapshot..."
+   363→curl -X POST "$ES_URL/_flush/synced" | jq '{shards: .._shards, failures: (.failures // [])}'
+   364→
+   365→# Step 3: Create snapshot
+   366→echo "[3/5] Creating snapshot: $SNAPSHOT_NAME..."
+   367→
+   368→SNAPSHOT_RESPONSE=$(curl -X PUT "$ES_URL/_snapshot/$REPOSITORY_NAME/$SNAPSHOT_NAME?wait_for_completion=true" \
+   369→  -H 'Content-Type: application/json' \
+   370→  -d '{
+   371→    "indices": ["alerts-*", "incidents-*", "audit-*", "metrics-*"],
+   372→    "ignore_unavailable": false,
+   373→    "include_global_state": true,
+   374→    "metadata": {
+   375→      "taken_by": "automated_backup",
+   376→      "taken_at": "'$(date -Iseconds)'",
+   377→      "version": "'$(cat /etc/soc-version 2>/dev/null || echo unknown)'"
+   378→    }
+   379→  }')
+   380→
+   381→SNAPSHOT_STATE=$(echo "$SNAPSHOT_RESPONSE" | jq -r '.snapshot.state')
+   382→SNAPSHOT_SIZE=$(echo "$SNAPSHOT_RESPONSE" | jq -r '.snapshot.size')
+   383→
+   384→echo "Snapshot state: $SNAPSHOT_STATE"
+   385→echo "Snapshot size: $SNAPSHOT_SIZE"
+   386→
+   387→if [ "$SNAPSHOT_STATE" != "SUCCESS" ]; then
+   388→  echo "ERROR: Snapshot creation failed!"
+   389→  echo "$SNAPSHOT_RESPONSE" | jq .
+   390→  exit 1
+   391→fi
+   392→
+   393→# Step 4: Clean up old snapshots
+   394→echo "[4/5] Cleaning old snapshots beyond ${RETENTION_DAYS} days..."
+   395→CUTOFF_DATE=$(date -d "-${RETENTION_DAYS} days" '+%Y.%m.%d' 2>/dev/null || date -v-${RETENTION_DAYS}d '+%Y.%m.%d')
+   396→
+   397→OLD_SNAPSHOTS=$(curl -sf "$ES_URL/_snapshot/$REPOSITORY_NAME/_all" | \
+   398→  jq -r ".snapshots[] | select(.start_time_in_millis < $(date -d "$CUTOFF_DATE" +%s000)) | .snapshot")
+   399→
+   400→for snap in $OLD_SNAPSHOTS; do
+   401→  echo "Deleting old snapshot: $snap"
+   402→  curl -X DELETE "$ES_URL/_snapshot/$REPOSITORY_NAME/$snap"
+   403→done
+   404→
+   405→# Step 5: Verify repository integrity
+   406→echo "[5/5] Verifying repository integrity..."
+   407→VERIFY_RESULT=$(curl -X POST "$ES_URL/_snapshot/$REPOSITORY_NAME/_verify" | jq '.valid')
+   408→
+   409→if [ "$VERIFY_RESULT" = "true" ]; then
+   410→  echo "Repository verification: PASSED"
+   411→else
+   412→  echo "WARNING: Repository verification issues detected"
+   413→fi
+   414→
+   415→# List current snapshots
+   416→echo ""
+   417→echo "Current snapshots in repository:"
+   418→curl -sf "$ES_URL/_snapshot/$REPOSITORY_NAME/_all" | \
+   419→  jq -r '.snapshots[] | "\(.snapshot) | \(.state) | \(.start_time) | \(.duration)"'
+   420→
+   421→echo ""
+   422→echo "=== SNAPSHOT COMPLETE ==="
+   423→```
+   424→
+   425→#### Redis Backup Script
+   426→
+   427→```bash
+   428→#!/bin/bash
+   429→# redis_backup.sh - Redis RDB/AOF backup procedure
+   430→
+   431→set -euo pipefail
+   432→
+   433→REDIS_HOST="redis-master.soc-platform.svc.cluster.local"
+   434→REDIS_PORT=6379
+   435→REDIS_PASSWORD=${REDIS_PASSWORD:-""}
+   436→BACKUP_DIR="/backups/redis"
+   437→RETENTION_COPIES=3
+   438→
+   439→echo "=== Redis Backup Procedure ==="
+   440→echo "Target: $REDIS_HOST:$REDIS_PORT"
+   441→echo "Timestamp: $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
+   442→
+   443→mkdir -p $BACKUP_DIR
+   444→
+   445→# Build redis-cli command
+   446→REDIS_CMD="redis-cli -h $REDIS_HOST -p $REDIS_PORT"
+   447→if [ -n "$REDIS_PASSWORD" ]; then
+   448→  REDIS_CMD="$REDIS_CMD -a $REDIS_PASSWORD"
+   449→fi
+   450→
+   451→# Step 1: Get current info
+   452→echo "[1/4] Getting Redis server info..."
+   453→REDIS_INFO=$($REDIS_CMD INFO server 2>/dev/null)
+   454→REDIS_VERSION=$(echo "$REDIS_INFO" | grep "^redis_version:" | cut -d: -f2)
+   455→DB_COUNT=$($REDIS_CMD CONFIG GET databases | tail -1)
+   456→echo "Redis Version: $REDIS_VERSION"
+   457→echo "Databases: $DB_COUNT"
+   458→
+   459→# Step 2: Trigger BGSAVE for RDB snapshot
+   460→echo "[2/4] Triggering background save..."
+   461→LAST_SAVE_BEFORE=$($REDIS_CMD LASTSAVE)
+   462→
+   463→$REDIS_CMD BGSAVE
+   464→
+   465→# Wait for BGSAVE to complete (max 5 minutes)
+   466→WAIT_TIME=0
+   467→MAX_WAIT=300
+   468→while [ $WAIT_TIME -lt $MAX_WAIT ]; do
+   469→  LAST_SAVE_AFTER=$($REDIS_CMD LASTSAVE)
+   470→  if [ "$LAST_SAVE_AFTER" != "$LAST_SAVE_BEFORE" ]; then
+   471→    echo "BGSAVE completed after ${WAIT_TIME}s"
+   472→    break
+   473→  fi
+   474→  sleep 5
+   475→  WAIT_TIME=$((WAIT_TIME + 5))
+   476→done
+   477→
+   478→if [ $WAIT_TIME -ge $MAX_WAIT ]; then
+   479→  echo "WARNING: BGSAVE did not complete within ${MAX_WAIT}s"
+   480→fi
+   481→
+   482→# Step 3: Copy RDB file
+   483→echo "[3/4] Copying RDB backup..."
+   484→BACKUP_TIMESTAMP=$(date +%Y%m%d_%H%M%S)
+   485→BACKUP_FILE="redis_dump_${BACKUP_TIMESTAMP}.rdb"
+   486→
+   487→# Get RDB directory from config
+   488→RDB_DIR=$($REDIS_CMD CONFIG GET dir | tail -1)
+   489→RDB_FILENAME=$($REDIS_CMD CONFIG GET dbfilename | tail -1)
+   490→
+   491→# Copy from Redis pod (assuming local execution on node or via sidecar)
+   492→if [ -f "$RDB_DIR/$RDB_FILENAME" ]; then
+   493→  cp "$RDB_DIR/$RDB_FILENAME" "$BACKUP_DIR/$BACKUP_FILE"
+   494→  echo "Backup created: $BACKUP_DIR/$BACKUP_FILE"
+   495→  echo "Size: $(du -h $BACKUP_DIR/$BACKUP_FILE | cut -f1)"
+   496→else
+   497→  echo "RDB file not found at expected location"
+   498→  echo "Attempting direct copy via redis-cli..."
+   499→  
+   500→  # Alternative: Use --rdb option if available
+   501→  $REDIS_CMD --rdb "$BACKUP_DIR/$BACKUP_FILE" 2>/dev/null && \
+   502→    echo "Direct RDB export successful" || \
+   503→    echo "WARNING: Could not create RDB backup"
+   504→fi
+   505→
+   506→# Create checksum
+   507→if [ -f "$BACKUP_DIR/$BACKUP_FILE" ]; then
+   508→  sha256sum "$BACKUP_DIR/$BACKUP_FILE" > "$BACKUP_DIR/$BACKUP_FILE.sha256"
+   509→fi
+   510→
+   511→# Step 4: Cleanup old backups
+   512→echo "[4/4] Cleaning old backups (keeping last $RETENTION_COPIES)..."
+   513→ls -t $BACKUP_DIR/*.rdb 2>/dev/null | tail -n +$((RETENTION_COPIES + 1)) | xargs rm -f 2>/dev/null || true
+   514→ls -t $BACKUP_DIR/*.sha256 2>/dev/null | tail -n +$((RETENTION_COPIES + 1)) | xargs rm -f 2>/dev/null || true
+   515→
+   516→echo ""
+   517→echo "Current backups:"
+   518→ls -lh $BACKUP_DIR/*.rdb 2>/dev/null || echo "No RDB backups found"
+   519→
+   520→echo ""
+   521→echo "=== REDIS BACKUP COMPLETE ==="
+   522→```
+   523→
+   524→---
+   525→
+   526→## Recovery Procedures by System
+   527→
+   528→### PostgreSQL Recovery
+   529→
+   530→#### Point-in-Time Recovery (PITR)
+   531→
+   532→```bash
+   533→#!/bin/bash
+   534→# recover_postgresql.sh - PostgreSQL PITR recovery procedure
+   535→
+   536→set -euo pipefail
+   537→
+   538→TARGET_TIME=${1:-$(date -u '+%Y-%m-%d %H:%M:%S')}
+   539→RECOVERY_MODE=${2:-"preview"}  # preview or production
+   540→BACKUP_SOURCE=${3:-"/backups/postgresql"}
+   541→PGDATA="/var/lib/postgresql/data"
+   542→ENCRYPTION_KEY=${BACKUP_ENCRYPTION_KEY:-}
+   543→
+   544→echo "============================================"
+   545→echo "  POSTGRESQL RECOVERY PROCEDURE"
+   546→echo "============================================"
+   547→echo "Target Time: $TARGET_TIME"
+   548→echo "Mode: $RECOVERY_MODE"
+   549→echo "Timestamp: $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
+   550→echo ""
+   551→
+   552→# WARNING: This will overwrite existing data!
+   553→if [ "$RECOVERY_MODE" = "production" ]; then
+   554→  read -p "⚠️  This will overwrite existing PostgreSQL data. Continue? (yes/no): " CONFIRM
+   555→  [ "$CONFIRM" != "yes" ] && echo "Aborted" && exit 1
+   556→  
+   557→  # Stop PostgreSQL if running
+   558→  echo "Stopping PostgreSQL..."
+   559→  pg_ctlcluster 16 main stop || true
+   560→fi
+   561→
+   562→# Step 1: Find appropriate base backup
+   563→echo "[1/6] Finding base backup before target time..."
+   564→LATEST_BACKUP=$(ls -t $BACKUP_SOURCE/*.dump.enc 2>/dev/null | head -1)
+   565→
+   566→if [ -z "$LATEST_BACKUP" ]; then
+   567→  echo "ERROR: No backup files found in $BACKUP_SOURCE"
+   568→  exit 1
+   569→fi
+   570→
+   571→echo "Using backup: $LATEST_BACKUP"
+   572→
+   573→# Step 2: Decrypt backup
+   574→echo "[2/6] Decrypting backup..."
+   575→DECRYPTED_BACKUP="/tmp/recovery_$(date +%s).dump"
+   576→
+   577→openssl enc -aes-256-cbc -d \
+   578→  -pbkdf2 \
+   579→  -in "$LATEST_BACKUP" \
+   580→  -out "$DECRYPTED_BACKUP" \
+   581→  -pass pass:"$ENCRYPTION_KEY"
+   582→
+   583→echo "Decrypted to: $DECRYPTED_BACKUP"
+   584→
+   585→# Step 3: Verify backup integrity
+   586→echo "[3/6] Verifying backup integrity..."
+   587→EXPECTED_HASH=$(cat "${LATEST_BACKUP}.sha256" | awk '{print $1}')
+   588→ACTUAL_HASH=$(sha256sum "$DECRYPTED_BACKUP" | awk '{print $1}')
+   589→
+   590→if [ "$EXPECTED_HASH" != "$ACTUAL_HASH" ]; then
+   591→  echo "ERROR: Checksum mismatch!"
+   592→  echo "Expected: $EXPECTED_HASH"
+   593→  echo "Actual: $ACTUAL_HASH"
+   594→  rm -f "$DECRYPTED_BACKUP"
+   595→  exit 1
+   596→fi
+   597→echo "Checksum verified: $ACTUAL_HASH"
+   598→
+   599→# Step 4: Perform restore
+   600→echo "[4/6] Restoring database..."
+   601→pg_restore \
+   602→  --verbose \
+   603→  --clean \
+   604→  --if-exists \
+   605→  --dbname=soc_platform \
+   606→  "$DECRYPTED_BACKUP" \
+   607→  2>&1 | tee /tmp/pg_restore.log
+   608→
+   609→RESTORE_EXIT=$?
+   610→
+   611→# Clean up decrypted file
+   612→rm -f "$DECRYPTED_BACKUP"
+   613→
+   614→if [ $RESTORE_EXIT -ne 0 ]; then
+   615→  echo "ERROR: pg_restore failed with exit code $RESTORE_EXIT"
+   616→  exit 1
+   617→fi
+   618→
+   619→# Step 5: If using PITR with WAL replay
+   620→echo "[5/6] Applying WAL logs (if available)..."
+   621→
+   622→# Configure recovery target
+   623→cat >> "$PGDATA/postgresql.auto.conf" <<EOF
+   624→restore_command = 'cp /var/lib/postgresql/wal_archive/%f %p'
+   625→recovery_target_time = '$TARGET_TIME'
+   626→recovery_target_action = 'promote'
+   627→EOF
+   628→
+   629→# Create recovery signal
+   630→touch "$PGDATA/recovery.signal"
+   631→
+   632→# Step 6: Start PostgreSQL
+   633→echo "[6/6] Starting PostgreSQL in recovery mode..."
+   634→pg_ctlcluster 16 main start
+   635→
+   636→# Monitor recovery progress
+   637→echo "Monitoring recovery..."
+   638→sleep 5
+   639→
+   640→# Check if still in recovery
+   641→IS_IN_RECOVERY=$(psql -U postgres -t -c "SELECT pg_is_in_recovery();")
+   642→echo "In recovery mode: $IS_IN_RECOVERY"
+   643→
+   644→# Wait for recovery to complete
+   645→TIMEOUT=600  # 10 minutes max
+   646→ELAPSED=0
+   647→while [ "$IS_IN_RECOVERY" = " t" ] && [ $ELAPSED -lt $TIMEOUT ]; do
+   648→  sleep 10
+   649→  ELAPSED=$((ELAPSED + 10))
+   650→  IS_IN_RECOVERY=$(psql -U postgres -t -c "SELECT pg_is_in_recovery();")
+   651→  echo "Still recovering... (${ELAPSED}s elapsed)"
+   652→done
+   653→
+   654→if [ "$IS_IN_RECOVERY" = " f" ] || [ -z "$IS_IN_RECOVERY" ]; then
+   655→  echo "✅ Recovery complete!"
+   656→  
+   657→  # Verify data
+   658→  echo ""
+   659→  echo "Data verification:"
+   660→  psql -U postgres -d soc_platform -c "
+   661→    SELECT 
+   662→      count(*) as total_tables
+   663→    FROM information_schema.tables 
+   664→    WHERE table_schema = 'public';
+   665→  "
+   666→  
+   667→  psql -U postgres -d soc_platform -c "
+   668→    SELECT 
+   669→      relname as table_name,
+   670→      n_live_tup as row_count
+   671→    FROM pg_stat_user_tables 
+   672→    ORDER BY n_live_tup DESC 
+   673→    LIMIT 10;
+   674→  "
+   675→else
+   676→  echo "⚠️  Recovery may not have completed within timeout"
+   677→fi
+   678→
+   679→echo ""
+   680→echo "=== RECOVERY PROCEDURE COMPLETE ==="
+   681→echo "Recovered to target time: $TARGET_TIME"
+   682→echo "Actual recovery time: $(psql -U postgres -t -c "SELECT now();")"
+   683→```
+   684→
+   685→### Elasticsearch Recovery
+   686→
+   687→```bash
+   688→#!/bin/bash
+   689→# recover_elasticsearch.sh - Elasticsearch index restoration
+   690→
+   691→set -euo pipefail
+   692→
+   693→SNAPSHOT_NAME=${1:?Usage: $0 <snapshot-name> [--all-indices | --indices index1,index2]}
+   694→INDICES_OPTION=${2:-"--all-indices"}
+   695→ES_URL="http://elasticsearch.soc.djezzy.local:9200"
+   696→REPOSITORY_NAME="soc_backups"
+   697→
+   698→echo "============================================"
+   699→echo "  ELASTICSEARCH RECOVERY PROCEDURE"
+   700→echo "============================================"
+   701→echo "Snapshot: $SNAPSHOT_NAME"
+   702→echo "Option: $INDICES_OPTION"
+   703→echo "Timestamp: $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
+   704→echo ""
+   705→
+   706→# Step 1: Verify snapshot exists
+   707→echo "[1/5] Verifying snapshot exists..."
+   708→SNAPSHOT_INFO=$(curl -sf "$ES_URL/_snapshot/$REPOSITORY_NAME/$SNAPSHOT_NAME")
+   709→
+   710→if [ -z "$SNAPSHOT_INFO" ]; then
+   711→  echo "ERROR: Snapshot '$SNAPSHOT_NAME' not found!"
+   712→  echo "Available snapshots:"
+   713→  curl -sf "$ES_URL/_snapshot/$REPOSITORY_NAME/_all" | jq -r '.snapshots[].snapshot'
+   714→  exit 1
+   715→fi
+   716→
+   717→SNAPSHOT_STATE=$(echo "$SNAPSHOT_INFO" | jq -r '.snapshots[0].state')
+   718→echo "Snapshot state: $SNAPSHOT_STATE"
+   719→
+   720→if [ "$SNAPSHOT_STATE" != "SUCCESS" ]; then
+   721→  echo "ERROR: Snapshot is not in SUCCESS state: $SNAPSHOT_STATE"
+   722→  exit 1
+   723→fi
+   724→
+   725→# Show snapshot details
+   726→echo ""
+   727→echo "Snapshot details:"
+   728→echo "$SNAPSHOT_INFO" | jq '{
+   729→  snapshot: .snapshots[0].snapshot,
+   730→  indices: .snapshots[0].indices,
+   731→  start_time: .snapshots[0].start_time,
+   732→  end_time: .snapshots[0].end_time,
+   733→  duration: .snapshots[0].duration_in_millis,
+   734→  size: .snapshots[0].size
+   735→}'
+   736→
+   737→# Step 2: Determine which indices to restore
+   738→echo ""
+   739→echo "[2/5] Determining indices to restore..."
+   740→
+   741→case $INDICES_OPTION in
+   742→  --all-indices)
+   743→    RESTORE_INDICES=$(echo "$SNAPSHOT_INFO" | jq -r '.snapshots[0].indices[]' | tr '\n' ',')
+   744→    ;;
+   745→  --indices)
+   746→    shift 2
+   747→    RESTORE_INDICES="$*"
+   748→    ;;
+   749→  *)
+   750→    echo "Unknown option: $INDICES_OPTION"
+   751→    exit 1
+   752→    ;;
+   753→esac
+   754→
+   755→echo "Indices to restore: $RESTORE_INDICES"
+   756→
+   757→# Step 3: Close existing indices (required before restore)
+   758→echo ""
+   759→echo "[3/5] Closing existing indices..."
+   760→
+   761→IFS=',' read -ra INDEX_ARRAY <<< "$RESTORE_INDICES"
+   762→for INDEX in "${INDEX_ARRAY[@]}"; do
+   763→  # Strip whitespace
+   764→  INDEX=$(echo "$INDEX" | xargs)
+   765→  
+   766→  # Handle wildcard patterns
+   767→  if [[ "$INDEX" == *"*"* ]]; then
+   768→    echo "Skipping wildcard pattern: $INDEX (handle manually)"
+   769→    continue
+   770→  fi
+   771→  
+   772→  # Check if index exists
+   773→  HTTP_CODE=$(curl -sf -o /dev/null -w "%{http_code}" "$ES_URL/$INDEX")
+   774→  
+   775→  if [ "$HTTP_CODE" = "200" ]; then
+   776→    echo "Closing index: $INDEX"
+   777→    curl -sX POST "$ES_URL/$INDEX/_close" | jq '{acknowledged: .acknowledged}'
+   778→  else
+   779→    echo "Index does not exist (will be created): $INDEX"
+   780→  fi
+   781→done
+   782→
+   783→# Step 4: Execute restore
+   784→echo ""
+   785→echo "[4/5] Executing restore..."
+   786→
+   787→RESTORE_BODY=$(cat <<EOF
+   788→{
+   789→  "indices": "$RESTORE_INDICES",
+   790→  "include_global_state": true,
+   791→  "rename_pattern": "(.+)",
+   792→  "rename replacement": "\$1",
+   793→  "index_settings": {
+   794→    "number_of_replicas": 1
+   795→  },
+   796→  "ignore_index_settings": [
+   797→    "refresh_interval",
+   798→    "number_of_replicas"
+   799→  ]
+   800→}
+   801→EOF
+   802→)
+   803→
+   804→echo "Restore request body:"
+   805→echo "$RESTORE_BODY" | jq .
+   806→
+   807→RESTORE_RESPONSE=$(curl -sX POST "$ES_URL/_snapshot/$REPOSITORY_NAME/$SNAPSHOT_NAME/_restore" \
+   808→  -H 'Content-Type: application/json' \
+   809→  -d "$RESTORE_BODY")
+   810→
+   811→echo ""
+   812→echo "Restore response:"
+   813→echo "$RESTORE_RESPONSE" | jq '{
+   814→  snapshot: .snapshot,
+   815→  indices: .indices
+   816→}'
+   817→
+   818→# Step 5: Monitor restore completion
+   819→echo ""
+   820→echo "[5/5] Monitoring restore progress..."
+   821→
+   822→# Wait for restore to complete (check every 10 seconds, max 30 minutes)
+   823→MAX_WAIT=1800
+   824→ELAPSED=0
+   825→
+   826→while [ $ELAPSED -lt $MAX_WAIT ]; do
+   827→  # Check restore status
+   828→  RESTORE_STATUS=$(curl -sf "$ES_URL/_snapshot/$REPOSITORY_NAME/$SNAPSHOT_NAME/_status" 2>/dev/null || echo "{}")
+   829→  
+   830→  # Check if any shards are still initializing
+   831→  INITIALIZING=$(curl -sf "$ES_URL/_cat/indices?v&health" 2>/dev/null | grep -c "INIT" || echo "0")
+   832→  
+   833→  if [ "$INITIALIZING" = "0" ]; then
+   834→    echo "✅ All indices restored successfully!"
+   835→    break
+   836→  fi
+   837→  
+   838→  echo "Restoring... ($ELAPSED)s elapsed, $INITIALIZING indices still initializing"
+   839→  sleep 10
+   840→  ELAPSED=$((ELAPSED + 10))
+   841→done
+   842→
+   843→# Final status report
+   844→echo ""
+   845→echo "=== FINAL STATUS ==="
+   846→curl -sf "$ES_URL/_cat/indices?v" | head -20
+   847→curl -sf "$ES_URL/_cat/health" 
+   848→
+   849→echo ""
+   850→echo "=== ELASTICSEARCH RECOVERY COMPLETE ==="
+   851→```
+   852→
+   853→### Application Configuration Recovery
+   854→
+   855→```bash
+   856→#!/bin/bash
+   857→# recover_config.sh - Application configuration recovery
+   858→
+   859→set -euo pipefail
+   860→
+   861→CONFIG_TYPE=${1:?Usage: $0 <helm-values|k8s-manifests|secrets> [target-version]}
+   862→VERSION=${2:-"latest"}
+   863→
+   864→echo "============================================"
+   865→echo "  CONFIGURATION RECOVERY PROCEDURE"
+   866→echo "============================================"
+   867→echo "Type: $CONFIG_TYPE"
+   868→echo "Version: $VERSION"
+   869→echo "Timestamp: $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
+   870→echo ""
+   871→
+   872→case $CONFIG_TYPE in
+   873→  helm-values)
+   874→    echo "--- Recovering Helm Values ---"
+   875→    
+   876→    if [ "$VERSION" = "latest" ]; then
+   877→      # Get latest from git
+   878→      git clone https://gitlab.djezzy.local/soc/platform-config.git /tmp/config-recovery
+   879→      LATEST_VALUES=$(ls -t /tmp/config-recovery/helm/*/values-production.yaml 2>/dev/null | head -1)
+   880→      
+   881→      if [ -n "$LATEST_VALUES" ]; then
+   882→        echo "Latest values file: $LATEST_VALUES"
+   883→        cp "$LATEST_VALUES" ./recovered-values.yaml
+   884→        echo "Recovered to: ./recovered-values.yaml"
+   885→      else
+   886→        echo "ERROR: No values file found"
+   887→        exit 1
+   888→      fi
+   889→    else
+   890→      # Checkout specific version/tag
+   891→      git clone https://gitlab.djezzy.local/soc/platform-config.git /tmp/config-recovery
+   892→      cd /tmp/config-recovery
+   893→      git checkout "$VERSION"
+   894→      cp helm/soc-platform/values-production.yaml ../../recovered-values.yaml
+   895→      cd ../..
+   896→      echo "Recovered version $VERSION to: ./recovered-values.yaml"
+   897→    fi
+   898→    ;;
+   899→
+   900→  k8s-manifests)
+   901→    echo "--- Recovering Kubernetes Manifests ---"
+   902→    
+   903→    # Option A: From Velero backup
+   904→    if command -v velero &> /dev/null; then
+   905→      echo "Checking Velero backups..."
+   906→      velero backup get | grep -E "COMPLETED|PARTIAL"
+   907→      
+   908→      read -p "Enter Velero backup name: " VELERO_BACKUP
+   909→      velero restore create --from-backup "$VELERO_BACKUP" --include-namespaces soc-platform
+   910→    else
+   911→      # Option B: From git
+   912→      git clone https://gitlab.djezzy.local/soc/k8s-manifests.git /tmp/k8s-recovery
+   913→      kubectl apply -f /tmp/k8s-recovery/manifests/ -n soc-platform
+   914→    fi
+   915→    ;;
+   916→
+   917→  secrets)
+   918→    echo "--- Recovering Secrets ---"
+   919→    
+   920→    echo "WARNING: Secret recovery requires admin privileges!"
+   921→    echo "Options:"
+   922→    echo "  1. Restore from Vault snapshot"
+   923→    echo "  2. Re-create from documentation"
+   924→    echo "  3. Import from secure backup file"
+   925→    
+   926→    read -p "Select option (1-3): " OPTION
+   927→    
+   928→    case $OPTION in
+   929→      1)
+   930→        # Vault restore
+   931→        vault operator raft restore -file /path/to/vault-snapshot
+   932→        ;;
+   933→      2)
+   934→        echo "Please consult secrets documentation for re-creation steps"
+   935→        ;;
+   936→      3)
+   937→        read -p "Path to encrypted secrets backup: " SECRETS_FILE
+   938→        openssl enc -d -aes-256-cbc -in "$SECRETS_FILE" -out /tmp/secrets.yaml -pass pass:$DECRYPTION_KEY
+   939→        kubectl apply -f /tmp/secrets.yaml
+   940→        shred -u /tmp/secrets.yaml
+   941→        ;;
+   942→    esac
+   943→    ;;
+   944→
+   945→  *)
+   946→    echo "Unknown config type: $CONFIG_TYPE"
+   947→    echo "Valid types: helm-values, k8s-manifests, secrets"
+   948→    exit 1
+   949→    ;;
+   950→esac
+   951→
+   952→echo ""
+   953→echo "=== CONFIG RECOVERY COMPLETE ==="
+   954→```
+   955→
+   956→---
+   957→
+   958→## Disaster Recovery Procedures
+   959→
+   960→### Full DR Site Failover
+   961→
+   962→```markdown
+   963→## DISASTER RECOVERY FAILOVER CHECKLIST
+   964→
+   965→**Authorization Required:** CISO + IT Director
+   966→**Estimated RTO:** 2-4 hours
+   967→**Communication:** Before, During, After failover
+   968→
+   969→### PRE-FAILOVER (T-60 minutes to T-0)
+   970→
+   971→□ Obtain formal authorization for DR activation
+   972→□ Assemble DR team (conference bridge established)
+   973→□ Notify all stakeholders of impending failover
+   974→□ Verify DR site readiness checklist complete
+   975→
+   976→**DR Site Readiness:**
+   977→- [ ] Power/environmental systems operational
+   978→- [ ] Network connectivity confirmed (WAN link up)
+   979→- [ ] Storage accessible and synchronized
+   980→- [ ] Staff access validated
+   981→- [ ] Security controls operational
+   982→
+   983→### DATABASE FAILOVER (T+0 to T+45 min)
+   984→
+   985→□ Promote DR PostgreSQL to primary role
+   986→```bash
+   987→# On DR site
+   988→patronictl failover --master old-primary-host --candidate dr-primary --force
+   989→```
+   990→
+   991→□ Verify promotion success
+   992→```bash
+   993→patronictl list
+   994→# Confirm new leader is DR host
+   995→```
+   996→
+   997→□ Update connection strings in application config
+   998→```bash
+   999→# Update Kubernetes secrets/configmaps
+  1000→kubectl create secret generic postgres-connection \
+  1001→  --from-literal=host=dr-postgres.internal \
+  1002→  --dry-run=client -o yaml | kubectl apply -f -
+  1003→```
+  1004→
+  1005→□ Validate database consistency
+  1006→```bash
+  1007→# Check replication position
+  1008→psql -c "SELECT pg_last_xact_replay_timestamp();"
+  1009→# Should show recent timestamp (< 15 min ago per RPO)
+  1010→```
+  1011→
+  1012→### ELASTICSEARCH FAILOVER (T+30 to T+60 min)
+  1013→
+  1014→□ Activate DR Elasticsearch cluster
+  1015→```bash
+  1016→# Ensure all nodes are running
+  1017→kubectl scale deployment elasticsearch-data --replicas=3 -n soc-platform-dr
+  1018→```
+  1019→
+  1020→□ Redirect log shippers to DR cluster
+  1021→```bash
+  1022→# Update Filebeat outputs
+  1023→# Point to DR Elasticsearch endpoints
+  1024→```
+  1025→
+  1026→□ Verify index recovery status
+  1027→```bash
+  1028→curl http://dr-elasticsearch:9200/_cat/recovery?v
+  1029→# Wait for all shards to be COMPLETE
+  1030→```
+  1031→
+  1032→### APPLICATION FAILOVER (T+45 to T+90 min)
+  1033→
+  1034→□ Update DNS records (pre-lowered TTL should be 60s)
+  1035→```
+  1036→soc-api.djezzy.local → DR Load Balancer IP
+  1037→soc.djezzy.local → DR Load Balancer IP
+  1038→api.soc.djezzy.local → DR Load Balancer IP
+  1039→```
+  1040→
+  1041→□ Scale up DR application workloads
+  1042→```bash
+  1043→# Deployments should be pre-created with 0 replicas
+  1044→kubectl scale deployment soc-platform --replicas=3 -n soc-platform-dr
+  1045→kubectl scale deployment soc-platform-backend --replicas=3 -n soc-platform-dr
+  1046→kubectl scale deployment soc-platform-worker --replicas=2 -n soc-platform-dr
+  1047→```
+  1048→
+  1049→□ Verify health endpoints
+  1050→```bash
+  1051→for pod in $(kubectl get pods -n soc-platform-dr -l app=soc-platform -o name); do
+  1052→  kubectl exec -it $pod -- curl -sf localhost/api/health | jq .status
+  1053→done
+  1054→```
+  1055→
+  1056→### VALIDATION (T+90 to T+120 min)
+  1057→
+  1058→□ Run smoke test suite
+  1059→```bash
+  1060→./scripts/smoke_tests.sh dr-site
+  1061→```
+  1062→
+  1063→□ Validate core functionality
+  1064→- [ ] User authentication working
+  1065→- [ ] Alert display functional
+  1066→- [ ] Incident creation possible
+  1067→- [ ] Reports generating
+  1068→- [ ] API endpoints responding
+  1069→
+  1070→□ Performance baseline check
+  1071→- [ ] Response times acceptable
+  1072→- [ ] Error rates normal
+  1073→- [ ] Resource utilization healthy
+  1074→
+  1075→### COMMUNICATION (Throughout)
+  1076→
+  1077→**Before (T-60min):**
+  1078→- Internal: All-hands notification
+  1079→- External: Vendor standby notification
+  1080→
+  1081→**During (T+0 to T+120min):**
+  1082→- Status updates every 30 minutes
+  1083→- Incident channel active monitoring
+  1084→
+  1085→**After (T+120min):**
+  1086→- Resolution announcement
+  1087→- Post-mortem scheduling
+  1088→- Return-to-normal planning
+  1089→
+  1090→### RETURN TO PRIMARY (After resolution)
+  1091→
+  1092→Schedule maintenance window (minimum 48 hours notice):
+  1093→
+  1094→1. Verify primary site fully restored
+  1095→2. Reverse data replication (DR → Primary)
+  1096→3. Perform controlled failback
+  1097→4. Validate primary operations
+  1098→5. Decommission DR active mode
+  1099→6 document lessons learned
+  1100→```
+  1101→
+  1102→---
+  1103→
+  1104→## Backup Verification Testing
+  1105→
+  1106→### Automated Verification Jobs
+  1107→
+  1108→```yaml
+  1109→# k8s/manifests/backup-verification-cronjob.yaml
+  1110→apiVersion: batch/v1
+  1111→kind: CronJob
+  1112→metadata:
+  1113→  name: backup-verification
+  1114→  namespace: soc-platform
+  1115→spec:
+  1116→  schedule: "0 4 * * *"  # Daily at 04:00 UTC (after backups)
+  1117→  jobTemplate:
+  1118→    spec:
+  1119→      template:
+  1120→        spec:
+  1121→          containers:
+  1122→          - name: verify-backups
+  1123→            image: alpine:3.19
+  1124→            command:
+  1125→            - /bin/sh
+  1126→            - -c
+  1127→            - |
+  1128→              set -euo pipefail
+  1129→              
+  1130→              echo "=== Backup Verification ==="
+  1131→              echo "Date: $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
+  1132→              
+  1133→              PASS=0
+  1134→              FAIL=0
+  1135→              
+  1136→              check() {
+  1137→                if [ $? -eq 0 ]; then
+  1138→                  echo "✅ $1"
+  1139→                  PASS=$((PASS + 1))
+  1140→                else
+  1141→                  echo "❌ $1"
+  1142→                  FAIL=$((FAIL + 1))
+  1143→                fi
+  1144→              }
+  1145→              
+  1146→              # 1. Verify PostgreSQL backup exists and is valid
+  1147→              echo ""
+  1148→              echo "--- PostgreSQL Backup ---"
+  1149→              LATEST_PG_BACKUP=$(ls -t /backups/postgresql/*.dump.enc 2>/dev/null | head -1)
+  1150→              
+  1151→              if [ -n "$LATEST_PG_BACKUP" ]; then
+  1152→                echo "Latest backup: $LATEST_PG_BACKUP"
+  1153→                
+  1154→                # Verify checksum
+  1155→                if [ -f "${LATEST_PG_BACKUP}.sha256" ]; then
+  1156→                  sha256sum -c "${LATEST_PG_BACKUP}.sha256" >/dev/null 2>&1
+  1157→                  check "PostgreSQL backup checksum valid"
+  1158→                  
+  1159→                  # Test decryption (don't restore, just verify)
+  1160→                  openssl enc -aes-256-cbc -d -pbkdf2 \
+  1161→                    -in "$LATEST_PG_BACKUP" \
+  1162→                    -out /tmp/test_decrypt.dump \
+  1163→                    -pass pass:"${ENCRYPTION_KEY}" 2>/dev/null
+  1164→                  check "PostgreSQL backup decryptable"
+  1165→                  rm -f /tmp/test_decrypt.dump
+  1166→                else
+  1167→                  echo "❌ No checksum file found"
+  1168→                  FAIL=$((FAIL + 1))
+  1169→                fi
+  1170→                
+  1171→                # Check age (should be < 28 hours)
+  1172→                BACKUP_AGE=$(( ($(date +%s) - $(stat -c %Y "$LATEST_PG_BACKUP")) / 3600 ))
+  1173→                if [ "$BACKUP_AGE" -lt 28 ]; then
+  1174→                  check "PostgreSQL backup recent (${BACKUP_AGE}h old)"
+  1175→                else
+  1176→                  echo "❌ PostgreSQL backup stale (${BACKUP_AGE}h old)"
+  1177→                  FAIL=$((FAIL + 1))
+  1178→                fi
+  1179→              else
+  1180→                echo "❌ No PostgreSQL backup found"
+  1181→                FAIL=$((FAIL + 1))
+  1182→              fi
+  1183→              
+  1184→              # 2. Verify Elasticsearch snapshot
+  1185→              echo ""
+  1186→              echo "--- Elasticsearch Snapshot ---"
+  1187→              SNAPSHOT_STATUS=$(curl -sf http://elasticsearch:9200/_snapshot/soc_backups/_all 2>/dev/null | \
+  1188→                jq -r '.snapshots[-1].state // empty')
+  1189→              
+  1190→              if [ "$SNAPSHOT_STATUS" = "SUCCESS" ]; then
+  1191→                check "Elasticsearch snapshot successful"
+  1192→              elif [ -n "$SNAPSHOT_STATUS" ]; then
+  1193→                echo "❌ Latest snapshot state: $SNAPSHOT_STATUS"
+  1194→                FAIL=$((FAIL + 1))
+  1195→              else
+  1196→                echo "❌ No snapshots found"
+  1197→                FAIL=$((FAIL + 1))
+  1198→              fi
+  1199→              
+  1200→              # 3. Verify Redis backup
+  1201→              echo ""
+  1202→              echo "--- Redis Backup ---"
+  1203→              LATEST_REDIS_BACKUP=$(ls -t /backups/redis/*.rdb 2>/dev/null | head -1)
+  1204→              
+  1205→              if [ -n "$LATEST_REDIS_BACKUP" ]; then
+  1206→                # Verify it's a valid RDB file (starts with REDIS header)
+  1207→                if head -c 5 "$LATEST_REDIS_BACKUP" | grep -q "REDIS"; then
+  1208→                  check "Redis backup valid RDB format"
+  1209→                else
+  1210→                  echo "❌ Invalid Redis backup format"
+  1211→                  FAIL=$((FAIL + 1))
+  1212→                fi
+  1213→                
+  1214→                # Check age
+  1215→                REDIS_AGE=$(( ($(date +%s) - $(stat -c %Y "$LATEST_REDIS_BACKUP")) / 3600 ))
+  1216→                if [ "$REDIS_AGE" -lt 2 ]; then
+  1217→                  check "Redis backup recent (${REDIS_AGE}h old)"
+  1218→                else
+  1219→                  echo "⚠️  Redis backup older than expected (${REDIS_AGE}h)"
+  1220→                fi
+  1221→              else
+  1222→                echo "❌ No Redis backup found"
+  1223→                FAIL=$((FAIL + 1))
+  1224→              fi
+  1225→              
+  1226→              # Summary
+  1227→              echo ""
+  1228→              echo "=== VERIFICATION SUMMARY ==="
+  1229→              echo "Passed: $PASS"
+  1230→              echo "Failed: $FAIL"
+  1231→              
+  1232→              if [ $FAIL -gt 0 ]; then
+  1233→                echo "⚠️  VERIFICATION FAILED - Review required"
+  1234→                exit 1
+  1235→              else
+  1236→                echo "✅ ALL CHECKS PASSED"
+  1237→              fi
+  1238→              
+  1239→              # Send results to monitoring
+  1240→              curl -sf -X POST "https://monitoring.djezzy.local/api/backup-status" \
+  1241→                -H "Content-Type: application/json" \
+  1242→                -d "{\"status\": $([ $FAIL -eq 0 ] && echo 'success' || echo 'failure'), \
+  1243→                     \"checks_passed\": $PASS, \
+  1244→                     \"checks_failed\": $FAIL, \
+  1245→                     \"timestamp\": \"$(date -Iseconds)\"}" || true
+  1246→          
+  1247→          volumeMounts:
+  1248→          - name: backup-volume
+  1249→            mountPath: /backups
+  1250→          env:
+  1251→          - name: ENCRYPTION_KEY
+  1252→            valueFrom:
+  1253→              secretKeyRef:
+  1254→                name: backup-keys
+  1255→                key: encryption-key
+  1256→          restartPolicy: OnFailure
+  1257→      volumes:
+  1258→      - name: backup-volume
+  1259→        persistentVolumeClaim:
+  1260→          claimName: backup-pvc
+  1261→```
+  1262→
+  1263→---
+  1264→
+  1265→## Troubleshooting
+  1266→
+  1267→### Common Issues and Resolutions
+  1268→
+  1269→| Issue | Symptoms | Resolution |
+  1270→|-------|----------|------------|
+  1271→| **Backup job failing** | CronJob showing Failed status | Check job logs: `kubectl logs job/<job-name>` |
+  1272→| **Insufficient space** | `No space left on device` errors | Clean old backups, expand PVC |
+  1273→| **Encryption failure** | `bad decrypt` error | Verify encryption key matches backup origin |
+  1274→| **WAL gap in PostgreSQL** | PITR cannot reach target time | Check WAL archive completeness |
+  1275→| **Snapshot repository error** | ES snapshot fails | Verify S3 credentials, bucket permissions |
+  1276→| **Slow restore** | Recovery taking too long | Consider partial restore, increase resources |
+  1277→
+  1278→### Diagnostic Commands
+  1279→
+  1280→```bash
+  1281→# Check backup job status
+  1282→kubectl get cronjobs -n soc-platform
+  1283→kubectl get jobs -n soc-platform --sort-by='.status.startTime'
+  1284→
+  1285→# View backup job logs
+  1286→kubectl logs job/postgresql-backup-<timestamp> -n soc-platform
+  1287→
+  1288→# Check PVC usage
+  1289→kubectl get pvc -n soc-platform
+  1290→kubectl top pvc  # if metrics-server installed
+  1291→
+  1292→# Verify backup file integrity
+  1293→sha256sum -c backup_file.sha256
+  1294→
+  1295→# Check PostgreSQL WAL archive
+  1296→ls -la /var/lib/postgresql/wal_archive/
+  1297→pg_waldump /var/lib/postgresql/wal_archive/000000010000000000000001
+  1298→
+  1299→# List Elasticsearch snapshots
+  1300→curl -s http://es:9200/_snapshot/_all | jq '.'
+  1301→```
+  1302→
+  1303→---
+  1304→
+  1305→**Document Control:**
+  1306→
+  1307→| Version | Date | Author | Changes |
+  1308→|---------|------|--------|---------|
+  1309→| 1.0 | 2024-06-01 | Ops Team | Initial framework |
+  1310→| 1.5 | 2025-01-10 | DBA Lead | Added DR procedures, verification jobs |
+  1311→
+  1312→---
+  1313→
+  1314→*This document is critical for business continuity. Test recovery procedures quarterly and update after any infrastructure changes.*
+  1315→
