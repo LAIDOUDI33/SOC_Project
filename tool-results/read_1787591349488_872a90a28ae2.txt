@@ -1,0 +1,735 @@
+     1→'use client'
+     2→
+     3→import React, { useState, useMemo } from 'react'
+     4→import {
+     5→  Zap, Play, Pause, SkipForward, RotateCcw, CheckCircle,
+     6→  AlertTriangle, Clock, Shield, Lock, Unlock, Users,
+     7→  Settings, FileText, Eye, Ban, ArrowRight, ChevronDown,
+     8→  ChevronRight, CircleDot, Activity, Bot, UserCheck,
+     9→  Timer, ListChecks, Workflow, Pencil, Save, Send
+    10→} from 'lucide-react'
+    11→import { Button } from '@/components/ui/button'
+    12→import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+    13→import { Badge } from '@/components/ui/badge'
+    14→import { Progress } from '@/components/ui/progress'
+    15→import { Separator } from '@/components/ui/separator'
+    16→import {
+    17→  Select,
+    18→  SelectContent,
+    19→  SelectItem,
+    20→  SelectTrigger,
+    21→  SelectValue,
+    22→} from '@/components/ui/select'
+    23→import {
+    24→  Tooltip,
+    25→  TooltipContent,
+    26→  TooltipProvider,
+    27→  Trigger,
+    28→} from '@/components/ui/tooltip'
+    29→
+    30→// Types
+    31→interface PlaybookStep {
+    32→  id: string
+    33→  name: string
+    34→  type: 'manual' | 'automated' | 'approval' | 'conditional' | 'parallel'
+    35→  status: 'pending' | 'running' | 'completed' | 'skipped' | 'failed' | 'waiting_approval'
+    36→  description: string
+    37→  action?: string
+    38→  target?: string
+    39→  riskLevel: 'low' | 'medium' | 'high' | 'critical'
+    40→  estimatedDuration?: number
+    41→  actualDuration?: number
+    42→  output?: string
+    43→  error?: string
+    44→  subSteps?: PlaybookStep[]
+    45→  approvals?: {
+    46→    required: number
+    47→    received: number
+    48→    approvers: Array<{ name: string; status: 'pending' | 'approved' | 'rejected'; timestamp?: Date }>
+    49→  }
+    50→}
+    51→
+    52→interface Playbook {
+    53→  id: string
+    54→  name: string
+    55→  category: 'incident_response' | 'threat_hunting' | 'containment' | 'remediation' | 'compliance'
+    56→  severity: 'critical' | 'high' | 'medium' | 'low'
+    57→  status: 'draft' | 'active' | 'completed' | 'paused' | 'failed'
+    58→  autonomyLevel: 0 | 1 | 2 | 3 | 4
+    59→  triggerType: 'alert' | 'incident' | 'manual' | 'scheduled'
+    60→  steps: PlaybookStep[]
+    61→  currentStepIndex: number
+    62→  progress: number
+    63→  startedAt?: Date
+    64→  completedAt?: Date
+    65→  assignedTo?: string
+    66→  incidentId?: string
+    67→  metrics?: {
+    68→    mttD?: number
+    69→    mttr?: number
+    70→    actionsExecuted: number
+    71→    actionsSkipped: number
+    72→    humanInterventions: number
+    73→  }
+    74→}
+    75→
+    76→interface ApprovalRequest {
+    77→  id: string
+    78→  playbookId: string
+    79→  stepId: string
+    80→  requester: string
+    81→  requestedAt: Date
+    82→  action: string
+    83→  target: string
+    84→  riskLevel: string
+    85→  reason: string
+    86→  status: 'pending' | 'approved' | 'rejected' | 'expired'
+    87→  approvers: Array<{ name: string; role: string; decision?: 'approved' | 'rejected'; comment?: string; timestamp?: Date }>
+    88→}
+    89→
+    90→// Sample Data
+    91→const samplePlaybooks: Playbook[] = [
+    92→  {
+    93→    id: 'pb-001',
+    94→    name: 'Phishing Incident Response - Executive Targeting',
+    95→    category: 'incident_response',
+    96→    severity: 'high',
+    97→    status: 'active',
+    98→    autonomyLevel: 2,
+    99→    triggerType: 'incident',
+   100→    currentStepIndex: 2,
+   101→    progress: 35,
+   102→    startedAt: new Date('2024-08-24T09:45:00'),
+   103→    incidentId: 'INC-2024-4521',
+   104→    assignedTo: 'soc-analyst-team@cybersoc',
+   105→    metrics: {
+   106→      mttD: 847, // seconds
+   107→      mttr: null,
+   108→      actionsExecuted: 5,
+   109→      actionsSkipped: 0,
+   110→      humanInterventions: 1
+   111→    },
+   112→    steps: [
+   113→      {
+   114→        id: 's1', name: 'Initial Triage', type: 'automated', status: 'completed',
+   115→        description: 'Collect initial alert data and assess severity',
+   116→        action: 'Aggregate alerts from email gateway, EDR, SIEM',
+   117→        riskLevel: 'low', estimatedDuration: 30, actualDuration: 28,
+   118→        output: '12 alerts aggregated, severity confirmed as HIGH'
+   119→      },
+   120→      {
+   121→        id: 's2', name: 'User Impact Assessment', type: 'automated', status: 'completed',
+   122→        description: 'Identify affected users and their access levels',
+   123→        action: 'Query identity provider for user details and privileges',
+   124→        riskLevel: 'low', estimatedDuration: 60, actualDuration: 55,
+   125→        output: '3 users affected (1 executive, 2 managers)'
+   126→      },
+   127→      {
+   128→        id: 's3', name: 'Containment Actions', type: 'approval', status: 'running',
+   129→        description: 'Execute containment measures to prevent further damage',
+   130→        action: 'Isolate endpoints, suspend accounts, block IOCs',
+   131→        riskLevel: 'high', estimatedDuration: 300,
+   132→        approvals: {
+   133→          required: 2,
+   134→          received: 1,
+   135→          approvers: [
+   136→            { name: 'John Smith (SOC Manager)', status: 'approved', timestamp: new Date() },
+   137→            { name: 'Jane Doe (CISO)', status: 'pending' }
+   138→          ]
+   139→        },
+   140→        subSteps: [
+   141→          { id: 's3a', name: 'Isolate Endpoint WORKSTATION-0147', type: 'automated', status: 'completed', description: 'Network isolation of compromised endpoint', action: 'EDR isolate command', riskLevel: 'high', output: 'Endpoint isolated successfully' },
+   142→          { id: 's3b', name: 'Suspend User Account', type: 'automated', status: 'completed', description: 'Disable login for affected user', action: 'LDAP disable account', riskLevel: 'high', output: 'Account maria.chen@finance suspended' },
+   143→          { id: 's3c', name: 'Block Malicious Domains', type: 'automated', status: 'running', description: 'Add identified domains to DNS blocklist', action: 'DNS sinkhole update', riskLevel: 'medium' },
+   144→          { id: 's3d', name: 'Revoke Active Sessions', type: 'approval', status: 'waiting_approval', description: 'Invalidate all active sessions for affected user', action: 'Session revocation API call', riskLevel: 'medium', approvals: { required: 1, received: 0, approvers: [{ name: 'CISO', status: 'pending' }] } }
+   145→        ]
+   146→      },
+   147→      {
+   148→        id: 's4', name: 'Forensic Collection', type: 'manual', status: 'pending',
+   149→        description: 'Preserve evidence for investigation',
+   150→        action: 'Memory dump, disk image, log collection',
+   151→        riskLevel: 'low', estimatedDuration: 1800
+   152→      },
+   153→      {
+   154→        id: 's5', name: 'Notification & Escalation', type: 'automated', status: 'pending',
+   155→        description: 'Notify stakeholders and escalate if needed',
+   156→        action: 'Send notifications to security team, management, affected users',
+   157→        riskLevel: 'low', estimatedDuration: 120
+   158→      },
+   159→      {
+   160→        id: 's6', name: 'Remediation & Recovery', type: 'conditional', status: 'pending',
+   161→        description: 'Restore systems to normal operation',
+   162→        action: 'Clean endpoint, restore account, verify integrity',
+   163→        riskLevel: 'medium', estimatedDuration: 3600
+   164→      },
+   165→      {
+   166→        id: 's7', name: 'Post-Incident Review', type: 'manual', status: 'pending',
+   167→        description: 'Document lessons learned and update detections',
+   168→        action: 'Create incident report, update playbooks, tune rules',
+   169→        riskLevel: 'low', estimatedDuration: 3600
+   170→      }
+   171→    ]
+   172→  },
+   173→  {
+   174→    id: 'pb-002',
+   175→    name: 'Data Exfiltration Containment - Insider Threat',
+   176→    category: 'containment',
+   177→    severity: 'critical',
+   178→    status: 'active',
+   179→    autonomyLevel: 3,
+   180→    triggerType: 'alert',
+   181→    currentStepIndex: 1,
+   182→    progress: 15,
+   183→    startedAt: new Date('2024-08-24T14:33:00'),
+   184→    incidentId: 'INC-2024-4522',
+   185→    metrics: {
+   186→      mttD: 234,
+   187→      mttr: null,
+   188→      actionsExecuted: 2,
+   189→      actionsSkipped: 0,
+   190→      humanInterventions: 0
+   191→    },
+   192→    steps: [
+   193→      {
+   194→        id: 's1', name: 'Immediate Isolation', type: 'automated', status: 'completed',
+   195→        description: 'Critical assets isolation - autonomous response authorized',
+   196→        action: 'Isolate file server, suspend user, block external IP',
+   197→        riskLevel: 'critical', estimatedDuration: 120, actualDuration: 95,
+   198→        output: 'All immediate containment actions executed successfully'
+   199→      },
+   200→      {
+   201→        id: 's2', name: 'Evidence Preservation', type: 'automated', status: 'running',
+   202→        description: 'Automated forensic snapshot before any cleanup',
+   203→        action: 'Create memory image, capture network state, preserve logs',
+   204→        riskLevel: 'medium', estimatedDuration: 600
+   205→      },
+   206→      {
+   207→        id: 's3', name: 'Human Investigation Handoff', type: 'manual', status: 'pending',
+   208→        description: 'Prepare evidence package for DFIR team handoff',
+   209→        action: 'Compile timeline, extract artifacts, create case file',
+   210→        riskLevel: 'low', estimatedDuration: 1800
+   211→      }
+   212→    ]
+   213→  }
+   214→]
+   215→
+   216→const autonomyLevels = [
+   217→  { level: 0, name: 'Observe Only', description: 'No automated actions, manual approval for everything', icon: Eye, color: 'text-blue-400' },
+   218→  { level: 1, name: 'Recommend', description: 'AI suggests actions, human decides', icon: Lightbulb, color: 'text-green-400' },
+   219→  { level: 2, name: 'Low-Risk Auto', description: 'Execute low-risk actions automatically', icon: Play, color: 'text-yellow-400' },
+   220→  { level: 3, name: 'Approved Auto', description: 'Execute pre-approved playbooks autonomously', icon: Zap, color: 'text-orange-400' },
+   221→  { level: 4, name: 'Full Autonomous', description: 'Controlled autonomous defense with human oversight', icon: Bot, color: 'text-red-400' },
+   222→]
+   223→
+   224→const stepStatusConfig = {
+   225→  pending: { icon: CircleDot, color: 'text-slate-400', bg: 'bg-slate-700/50', label: 'Pending' },
+   226→  running: { icon: Activity, color: 'text-blue-400', bg: 'bg-blue-500/20 animate-pulse', label: 'Running' },
+   227→  completed: { icon: CheckCircle, color: 'text-emerald-400', bg: 'bg-emerald-500/20', label: 'Completed' },
+   228→  skipped: { icon: SkipForward, color: 'text-slate-400', bg: 'bg-slate-700/50', label: 'Skipped' },
+   229→  failed: { icon: AlertTriangle, color: 'text-red-400', bg: 'bg-red-500/20', label: 'Failed' },
+   230→  waiting_approval: { icon: Lock, color: 'text-yellow-400', bg: 'bg-yellow-500/20', label: 'Waiting Approval' },
+   231→}
+   232→
+   233→export function SOARPlaybookEngine() {
+   234→  const [selectedPlaybook, setSelectedPlaybook] = useState<Playbook>(samplePlaybooks[0])
+   235→  const [showDetails, setShowDetails] = useState<string | null>(null)
+   236→  const [isPaused, setIsPaused] = useState(false)
+   237→  const [approvalDialog, setApprovalDialog] = useState<ApprovalRequest | null>(null)
+   238→
+   239→  const currentStep = selectedPlaybook?.steps[selectedPlaybook.currentStepIndex]
+   240→  const autonomyConfig = autonomyLevels[selectedPlaybook.autonomyLevel]
+   241→
+   242→  const handleApprove = (stepId: string) => {
+   243→    console.log('Approving step:', stepId)
+   244→    // In real implementation, this would call the approval API
+   245→  }
+   246→
+   247→  const handleReject = (stepId: string) => {
+   248→    console.log('Rejecting step:', stepId)
+   249→  }
+   250→
+   251→  const handlePauseResume = () => {
+   252→    setIsPaused(!isPaused)
+   253→  }
+   254→
+   255→  const handleStepAction = (action: string, stepId: string) => {
+   256→    console.log('Step action:', action, 'for step:', stepId)
+   257→  }
+   258→
+   259→  return (
+   260→    <TooltipProvider>
+   261→      <Card className="bg-slate-900 border-slate-700 h-full">
+   262→        <CardHeader className="border-b border-slate-700">
+   263→          <div className="flex items-center justify-between">
+   264→            <div>
+   265→              <CardTitle className="text-white flex items-center gap-2 text-lg">
+   266→                <Zap className="h-5 w-5 text-emerald-500" />
+   267→                SOAR Playbook Engine
+   268→              </CardTitle>
+   269→              <p className="text-sm text-slate-400 mt-1">Autonomous response orchestration with human governance</p>
+   270→            </div>
+   271→            <div className="flex items-center gap-2">
+   272→              <Badge className="bg-emerald-500/20 text-emerald-400 border-emerald-500/30">
+   273→                Level {selectedPlaybook.autonomyLevel}: {autonomyConfig.name}
+   274→              </Badge>
+   275→              <Button variant="outline" size="sm" className="bg-slate-800 border-slate-600 hover:bg-slate-700">
+   276→                <Settings className="h-4 w-4 mr-1" />
+   277→                Configure
+   278→              </Button>
+   279→            </div>
+   280→          </div>
+   281→
+   282→          {/* Autonomy Level Indicator */}
+   283→          <div className="mt-4 flex items-center gap-2">
+   284→            <span className="text-xs text-slate-400">Autonomy:</span>
+   285→            <div className="flex-1 flex items-center gap-1">
+   286→              {autonomyLevels.map((level) => (
+   287→                <div
+   288→                  key={level.level}
+   289→                  className={`flex-1 h-2 rounded-full ${
+   290→                    level.level <= selectedPlaybook.autonomyLevel
+   291→                      ? `bg-gradient-to-r ${level.level === 0 ? 'from-blue-500 to-blue-400' : level.level === 1 ? 'from-green-500 to-green-400' : level.level === 2 ? 'from-yellow-500 to-yellow-400' : level.level === 3 ? 'from-orange-500 to-orange-400' : 'from-red-500 to-red-400'}`
+   292→                      : 'bg-slate-700'
+   293→                  }`}
+   294→                />
+   295→              ))}
+   296→            </div>
+   297→            <span className={`text-xs font-medium ${autonomyConfig.color}`}>{autonomyConfig.name}</span>
+   298→          </div>
+   299→        </CardHeader>
+   300→
+   301→        <CardContent className="p-0">
+   302→          {/* Playbook Selector */}
+   303→          <div className="p-4 border-b border-slate-700 space-y-3">
+   304→            <div className="flex items-center justify-between">
+   305→              <h3 className="text-sm font-medium text-white">Active Playbooks</h3>
+   306→              <Select value={selectedPlaybook.id} onValueChange={(id) => setSelectedPlaybook(samplePlaybooks.find(p => p.id === id) || samplePlaybooks[0])}>
+   307→                <SelectTrigger className="w-[280px] bg-slate-800 border-slate-600 text-white">
+   308→                  <SelectValue />
+   309→                </SelectTrigger>
+   310→                <SelectContent className="bg-slate-800 border-slate-600">
+   311→                  {samplePlaybooks.map(pb => (
+   312→                    <SelectItem key={pb.id} value={pb.id}>
+   313→                      <div className="flex items-center gap-2">
+   314→                        <span>{pb.name.substring(0, 30)}...</span>
+   315→                        <Badge variant="secondary" className={`
+   316→                          ${pb.severity === 'critical' ? 'bg-red-500/20 text-red-400 border-red-500/30' :
+   317→                            pb.severity === 'high' ? 'bg-orange-500/20 text-orange-400 border-orange-500/30' :
+   318→                            'bg-yellow-500/20 text-yellow-400 border-yellow-500/30'}
+   319→                        `}>
+   320→                          {pb.severity}
+   321→                        </Badge>
+   322→                      </div>
+   323→                    </SelectItem>
+   324→                  ))}
+   325→                </SelectContent>
+   326→              </Select>
+   327→            </div>
+   328→
+   329→            {/* Selected Playbook Info */}
+   330→            <div className="grid grid-cols-6 gap-3">
+   331→              <div className="bg-slate-800 rounded-lg p-2 text-center">
+   332→                <p className="text-xs text-slate-400">Progress</p>
+   333→                <p className="text-lg font-bold text-white">{selectedPlaybook.progress}%</p>
+   334→              </div>
+   335→              <div className="bg-slate-800 rounded-lg p-2 text-center">
+   336→                <p className="text-xs text-slate-400">Current Step</p>
+   337→                <p className="text-lg font-bold text-white">{selectedPlaybook.currentStepIndex + 1}/{selectedPlaybook.steps.length}</p>
+   338→              </div>
+   339→              <div className="bg-slate-800 rounded-lg p-2 text-center">
+   340→                <p className="text-xs text-slate-400">MTTD</p>
+   341→                <p className="text-lg font-bold text-emerald-400">{selectedPlaybook.metrics?.mttD}s</p>
+   342→              </div>
+   343→              <div className="bg-slate-800 rounded-lg p-2 text-center">
+   344→                <p className="text-xs text-slate-400">Actions Done</p>
+   345→                <p className="text-lg font-bold text-blue-400">{selectedPlaybook.metrics?.actionsExecuted}</p>
+   346→              </div>
+   347→              <div className="bg-slate-800 rounded-lg p-2 text-center">
+   348→                <p className="text-xs text-slate-400">Human Steps</p>
+   349→                <p className="text-lg font-bold text-yellow-400">{selectedPlaybook.metrics?.humanInterventions}</p>
+   350→              </div>
+   351→              <div className="bg-slate-800 rounded-lg p-2 text-center">
+   352→                <p className="text-xs text-slate-400">Incident</p>
+   353→                <p className="text-xs font-mono text-purple-400">{selectedPlaybook.incidentId}</p>
+   354→              </div>
+   355→            </div>
+   356→
+   357→            {/* Progress Bar */}
+   358→            <div className="space-y-1">
+   359→              <div className="flex justify-between text-xs">
+   360→                <span className="text-slate-400">Overall Progress</span>
+   361→                <span className="text-white font-medium">{selectedPlaybook.progress}%</span>
+   362→              </div>
+   363→              <Progress value={selectedPlaybook.progress} className="h-2" />
+   364→            </div>
+   365→          </div>
+   366→
+   367→          {/* Main Content Area */}
+   368→          <div className="flex h-[calc(100vh-420px)]">
+   369→            {/* Steps Timeline */}
+   370→            <div className="flex-1 overflow-y-auto p-4 space-y-3">
+   371→              {selectedPlaybook.steps.map((step, index) => {
+   372→                const statusConfig = stepStatusConfig[step.status]
+   373→                const StatusIcon = statusConfig.icon
+   374→                const isCurrentStep = index === selectedPlaybook.currentStepIndex
+   375→
+   376→                return (
+   377→                  <div key={step.id} className={`rounded-xl border transition-all ${
+   378→                      isCurrentStep 
+   379→                        ? 'border-emerald-500/50 bg-emerald-500/5 shadow-lg shadow-emerald-500/10' 
+   380→                        : 'border-slate-700 bg-slate-800/50'
+   381→                    }`}>
+   382→                    {/* Step Header */}
+   383→                    <div 
+   384→                      className="flex items-start gap-3 p-4 cursor-pointer"
+   385→                      onClick={() => setShowDetails(showDetails === step.id ? null : step.id)}
+   386→                    >
+   387→                      {/* Step Number & Status */}
+   388→                      <div className="flex flex-col items-center gap-1">
+   389→                        <div className={`w-8 h-8 rounded-full flex items-center justify-center ${statusConfig.bg}`}>
+   390→                          <StatusIcon className={`h-4 w-4 ${statusConfig.color}`} />
+   391→                        </div>
+   392→                        {index < selectedPlaybook.steps.length - 1 && (
+   393→                          <div className={`w-0.5 h-8 ${index < selectedPlaybook.currentStepIndex ? 'bg-emerald-500' : 'bg-slate-700'}`} />
+   394→                        )}
+   395→                      </div>
+   396→
+   397→                      {/* Step Content */}
+   398→                      <div className="flex-1 min-w-0">
+   399→                        <div className="flex items-center gap-2 mb-1">
+   400→                          <h4 className="font-medium text-white">{step.name}</h4>
+   401→                          <Badge variant="secondary" className={`
+   402→                            ${step.type === 'automated' ? 'bg-blue-500/20 text-blue-400 border-blue-500/30' :
+   403→                              step.type === 'manual' ? 'bg-purple-500/20 text-purple-400 border-purple-500/30' :
+   404→                              step.type === 'approval' ? 'bg-yellow-500/20 text-yellow-400 border-yellow-500/30' :
+   405→                              'bg-slate-700 text-slate-300'}
+   406→                          `}>
+   407→                            {step.type}
+   408→                          </Badge>
+   409→                          <Badge variant="secondary" className={`
+   410→                            ${step.riskLevel === 'critical' ? 'bg-red-500/20 text-red-400 border-red-500/30' :
+   411→                              step.riskLevel === 'high' ? 'bg-orange-500/20 text-orange-400 border-orange-500/30' :
+   412→                              step.riskLevel === 'medium' ? 'bg-yellow-500/20 text-yellow-400 border-yellow-500/30' :
+   413→                              'bg-green-500/20 text-green-400 border-green-500/30'}
+   414→                          `}>
+   415→                            {step.riskLevel}
+   416→                          </Badge>
+   417→                          {isCurrentStep && (
+   418→                            <Badge className="bg-emerald-500 text-white animate-pulse">CURRENT</Badge>
+   419→                          )}
+   420→                        </div>
+   421→                        
+   422→                        <p className="text-sm text-slate-300 mb-2">{step.description}</p>
+   423→                        
+   424→                        {step.action && (
+   425→                          <p className="text-xs text-slate-400 font-mono bg-slate-900 rounded px-2 py-1 inline-block">
+   426→                            {step.action}
+   427→                          </p>
+   428→                        )}
+   429→
+   430→                        {/* Output or Error */}
+   431→                        {step.output && (
+   432→                          <div className="mt-2 p-2 bg-emerald-500/10 border border-emerald-500/30 rounded-md">
+   433→                            <p className="text-xs text-emerald-400 flex items-start gap-1">
+   434→                              <CheckCircle className="h-3 w-3 mt-0.5 flex-shrink-0" />
+   435→                              {step.output}
+   436→                            </p>
+   437→                          </div>
+   438→                        )}
+   439→
+   440→                        {step.error && (
+   441→                          <div className="mt-2 p-2 bg-red-500/10 border border-red-500/30 rounded-md">
+   442→                            <p className="text-xs text-red-400 flex items-start gap-1">
+   443→                              <AlertTriangle className="h-3 w-3 mt-0.5 flex-shrink-0" />
+   444→                              {step.error}
+   445→                            </p>
+   446→                          </div>
+   447→                        )}
+   448→
+   449→                        {/* Duration */}
+   450→                        {(step.actualDuration || step.estimatedDuration) && (
+   451→                          <div className="flex items-center gap-2 mt-2 text-xs text-slate-400">
+   452→                            <Timer className="h-3 w-3" />
+   453→                            {step.actualDuration ? (
+   454→                              <>
+   455→                                <span>{Math.floor(step.actualDuration / 60)}m {step.actualDuration % 60}s</span>
+   456→                                <span className="text-emerald-400">(actual)</span>
+   457→                              </>
+   458→                            ) : (
+   459→                              <>
+   460→                                <span>~{Math.floor(step.estimatedDuration / 60)}m</span>
+   461→                                <span>(estimated)</span>
+   462→                              </>
+   463→                            )}
+   464→                          </div>
+   465→                        )}
+   466→
+   467→                        {/* Approvals Status */}
+   468→                        {step.approvals && (
+   469→                          <div className="mt-2 space-y-1">
+   470→                            <div className="flex items-center gap-2 text-xs">
+   471→                              <Lock className="h-3 w-3 text-yellow-400" />
+   472→                              <span className="text-slate-300">
+   473→                                Approvals: {step.approvals.received}/{step.approvals.required}
+   474→                              </span>
+   475→                            </div>
+   476→                            {step.approvers.map((approver, i) => (
+   477→                              <div key={i} className="flex items-center gap-2 text-xs bg-slate-900 rounded px-2 py-1">
+   478→                                {approver.status === 'approved' ? (
+   479→                                  <CheckCircle className="h-3 w-3 text-emerald-400" />
+   480→                                ) : (
+   481→                                  <Clock className="h-3 w-3 text-yellow-400 animate-pulse" />
+   482→                                )}
+   483→                                <span className="text-slate-300">{approver.split('(')[0]}</span>
+   484→                                {approver.status === 'approved' && approver.timestamp && (
+   485→                                  <span className="text-slate-500 ml-auto">
+   486→                                    {approver.timestamp.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+   487→                                  </span>
+   488→                                )}
+   489→                              </div>
+   490→                            ))}
+   491→                          </div>
+   492→                        )}
+   493→                      </div>
+   494→
+   495→                      {/* Expand/Collapse Icon */}
+   496→                      <ChevronRight className={`h-5 w-5 text-slate-400 transition-transform ${showDetails === step.id ? 'rotate-90' : ''}`} />
+   497→                    </div>
+   498→
+   499→                    {/* Expanded Details - Sub-steps */}
+   500→                    {showDetails === step.id && step.subSteps && (
+   501→                      <div className="px-4 pb-4 pl-16 space-y-2">
+   502→                        <Separator className="bg-slate-700 mb-3" />
+   503→                        {step.subSteps.map((subStep) => {
+   504→                          const subStatusConfig = stepStatusConfig[subStep.status]
+   505→                          const SubIcon = subStatusConfig.icon
+   506→                          
+   507→                          return (
+   508→                            <div key={subStep.id} className={`flex items-start gap-3 p-3 rounded-lg border ${
+   509→                              subStep.status === 'running' ? 'border-blue-500/50 bg-blue-500/5' :
+   510→                              subStep.status === 'completed' ? 'border-emerald-500/30 bg-emerald-500/5' :
+   511→                              subStep.status === 'waiting_approval' ? 'border-yellow-500/50 bg-yellow-500/5' :
+   512→                              'border-slate-700 bg-slate-800/50'
+   513→                            }`}>
+   514→                              <SubIcon className={`h-4 w-4 mt-0.5 ${subStatusConfig.color}`} />
+   515→                              <div className="flex-1 min-w-0">
+   516→                                <div className="flex items-center gap-2 mb-1">
+   517→                                  <span className="text-sm font-medium text-white">{subStep.name}</span>
+   518→                                  <Badge variant="secondary" className={`${subStatusConfig.bg} ${subStatusConfig.color} border-0 text-xs`}>
+   519→                                    {subStatusConfig.label}
+   520→                                  </Badge>
+   521→                                </div>
+   522→                                <p className="text-xs text-slate-400">{subStep.description}</p>
+   523→                                
+   524→                                {subStep.output && (
+   525→                                  <p className="text-xs text-emerald-400 mt-1">{subStep.output}</p>
+   526→                                )}
+   527→
+   528→                                {subStep.approvals && subStep.status === 'waiting_approval' && (
+   529→                                  <div className="flex gap-2 mt-2">
+   530→                                    <Button
+   531→                                      size="sm"
+   532→                                      className="bg-emerald-600 hover:bg-emerald-500 text-xs"
+   533→                                      onClick={() => handleApprove(subStep.id)}
+   534→                                    >
+   535→                                      <CheckCircle className="h-3 w-3 mr-1" />
+   536→                                      Approve
+   537→                                    </Button>
+   538→                                    <Button
+   539→                                      size="sm"
+   540→                                      variant="outline"
+   541→                                      className="bg-red-900/50 border-red-500/50 hover:bg-red-900 text-red-300 text-xs"
+   542→                                      onClick={() => handleReject(subStep.id)}
+   543→                                    >
+   544→                                      <Ban className="h-3 w-3 mr-1" />
+   545→                                      Reject
+   546→                                    </Button>
+   547→                                  </div>
+   548→                                )}
+   549→                              </div>
+   550→                            </div>
+   551→                          )
+   552→                        })}
+   553→                      </div>
+   554→                    )}
+   555→                  </div>
+   556→                )
+   557→              })}
+   558→            </div>
+   559→
+   560→            {/* Control Panel */}
+   561→            <div className="w-72 border-l border-slate-700 p-4 space-y-4 bg-slate-900">
+   562→              <h3 className="text-sm font-medium text-white flex items-center gap-2">
+   563→                <Workflow className="h-4 w-4 text-emerald-500" />
+   564→                Control Panel
+   565→              </h3>
+   566→
+   567→              {/* Playback Controls */}
+   568→              <div className="space-y-3">
+   569→                <div className="grid grid-cols-2 gap-2">
+   570→                  <Button
+   571→                    variant={isPaused ? "default" : "outline"}
+   572→                    size="sm"
+   573→                    className={isPaused ? "bg-emerald-600 hover:bg-emerald-500 text-white" : "bg-slate-800 border-slate-600 hover:bg-slate-700"}
+   574→                    onClick={handlePauseResume}
+   575→                  >
+   576→                    {isPaused ? <><Play className="h-4 w-4 mr-1" /> Resume</> : <><Pause className="h-4 w-4 mr-1" /> Pause</>}
+   577→                  </Button>
+   578→                  <Button
+   579→                    variant="outline"
+   580→                    size="sm"
+   581→                    className="bg-slate-800 border-slate-600 hover:bg-slate-700"
+   582→                  >
+   583→                    <RotateCcw className="h-4 w-4 mr-1" />
+   584→                    Restart
+   585→                  </Button>
+   586→                </div>
+   587→
+   588→                <Button
+   589→                  variant="outline"
+   590→                  size="sm"
+   591→                  className="w-full bg-slate-800 border-slate-600 hover:bg-slate-700"
+   592→                >
+   593→                  <SkipForward className="h-4 w-4 mr-1" />
+   594→                  Skip Current Step
+   595→                </Button>
+   596→              </div>
+   597→
+   598→              <Separator className="bg-slate-700" />
+   599→
+   600→              {/* Quick Actions */}
+   601→              <div className="space-y-2">
+   602→                <h4 className="text-xs font-medium text-slate-400">Quick Actions</h4>
+   603→                
+   604→                <Button
+   605→                  variant="outline"
+   606→                  size="sm"
+   607→                  className="w-full justify-start bg-slate-800 border-slate-600 hover:bg-slate-700 text-white"
+   608→                >
+   609→                  <Pencil className="h-4 w-4 mr-2" />
+   610→                  Edit Playbook
+   611→                </Button>
+   612→                
+   613→                <Button
+   614→                  variant="outline"
+   615→                  size="sm"
+   616→                  className="w-full justify-start bg-slate-800 border-slate-600 hover:bg-slate-700 text-white"
+   617→                >
+   618→                  <Save className="h-4 w-4 mr-2" />
+   619→                  Save as Template
+   620→                </Button>
+   621→                
+   622→                <Button
+   623→                  variant="outline"
+   624→                  size="sm"
+   625→                  className="w-full justify-start bg-slate-800 border-slate-600 hover:bg-slate-700 text-white"
+   626→                >
+   627→                  <FileText className="h-4 w-4 mr-2" />
+   628→                  Export Run Report
+   629→                </Button>
+   630→                
+   631→                <Button
+   632→                  variant="outline"
+   633→                  size="sm"
+   634→                  className="w-full justify-start bg-slate-800 border-slate-600 hover:bg-slate-700 text-white"
+   635→                >
+   636→                  <Send className="h-4 w-4 mr-2" />
+   637→                  Notify Stakeholders
+   638→                </Button>
+   639→              </div>
+   640→
+   641→              <Separator className="bg-slate-700" />
+   642→
+   643→              {/* Current Step Actions */}
+   644→              {currentStep && (
+   645→                <div className="space-y-2">
+   646→                  <h4 className="text-xs font-medium text-slate-400">Current Step Actions</h4>
+   647→                  
+   648→                  <div className="bg-slate-800 rounded-lg p-3 space-y-2">
+   649→                    <p className="text-sm font-medium text-white">{currentStep.name}</p>
+   650→                    
+   651→                    {currentStep.status === 'waiting_approval' && (
+   652→                      <div className="space-y-2 pt-2">
+   653→                        <Button
+   654→                          size="sm"
+   655→                          className="w-full bg-emerald-600 hover:bg-emerald-500 text-white"
+   656→                          onClick={() => handleApprove(currentStep.id)}
+   657→                        >
+   658→                          <UserCheck className="h-4 w-4 mr-1" />
+   659→                          Approve This Step
+   660→                        </Button>
+   661→                        <Button
+   662→                          size="sm"
+   663→                          variant="outline"
+   664→                          className="w-full bg-red-900/50 border-red-500/50 hover:bg-red-900 text-red-300"
+   665→                          onClick={() => handleReject(currentStep.id)}
+   666→                        >
+   667→                          <Ban className="h-4 w-4 mr-1" />
+   668→                          Reject & Hold
+   669→                        </Button>
+   670→                      </div>
+   671→                    )}
+   672→                    
+   673→                    {currentStep.status === 'running' && (
+   674→                      <Button
+   675→                        size="sm"
+   676→                        variant="outline"
+   677→                        className="w-full bg-slate-700 border-slate-600 hover:bg-slate-600"
+   678→                        onClick={() => handleStepAction('cancel', currentStep.id)}
+   679→                      >
+   680→                        Cancel Execution
+   681→                      </Button>
+   682→                    )}
+   683→                    
+   684→                    {currentStep.status === 'pending' && (
+   685→                      <Button
+   686→                        size="sm"
+   687→                        className="w-full bg-blue-600 hover:bg-blue-500 text-white"
+   688→                        onClick={() => handleStepAction('execute', currentStep.id)}
+   689→                      >
+   690→                        <Play className="h-4 w-4 mr-1" />
+   691→                        Execute Manually
+   692→                      </Button>
+   693→                    )}
+   694→                  </div>
+   695→                </div>
+   696→              )}
+   697→
+   698→              <Separator className="bg-slate-700" />
+   699→
+   700→              {/* Audit Log Preview */}
+   701→              <div className="space-y-2">
+   702→                <h4 className="text-xs font-medium text-slate-400 flex items-center justify-between">
+   703→                  Recent Activity
+   704→                  <Button variant="ghost" size="sm" className="h-6 w-6 p-0 text-slate-400">
+   705→                    <ListChecks className="h-3 w-3" />
+   706→                  </Button>
+   707→                </h4>
+   708→                
+   709→                <div className="space-y-2 max-h-40 overflow-y-auto">
+   710→                  {[
+   711→                    { time: '14:35', action: 'Step completed', detail: 'Initial Triage', icon: CheckCircle, color: 'text-emerald-400' },
+   712→                    { time: '14:34', action: 'Auto-executed', detail: 'Alert aggregation', icon: Zap, color: 'text-blue-400' },
+   713→                    { time: '14:33', action: 'Approval granted', detail: 'By John Smith', icon: UserCheck, color: 'text-green-400' },
+   714→                    { time: '14:32', action: 'Step started', detail: 'User Impact Assessment', icon: Activity, color: 'text-blue-400' },
+   715→                    { time: '14:31', action: 'Playbook triggered', detail: 'By INC-2024-4521', icon: Play, color: 'text-purple-400' },
+   716→                  ].map((log, i) => (
+   717→                    <div key={i} className="flex items-start gap-2 text-xs">
+   718→                      <log.icon className={`h-3 w-3 mt-0.5 ${log.color} flex-shrink-0`} />
+   719→                      <div className="flex-1 min-w-0">
+   720→                        <p className="text-slate-300">{log.action}</p>
+   721→                        <p className="text-slate-500 truncate">{log.detail}</p>
+   722→                      </div>
+   723→                      <span className="text-slate-500 flex-shrink-0">{log.time}</span>
+   724→                    </div>
+   725→                  ))}
+   726→                </div>
+   727→              </div>
+   728→            </div>
+   729→          </div>
+   730→        </CardContent>
+   731→      </Card>
+   732→    </TooltipProvider>
+   733→  )
+   734→}
+   735→
