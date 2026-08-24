@@ -6,7 +6,7 @@ import {
   Globe, AlertTriangle, Activity, Users, Database,
   Eye, Settings, Bell, Search, Menu, X,
   Brain, Target, Radar, Workflow, ChevronRight,
-  Clock
+  Clock, UserCog
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
@@ -17,6 +17,7 @@ import { AISocCopilot } from '@/components/ai-copilot/AISocCopilot'
 import { SecurityKnowledgeGraph } from '@/components/security-graph/SecurityKnowledgeGraph'
 import { ThreatIntelligenceCenter } from '@/components/threat-intel/ThreatIntelligenceCenter'
 import { SOARPlaybookEngine } from '@/components/soar-engine/SOARPlaybookEngine'
+import { FullAdminInterface } from '@/components/admin/FullAdminInterface'
 
 // Dashboard Stats
 const platformStats = {
@@ -41,6 +42,7 @@ export default function CyberSOCPlatform() {
   const [activeTab, setActiveTab] = useState('overview')
   const [showMobileNav, setShowMobileNav] = useState(false)
   const [copilotExpanded, setCopilotExpanded] = useState(true)
+  const [showAdminInterface, setShowAdminInterface] = useState(false)
 
   return (
     <div className="min-h-screen bg-slate-950 text-white">
@@ -100,6 +102,14 @@ export default function CyberSOCPlatform() {
               </div>
 
               {/* Header Actions */}
+              <Button 
+                variant="ghost" 
+                size="sm" 
+                className={`text-slate-400 hover:text-white relative ${showAdminInterface ? 'bg-red-500/20 text-red-400' : ''}`}
+                onClick={() => setShowAdminInterface(!showAdminInterface)}
+              >
+                <UserCog className="h-5 w-5" />
+              </Button>
               <Button variant="ghost" size="sm" className="text-slate-400 hover:text-white relative">
                 <Bell className="h-5 w-5" />
                 <span className="absolute -top-1 -right-1 w-4 h-4 bg-red-500 rounded-full text-[10px] flex items-center justify-center font-bold">
@@ -117,6 +127,10 @@ export default function CyberSOCPlatform() {
         </div>
       </header>
 
+      {/* Show Admin Interface or Main Dashboard */}
+      {showAdminInterface ? (
+        <FullAdminInterface />
+      ) : (
       <div className="flex">
         {/* Sidebar Navigation */}
         <aside className={`
@@ -557,6 +571,7 @@ export default function CyberSOCPlatform() {
           </Tabs>
         </main>
       </div>
+      )}
 
       {/* Mobile Overlay */}
       {showMobileNav && (

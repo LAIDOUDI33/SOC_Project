@@ -1,0 +1,1806 @@
+     1→'use client'
+     2→
+     3→import React, { useState, useEffect, useCallback } from 'react'
+     4→import {
+     5→  Shield, Users, Settings, FileText, Activity, Key, Clock,
+     6→  Search, Plus, Edit2, Trash2, Eye, RefreshCw, Download,
+     7→  Filter, ChevronDown, ChevronRight, X, Check, AlertTriangle,
+     8→  Server, Database, Globe, Lock, Unlock, UserPlus, UserCheck,
+     9→  UserX, Calendar, BarChart3, Terminal, Save, Ban, CheckCircle,
+    10→  XCircle, Pause, Play, ArrowLeft, MoreVertical, Copy
+    11→} from 'lucide-react'
+    12→import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
+    13→import { Button } from '@/components/ui/button'
+    14→import { Input } from '@/components/ui/input'
+    15→import { Badge } from '@/components/ui/badge'
+    16→import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
+    17→import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog'
+    18→import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
+    19→import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
+    20→import { Switch } from '@/components/ui/switch'
+    21→import { Label } from '@/components/ui/label'
+    22→import { Textarea } from '@/components/ui/textarea'
+    23→import { Separator } from '@/components/ui/separator'
+    24→import { ScrollArea } from '@/components/ui/scroll-area'
+    25→import { toast } from 'sonner'
+    26→
+    27→// Types
+    28→interface User {
+    29→  id: string
+    30→  email: string
+    31→  name: string
+    32→  status: string
+    33→  department?: string
+    34→  phone?: string
+    35→  mfaEnabled: boolean
+    36→  role?: { id: string; name: string; description?: string }
+    37→  createdAt: string
+    38→  lastLoginAt?: string
+    39→  _count?: { sessions: number; auditLogs: number }
+    40→}
+    41→
+    42→interface Role {
+    43→  id: string
+    44→  name: string
+    45→  description?: string
+    46→  permissions: string[]
+    47→  isSystemRole: boolean
+    48→  _count?: { users: number }
+    49→}
+    50→
+    51→interface Session {
+    52→  id: string
+    53→  userId: string
+    54→  isActive: boolean
+    55→  ipAddress?: string
+    56→  userAgent?: string
+    57→  deviceInfo?: string
+    58→  createdAt: string
+    59→  lastActiveAt: string
+    60→  user?: { id: string; email: string; name: string; role?: { name: string } }
+    61→}
+    62→
+    63→interface AuditLog {
+    64→  id: string
+    65→  userId: string
+    66→  action: string
+    67→  entityType: string
+    68→  entityId?: string
+    69→  details?: string
+    70→  ipAddress?: string
+    71→  userAgent?: string
+    72→  severity?: string
+    73→  createdAt: string
+    74→  user?: { name: string; email: string }
+    75→}
+    76→
+    77→interface SystemHealth {
+    78→  healthScore: number
+    79→  users: any
+    80→  sessions: any
+    81→  incidents: any
+    82→  alerts: any
+    83→  threats: any
+    84→  systemHealth: any
+    85→  database: any
+    86→}
+    87→
+    88→interface ScheduledJob {
+    89→  id: string
+    90→  name: string
+    91→  action: string
+    92→  schedule: string
+    93→  enabled: boolean
+    94→  lastRun: string | null
+    95→  nextRun: string | null
+    96→  createdAt: string
+    97→  lastResult?: any
+    98→}
+    99→
+   100→// Admin Panel Component
+   101→export function AdminPanel() {
+   102→  const [activeTab, setActiveTab] = useState('dashboard')
+   103→  const [isLoading, setIsLoading] = useState(false)
+   104→  const [systemHealth, setSystemHealth] = useState<SystemHealth | null>(null)
+   105→  
+   106→  const fetchSystemHealth = useCallback(async () => {
+   107→    try {
+   108→      const res = await fetch('/api/admin/system')
+   109→      if (res.ok) {
+   110→        const data = await res.json()
+   111→        setSystemHealth(data.data)
+   112→      }
+   113→    } catch (error) {
+   114→      console.error('Failed to fetch system health:', error)
+   115→    }
+   116→  }, [])
+   117→  
+   118→  // Fetch system health on mount
+   119→  useEffect(() => {
+   120→    // eslint-disable-next-line react-hooks/rules-of-hooks
+   121→    fetchSystemHealth()
+   122→  }, [fetchSystemHealth])
+   123→
+   124→  return (
+   125→    <div className="min-h-screen bg-slate-950 text-white">
+   126→      {/* Admin Header */}
+   127→      <header className="border-b border-slate-800 bg-slate-900/50 backdrop-blur-sm sticky top-0 z-50">
+   128→        <div className="flex items-center justify-between px-6 py-4">
+   129→          <div className="flex items-center gap-4">
+   130→            <Shield className="h-8 w-8 text-red-500" />
+   131→            <div>
+   132→              <h1 className="text-xl font-bold">SOC Administration</h1>
+   133→              <p className="text-sm text-slate-400">Full Privileges Control Panel</p>
+   134→            </div>
+   135→          </div>
+   136→          <div className="flex items-center gap-4">
+   137→            <Badge variant="outline" className="border-green-500 text-green-400">
+   138→              <span className="w-2 h-2 bg-green-500 rounded-full mr-2 animate-pulse" />
+   139→              Admin Mode
+   140→            </Badge>
+   141→            <Button 
+   142→              variant="ghost" 
+   143→              size="sm" 
+   144→              onClick={fetchSystemHealth}
+   145→              disabled={isLoading}
+   146→            >
+   147→              <RefreshCw className={`h-4 w-4 mr-2 ${isLoading ? 'animate-spin' : ''}`} />
+   148→              Refresh
+   149→            </Button>
+   150→          </div>
+   151→        </div>
+   152→      </header>
+   153→
+   154→      <div className="flex">
+   155→        {/* Sidebar Navigation */}
+   156→        <aside className="w-64 border-r border-slate-800 min-h-[calc(100vh-73px)] bg-slate-900/30 p-4">
+   157→          <nav className="space-y-2">
+   158→            <AdminNavItem 
+   159→              icon={<Activity className="h-4 w-4" />} 
+   160→              label="Dashboard" 
+   161→              active={activeTab === 'dashboard'}
+   162→              onClick={() => setActiveTab('dashboard')}
+   163→            />
+   164→            <AdminNavItem 
+   165→              icon={<Users className="h-4 w-4" />} 
+   166→              label="User Management" 
+   167→              active={activeTab === 'users'}
+   168→              onClick={() => setActiveTab('users')}
+   169→            />
+   170→            <AdminNavItem 
+   171→              icon={<Shield className="h-4 w-4" />} 
+   172→              label="Roles & Permissions" 
+   173→              active={activeTab === 'roles'}
+   174→              onClick={() => setActiveTab('roles')}
+   175→            />
+   176→            <AdminNavItem 
+   177→              icon={<Clock className="h-4 w-4" />} 
+   178→              label="Sessions" 
+   179→              active={activeTab === 'sessions'}
+   180→              onClick={() => setActiveTab('sessions')}
+   181→            />
+   182→            <AdminNavItem 
+   183→              icon={<FileText className="h-4 w-4" />} 
+   184→              label="Audit Logs" 
+   185→              active={activeTab === 'audit'}
+   186→              onClick={() => setActiveTab('audit')}
+   187→            />
+   188→            <AdminNavItem 
+   189→              icon={<Lock className="h-4 w-4" />} 
+   190→              label="Security Settings" 
+   191→              active={activeTab === 'security'}
+   192→              onClick={() => setActiveTab('security')}
+   193→            />
+   194→            <AdminNavItem 
+   195→              icon={<Terminal className="h-4 w-4" />} 
+   196→              label="Maintenance & Jobs" 
+   197→              active={activeTab === 'maintenance'}
+   198→              onClick={() => setActiveTab('maintenance')}
+   199→            />
+   200→          </nav>
+   201→
+   202→          {/* Quick Stats */}
+   203→          {systemHealth && (
+   204→            <div className="mt-8 pt-6 border-t border-slate-800">
+   205→              <h3 className="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-4">Quick Stats</h3>
+   206→              <div className="space-y-3">
+   207→                <StatItem label="Health Score" value={`${systemHealth.healthScore}%`} color={systemHealth.healthScore > 80 ? 'text-green-400' : systemHealth.healthScore > 60 ? 'text-yellow-400' : 'text-red-400'} />
+   208→                <StatItem label="Active Users" value={systemHealth.users?.byStatus?.ACTIVE || 0} />
+   209→                <StatItem label="Active Sessions" value={systemHealth.sessions?.total || 0} />
+   210→                <StatItem label="Open Incidents" value={systemHealth.incidents?.open || 0} />
+   211→              </div>
+   212→            </div>
+   213→          )}
+   214→        </aside>
+   215→
+   216→        {/* Main Content */}
+   217→        <main className="flex-1 p-6 overflow-y-auto max-h-[calc(100vh-73px)]">
+   218→          <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-6">
+   219→            {/* Dashboard Tab */}
+   220→            <TabsContent value="dashboard">
+   221→              <AdminDashboard healthData={systemHealth} onRefresh={fetchSystemHealth} />
+   222→            </TabsContent>
+   223→
+   224→            {/* Users Tab */}
+   225→            <TabsContent value="users">
+   226→              <UserManagement />
+   227→            </TabsContent>
+   228→
+   229→            {/* Roles Tab */}
+   230→            <TabsContent value="roles">
+   231→              <RoleManagement />
+   232→            </TabsContent>
+   233→
+   234→            {/* Sessions Tab */}
+   235→            <TabsContent value="sessions">
+   236→              <SessionManagement />
+   237→            </TabsContent>
+   238→
+   239→            {/* Audit Logs Tab */}
+   240→            <TabsContent value="audit">
+   241→              <AuditLogsViewer />
+   242→            </TabsContent>
+   243→
+   244→            {/* Security Tab */}
+   245→            <TabsContent value="security">
+   246→              <SecuritySettings />
+   247→            </TabsContent>
+   248→
+   249→            {/* Maintenance Tab */}
+   250→            <TabsContent value="maintenance">
+   251→              <MaintenancePanel />
+   252→            </TabsContent>
+   253→          </Tabs>
+   254→        </main>
+   255→      </div>
+   256→    </div>
+   257→  )
+   258→}
+   259→
+   260→// Navigation Item Component
+   261→function AdminNavItem({ icon, label, active, onClick }: { icon: React.ReactNode; label: string; active: boolean; onClick: () => void }) {
+   262→  return (
+   263→    <button
+   264→      onClick={onClick}
+   265→      className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-all ${
+   266→        active 
+   267→          ? 'bg-red-500/10 text-red-400 border border-red-500/20' 
+   268→          : 'text-slate-300 hover:bg-slate-800 hover:text-white'
+   269→      }`}
+   270→    >
+   271→      {icon}
+   272→      {label}
+   273→    </button>
+   274→  )
+   275→}
+   276→
+   277→// Stat Item Component
+   278→function StatItem({ label, value, color = 'text-slate-200' }: { label: string; value: string | number; color?: string }) {
+   279→  return (
+   280→    <div className="flex justify-between items-center">
+   281→      <span className="text-xs text-slate-400">{label}</span>
+   282→      <span className={`text-sm font-semibold ${color}`}>{value}</span>
+   283→    </div>
+   284→  )
+   285→}
+   286→
+   287→// Dashboard Component
+   288→function AdminDashboard({ healthData, onRefresh }: { healthData: SystemHealth | null; onRefresh: () => void }) {
+   289→  if (!healthData) {
+   290→    return (
+   291→      <div className="flex items-center justify-center h-64">
+   292→        <RefreshCw className="h-8 w-8 animate-spin text-slate-400" />
+   293→      </div>
+   294→    )
+   295→  }
+   296→
+   297→  const getHealthColor = (score: number) => {
+   298→    if (score >= 90) return 'text-green-400 bg-green-500/10 border-green-500/20'
+   299→    if (score >= 70) return 'text-yellow-400 bg-yellow-500/10 border-yellow-500/20'
+   300→    return 'text-red-400 bg-red-500/10 border-red-500/20'
+   301→  }
+   302→
+   303→  return (
+   304→    <div className="space-y-6">
+   305→      <div className="flex items-center justify-between">
+   306→        <div>
+   307→          <h2 className="text-2xl font-bold">System Overview</h2>
+   308→          <p className="text-slate-400 mt-1">Real-time monitoring and statistics</p>
+   309→        </div>
+   310→        <Button onClick={onRefresh} variant="outline">
+   311→          <RefreshCw className="h-4 w-4 mr-2" /> Refresh Data
+   312→        </Button>
+   313→      </div>
+   314→
+   315→      {/* Health Score Card */}
+   316→      <Card className={`border ${getHealthColor(healthData.healthScore)}`}>
+   317→        <CardContent className="p-6">
+   318→          <div className="flex items-center justify-between">
+   319→            <div>
+   320→              <p className="text-sm font-medium opacity-70">Overall System Health</p>
+   321→              <p className={`text-5xl font-bold mt-2`}>{healthData.healthScore}%</p>
+   322→            </div>
+   323→            <Activity className="h-16 w-16 opacity-20" />
+   324→          </div>
+   325→          <div className="mt-4 grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
+   326→            <div>
+   327→              <p className="opacity-70">Database</p>
+   328→              <p className="font-semibold">{healthData.systemHealth?.database?.status || 'Unknown'}</p>
+   329→            </div>
+   330→            <div>
+   331→              <p className="opacity-70">Stale Sessions</p>
+   332→              <p className="font-semibold">{healthData.systemHealth?.staleSessions || 0}</p>
+   333→            </div>
+   334→            <div>
+   335→              <p className="opacity-70">Locked Users</p>
+   336→              <p className="font-semibold">{healthData.systemHealth?.lockedUsers || 0}</p>
+   337→            </div>
+   338→            <div>
+   339→              <p className="opacity-70">Uptime</p>
+   340→              <p className="font-semibold">{Math.floor(healthData.systemHealth?.processInfo?.uptime / 3600)}h</p>
+   341→            </div>
+   342→          </div>
+   343→        </CardContent>
+   344→      </Card>
+   345→
+   346→      {/* Stats Grid */}
+   347→      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+   348→        <StatsCard title="Total Users" value={healthData.users?.total || 0} icon={<Users className="h-5 w-5" />} color="blue" />
+   349→        <StatsCard title="Active Sessions" value={healthData.sessions?.total || 0} icon={<Clock className="h-5 w-5" />} color="green" />
+   350→        <StatsCard title="Open Incidents" value={healthData.incidents?.open || 0} icon={<AlertTriangle className="h-5 w-5" />} color="red" />
+   351→        <StatsCard title="Active Alerts" value={healthData.alerts?.open || 0} icon={<FileText className="h-5 w-5" />} color="yellow" />
+   352→      </div>
+   353→
+   354→      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+   355→        {/* Recent Activity */}
+   356→        <Card className="bg-slate-900/50 border-slate-800">
+   357→          <CardHeader>
+   358→            <CardTitle className="text-lg">Recent Activity</CardTitle>
+   359→          </CardHeader>
+   360→          <CardContent>
+   361→            <ScrollArea className="h-64">
+   362→              <div className="space-y-3">
+   363→                {healthData.recentLogs?.slice(0, 10).map((log: AuditLog) => (
+   364→                  <div key={log.id} className="flex items-start gap-3 p-2 rounded hover:bg-slate-800/50">
+   365→                    <div className="w-2 h-2 rounded-full bg-blue-500 mt-2 flex-shrink-0" />
+   366→                    <div className="flex-1 min-w-0">
+   367→                      <p className="text-sm font-medium truncate">{log.action.replace(/_/g, ' ')}</p>
+   368→                      <p className="text-xs text-slate-400 truncate">{log.details}</p>
+   369→                    </div>
+   370→                    <span className="text-xs text-slate-500 whitespace-nowrap">
+   371→                      {new Date(log.createdAt).toLocaleTimeString()}
+   372→                    </span>
+   373→                  </div>
+   374→                ))}
+   375→              </div>
+   376→            </ScrollArea>
+   377→          </CardContent>
+   378→        </Card>
+   379→
+   380→        {/* System Info */}
+   381→        <Card className="bg-slate-900/50 border-slate-800">
+   382→          <CardHeader>
+   383→            <CardTitle className="text-lg">System Information</CardTitle>
+   384→          </CardHeader>
+   385→          <CardContent className="space-y-4">
+   386→            <InfoRow label="Node Version" value={healthData.systemHealth?.processInfo?.nodeVersion} />
+   387→            <InfoRow label="Platform" value={healthData.systemHealth?.processInfo?.platform} />
+   388→            <InfoRow label="Memory Usage" value={`${Math.round((healthData.systemHealth?.processInfo?.memory?.heapUsed || 0) / 1024 / 1024)} MB`} />
+   389→            
+   390→            <Separator className="bg-slate-700" />
+   391→            
+   392→            <h4 className="font-semibold text-sm">Database Records</h4>
+   393→            <div className="grid grid-cols-2 gap-2 text-sm">
+   394→              <InfoRow label="Users" value={healthData.database?.users || 0} />
+   395→              <InfoRow label="Sessions" value={healthData.database?.sessions || 0} />
+   396→              <InfoRow label="Audit Logs" value={healthData.database?.audits || 0} />
+   397→              <InfoRow label="Incidents" value={healthData.database?.incidents || 0} />
+   398→              <InfoRow label="Alerts" value={healthData.database?.alerts || 0} />
+   399→              <InfoRow label="SS7 Messages" value={healthData.database?.ss7 || 0} />
+   400→            </div>
+   401→          </CardContent>
+   402→        </Card>
+   403→      </div>
+   404→    </div>
+   405→  )
+   406→}
+   407→
+   408→// Stats Card Component
+   409→function StatsCard({ title, value, icon, color }: { title: string; value: number; icon: React.ReactNode; color: 'blue' | 'green' | 'red' | 'yellow' }) {
+   410→  const colors = {
+   411→    blue: 'from-blue-500/20 to-blue-600/10 border-blue-500/20 text-blue-400',
+   412→    green: 'from-green-500/20 to-green-600/10 border-green-500/20 text-green-400',
+   413→    red: 'from-red-500/20 to-red-600/10 border-red-500/20 text-red-400',
+   414→    yellow: 'from-yellow-500/20 to-yellow-600/10 border-yellow-500/20 text-yellow-400',
+   415→  }
+   416→
+   417→  return (
+   418→    <Card className={`bg-gradient-to-br ${colors[color]} border`}>
+   419→      <CardContent className="p-4">
+   420→        <div className="flex items-center justify-between">
+   421→          <div>
+   422→            <p className="text-sm font-medium opacity-80">{title}</p>
+   423→            <p className="text-3xl font-bold mt-1">{value.toLocaleString()}</p>
+   424→          </div>
+   425→          <div className="p-3 rounded-lg bg-black/20">{icon}</div>
+   426→        </div>
+   427→      </CardContent>
+   428→    </Card>
+   429→  )
+   430→}
+   431→
+   432→// Info Row Component
+   433→function InfoRow({ label, value }: { label: string; value: string | number }) {
+   434→  return (
+   435→    <div className="flex justify-between items-center py-1">
+   436→      <span className="text-sm text-slate-400">{label}</span>
+   437→      <span className="text-sm font-medium">{value}</span>
+   438→    </div>
+   439→  )
+   440→}
+   441→
+   442→// User Management Component
+   443→function UserManagement() {
+   444→  const [users, setUsers] = useState<User[]>([])
+   445→  const [loading, setLoading] = useState(true)
+   446→  const [searchQuery, setSearchQuery] = useState('')
+   447→  const [statusFilter, setStatusFilter] = useState('all')
+   448→  const [showCreateDialog, setShowCreateDialog] = useState(false)
+   449→  const [selectedUser, setSelectedUser] = useState<User | null>(null)
+   450→  const [pagination, setPagination] = useState({ page: 1, total: 0, pages: 0 })
+   451→
+   452→  const fetchUsers = useCallback(async () => {
+   453→    setLoading(true)
+   454→    try {
+   455→      const params = new URLSearchParams({
+   456→        page: pagination.page.toString(),
+   457→        limit: '20',
+   458→        ...(searchQuery && { search: searchQuery }),
+   459→        ...(statusFilter !== 'all' && { status: statusFilter })
+   460→      })
+   461→      
+   462→      const res = await fetch(`/api/admin/users?${params}`)
+   463→      if (res.ok) {
+   464→        const data = await res.json()
+   465→        setUsers(data.data.users)
+   466→        setPagination(data.data.pagination)
+   467→      }
+   468→    } catch (error) {
+   469→      toast.error('Failed to fetch users')
+   470→    } finally {
+   471→      setLoading(false)
+   472→    }
+   473→  }, [pagination.page, searchQuery, statusFilter])
+   474→
+   475→  useEffect(() => {
+   476→    fetchUsers()
+   477→  }, [fetchUsers])
+   478→
+   479→  const handleCreateUser = async (formData: FormData) => {
+   480→    try {
+   481→      const res = await fetch('/api/admin/users', {
+   482→        method: 'POST',
+   483→        headers: { 'Content-Type': 'application/json' },
+   484→        body: JSON.stringify(Object.fromEntries(formData))
+   485→      })
+   486→      
+   487→      if (res.ok) {
+   488→        toast.success('User created successfully')
+   489→        setShowCreateDialog(false)
+   490→        fetchUsers()
+   491→      } else {
+   492→        const data = await res.json()
+   493→        toast.error(data.error || 'Failed to create user')
+   494→      }
+   495→    } catch (error) {
+   496→      toast.error('Failed to create user')
+   497→    }
+   498→  }
+   499→
+   500→  const handleToggleStatus = async (user: User) => {
+   501→    const newStatus = user.status === 'ACTIVE' ? 'SUSPENDED' : 'ACTIVE'
+   502→    try {
+   503→      const res = await fetch(`/api/admin/users/${user.id}`, {
+   504→        method: 'PATCH',
+   505→        headers: { 'Content-Type': 'application/json' },
+   506→        body: JSON.stringify({ status: newStatus })
+   507→      })
+   508→      
+   509→      if (res.ok) {
+   510→        toast.success(`User ${newStatus.toLowerCase()}`)
+   511→        fetchUsers()
+   512→      }
+   513→    } catch (error) {
+   514→      toast.error('Failed to update user status')
+   515→    }
+   516→  }
+   517→
+   518→  const handleDeleteUser = async (userId: string) => {
+   519→    if (!confirm('Are you sure you want to delete this user?')) return
+   520→    
+   521→    try {
+   522→      const res = await fetch(`/api/admin/users/${userId}`, { method: 'DELETE' })
+   523→      if (res.ok) {
+   524→        toast.success('User deleted')
+   525→        fetchUsers()
+   526→      }
+   527→    } catch (error) {
+   528→      toast.error('Failed to delete user')
+   529→    }
+   530→  }
+   531→
+   532→  const getStatusColor = (status: string) => {
+   533→    switch (status) {
+   534→      case 'ACTIVE': return 'bg-green-500/10 text-green-400 border-green-500/20'
+   535→      case 'INACTIVE': return 'bg-gray-500/10 text-gray-400 border-gray-500/20'
+   536→      case 'SUSPENDED': return 'bg-yellow-500/10 text-yellow-400 border-yellow-500/20'
+   537→      case 'LOCKED': return 'bg-red-500/10 text-red-400 border-red-500/20'
+   538→      default: return 'bg-gray-500/10 text-gray-400 border-gray-500/20'
+   539→    }
+   540→  }
+   541→
+   542→  return (
+   543→    <div className="space-y-6">
+   544→      <div className="flex items-center justify-between">
+   545→        <div>
+   546→          <h2 className="text-2xl font-bold">User Management</h2>
+   547→          <p className="text-slate-400 mt-1">Manage user accounts and permissions</p>
+   548→        </div>
+   549→        <Dialog open={showCreateDialog} onOpenChange={setShowCreateDialog}>
+   550→          <DialogTrigger asChild>
+   551→            <Button><UserPlus className="h-4 w-4 mr-2" /> Create User</Button>
+   552→          </DialogTrigger>
+   553→          <DialogContent className="bg-slate-900 border-slate-700">
+   554→            <DialogHeader>
+   555→              <DialogTitle>Create New User</DialogTitle>
+   556→              <DialogDescription>Add a new user to the platform</DialogDescription>
+   557→            </DialogHeader>
+   558→            <form action={handleCreateUser} className="space-y-4">
+   559→              <div className="space-y-2">
+   560→                <Label htmlFor="name">Full Name</Label>
+   561→                <Input id="name" name="name" required className="bg-slate-800 border-slate-600" />
+   562→              </div>
+   563→              <div className="space-y-2">
+   564→                <Label htmlFor="email">Email Address</Label>
+   565→                <Input id="email" name="email" type="email" required className="bg-slate-800 border-slate-600" />
+   566→              </div>
+   567→              <div className="space-y-2">
+   568→                <Label htmlFor="department">Department</Label>
+   569→                <Input id="department" name="department" className="bg-slate-800 border-slate-600" />
+   570→              </div>
+   571→              <div className="space-y-2">
+   572→                <Label htmlFor="phone">Phone</Label>
+   573→                <Input id="phone" name="phone" className="bg-slate-800 border-slate-600" />
+   574→              </div>
+   575→              <DialogFooter>
+   576→                <Button type="submit">Create User</Button>
+   577→              </DialogFooter>
+   578→            </form>
+   579→          </DialogContent>
+   580→        </Dialog>
+   581→      </div>
+   582→
+   583→      {/* Filters */}
+   584→      <Card className="bg-slate-900/50 border-slate-800">
+   585→        <CardContent className="p-4">
+   586→          <div className="flex flex-wrap gap-4">
+   587→            <div className="relative flex-1 min-w-64">
+   588→              <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />
+   589→              <Input
+   590→                placeholder="Search users..."
+   591→                value={searchQuery}
+   592→                onChange={(e) => setSearchQuery(e.target.value)}
+   593→                className="pl-10 bg-slate-800 border-slate-600"
+   594→              />
+   595→            </div>
+   596→            <Select value={statusFilter} onValueChange={setStatusFilter}>
+   597→              <SelectTrigger className="w-40 bg-slate-800 border-slate-600">
+   598→                <SelectValue placeholder="Status" />
+   599→              </SelectTrigger>
+   600→              <SelectContent>
+   601→                <SelectItem value="all">All Statuses</SelectItem>
+   602→                <SelectItem value="ACTIVE">Active</SelectItem>
+   603→                <SelectItem value="INACTIVE">Inactive</SelectItem>
+   604→                <SelectItem value="SUSPENDED">Suspended</SelectItem>
+   605→                <SelectItem value="LOCKED">Locked</SelectItem>
+   606→              </SelectContent>
+   607→            </Select>
+   608→          </div>
+   609→        </CardContent>
+   610→      </Card>
+   611→
+   612→      {/* Users Table */}
+   613→      <Card className="bg-slate-900/50 border-slate-800">
+   614→        <CardContent className="p-0">
+   615→          {loading ? (
+   616→            <div className="flex items-center justify-center py-12">
+   617→              <RefreshCw className="h-8 w-8 animate-spin text-slate-400" />
+   618→            </div>
+   619→          ) : (
+   620→            <Table>
+   621→              <TableHeader>
+   622→                <TableRow className="border-slate-700 hover:bg-transparent">
+   623→                  <TableHead>User</TableHead>
+   624→                  <TableHead>Role</TableHead>
+   625→                  <TableHead>Status</TableHead>
+   626→                  <TableHead>MFA</TableHead>
+   627→                  <TableHead>Sessions</TableHead>
+   628→                  <TableHead>Created</TableHead>
+   629→                  <TableHead className="text-right">Actions</TableHead>
+   630→                </TableRow>
+   631→              </TableHeader>
+   632→              <TableBody>
+   633→                {users.map((user) => (
+   634→                  <TableRow key={user.id} className="border-slate-700">
+   635→                    <TableCell>
+   636→                      <div>
+   637→                        <p className="font-medium">{user.name}</p>
+   638→                        <p className="text-sm text-slate-400">{user.email}</p>
+   639→                      </div>
+   640→                    </TableCell>
+   641→                    <TableCell>
+   642→                      <Badge variant="outline" className="border-slate-600">
+   643→                        {user.role?.name || 'No Role'}
+   644→                      </Badge>
+   645→                    </TableCell>
+   646→                    <TableCell>
+   647→                      <Badge variant="outline" className={getStatusColor(user.status)}>
+   648→                        {user.status}
+   649→                      </Badge>
+   650→                    </TableCell>
+   651→                    <TableCell>
+   652→                      {user.mfaEnabled ? (
+   653→                        <CheckCircle className="h-5 w-5 text-green-400" />
+   654→                      ) : (
+   655→                        <XCircle className="h-5 w-5 text-slate-500" />
+   656→                      )}
+   657→                    </TableCell>
+   658→                    <TableCell>{user._count?.sessions || 0}</TableCell>
+   659→                    <TableCell className="text-slate-400">
+   660→                      {new Date(user.createdAt).toLocaleDateString()}
+   661→                    </TableCell>
+   662→                    <TableCell className="text-right">
+   663→                      <div className="flex items-center justify-end gap-2">
+   664→                        <Button
+   665→                          variant="ghost"
+   666→                          size="sm"
+   667→                          onClick={() => handleToggleStatus(user)}
+   668→                        >
+   669→                          {user.status === 'ACTIVE' ? (
+   670→                            <Pause className="h-4 w-4 text-yellow-400" />
+   671→                          ) : (
+   672→                            <Play className="h-4 w-4 text-green-400" />
+   673→                          )}
+   674→                        </Button>
+   675→                        <Button
+   676→                          variant="ghost"
+   677→                          size="sm"
+   678→                          onClick={() => handleDeleteUser(user.id)}
+   679→                        >
+   680→                          <Trash2 className="h-4 w-4 text-red-400" />
+   681→                        </Button>
+   682→                      </div>
+   683→                    </TableCell>
+   684→                  </TableRow>
+   685→                ))}
+   686→              </TableBody>
+   687→            </Table>
+   688→          )}
+   689→          
+   690→          {/* Pagination */}
+   691→          {pagination.pages > 1 && (
+   692→            <div className="flex items-center justify-between px-4 py-3 border-t border-slate-700">
+   693→              <p className="text-sm text-slate-400">
+   694→                Showing {(pagination.page - 1) * 20 + 1}-{Math.min(pagination.page * 20, pagination.total)} of {pagination.total}
+   695→              </p>
+   696→              <div className="flex gap-2">
+   697→                <Button
+   698→                  variant="outline"
+   699→                  size="sm"
+   700→                  disabled={pagination.page <= 1}
+   701→                  onClick={() => setPagination(p => ({ ...p, page: p.page - 1 }))}
+   702→                >
+   703→                  Previous
+   704→                </Button>
+   705→                <Button
+   706→                  variant="outline"
+   707→                  size="sm"
+   708→                  disabled={pagination.page >= pagination.pages}
+   709→                  onClick={() => setPagination(p => ({ ...p, page: p.page + 1 }))}
+   710→                >
+   711→                  Next
+   712→                </Button>
+   713→              </div>
+   714→            </div>
+   715→          )}
+   716→        </CardContent>
+   717→      </Card>
+   718→    </div>
+   719→  )
+   720→}
+   721→
+   722→// Role Management Component
+   723→function RoleManagement() {
+   724→  const [roles, setRoles] = useState<Role[]>([])
+   725→  const [loading, setLoading] = useState(true)
+   726→  const [selectedRole, setSelectedRole] = useState<Role | null>(null)
+   727→  const [showCreateDialog, setShowCreateDialog] = useState(false)
+   728→
+   729→  useEffect(() => {
+   730→    fetchRoles()
+   731→  }, [])
+   732→
+   733→  const fetchRoles = async () => {
+   734→    try {
+   735→      const res = await fetch('/api/admin/roles')
+   736→      if (res.ok) {
+   737→        const data = await res.json()
+   738→        setRoles(data.data.roles)
+   739→      }
+   740→    } catch (error) {
+   741→      toast.error('Failed to fetch roles')
+   742→    } finally {
+   743→      setLoading(false)
+   744→    }
+   745→  }
+   746→
+   747→  const permissionCategories = {
+   748→    'User Management': ['users:read', 'users:create', 'users:update', 'users:delete'],
+   749→    'Incident Management': ['incidents:read', 'incidents:create', 'incidents:update', 'incidents:delete'],
+   750→    'Alert Management': ['alerts:read', 'alerts:acknowledge', 'alerts:escalate'],
+   751→    'Threat Intelligence': ['threats:read', 'threats:create', 'threats:update', 'threats:delete'],
+   752→    'Threat Hunting': ['hunting:read', 'hunting:create', 'hunting:execute'],
+   753→    'Analytics & Reports': ['analytics:read', 'reports:read', 'reports:create'],
+   754→    'System Administration': ['system:admin', 'system:config', 'system:maintenance'],
+   755→    'Security': ['audit:read', 'sessions:terminate', 'apikeys:create'],
+   756→  }
+   757→
+   758→  return (
+   759→    <div className="space-y-6">
+   760→      <div className="flex items-center justify-between">
+   761→        <div>
+   762→          <h2 className="text-2xl font-bold">Roles & Permissions</h2>
+   763→          <p className="text-slate-400 mt-1">Manage roles and their associated permissions</p>
+   764→        </div>
+   765→        <Dialog open={showCreateDialog} onOpenChange={setShowCreateDialog}>
+   766→          <DialogTrigger asChild>
+   767→            <Button><Shield className="h-4 w-4 mr-2" /> Create Role</Button>
+   768→          </DialogTrigger>
+   769→          <DialogContent className="bg-slate-900 border-slate-700 max-w-2xl">
+   770→            <DialogHeader>
+   771→              <DialogTitle>Create New Role</DialogTitle>
+   772→              <DialogDescription>Define a new role with specific permissions</DialogDescription>
+   773→            </DialogHeader>
+   774→            <form className="space-y-4">
+   775→              <div className="space-y-2">
+   776→                <Label htmlFor="role-name">Role Name</Label>
+   777→                <Input id="role-name" placeholder="e.g., Security Analyst" className="bg-slate-800 border-slate-600" />
+   778→              </div>
+   779→              <div className="space-y-2">
+   780→                <Label htmlFor="role-desc">Description</Label>
+   781→                <Textarea id="role-desc" placeholder="Role description..." className="bg-slate-800 border-slate-600" />
+   782→              </div>
+   783→              
+   784→              <div className="space-y-3">
+   785→                <Label>Permissions</Label>
+   786→                <ScrollArea className="h-64 border border-slate-700 rounded-md p-4">
+   787→                  <div className="space-y-4">
+   788→                    {Object.entries(permissionCategories).map(([category, perms]) => (
+   789→                      <div key={category}>
+   790→                        <p className="text-sm font-semibold mb-2">{category}</p>
+   791→                        <div className="grid grid-cols-2 gap-2 ml-2">
+   792→                          {perms.map(perm => (
+   793→                            <label key={perm} className="flex items-center gap-2 text-sm">
+   794→                              <input type="checkbox" className="rounded bg-slate-800" />
+   795→                              <span className="text-slate-300">{perm}</span>
+   796→                            </label>
+   797→                          ))}
+   798→                        </div>
+   799→                      </div>
+   800→                    ))}
+   801→                  </div>
+   802→                </ScrollArea>
+   803→              </div>
+   804→              
+   805→              <DialogFooter>
+   806→                <Button type="button" onClick={() => setShowCreateDialog(false)}>Cancel</Button>
+   807→                <Button type="submit">Create Role</Button>
+   808→              </DialogFooter>
+   809→            </form>
+   810→          </DialogContent>
+   811→        </Dialog>
+   812→      </div>
+   813→
+   814→      {/* Roles Grid */}
+   815→      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+   816→        {loading ? (
+   817→          Array.from({ length: 6 }).map((_, i) => (
+   818→            <Card key={i} className="bg-slate-900/50 border-slate-800 animate-pulse">
+   819→              <CardContent className="p-6">
+   820→                <div className="h-6 bg-slate-700 rounded w-32 mb-4" />
+   821→                <div className="h-4 bg-slate-700 rounded w-full mb-2" />
+   822→                <div className="h-4 bg-slate-700 rounded w-2/3" />
+   823→              </CardContent>
+   824→            </Card>
+   825→          ))
+   826→        ) : (
+   827→          roles.map((role) => (
+   828→            <Card 
+   829→              key={role.id} 
+   830→              className={`bg-slate-900/50 border cursor-pointer transition-all ${
+   831→                selectedRole?.id === role.id ? 'border-red-500/50 ring-1 ring-red-500/20' : 'border-slate-800 hover:border-slate-700'
+   832→              }`}
+   833→              onClick={() => setSelectedRole(selectedRole?.id === role.id ? null : role)}
+   834→            >
+   835→              <CardHeader className="pb-3">
+   836→                <div className="flex items-start justify-between">
+   837→                  <div className="flex items-center gap-2">
+   838→                    <Shield className="h-5 w-5 text-red-400" />
+   839→                    <CardTitle className="text-base">{role.name}</CardTitle>
+   840→                  </div>
+   841→                  {role.isSystemRole && (
+   842→                    <Badge variant="outline" className="text-xs border-blue-500/30 text-blue-400">
+   843→                      System
+   844→                    </Badge>
+   845→                  )}
+   846→                </div>
+   847→                {role.description && (
+   848→                  <CardDescription className="text-sm">{role.description}</CardDescription>
+   849→                )}
+   850→              </CardHeader>
+   851→              <CardContent>
+   852→                <div className="flex items-center justify-between text-sm">
+   853→                  <span className="text-slate-400">{role.permissions.length} permissions</span>
+   854→                  <span className="text-slate-400">{role._count?.users || 0} users</span>
+   855→                </div>
+   856→                
+   857→                {selectedRole?.id === role.id && (
+   858→                  <div className="mt-4 pt-4 border-t border-slate-700">
+   859→                    <p className="text-xs font-semibold uppercase tracking-wider text-slate-400 mb-2">Permissions</p>
+   860→                    <div className="flex flex-wrap gap-1">
+   861→                      {role.permissions.slice(0, 8).map(perm => (
+   862→                        <Badge key={perm} variant="outline" className="text-xs border-slate-600">
+   863→                          {perm}
+   864→                        </Badge>
+   865→                      ))}
+   866→                      {role.permissions.length > 8 && (
+   867→                        <Badge variant="outline" className="text-xs border-slate-600">
+   868→                          +{role.permissions.length - 8} more
+   869→                        </Badge>
+   870→                      )}
+   871→                    </div>
+   872→                    
+   873→                    {!role.isSystemRole && (
+   874→                      <div className="mt-4 flex gap-2">
+   875→                        <Button size="sm" variant="outline"><Edit2 className="h-3 w-3 mr-1" /> Edit</Button>
+   876→                        <Button size="sm" variant="outline" className="text-red-400 border-red-500/30 hover:bg-red-500/10">
+   877→                          <Trash2 className="h-3 w-3 mr-1" /> Delete
+   878→                        </Button>
+   879→                      </div>
+   880→                    )}
+   881→                  </div>
+   882→                )}
+   883→              </CardContent>
+   884→            </Card>
+   885→          ))
+   886→        )}
+   887→      </div>
+   888→    </div>
+   889→  )
+   890→}
+   891→
+   892→// Session Management Component
+   893→function SessionManagement() {
+   894→  const [sessions, setSessions] = useState<Session[]>([])
+   895→  const [loading, setLoading] = useState(true)
+   896→  const [stats, setStats] = useState<any>(null)
+   897→  const [filter, setFilter] = useState('all')
+   898→
+   899→  useEffect(() => {
+   900→    fetchSessions()
+   901→  }, [filter])
+   902→
+   903→  const fetchSessions = async () => {
+   904→    setLoading(true)
+   905→    try {
+   906→      const params = new URLSearchParams({ limit: '50', status: filter })
+   907→      const res = await fetch(`/api/admin/sessions?${params}`)
+   908→      if (res.ok) {
+   909→        const data = await res.json()
+   910→        setSessions(data.data.sessions)
+   911→        setStats(data.data.statistics)
+   912→      }
+   913→    } catch (error) {
+   914→      toast.error('Failed to fetch sessions')
+   915→    } finally {
+   916→      setLoading(false)
+   917→    }
+   918→  }
+   919→
+   920→  const terminateSession = async (sessionId: string) => {
+   921→    if (!confirm('Terminate this session?')) return
+   922→    
+   923→    try {
+   924→      const res = await fetch('/api/admin/sessions', {
+   925→        method: 'POST',
+   926→        headers: { 'Content-Type': 'application/json' },
+   927→        body: JSON.stringify({ action: 'force-logout', sessionId })
+   928→      })
+   929→      
+   930→      if (res.ok) {
+   931→        toast.success('Session terminated')
+   932→        fetchSessions()
+   933→      }
+   934→    } catch (error) {
+   935→      toast.error('Failed to terminate session')
+   936→    }
+   937→  }
+   938→
+   939→  const terminateStaleSessions = async () => {
+   940→    if (!confirm('Terminate all stale sessions (inactive for 2+ hours)?')) return
+   941→    
+   942→    try {
+   943→      const res = await fetch('/api/admin/sessions', {
+   944→        method: 'DELETE',
+   945→        headers: { 'Content-Type': 'application/json' },
+   946→        body: JSON.stringify({ terminateAllStale: true })
+   947→      })
+   948→      
+   949→      if (res.ok) {
+   950→        const data = await res.json()
+   951→        toast.success(data.message)
+   952→        fetchSessions()
+   953→      }
+   954→    } catch (error) {
+   955→      toast.error('Failed to terminate stale sessions')
+   956→    }
+   957→  }
+   958→
+   959→  const formatTimeAgo = (dateString: string) => {
+   960→    const diff = Date.now() - new Date(dateString).getTime()
+   961→    const minutes = Math.floor(diff / 60000)
+   962→    if (minutes < 1) return 'Just now'
+   963→    if (minutes < 60) return `${minutes}m ago`
+   964→    const hours = Math.floor(minutes / 60)
+   965→    if (hours < 24) return `${hours}h ago`
+   966→    return `${Math.floor(hours / 24)}d ago`
+   967→  }
+   968→
+   969→  return (
+   970→    <div className="space-y-6">
+   971→      <div className="flex items-center justify-between">
+   972→        <div>
+   973→          <h2 className="text-2xl font-bold">Session Management</h2>
+   974→          <p className="text-slate-400 mt-1">Monitor and manage active user sessions</p>
+   975→        </div>
+   976→        <Button variant="destructive" onClick={terminateStaleSessions}>
+   977→          <Trash2 className="h-4 w-4 mr-2" /> Clean Stale Sessions
+   978→        </Button>
+   979→      </div>
+   980→
+   981→      {/* Session Stats */}
+   982→      {stats && (
+   983→        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+   984→          <MiniStatCard label="Active Now" value={stats.activeLast5min} color="green" />
+   985→          <MiniStatCard label="Last 30 min" value={stats.activeLast30min} color="blue" />
+   986→          <MiniStatCard label="Last Hour" value={stats.activeLast1hour} color="yellow" />
+   987→          <MiniStatCard label="Stale (>2h)" value={stats.staleSessions} color="red" />
+   988→        </div>
+   989→      )}
+   990→
+   991→      {/* Filters */}
+   992→      <div className="flex gap-2">
+   993→        {['all', 'active', 'inactive'].map(f => (
+   994→          <Button
+   995→            key={f}
+   996→            variant={filter === f ? 'default' : 'outline'}
+   997→            size="sm"
+   998→            onClick={() => setFilter(f)}
+   999→            className="capitalize"
+  1000→          >
+  1001→            {f}
+  1002→          </Button>
+  1003→        ))}
+  1004→      </div>
+  1005→
+  1006→      {/* Sessions List */}
+  1007→      <Card className="bg-slate-900/50 border-slate-800">
+  1008→        <CardContent className="p-0">
+  1009→          {loading ? (
+  1010→            <div className="flex items-center justify-center py-12">
+  1011→              <RefreshCw className="h-8 w-8 animate-spin text-slate-400" />
+  1012→            </div>
+  1013→          ) : (
+  1014→            <Table>
+  1015→              <TableHeader>
+  1016→                <TableRow className="border-slate-700 hover:bg-transparent">
+  1017→                  <TableHead>User</TableHead>
+  1018→                  <TableHead>Status</TableHead>
+  1019→                  <TableHead>IP Address</TableHead>
+  1020→                  <TableHead>Last Active</TableHead>
+  1021→                  <TableHead>Created</TableHead>
+  1022→                  <TableHead className="text-right">Actions</TableHead>
+  1023→                </TableRow>
+  1024→              </TableHeader>
+  1025→              <TableBody>
+  1026→                {sessions.map((session) => (
+  1027→                  <TableRow key={session.id} className="border-slate-700">
+  1028→                    <TableCell>
+  1029→                      <div>
+  1030→                        <p className="font-medium">{session.user?.name || 'Unknown'}</p>
+  1031→                        <p className="text-sm text-slate-400">{session.user?.email}</p>
+  1032→                      </div>
+  1033→                    </TableCell>
+  1034→                    <TableCell>
+  1035→                      <Badge variant={session.isActive ? 'default' : 'secondary'} className={session.isActive ? 'bg-green-500/10 text-green-400' : ''}>
+  1036→                        {session.isActive ? 'Active' : 'Inactive'}
+  1037→                      </Badge>
+  1038→                    </TableCell>
+  1039→                    <TableCell className="font-mono text-sm">{session.ipAddress || '-'}</TableCell>
+  1040→                    <TableCell className="text-slate-400">{formatTimeAgo(session.lastActiveAt)}</TableCell>
+  1041→                    <TableCell className="text-slate-400">{formatTimeAgo(session.createdAt)}</TableCell>
+  1042→                    <TableCell className="text-right">
+  1043→                      {session.isActive && (
+  1044→                        <Button
+  1045→                          variant="ghost"
+  1046→                          size="sm"
+  1047→                          onClick={() => terminateSession(session.id)}
+  1048→                        >
+  1049→                          <Ban className="h-4 w-4 text-red-400" />
+  1050→                        </Button>
+  1051→                      )}
+  1052→                    </TableCell>
+  1053→                  </TableRow>
+  1054→                ))}
+  1055→              </TableBody>
+  1056→            </Table>
+  1057→          )}
+  1058→        </CardContent>
+  1059→      </Card>
+  1060→    </div>
+  1061→  )
+  1062→}
+  1063→
+  1064→// Mini Stat Card for Sessions
+  1065→function MiniStatCard({ label, value, color }: { label: string; value: number; color: string }) {
+  1066→  const colors: Record<string, string> = {
+  1067→    green: 'text-green-400 bg-green-500/10 border-green-500/20',
+  1068→    blue: 'text-blue-400 bg-blue-500/10 border-blue-500/20',
+  1069→    yellow: 'text-yellow-400 bg-yellow-500/10 border-yellow-500/20',
+  1070→    red: 'text-red-400 bg-red-500/10 border-red-500/20',
+  1071→  }
+  1072→
+  1073→  return (
+  1074→    <Card className={`border ${colors[color]}`}>
+  1075→      <CardContent className="p-4 text-center">
+  1076→        <p className="text-2xl font-bold">{value}</p>
+  1077→        <p className="text-xs opacity-70">{label}</p>
+  1078→      </CardContent>
+  1079→    </Card>
+  1080→  )
+  1081→}
+  1082→
+  1083→// Audit Logs Viewer Component
+  1084→function AuditLogsViewer() {
+  1085→  const [logs, setLogs] = useState<AuditLog[]>([])
+  1086→  const [loading, setLoading] = useState(true)
+  1087→  const [filters, setFilters] = useState({
+  1088→    search: '',
+  1089→    action: '',
+  1090→    entityType: '',
+  1091→    startDate: '',
+  1092→    endDate: '',
+  1093→  })
+  1094→
+  1095→  useEffect(() => {
+  1096→    fetchLogs()
+  1097→  }, [])
+  1098→
+  1099→  const fetchLogs = async () => {
+  1100→    setLoading(true)
+  1101→    try {
+  1102→      const params = new URLSearchParams({
+  1103→        limit: '100',
+  1104→        ...Object.fromEntries(Object.entries(filters).filter(([_, v]) => v)),
+  1105→      })
+  1106→      
+  1107→      const res = await fetch(`/api/admin/audit?${params}`)
+  1108→      if (res.ok) {
+  1109→        const data = await res.json()
+  1110→        setLogs(data.data.logs)
+  1111→      }
+  1112→    } catch (error) {
+  1113→      toast.error('Failed to fetch audit logs')
+  1114→    } finally {
+  1115→      setLoading(false)
+  1116→    }
+  1117→  }
+  1118→
+  1119→  const exportLogs = async (format: 'json' | 'csv') => {
+  1120→    try {
+  1121→      const res = await fetch('/api/admin/audit', {
+  1122→        method: 'POST',
+  1123→        headers: { 'Content-Type': 'application/json' },
+  1124→        body: JSON.stringify({ action: 'export', format, filters })
+  1125→      })
+  1126→      
+  1127→      if (res.ok) {
+  1128→        const blob = await res.blob()
+  1129→        const url = URL.createObjectURL(blob)
+  1130→        const a = document.createElement('a')
+  1131→        a.href = url
+  1132→        a.download = `audit-logs.${format}`
+  1133→        a.click()
+  1134→        toast.success(`Exported as ${format.toUpperCase()}`)
+  1135→      }
+  1136→    } catch (error) {
+  1137→      toast.error('Failed to export logs')
+  1138→    }
+  1139→  }
+  1140→
+  1141→  const getActionColor = (action: string) => {
+  1142→    if (action.includes('LOGIN') || action.includes('LOGOUT')) return 'text-blue-400'
+  1143→    if (action.includes('CREATE') || action.includes('ADD')) return 'text-green-400'
+  1144→    if (action.includes('DELETE') || action.includes('REMOVE')) return 'text-red-400'
+  1145→    if (action.includes('UPDATE') || action.includes('CHANGE')) return 'text-yellow-400'
+  1146→    return 'text-slate-300'
+  1147→  }
+  1148→
+  1149→  return (
+  1150→    <div className="space-y-6">
+  1151→      <div className="flex items-center justify-between">
+  1152→        <div>
+  1153→          <h2 className="text-2xl font-bold">Audit Logs</h2>
+  1154→          <p className="text-slate-400 mt-1">View and export system audit trail</p>
+  1155→        </div>
+  1156→        <div className="flex gap-2">
+  1157→          <Button variant="outline" onClick={() => exportLogs('csv')}>
+  1158→            <Download className="h-4 w-4 mr-2" /> Export CSV
+  1159→          </Button>
+  1160→          <Button variant="outline" onClick={() => exportLogs('json')}>
+  1161→            <Download className="h-4 w-4 mr-2" /> Export JSON
+  1162→          </Button>
+  1163→        </div>
+  1164→      </div>
+  1165→
+  1166→      {/* Filters */}
+  1167→      <Card className="bg-slate-900/50 border-slate-800">
+  1168→        <CardContent className="p-4">
+  1169→          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4">
+  1170→            <div className="relative">
+  1171→              <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />
+  1172→              <Input
+  1173→                placeholder="Search logs..."
+  1174→                value={filters.search}
+  1175→                onChange={(e) => setFilters(f => ({ ...f, search: e.target.value }))}
+  1176→                className="pl-10 bg-slate-800 border-slate-600"
+  1177→              />
+  1178→            </div>
+  1179→            <Input
+  1180→              placeholder="Action type..."
+  1181→              value={filters.action}
+  1182→              onChange={(e) => setFilters(f => ({ ...f, action: e.target.value }))}
+  1183→              className="bg-slate-800 border-slate-600"
+  1184→            />
+  1185→            <Input
+  1186→              placeholder="Entity type..."
+  1187→              value={filters.entityType}
+  1188→              onChange={(e) => setFilters(f => ({ ...f, entityType: e.target.value }))}
+  1189→              className="bg-slate-800 border-slate-600"
+  1190→            />
+  1191→            <Input
+  1192→              type="date"
+  1193→              value={filters.startDate}
+  1194→              onChange={(e) => setFilters(f => ({ ...f, startDate: e.target.value }))}
+  1195→              className="bg-slate-800 border-slate-600"
+  1196→            />
+  1197→            <Input
+  1198→              type="date"
+  1199→              value={filters.endDate}
+  1200→              onChange={(e) => setFilters(f => ({ ...f, endDate: e.target.value }))}
+  1201→              className="bg-slate-800 border-slate-600"
+  1202→            />
+  1203→          </div>
+  1204→          <div className="mt-4 flex gap-2">
+  1205→            <Button onClick={fetchLogs}><Filter className="h-4 w-4 mr-2" /> Apply Filters</Button>
+  1206→            <Button 
+  1207→              variant="outline" 
+  1208→              onClick={() => setFilters({ search: '', action: '', entityType: '', startDate: '', endDate: '' })}
+  1209→            >
+  1210→              Clear
+  1211→            </Button>
+  1212→          </div>
+  1213→        </CardContent>
+  1214→      </Card>
+  1215→
+  1216→      {/* Logs Table */}
+  1217→      <Card className="bg-slate-900/50 border-slate-800">
+  1218→        <CardContent className="p-0">
+  1219→          {loading ? (
+  1220→            <div className="flex items-center justify-center py-12">
+  1221→              <RefreshCw className="h-8 w-8 animate-spin text-slate-400" />
+  1222→            </div>
+  1223→          ) : (
+  1224→            <ScrollArea className="h-[600px]">
+  1225→              <Table>
+  1226→                <TableHeader>
+  1227→                  <TableRow className="border-slate-700 hover:bg-transparent sticky top-0 bg-slate-900">
+  1228→                    <TableHead>Timestamp</TableHead>
+  1229→                    <TableHead>Action</TableHead>
+  1230→                    <TableHead>User</TableHead>
+  1231→                    <TableHead>Entity</TableHead>
+  1232→                    <TableHead>Details</TableHead>
+  1233→                    <TableHead>IP Address</TableHead>
+  1234→                  </TableRow>
+  1235→                </TableHeader>
+  1236→                <TableBody>
+  1237→                  {logs.map((log) => (
+  1238→                    <TableRow key={log.id} className="border-slate-700">
+  1239→                      <TableCell className="text-slate-400 whitespace-nowrap">
+  1240→                        {new Date(log.createdAt).toLocaleString()}
+  1241→                      </TableCell>
+  1242→                      <TableCell className={`font-mono text-sm ${getActionColor(log.action)}`}>
+  1243→                        {log.action.replace(/_/g, ' ')}
+  1244→                      </TableCell>
+  1245→                      <TableCell>
+  1246→                        <span className="text-sm">{log.user?.name || 'System'}</span>
+  1247→                        {log.user?.email && (
+  1248→                          <p className="text-xs text-slate-400">{log.user.email}</p>
+  1249→                        )}
+  1250→                      </TableCell>
+  1251→                      <TableCell>
+  1252→                        <Badge variant="outline" className="text-xs border-slate-600">
+  1253→                          {log.entityType}
+  1254→                        </Badge>
+  1255→                      </TableCell>
+  1256→                      <TableCell className="max-w-xs truncate text-sm text-slate-300">
+  1257→                        {log.details || '-'}
+  1258→                      </TableCell>
+  1259→                      <TableCell className="font-mono text-xs text-slate-400">
+  1260→                        {log.ipAddress || '-'}
+  1261→                      </TableCell>
+  1262→                    </TableRow>
+  1263→                  ))}
+  1264→                </TableBody>
+  1265→              </Table>
+  1266→            </ScrollArea>
+  1267→          )}
+  1268→        </CardContent>
+  1269→      </Card>
+  1270→    </div>
+  1271→  )
+  1272→}
+  1273→
+  1274→// Security Settings Component
+  1275→function SecuritySettings() {
+  1276→  const [config, setConfig] = useState<any>(null)
+  1277→  const [loading, setLoading] = useState(true)
+  1278→  const [newApiKey, setNewApiKey] = useState<string | null>(null)
+  1279→  const [ipToBlock, setIpToBlock] = useState('')
+  1280→  const [blockReason, setBlockReason] = useState('')
+  1281→
+  1282→  useEffect(() => {
+  1283→    fetchConfig()
+  1284→  }, [])
+  1285→
+  1286→  const fetchConfig = async () => {
+  1287→    try {
+  1288→      const res = await fetch('/api/admin/security')
+  1289→      if (res.ok) {
+  1290→        const data = await res.json()
+  1291→        setConfig(data.data)
+  1292→      }
+  1293→    } catch (error) {
+  1294→      toast.error('Failed to fetch security config')
+  1295→    } finally {
+  1296→      setLoading(false)
+  1297→    }
+  1298→  }
+  1299→
+  1300→  const blockIP = async () => {
+  1301→    if (!ipToBlock) return
+  1302→    
+  1303→    try {
+  1304→      const res = await fetch('/api/admin/security', {
+  1305→        method: 'POST',
+  1306→        headers: { 'Content-Type': 'application/json' },
+  1307→        body: JSON.stringify({ action: 'block-ip', ipAddress: ipToBlock, reason: blockReason })
+  1308→      })
+  1309→      
+  1310→      if (res.ok) {
+  1311→        toast.success(`IP ${ipToBlock} blocked`)
+  1312→        setIpToBlock('')
+  1313→        setBlockReason('')
+  1314→        fetchConfig()
+  1315→      }
+  1316→    } catch (error) {
+  1317→      toast.error('Failed to block IP')
+  1318→    }
+  1319→  }
+  1320→
+  1321→  const createAPIKey = async () => {
+  1322→    try {
+  1323→      const res = await fetch('/api/admin/security', {
+  1324→        method: 'POST',
+  1325→        headers: { 'Content-Type': 'application/json' },
+  1326→        body: JSON.stringify({ action: 'create-api-key', name: `Key-${Date.now()}` })
+  1327→      })
+  1328→      
+  1329→      if (res.ok) {
+  1330→        const data = await res.json()
+  1331→        setNewApiKey(data.data.keyValue)
+  1332→        toast.success('API key created')
+  1333→        fetchConfig()
+  1334→      }
+  1335→    } catch (error) {
+  1336→      toast.error('Failed to create API key')
+  1337→    }
+  1338→  }
+  1339→
+  1340→  const revokeAPIKey = async (keyId: string) => {
+  1341→    if (!confirm('Revoke this API key?')) return
+  1342→    
+  1343→    try {
+  1344→      const res = await fetch('/api/admin/security', {
+  1345→        method: 'POST',
+  1346→        headers: { 'Content-Type': 'application/json' },
+  1347→        body: JSON.stringify({ action: 'revoke-api-key', keyId })
+  1348→      })
+  1349→      
+  1350→      if (res.ok) {
+  1351→        toast.success('API key revoked')
+  1352→        fetchConfig()
+  1353→      }
+  1354→    } catch (error) {
+  1355→      toast.error('Failed to revoke API key')
+  1356→    }
+  1357→  }
+  1358→
+  1359→  if (loading) {
+  1360→    return (
+  1361→      <div className="flex items-center justify-center h-64">
+  1362→        <RefreshCw className="h-8 w-8 animate-spin text-slate-400" />
+  1363→      </div>
+  1364→    )
+  1365→  }
+  1366→
+  1367→  return (
+  1368→    <div className="space-y-6">
+  1369→      <div>
+  1370→        <h2 className="text-2xl font-bold">Security Settings</h2>
+  1371→        <p className="text-slate-400 mt-1">Configure security policies and access controls</p>
+  1372→      </div>
+  1373→
+  1374→      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+  1375→        {/* IP Management */}
+  1376→        <Card className="bg-slate-900/50 border-slate-800">
+  1377→          <CardHeader>
+  1378→            <CardTitle className="flex items-center gap-2">
+  1379→              <Globe className="h-5 w-5" /> IP Access Control
+  1380→            </CardTitle>
+  1381→            <CardDescription>Block or whitelist IP addresses</CardDescription>
+  1382→          </CardHeader>
+  1383→          <CardContent className="space-y-4">
+  1384→            <div className="flex gap-2">
+  1385→              <Input
+  1386→                placeholder="IP address to block"
+  1387→                value={ipToBlock}
+  1388→                onChange={(e) => setIpToBlock(e.target.value)}
+  1389→                className="bg-slate-800 border-slate-600 font-mono"
+  1390→              />
+  1391→              <Button onClick={blockIP} variant="destructive">
+  1392→                <Ban className="h-4 w-4" />
+  1393→              </Button>
+  1394→            </div>
+  1395→            <Input
+  1396→              placeholder="Reason (optional)"
+  1397→              value={blockReason}
+  1398→              onChange={(e) => setBlockReason(e.target.value)}
+  1399→              className="bg-slate-800 border-slate-600"
+  1400→            />
+  1401→
+  1402→            <Separator className="bg-slate-700" />
+  1403→
+  1404→            <div>
+  1405→              <h4 className="text-sm font-semibold mb-2 text-red-400">Blocked IPs ({config?.ipManagement?.blocked?.length || 0})</h4>
+  1406→              <ScrollArea className="h-40">
+  1407→                <div className="space-y-2">
+  1408→                  {config?.ipManagement?.blocked?.slice(0, 10).map((ip: any) => (
+  1409→                    <div key={ip.id} className="flex items-center justify-between p-2 bg-slate-800/50 rounded text-sm">
+  1410→                      <span className="font-mono">{ip.ipAddress}</span>
+  1411→                      <span className="text-xs text-slate-400">{ip.reason}</span>
+  1412→                    </div>
+  1413→                  ))}
+  1414→                </div>
+  1415→              </ScrollArea>
+  1416→            </div>
+  1417→          </CardContent>
+  1418→        </Card>
+  1419→
+  1420→        {/* API Keys */}
+  1421→        <Card className="bg-slate-900/50 border-slate-800">
+  1422→          <CardHeader>
+  1423→            <div className="flex items-center justify-between">
+  1424→              <div>
+  1425→                <CardTitle className="flex items-center gap-2">
+  1426→                  <Key className="h-5 w-5" /> API Keys
+  1427→                </CardTitle>
+  1428→                <CardDescription>Manage programmatic access</CardDescription>
+  1429→              </div>
+  1430→              <Button onClick={createAPIKey} size="sm">
+  1431→                <Plus className="h-4 w-4 mr-1" /> New Key
+  1432→              </Button>
+  1433→            </div>
+  1434→          </CardHeader>
+  1435→          <CardContent className="space-y-4">
+  1436→            {newApiKey && (
+  1437→              <div className="p-3 bg-yellow-500/10 border border-yellow-500/20 rounded-lg">
+  1438→                <p className="text-xs text-yellow-400 font-semibold mb-1">⚠️ Save this key now - it won't be shown again!</p>
+  1439→                <div className="flex items-center gap-2">
+  1440→                  <code className="flex-1 text-sm bg-slate-800 p-2 rounded font-mono break-all">{newApiKey}</code>
+  1441→                  <Button
+  1442→                    size="sm"
+  1443→                    variant="outline"
+  1444→                    onClick={() => {
+  1445→                      navigator.clipboard.writeText(newApiKey)
+  1446→                      toast.success('Copied to clipboard')
+  1447→                    }}
+  1448→                  >
+  1449→                    <Copy className="h-4 w-4" />
+  1450→                  </Button>
+  1451→                </div>
+  1452→              </div>
+  1453→            )}
+  1454→
+  1455→            <div className="space-y-2">
+  1456→              {config?.apiKeys?.map((key: any) => (
+  1457→                <div key={key.id} className="flex items-center justify-between p-3 bg-slate-800/50 rounded">
+  1458→                  <div>
+  1459→                    <p className="font-medium text-sm">{key.name}</p>
+  1460→                    <p className="text-xs text-slate-400 font-mono">{key.keyPrefix}</p>
+  1461→                  </div>
+  1462→                  <div className="flex items-center gap-2">
+  1463→                    <Badge variant="outline" className="text-xs">{key.permissions.join(', ')}</Badge>
+  1464→                    <Button
+  1465→                      size="sm"
+  1466→                      variant="ghost"
+  1467→                      onClick={() => revokeAPIKey(key.id)}
+  1468→                    >
+  1469→                      <Trash2 className="h-4 w-4 text-red-400" />
+  1470→                    </Button>
+  1471→                  </div>
+  1472→                </div>
+  1473→              ))}
+  1474→              
+  1475→              {(!config?.apiKeys || config.apiKeys.length === 0) && (
+  1476→                <p className="text-sm text-slate-400 text-center py-4">No API keys created yet</p>
+  1477→              )}
+  1478→            </div>
+  1479→          </CardContent>
+  1480→        </Card>
+  1481→
+  1482→        {/* CORS Configuration */}
+  1483→        <Card className="bg-slate-900/50 border-slate-800">
+  1484→          <CardHeader>
+  1485→            <CardTitle className="flex items-center gap-2">
+  1486→              <Server className="h-5 w-5" /> CORS Configuration
+  1487→            </CardTitle>
+  1488→            <CardDescription>Cross-Origin Resource Sharing settings</CardDescription>
+  1489→          </CardHeader>
+  1490→          <CardContent className="space-y-4">
+  1491→            <div className="space-y-2">
+  1492→              <Label>Allowed Origins</Label>
+  1493→              <div className="space-y-2">
+  1494→                {config?.cors?.allowedOrigins?.map((origin: string, i: number) => (
+  1495→                  <div key={i} className="flex items-center gap-2 p-2 bg-slate-800/50 rounded text-sm font-mono">
+  1496→                    <span className="flex-1">{origin}</span>
+  1497→                  </div>
+  1498→                ))}
+  1499→              </div>
+  1500→            </div>
+  1501→            <div className="grid grid-cols-2 gap-4 text-sm">
+  1502→              <InfoRow label="Max Age" value={`${config?.cors?.maxAge}s`} />
+  1503→              <InfoRow label="Credentials" value={config?.cors?.credentials ? 'Enabled' : 'Disabled'} />
+  1504→            </div>
+  1505→          </CardContent>
+  1506→        </Card>
+  1507→
+  1508→        {/* Rate Limiting */}
+  1509→        <Card className="bg-slate-900/50 border-slate-800">
+  1510→          <CardHeader>
+  1511→            <CardTitle className="flex items-center gap-2">
+  1512→              <Activity className="h-5 w-5" /> Rate Limiting
+  1513→            </CardTitle>
+  1514→            <CardDescription>API rate limit configuration</CardDescription>
+  1515→          </CardHeader>
+  1516→          <CardContent className="space-y-4">
+  1517→            <div className="p-3 bg-slate-800/50 rounded">
+  1518→              <p className="text-sm font-medium mb-2">Global Limits</p>
+  1519→              <div className="grid grid-cols-2 gap-4 text-sm">
+  1520→                <InfoRow label="Window" value={`${config?.rateLimits?.global?.windowMs / 1000}s`} />
+  1521→                <InfoRow label="Max Requests" value={config?.rateLimits?.global?.maxRequests} />
+  1522→              </div>
+  1523→            </div>
+  1524→            
+  1525→            <div className="space-y-2">
+  1526→              <p className="text-sm font-medium">Endpoint Overrides</p>
+  1527→              {Object.entries(config?.rateLimits?.endpoints || {}).map(([endpoint, limits]: [string, any]) => (
+  1528→                <div key={endpoint} className="flex items-center justify-between p-2 bg-slate-800/50 rounded text-sm">
+  1529→                  <code className="font-mono text-xs">{endpoint}</code>
+  1530→                  <span className="text-slate-400">{limits.maxRequests}/{limits.windowMs / 1000}s</span>
+  1531→                </div>
+  1532→              ))}
+  1533→            </div>
+  1534→          </CardContent>
+  1535→        </Card>
+  1536→
+  1537→        {/* Security Features */}
+  1538→        <Card className="bg-slate-900/50 border-slate-800 lg:col-span-2">
+  1539→          <CardHeader>
+  1540→            <CardTitle className="flex items-center gap-2">
+  1541→              <Lock className="h-5 w-5" /> Security Features
+  1542→            </CardTitle>
+  1543→          </CardHeader>
+  1544→          <CardContent>
+  1545→            <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+  1546→              <div className="space-y-3">
+  1547→                <h4 className="font-semibold text-sm">Password Policy</h4>
+  1548→                <div className="space-y-1 text-sm">
+  1549→                  <InfoRow label="Min Length" value={config?.features?.passwordPolicy?.minLength} />
+  1550→                  <InfoRow label="Uppercase Required" value={config?.features?.passwordPolicy?.requireUppercase ? 'Yes' : 'No'} />
+  1551→                  <InfoRow label="Special Chars" value={config?.features?.passwordPolicy?.requireSpecialChars ? 'Yes' : 'No'} />
+  1552→                  <InfoRow label="Expiry (days)" value={config?.features?.passwordPolicy?.maxAgeDays} />
+  1553→                </div>
+  1554→              </div>
+  1555→              
+  1556→              <div className="space-y-3">
+  1557→                <h4 className="font-semibold text-sm">Authentication</h4>
+  1558→                <div className="space-y-1 text-sm">
+  1559→                  <InfoRow label="MFA Required" value={config?.features?.mfaRequired ? 'Yes' : 'No'} />
+  1560→                  <InfoRow label="Session Timeout" value={`${config?.features?.sessionTimeout / 3600}h`} />
+  1561→                  <InfoRow label="Max Login Attempts" value={config?.features?.maxLoginAttempts} />
+  1562→                  <InfoRow label="Lockout Duration" value={`${config?.features?.lockoutDuration / 60}m`} />
+  1563→                </div>
+  1564→              </div>
+  1565→              
+  1566→              <div className="space-y-3">
+  1567→                <h4 className="font-semibold text-sm">Security Headers</h4>
+  1568→                <div className="space-y-1 text-sm text-xs font-mono">
+  1569→                  {Object.entries(config?.securityHeaders || {}).map(([header, value]: [string, any]) => (
+  1570→                    <div key={header} className="flex justify-between">
+  1571→                      <span className="text-slate-400">{header}</span>
+  1572→                      <span className="truncate ml-2 max-w-24">{value}</span>
+  1573→                    </div>
+  1574→                  ))}
+  1575→                </div>
+  1576→              </div>
+  1577→            </div>
+  1578→          </CardContent>
+  1579→        </Card>
+  1580→      </div>
+  1581→    </div>
+  1582→  )
+  1583→}
+  1584→
+  1585→// Maintenance Panel Component
+  1586→function MaintenancePanel() {
+  1587→  const [jobs, setJobs] = useState<ScheduledJob[]>([])
+  1588→  const [loading, setLoading] = useState(true)
+  1589→  const [taskResult, setTaskResult] = useState<any>(null)
+  1590→  const [executingTask, setExecutingTask] = useState<string | null>(null)
+  1591→
+  1592→  useEffect(() => {
+  1593→    fetchMaintenanceData()
+  1594→  }, [])
+  1595→
+  1596→  const fetchMaintenanceData = async () => {
+  1597→    try {
+  1598→      const res = await fetch('/api/admin/maintenance')
+  1599→      if (res.ok) {
+  1600→        const data = await res.json()
+  1601→        setJobs(data.data.jobs)
+  1602→      }
+  1603→    } catch (error) {
+  1604→      toast.error('Failed to fetch maintenance data')
+  1605→    } finally {
+  1606→      setLoading(false)
+  1607→    }
+  1608→  }
+  1609→
+  1610→  const executeTask = async (task: string) => {
+  1611→    setExecutingTask(task)
+  1612→    setTaskResult(null)
+  1613→    
+  1614→    try {
+  1615→      const res = await fetch('/api/admin/maintenance', {
+  1616→        method: 'POST',
+  1617→        headers: { 'Content-Type': 'application/json' },
+  1618→        body: JSON.stringify({ action: 'execute-task', task })
+  1619→      })
+  1620→      
+  1621→      if (res.ok) {
+  1622→        const data = await res.json()
+  1623→        setTaskResult(data.data)
+  1624→        toast.success(`Task ${task} completed`)
+  1625→        fetchMaintenanceData()
+  1626→      }
+  1627→    } catch (error) {
+  1628→      toast.error('Failed to execute task')
+  1629→    } finally {
+  1630→      setExecutingTask(null)
+  1631→    }
+  1632→  }
+  1633→
+  1634→  const toggleJob = async (jobId: string) => {
+  1635→    try {
+  1636→      const res = await fetch('/api/admin/maintenance', {
+  1637→        method: 'POST',
+  1638→        headers: { 'Content-Type': 'application/json' },
+  1639→        body: JSON.stringify({ action: 'toggle-job', jobId })
+  1640→      })
+  1641→      
+  1642→      if (res.ok) {
+  1643→        const data = await res.json()
+  1644→        setJobs(jobs => jobs.map(j => j.id === jobId ? data.data : j))
+  1645→      }
+  1646→    } catch (error) {
+  1647→      toast.error('Failed to toggle job')
+  1648→    }
+  1649→  }
+  1650→
+  1651→  const taskIcons: Record<string, React.ReactNode> = {
+  1652→    'cleanup-sessions': <Clock className="h-5 w-5" />,
+  1653→    'clear-cache': <RefreshCw className="h-5 w-5" />,
+  1654→    'backup': <Database className="h-5 w-5" />,
+  1655→    'health-check': <Activity className="h-5 w-5" />,
+  1656→    'cleanup-audit-logs': <Trash2 className="h-5 w-5" />,
+  1657→    'generate-report': <BarChart3 className="h-5 w-5" />,
+  1658→  }
+  1659→
+  1660→  return (
+  1661→    <div className="space-y-6">
+  1662→      <div>
+  1663→        <h2 className="text-2xl font-bold">Maintenance & Scheduled Jobs</h2>
+  1664→        <p className="text-slate-400 mt-1">Run maintenance tasks and manage cron jobs</p>
+  1665→      </div>
+  1666→
+  1667→      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+  1668→        {/* Quick Actions */}
+  1669→        <Card className="bg-slate-900/50 border-slate-800">
+  1670→          <CardHeader>
+  1671→            <CardTitle className="flex items-center gap-2">
+  1672→              <Terminal className="h-5 w-5" /> Quick Actions
+  1673→            </CardTitle>
+  1674→            <CardDescription>Execute maintenance tasks immediately</CardDescription>
+  1675→          </CardHeader>
+  1676→          <CardContent className="space-y-3">
+  1677→            {[
+  1678→              { id: 'cleanup-sessions', label: 'Cleanup Stale Sessions', desc: 'Remove inactive sessions' },
+  1679→              { id: 'clear-cache', label: 'Clear Cache', desc: 'Clear all system caches' },
+  1680→              { id: 'backup', label: 'Database Backup', desc: 'Create backup now' },
+  1681→              { id: 'health-check', label: 'Health Check', desc: 'Run diagnostics' },
+  1682→              { id: 'cleanup-audit-logs', label: 'Clean Old Logs', desc: 'Remove 90+ day logs' },
+  1683→              { id: 'generate-report', label: 'Generate Report', desc: 'Create security report' },
+  1684→            ].map(task => (
+  1685→              <div
+  1686→                key={task.id}
+  1687→                className="flex items-center justify-between p-3 bg-slate-800/50 rounded-lg hover:bg-slate-800 transition-colors"
+  1688→              >
+  1689→                <div className="flex items-center gap-3">
+  1690→                  <div className="p-2 bg-slate-700 rounded">
+  1691→                    {taskIcons[task.id]}
+  1692→                  </div>
+  1693→                  <div>
+  1694→                    <p className="font-medium text-sm">{task.label}</p>
+  1695→                    <p className="text-xs text-slate-400">{task.desc}</p>
+  1696→                  </div>
+  1697→                </div>
+  1698→                <Button
+  1699→                  size="sm"
+  1700→                  onClick={() => executeTask(task.id)}
+  1701→                  disabled={executingTask === task.id}
+  1702→                >
+  1703→                  {executingTask === task.id ? (
+  1704→                    <RefreshCw className="h-4 w-4 animate-spin" />
+  1705→                  ) : (
+  1706→                    'Run'
+  1707→                  )}
+  1708→                </Button>
+  1709→              </div>
+  1710→            ))}
+  1711→          </CardContent>
+  1712→        </Card>
+  1713→
+  1714→        {/* Task Result */}
+  1715→        {taskResult && (
+  1716→          <Card className="bg-slate-900/50 border-green-500/20">
+  1717→            <CardHeader>
+  1718→              <CardTitle className="text-green-400 flex items-center gap-2">
+  1719→                <CheckCircle className="h-5 w-5" /> Task Result
+  1720→              </CardTitle>
+  1721→            </CardHeader>
+  1722→            <CardContent>
+  1723→              <pre className="text-sm bg-slate-800 p-4 rounded overflow-auto max-h-64">
+  1724→                {JSON.stringify(taskResult, null, 2)}
+  1725→              </pre>
+  1726→            </CardContent>
+  1727→          </Card>
+  1728→        )}
+  1729→
+  1730→        {/* Scheduled Jobs */}
+  1731→        <Card className="bg-slate-900/50 border-slate-800 lg:col-span-2">
+  1732→          <CardHeader>
+  1733→            <CardTitle className="flex items-center gap-2">
+  1734→              <Calendar className="h-5 w-5" /> Scheduled Jobs
+  1735→            </CardTitle>
+  1736→            <CardDescription>Automated maintenance tasks with cron scheduling</CardDescription>
+  1737→          </CardHeader>
+  1738→          <CardContent>
+  1739→            {loading ? (
+  1740→              <div className="flex items-center justify-center py-8">
+  1741→                <RefreshCw className="h-8 w-8 animate-spin text-slate-400" />
+  1742→              </div>
+  1743→            ) : (
+  1744→              <Table>
+  1745→                <TableHeader>
+  1746→                  <TableRow className="border-slate-700 hover:bg-transparent">
+  1747→                    <TableHead>Job Name</TableHead>
+  1748→                    <TableHead>Schedule</TableHead>
+  1749→                    <TableHead>Last Run</TableHead>
+  1750→                    <TableHead>Next Run</TableHead>
+  1751→                    <TableHead>Status</TableHead>
+  1752→                    <TableHead className="text-right">Actions</TableHead>
+  1753→                  </TableRow>
+  1754→                </TableHeader>
+  1755→                <TableBody>
+  1756→                  {jobs.map((job) => (
+  1757→                    <TableRow key={job.id} className="border-slate-700">
+  1758→                      <TableCell>
+  1759→                        <div className="flex items-center gap-2">
+  1760→                          {taskIcons[job.action]}
+  1761→                          <span className="font-medium">{job.name}</span>
+  1762→                        </div>
+  1763→                      </TableCell>
+  1764→                      <TableCell>
+  1765→                        <code className="text-sm bg-slate-800 px-2 py-1 rounded">{job.schedule}</code>
+  1766→                      </TableCell>
+  1767→                      <TableCell className="text-slate-400">
+  1768→                        {job.lastRun ? new Date(job.lastRun).toLocaleString() : 'Never'}
+  1769→                      </TableCell>
+  1770→                      <TableCell className="text-slate-400">
+  1771→                        {job.nextRun ? new Date(job.nextRun).toLocaleString() : '-'}
+  1772→                      </TableCell>
+  1773→                      <TableCell>
+  1774→                        <Switch
+  1775→                          checked={job.enabled}
+  1776→                          onCheckedChange={() => toggleJob(job.id)}
+  1777→                        />
+  1778→                      </TableCell>
+  1779→                      <TableCell className="text-right">
+  1780→                        <Button
+  1781→                          size="sm"
+  1782→                          variant="ghost"
+  1783→                          onClick={() => executeTask(job.action)}
+  1784→                          disabled={executingTask === job.action}
+  1785→                        >
+  1786→                          {executingTask === job.action ? (
+  1787→                            <RefreshCw className="h-4 w-4 animate-spin" />
+  1788→                          ) : (
+  1789→                            <Play className="h-4 w-4" />
+  1790→                          )}
+  1791→                        </Button>
+  1792→                      </TableCell>
+  1793→                    </TableRow>
+  1794→                  ))}
+  1795→                </TableBody>
+  1796→              </Table>
+  1797→            )}
+  1798→          </CardContent>
+  1799→        </Card>
+  1800→      </div>
+  1801→    </div>
+  1802→  )
+  1803→}
+  1804→
+  1805→export default AdminPanel
+  1806→

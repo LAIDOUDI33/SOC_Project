@@ -1,0 +1,571 @@
+     1→'use client'
+     2→
+     3→import React, { useState } from 'react'
+     4→import {
+     5→  Shield, Bot, Network, Lock, Zap, BarChart3,
+     6→  Globe, AlertTriangle, Activity, Users, Database,
+     7→  Eye, Settings, Bell, Search, Menu, X,
+     8→  Brain, Target, Radar, Workflow, ChevronRight,
+     9→  Clock
+    10→} from 'lucide-react'
+    11→import { Button } from '@/components/ui/button'
+    12→import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+    13→import { Badge } from '@/components/ui/badge'
+    14→import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
+    15→import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from '@/components/ui/tooltip'
+    16→import { AISocCopilot } from '@/components/ai-copilot/AISocCopilot'
+    17→import { SecurityKnowledgeGraph } from '@/components/security-graph/SecurityKnowledgeGraph'
+    18→import { ThreatIntelligenceCenter } from '@/components/threat-intel/ThreatIntelligenceCenter'
+    19→import { SOARPlaybookEngine } from '@/components/soar-engine/SOARPlaybookEngine'
+    20→
+    21→// Dashboard Stats
+    22→const platformStats = {
+    23→  eventsProcessed: 2847392,
+    24→  alertsGenerated: 847,
+    25→  activeIncidents: 23,
+    26→  threatScore: 87,
+    27→  detectionCoverage: 94.2,
+    28→  automationRate: 78,
+    29→  mttD: 847, // seconds
+    30→  mttr: 4230 // seconds (1.17 hours)
+    31→}
+    32→
+    33→const quickActions = [
+    34→  { label: 'Run Threat Hunt', icon: Radar, color: 'from-purple-500 to-pink-500' },
+    35→  { label: 'Generate Report', icon: BarChart3, color: 'from-blue-500 to-cyan-500' },
+    36→  { label: 'Review Detections', icon: Eye, color: 'from-emerald-500 to-green-400' },
+    37→  { label: 'System Health', icon: Activity, color: 'from-orange-500 to-yellow-400' },
+    38→]
+    39→
+    40→export default function CyberSOCPlatform() {
+    41→  const [activeTab, setActiveTab] = useState('overview')
+    42→  const [showMobileNav, setShowMobileNav] = useState(false)
+    43→  const [copilotExpanded, setCopilotExpanded] = useState(true)
+    44→
+    45→  return (
+    46→    <div className="min-h-screen bg-slate-950 text-white">
+    47→      {/* Header */}
+    48→      <header className="sticky top-0 z-50 bg-slate-900/95 backdrop-blur-sm border-b border-slate-800">
+    49→        <div className="px-4 lg:px-6 py-3">
+    50→          <div className="flex items-center justify-between">
+    51→            {/* Logo & Brand */}
+    52→            <div className="flex items-center gap-3">
+    53→              <Button
+    54→                variant="ghost"
+    55→                size="sm"
+    56→                className="lg:hidden text-slate-400 hover:text-white"
+    57→                onClick={() => setShowMobileNav(!showMobileNav)}
+    58→              >
+    59→                {showMobileNav ? <X className="h-5 w-5" /> : <Menu className="h-5 w-5" />}
+    60→              </Button>
+    61→              
+    62→              <div className="relative">
+    63→                <div className="p-2 bg-gradient-to-br from-emerald-500 via-cyan-500 to-blue-600 rounded-xl">
+    64→                  <Shield className="h-6 w-6 text-white" />
+    65→                </div>
+    66→                <div className="absolute -bottom-1 -right-1 w-3 h-3 bg-emerald-500 rounded-full animate-pulse" />
+    67→              </div>
+    68→              
+    69→              <div>
+    70→                <h1 className="text-lg font-bold text-white flex items-center gap-2">
+    71→                  CyberSOC
+    72→                  <Badge className="bg-gradient-to-r from-emerald-500 to-cyan-500 text-white border-0 text-xs font-semibold px-2 py-0.5">
+    73→                    AI-Native
+    74→                  </Badge>
+    75→                </h1>
+    76→                <p className="text-xs text-slate-400 hidden sm:block">Cyber Defense Operating System</p>
+    77→              </div>
+    78→            </div>
+    79→
+    80→            {/* Right Section */}
+    81→            <div className="flex items-center gap-3">
+    82→              {/* Quick Stats */}
+    83→              <div className="hidden md:flex items-center gap-4 mr-4">
+    84→                <div className="text-right">
+    85→                  <p className="text-xs text-slate-400">Events/sec</p>
+    86→                  <p className="text-sm font-bold text-emerald-400">{(platformStats.eventsProcessed / 86400).toFixed(0)}</p>
+    87→                </div>
+    88→                <div className="w-px h-8 bg-slate-700" />
+    89→                <div className="text-right">
+    90→                  <p className="text-xs text-slate-400">Active Incidents</p>
+    91→                  <p className="text-sm font-bold text-orange-400">{platformStats.activeIncidents}</p>
+    92→                </div>
+    93→                <div className="w-px h-8 bg-slate-700" />
+    94→                <div className="text-right">
+    95→                  <p className="text-xs text-slate-400">Threat Score</p>
+    96→                  <p className={`text-sm font-bold ${platformStats.threatScore >= 80 ? 'text-red-400' : 'text-yellow-400'}`}>
+    97→                    {platformStats.threatScore}/100
+    98→                  </p>
+    99→                </div>
+   100→              </div>
+   101→
+   102→              {/* Header Actions */}
+   103→              <Button variant="ghost" size="sm" className="text-slate-400 hover:text-white relative">
+   104→                <Bell className="h-5 w-5" />
+   105→                <span className="absolute -top-1 -right-1 w-4 h-4 bg-red-500 rounded-full text-[10px] flex items-center justify-center font-bold">
+   106→                  3
+   107→                </span>
+   108→              </Button>
+   109→              <Button variant="ghost" size="sm" className="text-slate-400 hover:text-white">
+   110→                <Settings className="h-5 w-5" />
+   111→              </Button>
+   112→              <div className="w-8 h-8 rounded-full bg-gradient-to-br from-blue-500 to-purple-600 flex items-center justify-center text-sm font-bold cursor-pointer hover:ring-2 ring-emerald-500/50 transition-all">
+   113→                SA
+   114→              </div>
+   115→            </div>
+   116→          </div>
+   117→        </div>
+   118→      </header>
+   119→
+   120→      <div className="flex">
+   121→        {/* Sidebar Navigation */}
+   122→        <aside className={`
+   123→          fixed lg:static inset-y-0 left-0 z-40
+   124→          w-64 bg-slate-900 border-r border-slate-800
+   125→          transform transition-transform duration-300 ease-in-out
+   126→          ${showMobileNav ? 'translate-x-0' : '-translate-x-full lg:translate-x-0'}
+   127→        `}>
+   128→          <div className="flex flex-col h-full p-4">
+   129→            {/* Navigation */}
+   130→            <nav className="space-y-1 flex-1 overflow-y-auto">
+   131→              <p className="text-xs font-medium text-slate-500 uppercase tracking-wider mb-2 px-3">
+   132→                Main Modules
+   133→              </p>
+   134→              
+   135→              {[
+   136→                { id: 'overview', label: 'Command Center', icon: Brain, badge: 'AI', badgeColor: 'bg-emerald-500/20 text-emerald-400' },
+   137→                { id: 'siem', label: 'SIEM & Detection', icon: Zap, badge: null },
+   138→                { id: 'graph', label: 'Knowledge Graph', icon: Network, badge: 'Live', badgeColor: 'bg-blue-500/20 text-blue-400' },
+   139→                { id: 'threats', label: 'Threat Intel', icon: Radar, badge: '47 IOCs', badgeColor: 'bg-orange-500/20 text-orange-400' },
+   140→                { id: 'soar', label: 'SOAR Engine', icon: Workflow, badge: 'Active', badgeColor: 'bg-purple-500/20 text-purple-400' },
+   141→                { id: 'hunt', label: 'Threat Hunting', icon: Target, badge: null },
+   142→                { id: 'dfir', label: 'DFIR Workspace', icon: Search, badge: null },
+   143→                { id: 'mssp', label: 'MSSP Portal', icon: Users, badge: 'New', badgeColor: 'bg-cyan-500/20 text-cyan-400' },
+   144→              ].map((item) => (
+   145→                <button
+   146→                  key={item.id}
+   147→                  onClick={() => setActiveTab(item.id)}
+   148→                  className={`
+   149→                    w-full flex items-center gap-3 px-3 py-2.5 rounded-lg transition-all text-left
+   150→                    ${activeTab === item.id 
+   151→                      ? 'bg-gradient-to-r from-emerald-500/10 to-cyan-500/10 text-white border border-emerald-500/30' 
+   152→                      : 'text-slate-400 hover:bg-slate-800 hover:text-white'
+   153→                    }
+   154→                  `}
+   155→                >
+   156→                  <item.icon className={`h-4 w-4 ${activeTab === item.id ? 'text-emerald-400' : ''}`} />
+   157→                  <span className="flex-1 text-sm font-medium">{item.label}</span>
+   158→                  {item.badge && (
+   159→                    <Badge variant="secondary" className={`${item.badgeColor || 'bg-slate-700 text-slate-300'} border-0 text-[10px]`}>
+   160→                      {item.badge}
+   161→                    </Badge>
+   162→                  )}
+   163→                </button>
+   164→              ))}
+   165→
+   166→              <p className="text-xs font-medium text-slate-500 uppercase tracking-wider mt-6 mb-2 px-3">
+   167→                Analytics
+   168→              </p>
+   169→              
+   170→              {[
+   171→                { id: 'analytics', label: 'Security Analytics', icon: BarChart3 },
+   172→                { id: 'compliance', label: 'Compliance', icon: Shield },
+   173→                { id: 'risk', label: 'Risk Management', icon: AlertTriangle },
+   174→              ].map((item) => (
+   175→                <button
+   176→                  key={item.id}
+   177→                  onClick={() => setActiveTab(item.id)}
+   178→                  className={`
+   179→                    w-full flex items-center gap-3 px-3 py-2 rounded-lg transition-all text-left
+   180→                    ${activeTab === item.id 
+   181→                      ? 'bg-slate-800 text-white' 
+   182→                      : 'text-slate-400 hover:bg-slate-800/50 hover:text-white'
+   183→                    }
+   184→                  `}
+   185→                >
+   186→                  <item.icon className="h-4 w-4" />
+   187→                  <span className="text-sm">{item.label}</span>
+   188→                </button>
+   189→              ))}
+   190→            </nav>
+   191→
+   192→            {/* User & Status */}
+   193→            <div className="border-t border-slate-800 pt-4 space-y-3">
+   194→              <div className="flex items-center gap-3 px-3">
+   195→                <div className="w-9 h-9 rounded-full bg-gradient-to-br from-blue-500 to-purple-600 flex items-center justify-center text-sm font-bold">
+   196→                  SA
+   197→                </div>
+   198→                <div className="flex-1 min-w-0">
+   199→                  <p className="text-sm font-medium text-white truncate">Security Analyst</p>
+   200→                  <p className="text-xs text-emerald-400">Online</p>
+   201→                </div>
+   202→              </div>
+   203→
+   204→              <div className="bg-slate-800 rounded-lg p-3 space-y-2">
+   205→                <div className="flex justify-between text-xs">
+   206→                  <span className="text-slate-400">Platform Status</span>
+   207→                  <Badge className="bg-emerald-500/20 text-emerald-400 border-emerald-500/30">Operational</Badge>
+   208→                </div>
+   209→                <div className="grid grid-cols-2 gap-2 text-xs">
+   210→                  <div>
+   211→                    <p className="text-slate-500">Detection</p>
+   212→                    <p className="text-white font-medium">{platformStats.detectionCoverage}%</p>
+   213→                  </div>
+   214→                  <div>
+   215→                    <p className="text-slate-500">Automation</p>
+   216→                    <p className="text-white font-medium">{platformStats.automationRate}%</p>
+   217→                  </div>
+   218→                </div>
+   219→              </div>
+   220→            </div>
+   221→          </div>
+   222→        </aside>
+   223→
+   224→        {/* Main Content */}
+   225→        <main className="flex-1 min-h-screen lg:ml-0 ml-64">
+   226→          <Tabs value={activeTab} onValueChange={setActiveTab} className="h-full">
+   227→            {/* Overview Tab - Command Center with AI Copilot */}
+   228→            <TabsContent value="overview" className="h-full m-0">
+   229→              <div className="p-4 lg:p-6 space-y-6 max-w-[1600px] mx-auto">
+   230→                {/* Page Title */}
+   231→                <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+   232→                  <div>
+   233→                    <h2 className="text-2xl font-bold text-white flex items-center gap-3">
+   234→                      <Brain className="h-7 w-7 text-emerald-500" />
+   235→                      SOC Command Center
+   236→                    </h2>
+   237→                    <p className="text-slate-400 mt-1">AI-augmented security operations overview</p>
+   238→                  </div>
+   239→                  
+   240→                  <div className="flex items-center gap-2">
+   241→                    {quickActions.map((action, i) => (
+   242→                      <Button
+   243→                        key={i}
+   244→                        variant="outline"
+   245→                        size="sm"
+   246→                        className={`bg-gradient-to-r ${action.color} border-0 text-white hover:opacity-90 hidden sm:flex`}
+   247→                      >
+   248→                        <action.icon className="h-4 w-4 mr-1" />
+   249→                        {action.label}
+   250→                      </Button>
+   251→                    ))}
+   252→                  </div>
+   253→                </div>
+   254→
+   255→                {/* Key Metrics Cards */}
+   256→                <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+   257→                  {[
+   258→                    { title: 'MTTD', value: `${Math.floor(platformStats.mttD / 60)}:${(platformStats.mttD % 60).toString().padStart(2, '0')}`, change: '-12%', positive: true, icon: Activity, color: 'text-emerald-400', bgColor: 'bg-emerald-500/10' },
+   259→                    { title: 'MTTR', value: `${Math.floor(platformStats.mttr / 3600)}h ${(Math.floor((platformStats.mttr % 3600) / 60))}m`, change: '-18%', positive: true, icon: Clock, color: 'text-blue-400', bgColor: 'bg-blue-500/10' },
+   260→                    { title: 'Alerts Today', value: platformStats.alertsGenerated.toString(), change: '+5%', positive: false, icon: AlertTriangle, color: 'text-orange-400', bgColor: 'bg-orange-500/10' },
+   261→                    { title: 'Automation Rate', value: `${platformStats.automationRate}%`, change: '+8%', positive: true, icon: Zap, color: 'text-purple-400', bgColor: 'bg-purple-500/10' },
+   262→                  ].map((metric, i) => (
+   263→                    <Card key={i} className="bg-slate-900 border-slate-800 hover:border-slate-700 transition-colors">
+   264→                      <CardContent className="p-4">
+   265→                        <div className="flex items-center justify-between mb-2">
+   266→                          <span className="text-slate-400 text-sm">{metric.title}</span>
+   267→                          <div className={`p-1.5 rounded-md ${metric.bgColor}`}>
+   268→                            <metric.icon className={`h-4 w-4 ${metric.color}`} />
+   269→                          </div>
+   270→                        </div>
+   271→                        <p className="text-2xl font-bold text-white">{metric.value}</p>
+   272→                        <div className="flex items-center gap-1 mt-1">
+   273→                          <span className={`text-xs ${metric.positive ? 'text-emerald-400' : 'text-red-400'}`}>
+   274→                            {metric.change}
+   275→                          </span>
+   276→                          <span className="text-xs text-slate-500">vs yesterday</span>
+   277→                        </div>
+   278→                      </CardContent>
+   279→                    </Card>
+   280→                  ))}
+   281→                </div>
+   282→
+   283→                {/* Main Content Grid - AI Copilot + Graph */}
+   284→                <div className="grid lg:grid-cols-2 gap-6">
+   285→                  {/* AI SOC Copilot */}
+   286→                  <div className={`${copilotExpanded ? 'lg:col-span-1' : 'lg:col-span-2'}`}>
+   287→                    <AISocCopilot />
+   288→                  </div>
+   289→
+   290→                  {/* Security Knowledge Graph */}
+   291→                  {!copilotExpanded && (
+   292→                    <div className="lg:col-span-1">
+   293→                      <SecurityKnowledgeGraph />
+   294→                    </div>
+   295→                  )}
+   296→                </div>
+   297→
+   298→                {/* Bottom Row - Threat Intel + SOAR Preview */}
+   299→                <div className="grid lg:grid-cols-2 gap-6">
+   300→                  {/* Threat Intelligence Summary */}
+   301→                  <Card className="bg-slate-900 border-slate-800">
+   302→                    <CardHeader className="pb-3 border-b border-slate-800">
+   303→                      <div className="flex items-center justify-between">
+   304→                        <CardTitle className="text-base text-white flex items-center gap-2">
+   305→                          <Radar className="h-5 w-5 text-orange-500" />
+   306→                          Threat Intelligence Summary
+   307→                        </CardTitle>
+   308→                        <Button variant="ghost" size="sm" className="text-slate-400 hover:text-white text-xs">
+   309→                          View All <ChevronRight className="h-4 w-4 ml-1" />
+   310→                        </Button>
+   311→                      </div>
+   312→                    </CardHeader>
+   313→                    <CardContent className="space-y-4">
+   314→                      {/* Active Campaigns */}
+   315→                      <div className="space-y-2">
+   316→                        <p className="text-xs font-medium text-slate-400 uppercase tracking-wide">Active Campaigns</p>
+   317→                        
+   318→                        <div className="space-y-2">
+   319→                          {[
+   320→                            { name: 'Operation Phishing Storm', actor: 'APT-29', severity: 'high', iocs: 47, status: 'active' },
+   321→                            { name: 'RansomWave Q3 2024', actor: 'LockBit', severity: 'critical', iocs: 234, status: 'active' },
+   322→                          { name: 'Supply Chain Attack', actor: 'Unknown', severity: 'medium', iocs: 12, status: 'monitoring' },
+   323→                          ].map((campaign, i) => (
+   324→                            <div key={i} className="flex items-center gap-3 p-2 rounded-lg bg-slate-800/50 hover:bg-slate-800 transition-colors">
+   325→                              <div className={`w-2 h-2 rounded-full ${
+   326→                                campaign.severity === 'critical' ? 'bg-red-500 animate-pulse' :
+   327→                                campaign.severity === 'high' ? 'bg-orange-500' : 'bg-yellow-500'
+   328→                              }`} />
+   329→                              <div className="flex-1 min-w-0">
+   330→                                <p className="text-sm font-medium text-white truncate">{campaign.name}</p>
+   331→                                <p className="text-xs text-slate-400">{campaign.actor} • {campaign.iocs} IOCs</p>
+   332→                              </div>
+   333→                              <Badge variant="secondary" className={
+   334→                                campaign.status === 'active' ? 'bg-red-500/20 text-red-400 border-red-500/30' :
+   335→                                'bg-slate-700 text-slate-300'
+   336→                              }>
+   337→                                {campaign.status}
+   338→                              </Badge>
+   339→                            </div>
+   340→                          ))}
+   341→                        </div>
+   342→                      </div>
+   343→
+   344→                      {/* Critical IOCs */}
+   345→                      <div className="space-y-2">
+   346→                        <p className="text-xs font-medium text-slate-400 uppercase tracking-wide">Critical IOCs</p>
+   347→                        <div className="flex flex-wrap gap-2">
+   348→                          {[
+   349→                            { type: 'IP', value: '185.220.101.45', risk: 95 },
+   350→                            { type: 'Domain', value: 'evil-c2[.]ru', risk: 98 },
+   351→                            { type: 'Hash', value: 'a1b2c3d4...', risk: 92 },
+   352→                            { type: 'Email', value: 'ceo-fraud@...', risk: 88 },
+   353→                          ].map((ioc, i) => (
+   354→                            <Tooltip key={i}>
+   355→                              <TooltipTrigger asChild>
+   356→                                <div className="flex items-center gap-1.5 px-2 py-1 rounded-md bg-slate-800 border border-slate-700 hover:border-red-500/50 cursor-pointer transition-colors">
+   357→                                  <span className="text-[10px] font-medium text-slate-500">{ioc.type}</span>
+   358→                                  <span className="text-xs font-mono text-white max-w-[100px] truncate">{ioc.value}</span>
+   359→                                  <span className="text-xs font-bold text-red-400">{ioc.risk}</span>
+   360→                                </div>
+   361→                              </TooltipTrigger>
+   362→                              <TooltipContent side="top" className="bg-slate-800 border-slate-600">
+   363→                                <p className="font-mono text-xs">{ioc.value}</p>
+   364→                                <p className="text-xs text-red-400 mt-1">Risk Score: {ioc.risk}/100</p>
+   365→                              </TooltipContent>
+   366→                            </Tooltip>
+   367→                          ))}
+   368→                        </div>
+   369→                      </div>
+   370→                    </CardContent>
+   371→                  </Card>
+   372→
+   373→                  {/* SOAR Playbooks Status */}
+   374→                  <Card className="bg-slate-900 border-slate-800">
+   375→                    <CardHeader className="pb-3 border-b border-slate-800">
+   376→                      <div className="flex items-center justify-between">
+   377→                        <CardTitle className="text-base text-white flex items-center gap-2">
+   378→                          <Workflow className="h-5 w-5 text-purple-500" />
+   379→                          Active Playbooks
+   380→                        </CardTitle>
+   381→                        <Button variant="ghost" size="sm" className="text-slate-400 hover:text-white text-xs">
+   382→                          Manage All <ChevronRight className="h-4 w-4 ml-1" />
+   383→                        </Button>
+   384→                      </div>
+   385→                    </CardHeader>
+   386→                    <CardContent className="space-y-3">
+   387→                      {[
+   388→                        {
+   389→                          name: 'Phishing Response',
+   390→                          incident: 'INC-4521',
+   391→                          progress: 35,
+   392→                          autonomy: 2,
+   393→                          status: 'running',
+   394→                          currentStep: 'Containment Actions',
+   395→                          timeRunning: '2h 15m'
+   396→                        },
+   397→                        {
+   398→                          name: 'Data Exfiltration',
+   399→                          incident: 'INC-4522',
+   400→                          progress: 15,
+   401→                          autonomy: 3,
+   402→                          status: 'running',
+   403→                          currentStep: 'Evidence Preservation',
+   404→                          timeRunning: '45m'
+   405→                        },
+   406→                        {
+   407→                          name: 'Malware Containment',
+   408→                          incident: 'INC-4520',
+   409→                          progress: 100,
+   410→                          autonomy: 2,
+   411→                          status: 'completed',
+   412→                          currentStep: 'Post-Incident Review',
+   413→                          timeRunning: 'Completed'
+   414→                        },
+   415→                      ].map((playbook, i) => (
+   416→                        <div key={i} className="p-3 rounded-lg bg-slate-800/50 border border-slate-700 hover:border-slate-600 transition-colors">
+   417→                          <div className="flex items-center justify-between mb-2">
+   418→                            <div className="flex items-center gap-2">
+   419→                              <div className={`w-2 h-2 rounded-full ${
+   420→                                playbook.status === 'running' ? 'bg-blue-500 animate-pulse' :
+   421→                                playbook.status === 'completed' ? 'bg-emerald-500' : 'bg-slate-500'
+   422→                              }`} />
+   423→                              <span className="text-sm font-medium text-white">{playbook.name}</span>
+   424→                            </div>
+   425→                            <div className="flex items-center gap-2">
+   426→                              <Badge variant="secondary" className={
+   427→                                playbook.autonomy >= 3 ? 'bg-red-500/20 text-red-400 border-red-500/30' :
+   428→                                playbook.autonomy >= 2 ? 'bg-orange-500/20 text-orange-400 border-orange-500/30' :
+   429→                                'bg-slate-700 text-slate-300'
+   430→                              }>
+   431→                                L{playbook.autonomy}
+   432→                              </Badge>
+   433→                              <span className="text-xs text-slate-400">{playbook.incident}</span>
+   434→                            </div>
+   435→                          </div>
+   436→                          
+   437→                          <div className="space-y-2">
+   438→                            <div className="flex items-center justify-between text-xs">
+   439→                              <span className="text-slate-400">Current: {playbook.currentStep}</span>
+   440→                              <span className="text-slate-400">{playbook.timeRunning}</span>
+   441→                            </div>
+   442→                            
+   443→                            <div className="w-full h-1.5 bg-slate-700 rounded-full overflow-hidden">
+   444→                              <div 
+   445→                                className={`h-full rounded-full transition-all ${
+   446→                                  playbook.status === 'completed' ? 'bg-emerald-500' :
+   447→                                  playbook.status === 'running' ? 'bg-blue-500' : 'bg-slate-500'
+   448→                                }`}
+   449→                                style={{ width: `${playbook.progress}%` }}
+   450→                              />
+   451→                            </div>
+   452→                            
+   453→                            <div className="flex justify-between text-xs">
+   454→                              <span className="text-slate-500">{playbook.progress}% complete</span>
+   455→                              <span className={
+   456→                                playbook.status === 'completed' ? 'text-emerald-400' :
+   457→                                playbook.status === 'running' ? 'text-blue-400' : 'text-slate-400'
+   458→                              }>
+   459→                                {playbook.status}
+   460→                              </span>
+   461→                            </div>
+   462→                          </div>
+   463→                        </div>
+   464→                      ))}
+   465→                    </CardContent>
+   466→                  </Card>
+   467→                </div>
+   468→              </div>
+   469→            </TabsContent>
+   470→
+   471→            {/* SIEM Tab */}
+   472→            <TabsContent value="siem" className="h-full m-0">
+   473→              <div className="p-6 space-y-6">
+   474→                <div className="flex items-center justify-between">
+   475→                  <h2 className="text-2xl font-bold text-white flex items-center gap-3">
+   476→                    <Zap className="h-7 w-7 text-emerald-500" />
+   477→                    SIEM & Detection Engine
+   478→                  </h2>
+   479→                  <Badge className="bg-emerald-500/20 text-emerald-400 border-emerald-500/30 px-3 py-1">
+   480→                    Real-time Processing Active
+   481→                  </Badge>
+   482→                </div>
+   483→
+   484→                {/* SIEM Metrics */}
+   485→                <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+   486→                  {[
+   487→                    { label: 'EPS (Events/Sec)', value: '32,847', trend: '+12%' },
+   488→                    { label: 'Detection Rules', value: '1,247', trend: '+24' },
+   489→                    { label: 'False Positive Rate', value: '4.2%', trend: '-1.8%' },
+   490→                    { label: 'Correlation Engine', value: 'Active', trend: null },
+   491→                  ].map((stat, i) => (
+   492→                    <Card key={i} className="bg-slate-900 border-slate-800">
+   493→                      <CardContent className="p-4 text-center">
+   494→                        <p className="text-xs text-slate-400 mb-1">{stat.label}</p>
+   495→                        <p className="text-xl font-bold text-white">{stat.value}</p>
+   496→                        {stat.trend && (
+   497→                          <p className={`text-xs mt-1 ${stat.trend.startsWith('+') ? 'text-emerald-400' : 'text-red-400'}`}>
+   498→                            {stat.trend} from last hour
+   499→                          </p>
+   500→                        )}
+   501→                      </CardContent>
+   502→                    </Card>
+   503→                  ))}
+   504→                </div>
+   505→
+   506→                {/* Full-width components for other tabs */}
+   507→                <SecurityKnowledgeGraph />
+   508→              </div>
+   509→            </TabsContent>
+   510→
+   511→            {/* Knowledge Graph Tab */}
+   512→            <TabsContent value="graph" className="h-full m-0">
+   513→              <div className="p-6">
+   514→                <SecurityKnowledgeGraph />
+   515→              </div>
+   516→            </TabsContent>
+   517→
+   518→            {/* Threat Intel Tab */}
+   519→            <TabsContent value="threats" className="h-full m-0">
+   520→              <div className="p-6">
+   521→                <ThreatIntelligenceCenter />
+   522→              </div>
+   523→            </TabsContent>
+   524→
+   525→            {/* SOAR Tab */}
+   526→            <TabsContent value="soar" className="h-full m-0">
+   527→              <div className="p-6">
+   528→                <SOARPlaybookEngine />
+   529→              </div>
+   530→            </TabsContent>
+   531→
+   532→            {/* Other tabs placeholder */}
+   533→            {['hunt', 'dfir', 'mssp', 'analytics', 'compliance', 'risk'].map((tabId) => (
+   534→              <TabsContent key={tabId} value={tabId} className="h-full m-0">
+   535→                <div className="p-6 flex flex-col items-center justify-center min-h-[60vh]">
+   536→                  <div className="text-center space-y-4">
+   537→                    <div className="p-4 rounded-2xl bg-slate-800 inline-block">
+   538→                      {tabId === 'hunt' && <Target className="h-12 w-12 text-emerald-500 mx-auto" />}
+   539→                      {tabId === 'dfir' && <Search className="h-12 w-12 text-blue-500 mx-auto" />}
+   540→                      {tabId === 'mssp' && <Users className="h-12 w-12 text-purple-500 mx-auto" />}
+   541→                      {tabId === 'analytics' && <BarChart3 className="h-12 w-12 text-orange-500 mx-auto" />}
+   542→                      {tabId === 'compliance' && <Shield className="h-12 w-12 text-green-500 mx-auto" />}
+   543→                      {tabId === 'risk' && <AlertTriangle className="h-12 w-12 text-red-500 mx-auto" />}
+   544→                    </div>
+   545→                    <h3 className="text-xl font-bold text-white capitalize">{tabId.replace('_', ' ')}</h3>
+   546→                    <p className="text-slate-400 max-w-md mx-auto">
+   547→                      This module is part of the CyberSOC strategic roadmap implementation.
+   548→                      Full functionality coming in the next development phase.
+   549→                    </p>
+   550→                    <Badge className="mt-4 bg-slate-800 text-slate-300 border-slate-600">
+   551→                      Phase 2 Development
+   552→                    </Badge>
+   553→                  </div>
+   554→                </div>
+   555→              </TabsContent>
+   556→            ))}
+   557→          </Tabs>
+   558→        </main>
+   559→      </div>
+   560→
+   561→      {/* Mobile Overlay */}
+   562→      {showMobileNav && (
+   563→        <div 
+   564→          className="fixed inset-0 bg-black/50 z-30 lg:hidden"
+   565→          onClick={() => setShowMobileNav(false)}
+   566→        />
+   567→      )}
+   568→    </div>
+   569→  )
+   570→}
+   571→
