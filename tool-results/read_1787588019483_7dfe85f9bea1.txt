@@ -1,0 +1,696 @@
+     1→-- ============================================================
+     2→-- National SOC Platform - PostgreSQL Initialization Script
+     3→-- Run this once to set up production database
+     4→-- ============================================================
+     5→
+     6→-- Enable required extensions
+     7→CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
+     8→CREATE EXTENSION IF NOT EXISTS "pgcrypto";
+     9→CREATE EXTENSION IF NOT EXISTS "pg_trgm";  -- For text similarity searches
+    10→
+    11→-- ============================================================
+    12→-- Create custom types (enums)
+    13→-- ============================================================
+    14→
+    15→DO $$ BEGIN
+    16→    CREATE TYPE alert_severity AS ENUM (
+    17→        'CRITICAL', 'HIGH', 'MEDIUM', 'LOW', 'INFO'
+    18→    );
+    19→EXCEPTION WHEN duplicate_object THEN NULL;
+    20→END $$;
+    21→
+    22→DO $$ BEGIN
+    23→    CREATE TYPE alert_status AS ENUM (
+    24→        'NEW', 'ACKNOWLEDGED', 'IN_PROGRESS', 'RESOLVED',
+    25→        'FALSE_POSITIVE', 'ESCALATED', 'SUPPRESSED', 'CLOSED'
+    26→    );
+    27→EXCEPTION WHEN duplicate_object THEN NULL;
+    28→END $$;
+    29→
+    30→DO $$ BEGIN
+    31→    CREATE TYPE incident_severity AS ENUM (
+    32→        'CRITICAL', 'HIGH', 'MEDIUM', 'LOW'
+    33→    );
+    34→EXCEPTION WHEN duplicate_object THEN NULL;
+    35→END $$;
+    36→
+    37→DO $$ BEGIN
+    38→    CREATE TYPE incident_status AS ENUM (
+    39→        'OPEN', 'IN_PROGRESS', 'WAITING', 'RESOLVED', 'CLOSED'
+    40→    );
+    41→EXCEPTION WHEN duplicate_object THEN NULL;
+    42→END $$;
+    43→
+    44→DO $$ BEGIN
+    45→    CREATE TYPE incident_phase AS ENUM (
+    46→        'DETECTION', 'TRIAGE', 'CONTAINMENT', 'ERADICATION',
+    47→        'RECOVERY', 'LESSONS_LEARNED', 'CLOSED'
+    48→    );
+    49→EXCEPTION WHEN duplicate_object THEN NULL;
+    50→END $$;
+    51→
+    52→DO $$ BEGIN
+    53→    CREATE TYPE ioc_type AS ENUM (
+    54→        'IP_ADDRESS', 'DOMAIN', 'URL', 'HASH_MD5', 'HASH_SHA1',
+    55→        'HASH_SHA256', 'EMAIL', 'PHONE_NUMBER', 'IMSI', 'IMEI',
+    56→        'MSISDN', 'FILE_NAME'
+    57→    );
+    58→EXCEPTION WHEN duplicate_object THEN NULL;
+    59→END $$;
+    60→
+    61→DO $$ BEGIN
+    62→    CREATE TYPE campaign_status AS ENUM (
+    63→        'ACTIVE', 'DORMANT', 'CONTAINED', 'ERADICATED'
+    64→    );
+    65→EXCEPTION WHEN duplicate_object THEN NULL;
+    66→END $$;
+    67→
+    68→DO $$ BEGIN
+    69→    CREATE TYPE subscriber_status AS ENUM (
+    70→        'ACTIVE', 'SUSPENDED', 'DEACTIVATED', 'PREPAID', 'POSTPAID'
+    71→    );
+    72→EXCEPTION WHEN duplicate_object THEN NULL;
+    73→END $$;
+    74→
+    75→DO $$ BEGIN
+    76→    CREATE TYPE roaming_status AS ENUM (
+    77→        'HOME', 'INTERNATIONAL_ROAMING', 'NATIONAL_ROAMING'
+    78→    );
+    79→EXCEPTION WHEN duplicate_object THEN NULL;
+    80→END $$;
+    81→
+    82→DO $$ BEGIN
+    83→    CREATE TYPE session_status AS ENUM (
+    84→        'ACTIVE', 'TERMINATED', 'TIMEOUT', 'ERROR'
+    85→    );
+    86→EXCEPTION WHEN duplicate_object THEN NULL;
+    87→END $$;
+    88→
+    89→DO $$ BEGIN
+    90→    CREATE TYPE audit_category AS ENUM (
+    91→        'AUTHENTICATION', 'AUTHORIZATION', 'DATA_ACCESS',
+    92→        'CONFIGURATION', 'INCIDENT_MANAGEMENT', 'SYSTEM'
+    93→    );
+    94→EXCEPTION WHEN duplicate_object THEN NULL;
+    95→END $$;
+    96→
+    97→DO $$ BEGIN
+    98→    CREATE TYPE task_status AS ENUM (
+    99→        'PENDING', 'IN_PROGRESS', 'COMPLETED', 'CANCELLED', 'BLOCKED'
+   100→    );
+   101→EXCEPTION WHEN duplicate_object THEN NULL;
+   102→END $$;
+   103→
+   104→DO $$ BEGIN
+   105→    CREATE TYPE task_priority AS ENUM (
+   106→        'CRITICAL', 'HIGH', 'MEDIUM', 'LOW'
+   107→    );
+   108→EXCEPTION WHEN duplicate_object THEN NULL;
+   109→END $$;
+   110→
+   111→-- ============================================================
+   112→-- Create tables with PostgreSQL optimizations
+   113→-- ============================================================
+   114→
+   115→-- Roles table
+   116→CREATE TABLE IF NOT EXISTS roles (
+   117→    id TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
+   118→    name TEXT NOT NULL UNIQUE,
+   119→    description TEXT NOT NULL DEFAULT '',
+   120→    permissions JSONB NOT NULL DEFAULT '[]'::jsonb,
+   121→    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+   122→    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+   123→);
+   124→
+   125→CREATE INDEX idx_roles_name ON roles(name);
+   126→
+   127→-- Users table
+   128→CREATE TABLE IF NOT EXISTS users (
+   129→    id TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
+   130→    email TEXT NOT NULL UNIQUE,
+   131→    username TEXT NOT NULL UNIQUE,
+   132→    password_hash TEXT NOT NULL,
+   133→    name TEXT NOT NULL,
+   134→    avatar_url TEXT,
+   135→    is_active BOOLEAN NOT NULL DEFAULT true,
+   136→    is_mfa_enabled BOOLEAN NOT NULL DEFAULT false,
+   137→    mfa_secret TEXT,
+   138→    last_login_at TIMESTAMPTZ,
+   139→    password_changed_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+   140→    role_id TEXT NOT NULL REFERENCES roles(id) ON DELETE RESTRICT,
+   141→    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+   142→    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+   143→);
+   144→
+   145→CREATE INDEX idx_users_email ON users(email);
+   146→CREATE INDEX idx_users_username ON users(username);
+   147→CREATE INDEX idx_users_role_id ON users(role_id);
+   148→CREATE INDEX idx_users_is_active ON users(is_active);
+   149→
+   150→-- Sessions table
+   151→CREATE TABLE IF NOT EXISTS sessions (
+   152→    id TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
+   153→    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+   154→    token TEXT NOT NULL UNIQUE,
+   155→    refresh_token TEXT UNIQUE,
+   156→    ip_address TEXT,
+   157→    user_agent TEXT,
+   158→    expires_at TIMESTAMPTZ NOT NULL,
+   159→    is_active BOOLEAN NOT NULL DEFAULT true,
+   160→    last_activity TIMESTAMPTZ,
+   161→    terminated_at TIMESTAMPTZ,
+   162→    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+   163→    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+   164→);
+   165→
+   166→CREATE INDEX idx_sessions_user_id ON sessions(user_id);
+   167→CREATE INDEX idx_sessions_token ON sessions(token);
+   168→CREATE INDEX idx_sessions_refresh_token ON sessions(refresh_token);
+   169→CREATE INDEX idx_sessions_is_active ON sessions(is_active);
+   170→CREATE INDEX idx_sessions_expires_at ON sessions(expires_at);
+   171→
+   172→-- Network Elements table
+   173→CREATE TABLE IF NOT EXISTS network_elements (
+   174→    id TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
+   175→    name TEXT NOT NULL,
+   176→    element_type TEXT NOT NULL,  -- HLR, MSC, SGSN, GGSN, etc.
+   177→    ip_address TEXT NOT NULL,
+   178→    vendor TEXT,
+   179→    software_version TEXT,
+   180→    status TEXT NOT NULL DEFAULT 'OPERATIONAL',
+   181→    location TEXT,
+   182→    region TEXT,
+   183→    config JSONB,
+   184→    metadata JSONB,
+   185→    last_seen TIMESTAMPTZ,
+   186→    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+   187→    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+   188→);
+   189→
+   190→CREATE INDEX idx_network_elements_type ON network_elements(element_type);
+   191→CREATE INDEX idx_network_elements_ip ON network_elements(ip_address);
+   192→CREATE INDEX idx_network_elements_status ON network_elements(status);
+   193→CREATE INDEX idx_network_elements_region ON network_elements(region);
+   194→
+   195→-- Subscribers table
+   196→CREATE TABLE IF NOT EXISTS subscribers (
+   197→    id TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
+   198→    msisdn TEXT NOT NULL UNIQUE,
+   199→    imsi TEXT UNIQUE,
+   200→    imei TEXT,
+   201→    subscriber_status subscriber_status NOT NULL DEFAULT 'ACTIVE',
+   202→    roaming_status roaming_status NOT NULL DEFAULT 'HOME',
+   203→    risk_score INTEGER NOT NULL DEFAULT 0 CHECK (risk_score >= 0 AND risk_score <= 100),
+   204→    is_roaming BOOLEAN NOT NULL DEFAULT false,
+   205→    home_msc TEXT,
+   206→    visited_msc TEXT,
+   207→    home_sgsn TEXT,
+   208→    visited_sgsn TEXT,
+   209→    profile_data JSONB,
+   210→    metadata JSONB,
+   211→    first_seen TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+   212→    last_seen TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+   213→    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+   214→    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+   215→);
+   216→
+   217→CREATE INDEX idx_subscribers_msisdn ON subscribers(msisdn);
+   218→CREATE INDEX idx_subscribers_imsi ON subscribers(imsi);
+   219→CREATE INDEX idx_subscribers_risk_score ON subscribers(risk_score);
+   220→CREATE INDEX idx_subscriber_status ON subscribers(subscriber_status);
+   221→CREATE INDEX idx_subscribers_roaming ON subscribers(roaming_status);
+   222→CREATE INDEX idx_subscribers_last_seen ON subscribers(last_seen);
+   223→
+   224→-- Campaigns table
+   225→CREATE TABLE IF NOT EXISTS campaigns (
+   226→    id TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
+   227→    name TEXT NOT NULL,
+   228→    description TEXT,
+   229→    threat_actor TEXT,
+   230→    campaign_status campaign_status NOT NULL DEFAULT 'ACTIVE',
+   231→    start_date DATE,
+   232→    end_date DATE,
+   233→    ttps JSONB,  -- Tactics, Techniques, Procedures
+   234→    target_sectors JSONB,
+   235→    mitre_techniques JSONB[],
+   236→    severity TEXT,
+   237→    confidence INTEGER CHECK (confidence >= 0 AND confidence <= 100),
+   238→    is_active BOOLEAN NOT NULL DEFAULT true,
+   239→    metadata JSONB,
+   240→    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+   241→    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+   242→);
+   243→
+   244→CREATE INDEX idx_campaigns_status ON campaigns(campaign_status);
+   245→CREATE INDEX idx_campaigns_threat_actor ON campaigns(threat_actor);
+   246→CREATE INDEX idx_campaigns_is_active ON campaigns(is_active);
+   247→
+   248→-- Threat Indicators table
+   249→CREATE TABLE IF NOT EXISTS threat_indicators (
+   250→    id TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
+   251→    title TEXT NOT NULL,
+   252→    description TEXT,
+   253→    indicator_type TEXT NOT NULL,
+   254→    value TEXT NOT NULL,
+   255→    source TEXT,
+   256→    confidence INTEGER CHECK (confidence >= 0 AND confidence <= 100),
+   257→    severity TEXT,
+   258→    campaign_id TEXT REFERENCES campaigns(id) ON DELETE SET NULL,
+   259→    is_active BOOLEAN NOT NULL DEFAULT true,
+   260→    valid_from TIMESTAMPTZ,
+   261→    valid_until TIMESTAMPTZ,
+   262→    tags TEXT[],
+   263→    context JSONB,
+   264→    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+   265→    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+   266→);
+   267→
+   268→CREATE INDEX idx_threat_indicators_type ON threat_indicators(indicator_type);
+   269→CREATE INDEX idx_threat_indicators_value ON threat_indicators(value);
+   270→CREATE INDEX idx_threat_indicators_source ON threat_indicators(source);
+   271→CREATE INDEX idx_threat_indicators_campaign ON threat_indicators(campaign_id);
+   272→CREATE INDEX idx_threat_indicators_active ON threat_indicators(is_active);
+   273→CREATE GIN INDEX idx_threat_indicators_tags ON threat_indicators USING gin(tags);
+   274→
+   275→-- IOCs (Indicators of Compromise)
+   276→CREATE TABLE IF NOT EXISTS iocs (
+   277→    id TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
+   278→    type ioc_type NOT NULL,
+   279→    value TEXT NOT NULL,
+   280→    description TEXT,
+   281→    source TEXT,
+   282→    threat_level TEXT NOT NULL DEFAULT 'MEDIUM',
+   283→    is_validated BOOLEAN NOT NULL DEFAULT false,
+   284→    is_active BOOLEAN NOT NULL DEFAULT true,
+   285→    first_seen TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+   286→    last_seen TIMESTAMPTZ,
+   287→    expiration_date TIMESTAMPTZ,
+   288→    campaign_id TEXT REFERENCES campaigns(id) ON DELETE SET NULL,
+   289→    tags TEXT[],
+   290→    context JSONB,
+   291→    created_by TEXT REFERENCES users(id),
+   292→    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+   293→    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+   294→);
+   295→
+   296→CREATE INDEX idx_iocs_type ON iocs(type);
+   297→CREATE INDEX idx_iocs_value ON iocs(value);
+   298→CREATE INDEX idx_iocs_source ON iocs(source);
+   299→CREATE INDEX idx_iocs_validated ON iocs(is_validated);
+   300→CREATE INDEX idx_iocs_active ON iocs(is_active);
+   301→CREATE GIN INDEX idx_iocs_tags ON iocs USING gin(tags);
+   302→
+   303→-- Alerts table
+   304→CREATE TABLE IF NOT EXISTS alerts (
+   305→    id TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
+   306→    title TEXT NOT NULL,
+   307→    description TEXT,
+   308→    severity alert_severity NOT NULL DEFAULT 'MEDIUM',
+   309→    status alert_status NOT NULL DEFAULT 'NEW',
+   310→    source TEXT NOT NULL,  -- SIEM, IDS, SOC Analyst, etc.
+   311→    source_ref TEXT,      -- Reference ID from source system
+   312→    category TEXT,
+   313→    raw_event JSONB,
+   314→    ioc_id TEXT REFERENCES iocs(id) ON DELETE SET NULL,
+   315→    incident_id TEXT,
+   316→    assigned_to TEXT REFERENCES users(id) ON DELETE SET NULL,
+   317→    first_seen TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+   318→    last_seen TIMESTAMPTZ,
+   319→    acknowledged_at TIMESTAMPTZ,
+   320→    resolved_at TIMESTAMPTZ,
+   321→    resolution TEXT,
+   322→    tags TEXT[],
+   323→    mitre_tactics TEXT[],
+   324→    mitre_techniques TEXT[],
+   325→    context JSONB,
+   326→    metadata JSONB,
+   327→    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+   328→    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+   329→);
+   330→
+   331→CREATE INDEX idx_alerts_severity ON alerts(severity);
+   332→CREATE INDEX idx_alerts_status ON alerts(status);
+   333→CREATE INDEX idx_alerts_source ON alerts(source);
+   334→CREATE INDEX idx_alerts_first_seen ON alerts(first_seen);
+   335→CREATE INDEX idx_alerts_incident ON alerts(incident_id);
+   336→CREATE INDEX idx_alerts_assigned ON alerts(assigned_to);
+   337→CREATE INDEX idx_alerts_ioc ON alerts(ioc_id);
+   338→CREATE INDEX idx_alerts_created ON alerts(created_at);
+   339→CREATE GIN INDEX idx_alerts_tags ON alerts USING gin(tags);
+   340→CREATE GIN INDEX idx_alerts_raw ON alerts USING gin(raw_event);
+   341→
+   342→-- Incidents table
+   343→CREATE TABLE IF NOT EXISTS incidents (
+   344→    id TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
+   345→    tatc_code TEXT UNIQUE,  -- Telecom Algeria Threat Code
+   346→    title TEXT NOT NULL,
+   347→    description TEXT,
+   348→    severity incident_severity NOT NULL DEFAULT 'MEDIUM',
+   349→    status incident_status NOT NULL DEFAULT 'OPEN',
+   350→    phase incident_phase NOT NULL DEFAULT 'DETECTION',
+   351→    source TEXT,
+   352→    impact_assessment TEXT,
+   353→    affected_assets JSONB,
+   354→    affected_subscribers_count INTEGER DEFAULT 0,
+   355→    sla_breach BOOLEAN NOT NULL DEFAULT false,
+   356→    sla_target TIMESTAMPTZ,
+   357→    detected_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+   358→    acknowledged_at TIMESTAMPTZ,
+   359→    contained_at TIMESTAMPTZ,
+   360→    eradicated_at TIMESTAMPTZ,
+   361→    recovered_at TIMESTAMPTZ,
+   362→    resolved_at TIMESTAMPTZ,
+   363→    closed_at TIMESTAMPTZ,
+   364→    root_cause_analysis TEXT,
+   365→    lessons_learned TEXT,
+   366→    reporter_id TEXT REFERENCES users(id),
+   367→    assignee_id TEXT REFERENCES users(id) ON DELETE SET NULL,
+   368→    campaign_id TEXT REFERENCES campaigns(id) ON DELETE SET NULL,
+   369→    tags TEXT[],
+   370→    timeline JSONB[],  -- Array of timeline events
+   371→    artifacts JSONB,
+   372→    cost_estimate DECIMAL(12,2),
+   373→    metadata JSONB,
+   374→    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+   375→    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+   376→);
+   377→
+   378→CREATE INDEX idx_incidents_tatc ON incidents(tatc_code);
+   379→CREATE INDEX idx_incidents_severity ON incidents(severity);
+   380→CREATE INDEX idx_incidents_status ON incidents(status);
+   381→CREATE INDEX idx_incidents_phase ON incidents(phase);
+   382→CREATE INDEX idx_incidents_detected ON incidents(detected_at);
+   383→CREATE INDEX idx_incidents_reporter ON incidents(reporter_id);
+   384→CREATE INDEX idx_incidents_assignee ON incidents(assignee_id);
+   385→CREATE INDEX idx_incidents_campaign ON incidents(campaign_id);
+   386→CREATE INDEX idx_incidents_sla ON incidents(sla_breach);
+   387→CREATE GIN INDEX idx_incidents_tags ON incidents USING gin(tags);
+   388→
+   389→-- Tasks table
+   390→CREATE TABLE IF NOT EXISTS tasks (
+   391→    id TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
+   392→    title TEXT NOT NULL,
+   393→    description TEXT,
+   394→    status task_status NOT NULL DEFAULT 'PENDING',
+   395→    priority task_priority NOT NULL DEFAULT 'MEDIUM',
+   396→    incident_id TEXT REFERENCES incidents(id) ON DELETE CASCADE,
+   397→    assigned_to TEXT REFERENCES users(id) ON DELETE SET NULL,
+   398→    created_by TEXT REFERENCES users(id),
+   399→    due_date TIMESTAMPTZ,
+   400→    completed_at TIMESTAMPTZ,
+   401→    checklist JSONB,  -- Array of subtasks
+   402→    attachments JSONB,
+   403→    notes TEXT,
+   404→    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+   405→    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+   406→);
+   407→
+   408→CREATE INDEX idx_tasks_incident ON tasks(incident_id);
+   409→CREATE INDEX idx_tasks_assigned ON tasks(assigned_to);
+   410→CREATE INDEX idx_tasks_status ON tasks(status);
+   411→CREATE INDEX idx_tasks_priority ON tasks(priority);
+   412→CREATE INDEX idx_tasks_due ON tasks(due_date);
+   413→
+   414→-- Incident Updates table
+   415→CREATE TABLE IF NOT EXISTS incident_updates (
+   416→    id TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
+   417→    incident_id TEXT NOT NULL REFERENCES incidents(id) ON DELETE CASCADE,
+   418→    author_id TEXT REFERENCES users(id),
+   419→    update_type TEXT NOT NULL,  -- STATUS_CHANGE, NOTE, EVIDENCE, ACTION_TAKEN
+   420→    content TEXT NOT NULL,
+   421→    previous_value JSONB,
+   422→    new_value JSONB,
+   423→    attachments JSONB,
+   424→    internal_only BOOLEAN NOT NULL DEFAULT false,
+   425→    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+   426→);
+   427→
+   428→CREATE INDEX idx_updates_incident ON incident_updates(incident_id);
+   429→CREATE INDEX idx_updates_author ON incident_updates(author_id);
+   430→CREATE INDEX idx_updates_created ON incident_updates(created_at);
+   431→
+   432→-- SS7 Messages table (Telecom protocol data)
+   433→CREATE TABLE IF NOT EXISTS ss7_messages (
+   434→    id TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
+   435→    message_type TEXT NOT NULL,
+   436→    calling_party TEXT,
+   437→    called_party TEXT,
+   438→    gtt_address TEXT,
+   439→    imsi TEXT,
+   440→    msisdn TEXT,
+   441→    is_blocked BOOLEAN NOT NULL DEFAULT false,
+   442→    block_reason TEXT,
+   443→    anomaly_score INTEGER CHECK (anomaly_score >= 0 AND anomaly_score <= 100),
+   444→    raw_message BYTEA,
+   445→    parsed_fields JSONB,
+   446→    source_ne TEXT,
+   447→    destination_ne TEXT,
+   448→    timestamp TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+   449→    processed_at TIMESTAMPTZ,
+   450→    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+   451→);
+   452→
+   453→CREATE INDEX idx_ss7_timestamp ON ss7_messages(timestamp);
+   454→CREATE INDEX idx_ss7_calling ON ss7_messages(calling_party);
+   455→CREATE INDEX idx_ss7_called ON ss7_messages(called_party);
+   456→CREATE INDEX idx_ss7_imsi ON ss7_messages(imsi);
+   457→CREATE INDEX idx_ss7_blocked ON ss7_messages(is_blocked);
+   458→CREATE INDEX idx_ss7_anomaly ON ss7_messages(anomaly_score);
+   459→CREATE INDEX idx_ss7_type ON ss7_messages(message_type);
+   460→
+   461→-- GTP Sessions table
+   462→CREATE TABLE IF NOT EXISTS gtp_sessions (
+   463→    id TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
+   464→    session_id TEXT NOT NULL,
+   465→    imsi TEXT,
+   466→    msisdn TEXT,
+   467→    imei TEXT,
+   468→    apn TEXT,
+   469→    sgsn_address TEXT,
+   470→    ggsn_address TEXT,
+   471→    ip_address INET,
+   472→    session_status session_status NOT NULL DEFAULT 'ACTIVE',
+   473→    bytes_up BIGINT DEFAULT 0,
+   474→    bytes_down BIGINT DEFAULT 0,
+   475→    duration_seconds INTEGER DEFAULT 0,
+   476→    anomaly_score INTEGER CHECK (anomaly_score >= 0 AND anomaly_score <= 100),
+   477→    rat_type TEXT,  -- Radio Access Technology
+   478→    location_info JSONB,
+   479→    qos_profile JSONB,
+   480→    started_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+   481→    disconnect_timestamp TIMESTAMPTZ,
+   482→    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+   483→);
+   484→
+   485→CREATE INDEX idx_gtp_session ON gtp_sessions(session_id);
+   486→CREATE INDEX idx_gtp_imsi ON gtp_sessions(imsi);
+   487→CREATE INDEX idx_gtp_ip ON gtp_sessions(ip_address);
+   488→CREATE INDEX idx_gtp_status ON gtp_sessions(session_status);
+   489→CREATE INDEX idx_gtp_started ON gtp_sessions(started_at);
+   490→CREATE INDEX idx_gtp_anomaly ON gtp_sessions(anomaly_score);
+   491→
+   492→-- SIP Sessions table
+   493→CREATE TABLE IF NOT EXISTS sip_sessions (
+   494→    id TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
+   495→    call_id TEXT NOT NULL,
+   496→    calling_party TEXT,
+   497→    called_party TEXT,
+   498→    sip_method TEXT,
+   499→    sip_status INTEGER,
+   500→    invite_timestamp TIMESTAMPTZ,
+   501→    connect_timestamp TIMESTAMPTZ,
+   502→    disconnect_timestamp TIMESTAMPTZ,
+   503→    duration_seconds INTEGER DEFAULT 0,
+   504→    sip_server TEXT,
+   505→    user_agent TEXT,
+   506→    is_fraud_suspected BOOLEAN NOT NULL DEFAULT false,
+   507→    fraud_type TEXT,
+   508→    raw_sip TEXT,
+   509→    signaling_data JSONB,
+   510→    media_data JSONB,
+   511→    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+   512→);
+   513→
+   514→CREATE INDEX idx_sip_call ON sip_sessions(call_id);
+   515→CREATE INDEX idx_sip_calling ON sip_sessions(calling_party);
+   516→CREATE INDEX idx_sip_called ON sip_sessions(called_party);
+   517→CREATE INDEX idx_sip_connect ON sip_sessions(connect_timestamp);
+   518→CREATE INDEX idx_sip_fraud ON sip_sessions(is_fraud_suspected);
+   519→
+   520→-- Diameter Sessions table
+   521→CREATE TABLE IF NOT EXISTS diameter_sessions (
+   522→    id TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
+   523→    session_id TEXT NOT NULL,
+   524→    command_code INTEGER,
+   525→    application_id INTEGER,
+   526→    origin_host TEXT,
+   527→    origin_realm TEXT,
+   528→    destination_host TEXT,
+   529→    destination_realm TEXT,
+   530→    imsi TEXT,
+   531→    msisdn TEXT,
+   532→    session_status session_status NOT NULL DEFAULT 'ACTIVE',
+   533→    result_code INTEGER,
+   534→    avps JSONB,  # Attribute Value Pairs
+   535→    started_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+   536→    ended_at TIMESTAMPTZ,
+   537→    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+   538→);
+   539→
+   540→CREATE INDEX idx_diameter_session ON diameter_sessions(session_id);
+   541→CREATE INDEX idx_diameter_command ON diameter_sessions(command_code);
+   542→CREATE INDEX idx_diameter_imsi ON diameter_sessions(imsi);
+   543→CREATE INDEX idx_diameter_status ON diameter_sessions(session_status);
+   544→
+   545→-- Audit Logs table
+   546→CREATE TABLE IF NOT EXISTS audit_logs (
+   547→    id TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
+   548→    user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
+   549→    action TEXT NOT NULL,
+   550→    resource TEXT NOT NULL,
+   551→    resource_id TEXT,
+   552→    outcome TEXT NOT NULL,
+   553→    category audit_category NOT NULL DEFAULT 'SYSTEM',
+   554→    ip_address TEXT,
+   555→    user_agent TEXT,
+   556→    request_details JSONB,
+   557→    response_details JSONB,
+   558→    error_message TEXT,
+   559→    duration_ms INTEGER,
+   560→    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+   561→);
+   562→
+   563→CREATE INDEX idx_audit_user ON audit_logs(user_id);
+   564→CREATE INDEX idx_audit_action ON audit_logs(action);
+   565→CREATE INDEX idx_audit_resource ON audit_logs(resource);
+   566→CREATE INDEX idx_audit_category ON audit_logs(category);
+   567→CREATE INDEX idx_audit_created ON audit_logs(created_at);
+   568→CREATE INDEX idx_audit_outcome ON audit_logs(outcome);
+   569→
+   570→-- ============================================================
+   571→-- Create optimized views for common queries
+   572→-- ============================================================
+   573→
+   574→-- Active Incidents View
+   575→CREATE OR REPLACE VIEW v_active_incidents AS
+   576→SELECT 
+   577→    i.*,
+   578→    u.name as assignee_name,
+   579→    COUNT(DISTINCT a.id) as alert_count,
+   580→    COUNT(DISTINCT t.id) as task_count
+   581→FROM incidents i
+   582→LEFT JOIN users u ON i.assignee_id = u.id
+   583→LEFT JOIN alerts a ON a.incident_id = i.id
+   584→LEFT JOIN tasks t ON t.incident_id = i.id
+   585→WHERE i.status NOT IN ('RESOLVED', 'CLOSED')
+   586→GROUP BY i.id, u.name;
+   587→
+   588→-- High Risk Subscribers View
+   589→CREATE OR REPLACE VIEW v_high_risk_subscribers AS
+   590→SELECT * FROM subscribers 
+   591→WHERE risk_score >= 70 
+   592→AND subscriber_status = 'ACTIVE'
+   593→ORDER BY risk_score DESC;
+   594→
+   595→-- Recent Alerts Summary View
+   596→CREATE OR REPLACE VIEW v_recent_alerts_summary AS
+   597→SELECT 
+   598→    DATE_TRUNC('hour', first_seen) as hour_bucket,
+   599→    severity,
+   600→    COUNT(*) as alert_count,
+   601→    COUNT(*) FILTER (WHERE status = 'NEW') as new_count,
+   602→    COUNT(*) FILTER (WHERE status = 'ACKNOWLEDGED') as ack_count
+   603→FROM alerts
+   604→WHERE first_seen > NOW() - INTERVAL '24 hours'
+   605→GROUP BY hour_bucket, severity
+   606→ORDER BY hour_bucket DESC;
+   607→
+   608→-- System Health Dashboard View
+   609→CREATE OR REPLACE VIEW v_system_health AS
+   610→SELECT 
+   611→    (SELECT COUNT(*) FROM users WHERE is_active = true) as active_users,
+   612→    (SELECT COUNT(*) FROM alerts WHERE status IN ('NEW', 'ACKNOWLEDGED', 'IN_PROGRESS')) as active_alerts,
+   613→    (SELECT COUNT(*) FROM incidents WHERE status NOT IN ('RESOLVED', 'CLOSED')) as open_incidents,
+   614→    (SELECT COUNT(*) FROM subscribers WHERE risk_score > 70 AND subscriber_status = 'ACTIVE') as high_risk_subs,
+   615→    (SELECT COUNT(*) FROM ss7_messages WHERE timestamp > NOW() - INTERVAL '1 hour') as ss7_msgs_1h,
+   616→    (SELECT COUNT(*) FROM gtp_sessions WHERE session_status = 'ACTIVE') as active_gtp_sessions;
+   617→
+   618→-- ============================================================
+   619→-- Create functions for automated operations
+   620→-- ============================================================
+   621→
+   622→-- Function to update updated_at timestamp
+   623→CREATE OR REPLACE FUNCTION update_updated_at_column()
+   624→RETURNS TRIGGER AS $$
+   625→BEGIN
+   626→    NEW.updated_at = NOW();
+   627→    RETURN NEW;
+   628→END;
+   629→$$ language 'plpgsql';
+   630→
+   631→-- Apply to all tables that need updated_at triggers
+   632→CREATE TRIGGER update_users_updated_at BEFORE UPDATE ON users FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+   633→CREATE TRIGGER update_roles_updated_at BEFORE UPDATE ON roles FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+   634→CREATE TRIGGER update_sessions_updated_at BEFORE UPDATE ON sessions FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+   635→CREATE TRIGGER update_subscribers_updated_at BEFORE UPDATE ON subscribers FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+   636→CREATE TRIGGER update_network_elements_updated_at BEFORE UPDATE ON network_elements FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+   637→CREATE TRIGGER update_campaigns_updated_at BEFORE UPDATE ON campaigns FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+   638→CREATE TRIGGER update_threat_indicators_updated_at BEFORE UPDATE ON threat_indicators FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+   639→CREATE TRIGGER update_iocs_updated_at BEFORE UPDATE ON iocs FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+   640→CREATE TRIGGER update_alerts_updated_at BEFORE UPDATE ON alerts FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+   641→CREATE TRIGGER update_incidents_updated_at BEFORE UPDATE ON incidents FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+   642→CREATE TRIGGER update_tasks_updated_at BEFORE UPDATE ON tasks FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+   643→
+   644→-- Function to calculate subscriber risk score
+   645→CREATE OR REPLACE FUNCTION calculate_subscriber_risk(p_subscriber_id TEXT)
+   646→RETURNS INTEGER AS $$
+   647→DECLARE
+   648→    v_risk_score INTEGER := 0;
+   649→    v_alert_count INTEGER;
+   650→    v_anomaly_avg NUMERIC;
+   651→BEGIN
+   652→    -- Count recent high-severity alerts for this subscriber
+   653→    SELECT COUNT(*) INTO v_alert_count
+   654→    FROM alerts a
+   655→    JOIN ss7_messages s ON s.imsi = (SELECT imsi FROM subscribers WHERE id = p_subscriber_id)
+   656→    WHERE a.severity IN ('CRITICAL', 'HIGH')
+   657→    AND a.first_seen > NOW() - INTERVAL '7 days';
+   658→    
+   659→    -- Get average anomaly score from recent sessions
+   660→    SELECT COALESCE(AVG(anomaly_score), 0) INTO v_anomaly_avg
+   661→    FROM gtp_sessions
+   662→    WHERE imsi = (SELECT imsi FROM subscribers WHERE id = p_subscriber_id)
+   663→    AND started_at > NOW() - INTERVAL '24 hours';
+   664→    
+   665→    -- Calculate composite score
+   666→    v_risk_score := LEAST(100, (v_alert_count * 10) + ROUND(v_anomaly_avg::INTEGER));
+   667→    
+   668→    UPDATE subscribers SET risk_score = v_risk_score WHERE id = p_subscriber_id;
+   669→    
+   670→    RETURN v_risk_score;
+   671→END;
+   672→$$ LANGUAGE plpgsql;
+   673→
+   674→-- ============================================================
+   675→-- Insert initial seed data
+   676→-- ============================================================
+   677→
+   678→INSERT INTO roles (id, name, description, permissions) VALUES
+   679→('role-admin-001', 'soc_admin', 'Full system administrator', '["*"]'),
+   680→('role-analyst-001', 'analyst', 'Security analyst with read/write access', '["alerts:read", "alerts:write", "incidents:read", "incidents:write", "threats:read", "dashboard:read"]'),
+   681→('role-hunter-001', 'threat_hunter', 'Threat hunting specialist', '["alerts:read", "incidents:read", "threats:read", "threats:write", "ioc:manage", "campaigns:manage"]'),
+   682→('role-engineer-001', 'telecom_engineer', 'Telecom network engineer', '["telecom:read", "telecom:write", "subscribers:read", "network-elements:read"]'),
+   683→('role-compliance-001', 'compliance_officer', 'Compliance and audit access', '["audit:read", "reports:read", "compliance:read"]')
+   684→ON CONFLICT (name) DO NOTHING;
+   685→
+   686→-- Print completion message
+   687→DO $$
+   688→BEGIN
+   689→    RAISE NOTICE '✅ National SOC Platform PostgreSQL schema initialized successfully!';
+   690→    RAISE NOTICE '   - Created 18 tables';
+   691→    RAISE NOTICE '   - Created 15 enum types';
+   692→    RAISE NOTICE '   - Created 4 optimized views';
+   693→    RAISE NOTICE '   - Created utility functions';
+   694→    RAISE NOTICE '   - Inserted default roles';
+   695→END $$;
+   696→
