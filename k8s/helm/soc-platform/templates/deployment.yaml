@@ -1,0 +1,241 @@
+{{/*
+=============================================================================
+CyberSOC Platform - Main Application Deployment
+Production-Ready | HA | Security Hardened | GitOps Compatible
+=============================================================================
+*/}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "soc-platform.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "soc-platform.labels" . | nindent 4 }}
+    app.kubernetes.io/component: api
+    {{- with .Values.global.complianceLabels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+  annotations:
+    {{- toYaml .Values.socPlatform.annotations | nindent 4 }}
+    argocd.argoproj.io/sync-wave: "{{ .Values.socPlatform.syncWave | default "2" }}"
+spec:
+  {{- if not .Values.socPlatform.autoscaling.enabled }}
+  replicas: {{ .Values.socPlatform.replicaCount }}
+  {{- end }}
+  selector:
+    matchLabels:
+      {{- include "soc-platform.selectorLabels" . | nindent 6 }}
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: {{ .Values.socPlatform.strategy.maxSurge | default 1 }}
+      maxUnavailable: {{ .Values.socPlatform.strategy.maxUnavailable | default 0 }}
+  template:
+    metadata:
+      labels:
+        {{- include "soc-platform.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: api
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "{{ .Values.socPlatform.config.port }}"
+        prometheus.io/path: "/api/metrics"
+      annotations:
+        prometheus.io/scrape: "true"
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+        checksum/secret: {{ include (print $.Template.BasePath "/secret.yaml") . | sha256sum }}
+    spec:
+      {{- with .Values.socPlatform.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      
+      serviceAccountName: {{ include "soc-platform.serviceAccountName" . }}
+      
+      {{- with .Values.global.securityContext }}
+      securityContext:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      
+      # Production Hardening
+      automountServiceAccountToken: {{ .Values.security.serviceAccount.automountServiceAccountToken | default false }}
+      
+      # Host Network (disabled for security)
+      hostNetwork: false
+      dnsPolicy: ClusterFirst
+      
+      containers:
+        - name: soc-platform-api
+          image: "{{ .Values.socPlatform.image.repository }}:{{ .Values.socPlatform.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.socPlatform.image.pullPolicy }}
+          
+          # Container Security Context
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            runAsUser: {{ .Values.global.securityContext.runAsUser }}
+            capabilities:
+              drop:
+                - ALL
+            seccompProfile:
+              type: RuntimeDefault
+          
+          ports:
+            - name: http
+              containerPort: {{ .Values.socPlatform.config.port }}
+              protocol: TCP
+            - name: grpc
+              containerPort: {{ .Values.socPlatform.config.grpcPort | default 50051 }}
+              protocol: TCP
+            - name: metrics
+              containerPort: {{ .Values.socPlatform.config.port }}
+              protocol: TCP
+          
+          # Environment Variables
+          env:
+            - name: NODE_ENV
+              value: {{ .Values.socPlatform.config.nodeEnv | quote }}
+            - name: PORT
+              value: {{ .Values.socPlatform.config.port | quote }}
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "soc-platform.fullname" . }}-secrets
+                  key: database-url
+            - name: REDIS_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "soc-platform.fullname" . }}-secrets
+                  key: redis-url
+            - name: ELASTICSEARCH_URL
+              value: {{ .Values.socPlatform.config.elasticsearchUrl | quote }}
+            - name: KAFKA_BROKERS
+              value: {{ .Values.socPlatform.config.kafkaBrokers | quote }}
+            - name: JWT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "soc-platform.fullname" . }}-secrets
+                  key: jwt-secret
+            - name: ENCRYPTION_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "soc-platform.fullname" . }}-secrets
+                  key: encryption-key
+            # Feature Flags as Env Vars
+            - name: SS7_MONITORING_ENABLED
+              value: {{ .Values.socPlatform.config.features.ss7Monitoring | quote }}
+            - name: THREAT_HUNTING_ENABLED
+              value: {{ .Values.socPlatform.config.features.threatHunting | quote }}
+            - name: AI_COPILOT_ENABLED
+              value: {{ .Values.socPlatform.config.features.aiCopilot | quote }}
+            - name: MSSP_MODE
+              value: {{ .Values.socPlatform.config.features.msspMode | quote }}
+            
+          # Resource Limits (Critical for Production)
+          resources:
+            {{- toYaml .Values.socPlatform.resources | nindent 12 }}
+          
+          # Liveness Probe
+          {{- if .Values.socPlatform.livenessProbe }}
+          livenessProbe:
+            {{- toYaml .Values.socPlatform.livenessProbe | nindent 12 }}
+          {{- else }}
+          livenessProbe:
+            httpGet:
+              path: /api/health/live
+              port: http
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          {{- end }}
+          
+          # Readiness Probe
+          {{- if .Values.socPlatform.readinessProbe }}
+          readinessProbe:
+            {{- toYaml .Values.socPlatform.readinessProbe | nindent 12 }}
+          {{- else }}
+          readinessProbe:
+            httpGet:
+              path: /api/health/ready
+              port: http
+            initialDelaySeconds: 15
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 3
+          {{- end }}
+          
+          # Startup Probe (for slow-starting containers)
+          {{- if .Values.socPlatform.startupProbe }}
+          startupProbe:
+            {{- toYaml .Values.socPlatform.startupProbe | nindent 12 }}
+          {{- end }}
+          
+          # Volume Mounts
+          volumeMounts:
+            - name: config-volume
+              mountPath: /app/config
+              readOnly: true
+            - name: tmp-dir
+              mountPath: /tmp
+            - name: cache-dir
+              mountPath: /.cache
+            {{- range .Values.socPlatform.extraVolumeMounts }}
+            - name: {{ .name }}
+              mountPath: {{ .mountPath }}
+              readOnly: {{ .readOnly | default false }}
+            {{- end }}
+      
+      # Volumes
+      volumes:
+        - name: config-volume
+          configMap:
+            name: {{ include "soc-platform.fullname" . }}-config
+        - name: tmp-dir
+          emptyDir: {}
+        - name: cache-dir
+          emptyDir:
+            sizeLimit: {{ .Values.socPlatform.cacheSizeLimit | default "1Gi" }}
+        {{- range .Values.socPlatform.extraVolumes }}
+        - name: {{ .name }}
+          {{- toYaml .source | nindent 10 }}
+        {{- end }}
+      
+      # Node Selection
+      {{- with .Values.socPlatform.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      
+      # Tolerations
+      {{- with .Values.socPlatform.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      
+      # Affinity Rules
+      {{- with .Values.socPlatform.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      
+      # Pod Anti-Affinity (Spread across nodes)
+      {{- if not .Values.socPlatform.affinity }}
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                labelSelector:
+                  matchExpressions:
+                    - key: app.kubernetes.io/name
+                      operator: In
+                      values:
+                        - {{ include "soc-platform.name" . }}
+                topologyKey: kubernetes.io/hostname
+      {{- end }}
+      
+      # Termination Grace Period
+      terminationGracePeriodSeconds: {{ .Values.socPlatform.terminationGracePeriodSeconds | default 120 }}
+      
+      # Priority Class
+      priorityClassName: {{ .Values.socPlatform.priorityClassName | default "high-priority" }}

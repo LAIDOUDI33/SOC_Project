@@ -1,0 +1,58 @@
+{{/*
+=============================================================================
+CyberSOC Platform - Service Configuration
+=============================================================================
+*/}}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "soc-platform.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "soc-platform.labels" . | nindent 4 }}
+  annotations:
+    {{- toYaml .Values.socPlatform.service.annotations | nindent 4 }}
+spec:
+  type: {{ .Values.socPlatform.service.type }}
+  {{- if and (eq .Values.socPlatform.service.type "LoadBalancer") .Values.socPlatform.service.loadBalancerIP }}
+  loadBalancerIP: {{ .Values.socPlatform.service.loadBalancerIP }}
+  {{- end }}
+  {{- if and (eq .Values.socPlatform.service.type "LoadBalancer") .Values.socPlatform.service.loadBalancerSourceRanges }}
+  loadBalancerSourceRanges:
+    {{- toYaml .Values.socPlatform.service.loadBalancerSourceRanges | nindent 4 }}
+  {{- end }}
+  ports:
+    - port: {{ .Values.socPlatform.service.port }}
+      targetPort: http
+      protocol: TCP
+      name: http
+    - port: {{ .Values.socPlatform.config.grpcPort | default 50051 }}
+      targetPort: grpc
+      protocol: TCP
+      name: grpc
+    - port: 9090
+      targetPort: metrics
+      protocol: TCP
+      name: metrics
+  selector:
+    {{- include "soc-platform.selectorLabels" . | nindent 4 }}
+---
+# Headless Service for StatefulSet operations (if needed)
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "soc-platform.fullname" . }}-headless
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "soc-platform.labels" . | nindent 4 }}
+    service-type: headless
+spec:
+  type: ClusterIP
+  clusterIP: None
+  ports:
+    - port: {{ .Values.socPlatform.config.port }}
+      targetPort: http
+      protocol: TCP
+      name: http
+  selector:
+    {{- include "soc-platform.selectorLabels" . | nindent 4 }}

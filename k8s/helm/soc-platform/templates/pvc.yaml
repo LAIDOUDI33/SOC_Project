@@ -1,0 +1,62 @@
+{{/*
+=============================================================================
+CyberSOC Platform - Persistent Volume Claims
+Application Data Persistence | Logs Cache | Temporary Storage
+=============================================================================
+*/}}
+{{- if .Values.socPlatform.persistence.enabled }}
+# Main Application Data PVC
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "soc-platform.fullname" . }}-data
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "soc-platform.labels" . | nindent 4 }}
+    pvc-type: application-data
+spec:
+  accessModes:
+    - {{ .Values.socPlatform.persistence.accessMode | default "ReadWriteOnce" }}
+  storageClassName: {{ .Values.socPlatform.persistence.storageClass | default "standard" }}
+  resources:
+    requests:
+      storage: {{ .Values.socPlatform.persistence.size | default "10Gi" }}
+  {{- if .Values.socPlatform.persistence.selector }}
+  selector:
+    {{- toYaml .Values.socPlatform.persistence.selector | nindent 4 }}
+  {{- end }}
+---
+# Logs PVC (for sidecar logging pattern)
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "soc-platform.fullname" . }}-logs
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "soc-platform.labels" . | nindent 4 }}
+    pvc-type: logs
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: {{ .Values.socPlatform.persistence.logsStorageClass | default "standard" }}
+  resources:
+    requests:
+      storage: {{ .Values.socPlatform.persistence.logsSize | default "20Gi" }}
+---
+# Uploads/Temporary Files PVC
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "soc-platform.fullname" . }}-uploads
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "soc-platform.labels" . | nindent 4 }}
+    pvc-type: uploads
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: {{ .Values.socPlatform.persistence.uploadsStorageClass | default "standard" }}
+  resources:
+    requests:
+      storage: {{ .Values.socPlatform.persistence.uploadsSize | default "5Gi" }}
+{{- end }}

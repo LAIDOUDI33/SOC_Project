@@ -1,0 +1,264 @@
+{{/*
+=============================================================================
+CyberSOC Platform - Network Policies
+Zero Trust Networking | Default Deny | Explicit Allow Rules
+=============================================================================
+*/}}
+{{- if .Values.security.networkPolicy.enabled }}
+# Default Deny All Ingress
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "soc-platform.fullname" . }}-default-deny-ingress
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "soc-platform.labels" . | nindent 4 }}
+    policy-type: default-deny-ingress
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+---
+# Default Deny All Egress
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "soc-platform.fullname" . }}-default-deny-egress
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "soc-platform.labels" . | nindent 4 }}
+    policy-type: default-deny-egress
+spec:
+  podSelector: {}
+  policyTypes:
+    - Egress
+---
+# Allow SOC Platform API Ingress (from Ingress Controller + Internal Services)
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "soc-platform.fullname" . }}-allow-api-ingress
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "soc-platform.labels" . | nindent 4 }}
+    policy-type: api-ingress
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "soc-platform.selectorLabels" . | nindent 6 }}
+  policyTypes:
+    - Ingress
+  ingress:
+    # Allow from Ingress Controller
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: ingress-nginx
+      ports:
+        - port: http
+          protocol: TCP
+        - port: grpc
+          protocol: TCP
+    # Allow from monitoring (Prometheus scraping)
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: monitoring
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: prometheus
+      ports:
+        - port: metrics
+          protocol: TCP
+    # Allow from same namespace (internal communication)
+    - from:
+        - podSelector: {}
+      ports:
+        - port: http
+          protocol: TCP
+        - port: grpc
+          protocol: TCP
+---
+# Allow SOC Platform Egress (Database, Redis, Kafka, ES, External)
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "soc-platform.fullname" . }}-allow-api-egress
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "soc-platform.labels" . | nindent 4 }}
+    policy-type: api-egress
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "soc-platform.selectorLabels" . | nindent 6 }}
+  policyTypes:
+    - Egress
+  egress:
+    # Allow DNS resolution
+    - to:
+        - namespaceSelector: {}
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - port: 53
+          protocol: UDP
+        - port: 53
+          protocol: TCP
+    
+    # Allow to PostgreSQL
+    {{- if .Values.postgresql.enabled }}
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: postgresql
+              app.kubernetes.io/instance: postgresql
+      ports:
+        - port: 5432
+          protocol: TCP
+    {{- end }}
+    
+    # Allow to Redis
+    {{- if .Values.redis.enabled }}
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: redis
+              app.kubernetes.io/instance: redis
+      ports:
+        - port: 6379
+          protocol: TCP
+    {{- end }}
+    
+    # Allow to Elasticsearch
+    {{- if .Values.elasticsearch.enabled }}
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: elasticsearch
+      ports:
+        - port: 9200
+          protocol: TCP
+        - port: 9300
+          protocol: TCP
+    {{- end }}
+    
+    # Allow to Kafka
+    {{- if .Values.kafka.enabled }}
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: kafka
+              app.kubernetes.io/instance: kafka
+      ports:
+        - port: 9092
+          protocol: TCP
+        - port: 9093
+          protocol: TCP
+    {{- end }}
+    
+    # Allow to Threat Intel services (MISP, OpenCTI)
+    {{- if .Values.threatIntel.enabled }}
+    - to:
+        - podSelector:
+            matchExpressions:
+              - key: app.kubernetes.io/component
+                operator: In
+                values:
+                  - misp
+                  - opencti
+                  - taxii
+      ports:
+        - port: 8080
+          protocol: TCP
+    {{- end }}
+    
+    # Allow egress to external APIs (controlled)
+    - to:
+        - namespaceSelector: {}
+      ports:
+        - port: 443
+          protocol: TCP
+      {{- if .Values.security.networkPolicy.allowedExternalDomains }}
+      {{- range .Values.security.networkPolicy.allowedExternalDomains }}
+      {{- . }}
+      {{- end }}
+      {{- end }}
+---
+# SIEM Module Network Policy
+{{- if .Values.siem.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "soc-platform.fullname" . }}-siem-policy
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "soc-platform.labels" . | nindent 4 }}
+    component: siem
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/component: siem
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: soc-platform
+      ports:
+        - port: 8400
+          protocol: TCP
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: elasticsearch
+      ports:
+        - port: 9200
+          protocol: TCP
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: kafka
+      ports:
+        - port: 9092
+          protocol: TCP
+{{- end }}
+---
+# SOAR Module Network Policy
+{{- if .Values.soar.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "soc-platform.fullname" . }}-soar-policy
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "soc-platform.labels" . | nindent 4 }}
+    component: soar
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/component: soar
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: soc-platform
+      ports:
+        - port: 8500
+          protocol: TCP
+  egress:
+    - to: []  # SOAR needs controlled external access for integrations
+      ports:
+        - port: 443
+          protocol: TCP
+        - port: 80
+          protocol: TCP
+{{- end }}
+{{- end }}

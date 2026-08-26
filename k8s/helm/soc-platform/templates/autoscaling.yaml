@@ -1,0 +1,108 @@
+{{/*
+=============================================================================
+CyberSOC Platform - Horizontal Pod Autoscaler (HPA)
+CPU/Memory/Custom Metrics Scaling | Production Optimized
+=============================================================================
+*/}}
+{{- if .Values.socPlatform.autoscaling.enabled }}
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: {{ include "soc-platform.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "soc-platform.labels" . | nindent 4 }}
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: {{ include "soc-platform.fullname" . }}
+  minReplicas: {{ .Values.socPlatform.autoscaling.minReplicas }}
+  maxReplicas: {{ .Values.socPlatform.autoscaling.maxReplicas }}
+  
+  metrics:
+    # CPU Utilization
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: {{ .Values.socPlatform.autoscaling.targetCPUUtilizationPercentage }}
+    
+    # Memory Utilization
+    - type: Resource
+      resource:
+        name: memory
+        target:
+          type: Utilization
+          averageUtilization: {{ .Values.socPlatform.autoscaling.targetMemoryUtilizationPercentage }}
+    
+    {{- if .Values.socPlatform.autoscaling.customMetrics }}
+    # Custom Metrics (e.g., active sessions, request rate)
+    {{- range .Values.socPlatform.autoscaling.customMetrics }}
+    - type: {{ .type }}
+      {{ .type }}:
+        metric:
+          name: {{ .pods.metric.name }}
+        target:
+          type: {{ .pods.target.type }}
+          averageValue: {{ .pods.target.averageValue }}
+    {{- end }}
+    {{- end }}
+  
+  behavior:
+    # Scale Up Behavior (Aggressive for security events)
+    scaleUp:
+      stabilizationWindowSeconds: {{ .Values.socPlatform.autoscaling.scaleUpStabilization | default 60 }}
+      policies:
+        - type: Pods
+          value: {{ .Values.socPlatform.autoscaling.scaleUpPodsPerPeriod | default 4 }}
+          periodSeconds: {{ .Values.socPlatform.autoscaling.scaleUpPeriod | default 60 }}
+        - type: Percent
+          value: {{ .Values.socPlatform.autoscaling.scaleUpPercent | default 100 }}
+          periodSeconds: {{ .Values.socPlatform.autoscaling.scaleUpPeriod | default 60 }}
+      selectPolicy: Max
+    
+    # Scale Down Behavior (Conservative to avoid disruption)
+    scaleDown:
+      stabilizationWindowSeconds: {{ .Values.socPlatform.autoscaling.scaleDownStabilization | default 300 }}
+      policies:
+        - type: Pods
+          value: 1
+          periodSeconds: {{ .Values.socPlatform.autoscaling.scaleDownPeriod | default 120 }}
+        - type: Percent
+          value: {{ .Values.socPlatform.autoscaling.scaleDownPercent | default 10 }}
+          periodSeconds: {{ .Values.socPlatform.autoscaling.scaleDownPeriod | default 120 }}
+      selectPolicy: Min
+{{- end }}
+---
+# Vertical Pod Autoscaler (VPA) - Optional
+{{- if .Values.socPlatform.verticalAutoscaling.enabled }}
+apiVersion: autoscaling.k8s.io/v1
+kind: VerticalPodAutoscaler
+metadata:
+  name: {{ include "soc-platform.fullname" . }}-vpa
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "soc-platform.labels" . | nindent 4 }}
+spec:
+  targetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: {{ include "soc-platform.fullname" . }}
+  
+  updatePolicy:
+    updateMode: {{ .Values.socPlatform.verticalAutoscaling.updateMode | default "Off" }}
+  
+  resourcePolicy:
+    containerPolicies:
+      - containerName: soc-platform-api
+        minAllowed:
+          cpu: {{ .Values.socPlatform.resources.requests.cpu }}
+          memory: {{ .Values.socPlatform.resources.requests.memory }}
+        maxAllowed:
+          cpu: {{ .Values.socPlatform.verticalAutoscaling.maxCPU | default "16000m" }}
+          memory: {{ .Values.socPlatform.verticalAutoscaling.maxMemory | default "32Gi" }}
+        controlledResources: ["cpu", "memory"]
+        controlledValues: RequestsAndLimits
+{{- end }}

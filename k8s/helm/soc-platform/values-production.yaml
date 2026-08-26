@@ -1,0 +1,697 @@
+# =============================================================================
+# CyberSOC Platform - PRODUCTION Values
+# =============================================================================
+# CRITICAL INFRASTRUCTURE | HIGH AVAILABILITY | ANRT COMPLIANT
+# ⚠️ DO NOT USE IN DEVELOPMENT - PRODUCTION ONLY
+# =============================================================================
+
+# Override with: helm install soc ./helm/soc-platform -f values-production.yaml
+
+global:
+  environment: production
+  imagePullSecrets:
+    - name: gcr-json-key
+    - name: dockerhub-credentials
+
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 1001
+    runAsGroup: 1001
+    fsGroup: 1001
+    seccompProfile:
+      type: RuntimeDefault
+
+# -- PRODUCTION Application Configuration --
+socPlatform:
+  enabled: true
+  replicaCount: 3  # HA minimum for production
+
+  image:
+    repository: ghcr.io/laidoudi33/soc-platform
+    tag: "2.0.0-production"  # Immutable production tags
+    pullPolicy: Always       # Always pull latest for production
+
+  # PRODUCTION Resources (Scaled for 10K EPS)
+  resources:
+    requests:
+      cpu: 2000m
+      memory: 4Gi
+    limits:
+      cpu: 8000m
+      memory: 16Gi
+
+  # Liveness & Readiness Probes (Production tuned)
+  livenessProbe:
+    httpGet:
+      path: /api/health/live
+      port: 3000
+    initialDelaySeconds: 30
+    periodSeconds: 10
+    timeoutSeconds: 5
+    failureThreshold: 3
+
+  readinessProbe:
+    httpGet:
+      path: /api/health/ready
+      port: 3000
+    initialDelaySeconds: 15
+    periodSeconds: 5
+    timeoutSeconds: 3
+    failureThreshold: 3
+
+  startupProbe:
+    httpGet:
+      path: /api/health/startup
+      port: 3000
+    initialDelaySeconds: 10
+    periodSeconds: 5
+    timeoutSeconds: 3
+    failureThreshold: 30
+
+  # Production Config
+  config:
+    nodeEnv: production
+    port: 3000
+    
+    # Production Database (Connection Pool)
+    databaseUrl: "postgresql://soc-prod:${DB_PASSWORD}@postgresql-primary.cybersoc.svc.cluster.local:5432/cybersoc?schema=public&connection_limit=100"
+    redisUrl: "redis://:${REDIS_PASSWORD}@redis-master.cybersoc.svc.cluster.local:6379/0"
+    
+    # Production Services
+    elasticsearchUrl: "https://elasticsearch-coordinating.cybersoc.svc.cluster.local:9200"
+    kafkaBrokers: "kafka-0.kafka-headless.cybersoc.svc.cluster.local:9092,kafka-1.kafka-headless.cybersoc.svc.cluster.local:9092,kafka-2.kafka-headless.cybersoc.svc.cluster.local:9092"
+    
+    # All Features Enabled in Production
+    features:
+      ss7Monitoring: true
+      threatHunting: true
+      aiCopilot: true
+      msspMode: true
+      geomarketing: true
+      dfir: true
+      complianceAutomation: true
+    
+    # Production Rate Limiting (Strict)
+    rateLimiting:
+      windowMs: 60000  # 1 minute window
+      maxRequests: 500  # Per user per minute
+    
+    # Production Logging (Comprehensive)
+    logging:
+      level: warn  # Only warnings and errors in production
+      format: json
+      redactSensitive: true
+      correlationIds: true
+      stacktrace: false  # Disable stack traces in production
+
+  # Production Service (LoadBalancer with reserved IP)
+  service:
+    type: LoadBalancer
+    loadBalancerIP: 10.0.0.100  # Reserved static IP
+    annotations:
+      service.beta.kubernetes.io/aws-load-balancer-type: nlb
+      service.beta.kubernetes.io/aws-load-balancer-cross-zone-load-balancing-enabled: "true"
+
+  # Production Ingress (Multi-domain, TLS)
+  ingress:
+    enabled: true
+    className: nginx-enterprise  # NGINX Plus for production
+    annotations:
+      nginx.ingress.kubernetes.io/ssl-redirect: "true"
+      nginx.ingress.kubernetes.io/proxy-body-size: "100m"
+      nginx.ingress.kubernetes.io/upstream-keepalive-connections: "200"
+      cert-manager.io/cluster-issuer: letsencrypt-production
+      nginx.ingress.kubernetes.io/limit-rps: "1000"
+      nginx.ingress.kubernetes.io/limit-connections: "500"
+    hosts:
+      - host: soc.djezzy.dz
+        paths:
+          - path: /
+            pathType: Prefix
+          - path: /api
+            pathType: Prefix
+      - host: api-soc.djezzy.dz
+        paths:
+          - path: /
+            pathType: Prefix
+    tls:
+      - secretName: soc-djezzy-dz-tls-prod
+        hosts:
+          - soc.djezzy.dz
+          - api-soc.djezzy.dz
+      - secretName: soc-api-tls-prod
+        hosts:
+          - api-soc.djezzy.dz
+
+  # Production Autoscaling (Aggressive)
+  autoscaling:
+    enabled: true
+    minReplicas: 3           # HA minimum
+    maxReplicas: 20          # Scale for peak events
+    targetCPUUtilizationPercentage: 65
+    targetMemoryUtilizationPercentage: 75
+    # Custom metrics scaling
+    customMetrics:
+      - type: Pods
+        pods:
+          metric:
+            name: active_sessions
+          target:
+            type: AverageValue
+            averageValue: "1000"
+
+  # Production PDB (High Availability)
+  podDisruptionBudget:
+    enabled: true
+    minAvailable: 2  # Always have 2 available during disruptions
+
+  # Production Node Selection (Dedicated nodes)
+  nodeSelector:
+    node-type: production
+    workload-class: critical
+  tolerations:
+    - key: "dedicated"
+      operator: "Equal"
+      value: "production"
+      effect: NoSchedule
+  affinity:
+    podAntiAffinity:
+      preferredDuringSchedulingIgnoredDuringExecution:
+        - weight: 100
+          podAffinityTerm:
+            labelSelector:
+              matchExpressions:
+                - key: app.kubernetes.io/name
+                  operator: In
+                  values:
+                    - soc-platform-api
+            topologyKey: kubernetes.io/hostname
+    nodeAffinity:
+      requiredDuringSchedulingIgnoredDuringExecution:
+        nodeSelectorTerms:
+          - matchExpressions:
+              - key: node-type
+                operator: In
+                values:
+                  - production
+                  - critical
+
+# -- PRODUCTION SIEM (High Throughput) --
+siem:
+  enabled: true
+  replicaCount: 5  # High throughput for 10K+ EPS
+  
+  image:
+    repository: ghcr.io/laidoudi33/soc-siem
+    tag: "2.0.0-production"
+  
+  resources:
+    requests:
+      cpu: 4000m
+      memory: 8Gi
+    limits:
+      cpu: 16000m
+      memory: 32Gi
+  
+  config:
+    epsTarget: 25000  # 25K EPS capacity
+    retentionDays: 365  # 1 year retention for compliance
+    indexStrategy: hot-warm-cold  # Tiered storage
+    
+  persistence:
+    enabled: true
+    size: 2Ti  # 2TB for logs
+    storageClass: premium-ssd  # SSD for performance
+
+# -- PRODUCTION SOAR --
+soar:
+  enabled: true
+  replicaCount: 3
+  
+  image:
+    repository: ghcr.io/laidoudi33/soc-soar
+    tag: "2.0.0-production"
+  
+  resources:
+    requests:
+      cpu: 2000m
+      memory: 4Gi
+    limits:
+      cpu: 8000m
+      memory: 16Gi
+  
+  config:
+    playbookConcurrency: 50  # High concurrency
+    integrationTimeout: 600   # 10 min timeout
+    approvalRequired: true
+    auditAllActions: true     # Full audit trail
+
+# -- PRODUCTION Threat Intelligence --
+threatIntel:
+  enabled: true
+  
+  config:
+    feeds:
+      - name: MISP-Production
+        enabled: true
+        url: "https://misp.djezzy.dz"
+        apiKey: ${MISP_API_KEY}
+      - name: OpenCTI-Production
+        enabled: true
+        url: "https://opencti.djezzy.dz"
+      - name: TAXII-Servers
+        enabled: true
+        servers:
+          - "https://cti-taxii.mitre.org/taxii"
+          - "https://taxii.alienvault.com/taxii"
+    
+    updateInterval: 1800  # Every 30 minutes
+    cacheTTL: 43200       # 12 hours
+
+# -- PRODUCTION SS7 Monitoring --
+ss7Monitoring:
+  enabled: true
+  
+  config:
+    probes:
+      - name: algiers-core-1
+        network: 2G/3G/4G
+        signalingPoint: "0x01"
+        location: Algiers
+        redundancy: true
+      - name: oran-datacenter-1
+        network: 4G/LTE/5G
+        interface: S6a/Diameter
+        location: Oran
+        redundancy: true
+      - name: constantine-dr-1
+        network: SS7/CAMEL
+        location: Constantine
+        redundancy: true
+    
+    fraudDetection:
+      enabled: true
+      rulesFile: /config/ss7/fraud-rules-production.yaml
+      alertThreshold: critical
+      autoBlock: true
+      anrtReporting: true
+
+# -- PRODUCTION AI Engine --
+aiEngine:
+  enabled: true
+  
+  config:
+    models:
+      nlp:
+        enabled: true
+        model: "cybersoc-nlp-production-v3"
+        endpoint: "http://ai-nlp.cybersoc.svc.cluster.local:8000"
+        gpu: true
+      vision:
+        enabled: true
+        model: "cybersoc-vision-production-v2"
+        endpoint: "http://ai-vision.cybersoc.svc.cluster.local:8001"
+        gpu: true
+      prediction:
+        enabled: true
+        model: "cybersoc-predictor-production-v4"
+        endpoint: "http://ai-prediction.cybersoc.svc.cluster.local:8002"
+        gpu: false
+    
+    fineTuning:
+      enabled: true
+      schedule: "0 3 * * 0"  # Weekly on Sunday 3 AM
+      dataRetentionDays: 730  # 2 years
+
+# -- PRODUCTION Database --
+postgresql:
+  enabled: true
+  auth:
+    username: soc-prod
+    password: ${POSTGRES_PASSWORD}
+    database: cybersoc
+  
+  # High Availability Configuration
+  primary:
+    replicaCount: 3  # HA cluster
+    persistence:
+      enabled: true
+      size: 1Ti
+      storageClass: premium-ssd
+    resources:
+      requests:
+        cpu: 4000m
+        memory: 8Gi
+      limits:
+        cpu: 16000m
+        memory: 32Gi
+    extraInitDbScripts:
+      production-tuning.sql: |
+        -- Production PostgreSQL Tuning for CyberSOC
+        ALTER SYSTEM SET shared_preload_extensions = 'pg_stat_statements,auto_explain';
+        ALTER SYSTEM SET max_connections = 1000;
+        ALTER SYSTEM SET shared_buffers = '8GB';
+        ALTER SYSTEM SET effective_cache_size = '24GB';
+        ALTER SYSTEM SET maintenance_work_mem = '2GB';
+        ALTER SYSTEM SET work_mem = '64MB';
+        ALTER SYSTEM SET random_page_cost = 1.1;
+        ALTER SYSTEM SET effective_io_concurrency = 200;
+        ALTER SYSTEM SET wal_buffers = '256MB';
+        ALTER SYSTEM SET checkpoint_completion_target = 0.9;
+        ALTER SYSTEM SET default_statistics_target = 500;
+        ALTER SYSTEM SET log_min_duration_statement = 1000;  # Log slow queries > 1s
+        ALTER SYSTEM SET log_checkpoints = on;
+        ALTER SYSTEM SET log_connections = on;
+        ALTER SYSTEM SET log_disconnections = on;
+        ALTER SYSTEM SET lock_timeout = '30s';
+        ALTER SYSTEM SET statement_timeout = '60min';
+        
+  readReplicas:
+    replicaCount: 2  # Read replicas for analytics
+  
+  # Connection Pooling via PgBouncer
+  pgbouncer:
+    enabled: true
+    poolMode: transaction
+    maxClientConn: 10000
+    defaultPoolSize: 25
+
+redis:
+  enabled: true
+  auth:
+    enabled: true
+    password: ${REDIS_PASSWORD}
+  master:
+    persistence:
+      enabled: true
+      size: 100Gi
+      storageClass: premium-ssd
+    resources:
+      requests:
+        cpu: 1000m
+        memory: 2Gi
+      limits:
+        cpu: 4000m
+        memory: 8Gi
+  replica:
+    replicaCount: 3  # HA Redis cluster
+  architecture: standalone  # Use Redis Cluster for >100GB
+
+# -- PRODUCTION Kafka --
+kafka:
+  enabled: true
+  listeners:
+    controller:
+      containerPort: 9093
+      name: controller
+      protocol: SASL_PLAINTEXT
+      auth:
+        type: scram-sha-512
+    plain:
+      containerPort: 9092
+      name: PLAINTEXT
+      auth:
+        type: scram-sha-512
+  controller:
+    replicaCount: 3
+  broker:
+    replicaCount: 9  # 9 brokers for high throughput
+    persistence:
+      size: 2Ti
+      storageClass: premium-ssd
+    resources:
+      requests:
+        cpu: 2000m
+        memory: 4Gi
+      limits:
+        cpu: 8000m
+        memory: 16Gi
+    config:
+      offsets.topic.replication.factor: 3
+      transaction.state.log.replication.factor: 3
+      transaction.state.log.min.isr: 2
+      default.replication.factor: 3
+      num.partitions: 50
+      message.max.bytes: 10485760  # 10MB messages
+  zookeeper:
+    enabled: false
+  puppeteer:
+    enabled: true
+    replicaCount: 3
+
+# -- PRODUCTION Elasticsearch --
+elasticsearch:
+  enabled: true
+  replicas: 9  # 9-node cluster
+  minimumMasterNodes: 4
+  clusterName: cybersoc-production
+  
+  # Dedicated Master Nodes (3)
+  master:
+    replicaCount: 3
+    persistence:
+      enabled: true
+      size: 50Gi
+    resources:
+      requests:
+        cpu: 1000m
+        memory: 4Gi
+      limits:
+        cpu: 2000m
+        memory: 8Gi
+    nodeGroups:
+      - name: master
+        roles:
+          - master
+          - data_cold
+        replicaCount: 3
+        persistence:
+          enabled: true
+          size: 2Ti  # Cold storage (cheaper)
+  
+  # Hot Data Nodes (3)
+  data:
+    replicaCount: 3
+    persistence:
+      enabled: true
+      size: 2Ti
+      storageClass: premium-nvme  # NVMe for hot data
+    resources:
+      requests:
+        cpu: 8000m
+        memory: 32Gi
+      limits:
+        cpu: 16000m
+        memory: 64Gi
+    config:
+      node.roles: ["data_hot", "data_content"]
+  
+  # Warm Data Nodes (3)
+  warm:
+    enabled: true
+    replicaCount: 3
+    persistence:
+      enabled: true
+      size: 2Ti
+      storageClass: premium-ssd
+    resources:
+      requests:
+        cpu: 4000m
+        memory: 16Gi
+      limits:
+        cpu: 8000m
+        memory: 32Gi
+    config:
+      node.roles: ["data_warm"]
+  
+  # Coordinating Nodes (4)
+  coordinating:
+    replicaCount: 4
+    resources:
+      requests:
+        cpu: 2000m
+        memory: 4Gi
+      limits:
+        cpu: 4000m
+        memory: 8Gi
+  
+  # ILM Policy for Hot-Warm-Cold
+  config:
+    action.destructive_requires_name: true
+    cluster.routing.allocation.balance.threshold: 0.5
+    indices.memory.index_buffer_size: "30%"
+
+# -- PRODUCTION Monitoring --
+monitoring:
+  prometheus:
+    enabled: true
+    retention: 90d  # 90 days retention
+    resources:
+      requests:
+        cpu: 2000m
+        memory: 4Gi
+      limits:
+        cpu: 8000m
+        memory: 16Gi
+    remoteWrite:
+      - url: https://thanos-receive.djezzy.dz/api/v1/receive
+    alertmanager:
+      enabled: true
+      replicas: 3
+      config:
+        global:
+          resolve_timeout: 5m
+        route:
+          receiver: 'production-alerts'
+          group_by: ['alertname', 'severity']
+          group_wait: 30s
+          group_interval: 5m
+          repeat_interval: 12h
+          routes:
+            - match:
+                severity: critical
+              receiver: 'pagerduty-critical'
+              continue: true
+            - match:
+                severity: warning
+              receiver: 'slack-warning'
+        receivers:
+          - name: 'pagerduty-critical'
+            pagerduty_configs:
+              - routing_key: ${PAGERDUTY_KEY}
+          - name: 'slack-warning'
+            slack_configs:
+              - channel: '#soc-alerts'
+                api_url: ${SLACK_WEBHOOK}
+
+  grafana:
+    enabled: true
+    adminPassword: ${GRAFANA_ADMIN_PASSWORD}
+    persistence:
+      enabled: true
+      size: 50Gi
+    replicas: 2
+    grafana.ini:
+      auth.anonymous_enabled: false
+      users.allow_sign_up: false
+      session.life_time: 86400
+    dashboards:
+      enabled: true
+    plugins:
+      - grafana-piechart-panel
+      - vonage-status-panel
+      - natel-discrete-panel
+      - grafana-worldmap-panel
+
+# -- PRODUCTION Security (Hardened) --
+security:
+  networkPolicy:
+    enabled: true
+    defaultDenyIngress: true
+    defaultDenyEgress: true
+    # Explicit allow rules defined in templates
+  
+  podSecurity:
+    standards: restricted
+    privileged: false
+    capabilities:
+      drop:
+        - ALL
+    seccompProfile:
+      type: RuntimeDefault
+    runAsNonRoot: true
+    readOnlyRootFilesystem: true
+    allowPrivilegeEscalation: false
+  
+  rbac:
+    create: true
+  
+  serviceAccount:
+    create: true
+    automountServiceAccountToken: false
+    annotations:
+      iam.amazonaws.com/role: cybersoc-production-role
+  
+  # Pod Security Standards Enforcement
+  podSecurityPolicy:
+    enabled: true
+  
+  # Network policies for each component
+  networkPolicies:
+    api:
+      ingress:
+        - from:
+            - namespaceSelector:
+                matchLabels:
+                  name: ingress-nginx
+          ports:
+            - port: 3000
+            - port: 8443
+      egress:
+        - to:
+            - namespaceSelector:
+                matchLabels:
+                  name: cybersoc
+          ports:
+            - port: 5432  # PostgreSQL
+            - port: 6379  # Redis
+            - port: 9200  # Elasticsearch
+            - port: 9092  # Kafka
+
+# -- PRODUCTION Backup --
+backup:
+  enabled: true
+  schedule: "0 */4 * * *"  # Every 4 hours
+  retention: 90d
+  s3:
+    bucket: cybersoc-production-backups
+    region: eu-west-1
+    endpoint: https://s3.djezzy.dz
+  databases:
+    - name: postgresql
+      type: postgres
+    - name: elasticsearch
+      type: elasticsearch-snapshot
+    - name: redis
+      type: redis-rdb
+  encryption:
+    enabled: true
+    algorithm: AES-256
+
+# -- PRODUCTION Compliance --
+compliance:
+  auditLog:
+    enabled: true
+    retention: 2555d  # 7 years for telecom compliance
+    destination: elasticsearch
+    indexPattern: "auditlog-*"
+    anrtExport:
+      enabled: true
+      schedule: "0 6 * * *"  # Daily at 6 AM
+      format: ANRT-STANDARD-V2
+  
+  anrtReporting:
+    enabled: true
+    schedule: monthly
+    endpoints:
+      - https://reporting.anrt.dz/api/v1/submit
+      - https://secure.anrt.dz/compliance/v2/report
+    encryption: TLS-1.3
+    authentication:
+      type: mutualTLS
+      certificate: /secrets/anrt/client.crt
+      key: /secrets/anrt/client.key
+
+# -- Disaster Recovery --
+disasterRecovery:
+  enabled: true
+  primaryRegion: eu-west-1
+  failoverRegion: eu-south-1
+  rpo: "1h"  # Recovery Point Objective: 1 hour
+  rto: "15m"  # Recovery Time Objective: 15 minutes
+  replication:
+    database: async
+    storage: cross-region
+    dns:
+      provider: route53
+      failoverRouting: true

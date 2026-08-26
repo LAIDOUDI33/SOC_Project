@@ -1,0 +1,160 @@
+{{/*
+=============================================================================
+CyberSOC Platform - ConfigMap
+Application Configuration | Feature Flags | Integration Settings
+=============================================================================
+*/}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "soc-platform.fullname" . }}-config
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "soc-platform.labels" . | nindent 4 }}
+data:
+  # Application Configuration
+  APP_CONFIG.json: |
+    {
+      "environment": "{{ .Values.global.environment }}",
+      "version": "{{ .Chart.Version }}",
+      "release": "{{ .Release.Name }}",
+      "features": {
+        "ss7Monitoring": {{ .Values.socPlatform.config.features.ss7Monitoring }},
+        "threatHunting": {{ .Values.socPlatform.config.features.threatHunting }},
+        "aiCopilot": {{ .Values.socPlatform.config.features.aiCopilot }},
+        "msspMode": {{ .Values.socPlatform.config.features.msspMode }},
+        "geomarketing": {{ .Values.socPlatform.config.features.geomarketing }},
+        "dfir": {{ .Values.socPlatform.config.features.dfir | default false }},
+        "complianceAutomation": {{ .Values.socPlatform.config.features.complianceAutomation | default false }}
+      },
+      "rateLimiting": {
+        "windowMs": {{ .Values.socPlatform.config.rateLimiting.windowMs }},
+        "maxRequests": {{ .Values.socPlatform.config.rateLimiting.maxRequests }}
+      },
+      "logging": {
+        "level": "{{ .Values.socPlatform.config.logging.level }}",
+        "format": "{{ .Values.socPlatform.config.logging.format }}",
+        "redactSensitive": {{ .Values.socPlatform.config.logging.redactSensitive }}
+      }
+    }
+  
+  # Next.js Configuration
+  next.config.js: |
+    /** @type {import('next').NextConfig} */
+    const nextConfig = {
+      reactStrictMode: true,
+      output: 'standalone',
+      experimental: {},
+      serverRuntimeConfig: {
+        PORT: {{ .Values.socPlatform.config.port }},
+      },
+      env: {
+        CUSTOM_KEY: process.env.CUSTOM_KEY,
+      },
+      async headers() {
+        return [
+          {
+            source: '/api/:path*',
+            headers: [
+              { key: 'X-Frame-Options', value: 'DENY' },
+              { key: 'X-Content-Type-Options', value: 'nosniff' },
+              { key: 'Referrer-Policy', value: 'strict-origin-when-cross-origin' },
+              { key: 'X-XSS-Protection', value: '1; mode=block' },
+            ],
+          },
+        ];
+      },
+    };
+    
+    module.exports = nextConfig;
+  
+  # SS7 Monitoring Configuration (if enabled)
+  {{- if .Values.ss7Monitoring.enabled }}
+  ss7-config.yaml: |
+    probes:
+      {{- range .Values.ss7Monitoring.config.probes }}
+      - name: {{ .name }}
+        network: {{ .network }}
+        signalingPoint: {{ .signalingPoint }}
+        location: {{ .location }}
+        redundancy: {{ .redundancy | default false }}
+      {{- end }}
+    
+    fraudDetection:
+      enabled: {{ .Values.ss7Monitoring.config.fraudDetection.enabled }}
+      rulesFile: {{ .Values.ss7Monitoring.config.fraudDetection.rulesFile }}
+      alertThreshold: {{ .Values.ss7Monitoring.config.fraudDetection.alertThreshold }}
+      autoBlock: {{ .Values.ss7Monitoring.config.fraudDetection.autoBlock | default false }}
+      anrtReporting: {{ .Values.ss7Monitoring.config.fraudDetection.anrtReporting | default false }}
+  {{- end }}
+  
+  # Threat Intelligence Feeds Configuration
+  {{- if .Values.threatIntel.enabled }}
+  threat-intel-config.yaml: |
+    feeds:
+      {{- range .Values.threatIntel.config.feeds }}
+      - name: {{ .name }}
+        enabled: {{ .enabled }}
+        url: {{ .url }}
+        apiKey: {{ .apiKey | default "" }}
+      {{- end }}
+    
+    updateInterval: {{ .Values.threatIntel.config.updateInterval }}
+    cacheTTL: {{ .Values.threatIntel.config.cacheTTL }}
+  {{- end }}
+  
+  # AI Engine Configuration
+  {{- if .Values.aiEngine.enabled }}
+  ai-engine-config.yaml: |
+    models:
+      nlp:
+        enabled: {{ .Values.aiEngine.config.models.nlp.enabled }}
+        model: {{ .Values.aiEngine.config.models.nlp.model }}
+        endpoint: {{ .Values.aiEngine.config.models.nlp.endpoint }}
+        gpu: {{ .Values.aiEngine.config.models.nlp.gpu | default false }}
+      vision:
+        enabled: {{ .Values.aiEngine.config.models.vision.enabled }}
+        model: {{ .Values.aiEngine.config.models.vision.model }}
+        endpoint: {{ .Values.aiEngine.config.models.vision.endpoint }}
+        gpu: {{ .Values.aiEngine.config.models.vision.gpu | default false }}
+      prediction:
+        enabled: {{ .Values.aiEngine.config.models.prediction.enabled }}
+        model: {{ .Values.aiEngine.config.models.prediction.model }}
+        endpoint: {{ .Values.aiEngine.config.models.prediction.endpoint }}
+        gpu: {{ .Values.aiEngine.config.models.prediction.gpu | default false }}
+    
+    fineTuning:
+      enabled: {{ .Values.aiEngine.config.fineTuning.enabled }}
+      schedule: {{ .Values.aiEngine.config.fineTuning.schedule | default "0 0 * * *" }}
+      dataRetentionDays: {{ .Values.aiEngine.config.fineTuning.dataRetentionDays | default 365 }}
+  {{- end }}
+
+  # SOAR Playbook Templates Directory Reference
+  soar-config.yaml: |
+    playbookConcurrency: {{ .Values.soar.config.playbookConcurrency | default 10 }}
+    integrationTimeout: {{ .Values.soar.config.integrationTimeout | default 300 }}
+    approvalRequired: {{ .Values.soar.config.approvalRequired | default true }}
+    auditAllActions: {{ .Values.soar.config.auditAllActions | default true }}
+    
+    integrations:
+      thehive:
+        url: "http://thehive:9000"
+        apiKey: "${THEHIVE_API_KEY}"
+      cortex:
+        url: "http://cortex:9001"
+        apiKey: "${CORTEX_API_KEY}"
+  
+  # Compliance & ANRT Reporting Configuration
+  compliance-config.yaml: |
+    anrtReporting:
+      enabled: {{ .Values.compliance.anrtReporting.enabled | default false }}
+      schedule: {{ .Values.compliance.anrtReporting.schedule | default "monthly" }}
+      endpoints:
+        {{- range .Values.compliance.anrtReporting.endpoints }}
+        - {{ . }}
+        {{- end }}
+    
+    auditLog:
+      enabled: {{ .Values.compliance.auditLog.enabled | default true }}
+      retentionDays: {{ .Values.compliance.auditLog.retention | default 365 }}
+      destination: {{ .Values.compliance.auditLog.destination | default "elasticsearch" }}
