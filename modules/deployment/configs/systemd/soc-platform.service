@@ -1,0 +1,73 @@
+# =============================================================================
+# National SOC Platform - Systemd Service
+# =============================================================================
+#
+# This systemd service manages the SOC platform as a system service.
+# Install with:
+#   sudo cp soc-platform.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable soc-platform
+#   sudo systemctl start soc-platform
+#
+# =============================================================================
+
+[Unit]
+Description=National SOC Platform for Algeria
+Documentation=https://docs.soc.local
+After=docker.service network-online.target
+Requires=docker.service
+
+[Service]
+Type=forking
+User=root
+Group=root
+
+# Working directory
+WorkingDirectory=/opt/soc
+
+# Environment
+EnvironmentFile=-/opt/soc/.env
+
+# Pre-start checks
+ExecStartPre=/bin/bash -c 'docker info > /dev/null 2>&1 || (echo "Docker not ready" && exit 1)'
+
+# Start command - using docker compose
+ExecStart=/usr/bin/docker compose -f /opt/soc/docker/docker-compose.prod.yml up -d
+
+# Stop command
+ExecStop=/usr/bin/docker compose -f /opt/soc/docker/docker-compose.prod.yml down
+
+# Reload command (graceful restart)
+ExecReload=/bin/bash -c '/usr/bin/docker compose -f /opt/soc/docker/docker-compose.prod.yml restart'
+
+# Status command
+StatusCommand=/usr/bin/docker compose -f /opt/soc/docker/docker-compose.prod.yml ps
+
+# Timeout settings
+TimeoutStartSec=300
+TimeoutStopSec=120
+TimeoutStopUSec=120s
+
+# Restart policy
+Restart=on-failure
+RestartSec=10
+StartLimitIntervalSec=300
+StartLimitBurst=3
+
+# Resource limits
+LimitNOFILE=65536
+LimitNPROC=65536
+
+# Security hardening
+NoNewPrivileges=false
+ProtectSystem=true
+ProtectHome=read-only
+PrivateTmp=true
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=soc-platform
+
+[Install]
+WantedBy=multi-user.target

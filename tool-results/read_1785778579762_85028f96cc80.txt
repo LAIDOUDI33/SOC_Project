@@ -1,0 +1,910 @@
+     1→"""
+     2→Djezzy SOC - SS7 Security Analyzer
+     3→Real-time analysis of SS7/Diameter messages for attack detection, fraud prevention, and alerting.
+     4→"""
+     5→
+     6→import asyncio
+     7→import json
+     8→import logging
+     9→import os
+    10→import re
+    11→import time
+    12→from collections import defaultdict
+    13→from dataclasses import dataclass, field
+    14→from datetime import datetime, timezone, timedelta
+    15→from enum import Enum
+    16→from pathlib import Path
+    17→from typing import Any, Callable, Dict, List, Optional, Set, Tuple
+    18→
+    19→import orjson
+    20→import yaml
+    21→from cerberus import Validator
+    22→from confluent_kafka import Consumer, Producer, KafkaError, TopicPartition
+    23→from fastapi import FastAPI, HTTPException
+    24→from pydantic import BaseModel, Field
+    25→from pydantic_settings import BaseSettings
+    26→
+    27→# Configure structured logging
+    28→import structlog
+    29→
+    30→structlog.configure(
+    31→    processors=[
+    32→        structlog.stdlib.filter_by_level,
+    33→        structlog.add_log_level,
+    34→        structlog.processors.TimeStamper(fmt="iso"),
+    35→        structlog.processors.StackInfoRenderer(),
+    36→        structlog.processors.format_exc_info,
+    37→        structlog.dev.ConsoleRenderer(),
+    38→    ],
+    39→    wrapper_class=structlog.stdlib.BoundLogger,
+    40→    context_class=dict,
+    41→    logger_factory=structlog.PrintLoggerFactory(),
+    42→    cache_logger_on_first_use=True,
+    43→)
+    44→
+    45→logger = structlog.get_logger()
+    46→
+    47→
+    48→# ============== Configuration ==============
+    49→
+    50→class Settings(BaseSettings):
+    51→    """Analyzer settings."""
+    52→    
+    53→    # Server
+    54→    host: str = "0.0.0.0"
+    55→    port: int = 8000
+    56→    
+    57→    # Kafka
+    58→    kafka_bootstrap_servers: str = "kafka-broker-1:9092,kafka-broker-2:9092,kafka-broker-3:9092"
+    59→    input_topic: str = "ss7-raw-events"
+    60→    output_topic: str = "ss7-alerts"
+    61→    consumer_group: str = "ss7-analyzer-group"
+    62→    
+    63→    # TheHive integration
+    64→    thehive_url: str = "http://thehive:9000"
+    65→    thehive_api_key: str = ""
+    66→    auto_create_cases: bool = True
+    67→    case_severity_map: Dict[str, int] = {"CRITICAL": 4, "HIGH": 3, "MEDIUM": 2, "LOW": 1}
+    68→    
+    69→    # Rules configuration
+    70→    rules_dir: Path = Path("/etc/ss7-analyzer/rules")
+    71→    rules_reload_interval_seconds: int = 300
+    72→    
+    73→    # Detection settings
+    74→    enable_ml_detection: bool = False
+    75→    anomaly_threshold: float = 0.85
+    76→    baseline_window_hours: int = 24
+    77→    
+    78→    # Rate limiting / blocking
+    79→    max_alerts_per_source_per_minute: int = 100
+    80→    block_threshold_score: float = 0.95
+    81→    
+    82→    class Config:
+    83→        env_prefix = "SS7_ANALYZER_"
+    84→        env_file = "/etc/ss7-analyzer/.env"
+    85→
+    86→
+    87→settings = Settings()
+    88→
+    89→
+    90→# ============== Data Models ==============
+    91→
+    92→class AlertSeverity(str, Enum):
+    93→    LOW = "LOW"
+    94→    MEDIUM = "MEDIUM"
+    95→    HIGH = "HIGH"
+    96→    CRITICAL = "CRITICAL"
+    97→
+    98→
+    99→class AlertStatus(str, Enum):
+   100→    NEW = "new"
+   101→    INVESTIGATING = "investigating"
+   102→    ESCALATED = "escalated"
+   103→    RESOLVED = "resolved"
+   104→    FALSE_POSITIVE = "false_positive"
+   105→
+   106→
+   107→@dataclass
+   108→class DetectionRule:
+   109→    """A single detection rule definition."""
+   110→    name: str
+   111→    description: str
+   112→    severity: AlertSeverity
+   113→    condition: Dict[str, Any]
+   114→    action: List[str]
+   115→    tags: List[str] = field(default_factory=list)
+   116→    mitre_technique: Optional[str] = None
+   117→    mitre_tactic: Optional[str] = None
+   118→    enabled: bool = True
+   119→    
+   120→    def matches(self, message: Dict) -> bool:
+   121→        """Check if a message matches this rule's conditions."""
+   122→        return self._evaluate_condition(self.condition, message)
+   123→    
+   124→    def _evaluate_condition(self, condition: Dict, message: Dict) -> bool:
+   125→        """Recursively evaluate condition tree."""
+   126→        if not condition:
+   127→            return True
+   128→        
+   129→        op = condition.get("op", "and")
+   130→        
+   131→        if op == "and":
+   132→            return all(
+   133→                self._evaluate_condition(sub_cond, message)
+   134→                for sub_cond in condition.get("conditions", [])
+   135→            )
+   136→        elif op == "or":
+   137→            return any(
+   138→                self._evaluate_condition(sub_cond, message)
+   139→                for sub_cond in condition.get("conditions", [])
+   140→            )
+   141→        elif op == "not":
+   142→            return not self._evaluate_condition(condition.get("condition", {}), message)
+   143→        else:
+   144→            # Leaf condition - field comparison
+   145→            field_path = condition.get("field")
+   146→            operator = condition.get("operator", "equals")
+   147→            value = condition.get("value")
+   148→            
+   149→            actual_value = self._get_field_value(message, field_path)
+   150→            
+   151→            if actual_value is None:
+   152→                return False
+   153→            
+   154→            return self._compare(actual_value, value, operator)
+   155→    
+   156→    def _get_field_value(self, obj: Dict, path: str) -> Any:
+   157→        """Get nested field value using dot notation."""
+   158→        keys = path.split(".")
+   159→        current = obj
+   160→        for key in keys:
+   161→            if isinstance(current, dict):
+   162→                current = current.get(key)
+   163→                if current is None:
+   164→                    return None
+   165→            else:
+   166→                return None
+   167→        return current
+   168→    
+   169→    def _compare(self, actual: Any, expected: Any, operator: str) -> bool:
+   170→        """Compare values using specified operator."""
+   171→        try:
+   172→            if operator == "equals":
+   173→                return actual == expected
+   174→            elif operator == "not_equals":
+   175→                return actual != expected
+   176→            elif operator == "contains":
+   177→                return expected in str(actual)
+   178→            elif operator == "matches":
+   179→                return bool(re.match(expected, str(actual)))
+   180→            elif operator == "greater_than":
+   181→                return float(actual) > float(expected)
+   182→            elif operator == "less_than":
+   183→                return float(actual) < float(expected)
+   184→            elif operator == "in":
+   185→                return actual in expected if isinstance(expected, list) else False
+   186→            elif operator == "exists":
+   187→                return actual is not None
+   188→            else:
+   189→                logger.warning("unknown_operator", operator=operator)
+   190→                return False
+   191→        except (ValueError, TypeError) as e:
+   192→            logger.debug("comparison_error", error=str(e))
+   193→            return False
+   194→
+   195→
+   196→@dataclass
+   197→class SecurityAlert:
+   198→    """Generated security alert from rule match."""
+   199→    alert_id: str
+   200→    rule_name: str
+   201→    severity: AlertSeverity
+   202→    title: str
+   203→    description: str
+   204→    source_message: Dict
+   205→    timestamp: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+   206→    indicators: List[str] = field(default_factory=list)
+   207→    risk_score: float = 0.0
+   208→    iocs: List[Dict] = field(default_factory=list)
+   209→    status: AlertStatus = AlertStatus.NEW
+   210→    actions_taken: List[str] = field(default_factory=list)
+   211→    
+   212→    def to_dict(self) -> Dict:
+   213→        return {
+   214→            "alert_id": self.alert_id,
+   215→            "rule_name": self.rule_name,
+   216→            "severity": self.severity.value,
+   217→            "title": self.title,
+   218→            "description": self.description,
+   219→            "timestamp": self.timestamp.isoformat(),
+   220→            "source_message": self.source_message,
+   221→            "indicators": self.indicators,
+   222→            "risk_score": self.risk_score,
+   223→            "iocs": self.iocs,
+   224→            "status": self.status.value,
+   225→            "actions_taken": self.actions_taken,
+   226→        }
+   227→
+   228→
+   229→# ============== State Trackers ==============
+   230→
+   231→class SlidingWindowCounter:
+   232→    """Thread-safe sliding window counter for rate-based detection."""
+   233→    
+   234→    def __init__(self, window_size_seconds: int = 60, max_windows: int = 10):
+   235→        self.window_size = window_size_seconds
+   236→        self.max_windows = max_windows
+   237→        self.windows: Dict[str, List[float]] = defaultdict(list)
+   238→        self.lock = asyncio.Lock()
+   239→    
+   240→    async def increment(self, key: str, timestamp: float = None):
+   241→        """Increment counter for key at timestamp."""
+   242→        async with self.lock:
+   243→            ts = timestamp or time.time()
+   244→            self.windows[key].append(ts)
+   245→            await self._cleanup(key, ts)
+   246→    
+   247→    async def get_count(self, key: str, since: float = None) -> int:
+   248→        """Get count of events in current window."""
+   249→        async with self.lock:
+   250→            ts = since or (time.time() - self.window_size)
+   251→            return sum(1 for t in self.windows[key] if t >= ts)
+   252→    
+   253→    async def _cleanup(self, key: str, current_time: float):
+   254→        """Remove old entries outside window."""
+   255→        cutoff = current_time - (self.window_size * self.max_windows)
+   256→        self.windows[key] = [t for t in self.windows[key] if t >= cutoff]
+   257→
+   258→
+   259→# ============== Rules Engine ==============
+   260→
+   261→class RulesEngine:
+   262→    """Load and manage detection rules from YAML files."""
+   263→    
+   264→    def __init__(self, rules_dir: Path):
+   265→        self.rules_dir = rules_dir
+   266→        self.rules: Dict[str, DetectionRule] = {}
+   267→        self.last_load_time: float = 0
+   268→        self.load_rules()
+   269→    
+   270→    def load_rules(self):
+   271→        """Load all YAML rule files from rules directory."""
+   272→        loaded_count = 0
+   273→        error_count = 0
+   274→        
+   275→        if not self.rules_dir.exists():
+   276→            logger.warning("rules_directory_not_found", path=str(self.rules_dir))
+   277→            return
+   278→        
+   279→        for rule_file in self.rules_dir.glob("**/*.yaml"):
+   280→            try:
+   281→                with open(rule_file) as f:
+   282→                    rule_data = yaml.safe_load(f)
+   283→                
+   284→                if isinstance(rule_data, list):
+   285→                    for rd in rule_data:
+   286→                        rule = self._parse_rule(rd)
+   287→                        if rule:
+   288→                            self.rules[rule.name] = rule
+   289→                            loaded_count += 1
+   290→                elif isinstance(rule_data, dict):
+   291→                    rule = self._parse_rule(rule_data)
+   292→                    if rule:
+   293→                        self.rules[rule.name] = rule
+   294→                        loaded_count += 1
+   295→                        
+   296→            except Exception as e:
+   297→                error_count += 1
+   298→                logger.error("rule_load_error", file=str(rule_file), error=str(e))
+   299→        
+   300→        self.last_load_time = time.time()
+   301→        logger.info("rules_loaded", total=len(self.rules), errors=error_count)
+   302→    
+   303→    def _parse_rule(self, data: Dict) -> Optional[DetectionRule]:
+   304→        """Parse rule dict into DetectionRule object."""
+   305→        try:
+   306→            required_fields = ["name", "description", "severity", "condition"]
+   307→            for f in required_fields:
+   308→                if f not in data:
+   309→                    logger.warning("rule_missing_field", rule=data.get("name"), field=f)
+   310→                    return None
+   311→            
+   312→            return DetectionRule(
+   313→                name=data["name"],
+   314→                description=data["description"],
+   315→                severity=AlertSeverity(data.get("severity", "MEDIUM").upper()),
+   316→                condition=data.get("condition", {}),
+   317→                action=data.get("action", ["log"]),
+   318→                tags=data.get("tags", []),
+   319→                mitre_technique=data.get("mitre_technique"),
+   320→                mitre_tactic=data.get("mitre_tactic"),
+   321→                enabled=data.get("enabled", True),
+   322→            )
+   323→        except Exception as e:
+   324→            logger.error("rule_parse_error", error=str(e))
+   325→            return None
+   326→    
+   327→    def evaluate(self, message: Dict) -> List[DetectionRule]:
+   328→        """Evaluate message against all enabled rules."""
+   329→        matches = []
+   330→        for rule_name, rule in self.rules.items():
+   331→            if rule.enabled and rule.matches(message):
+   332→                matches.append(rule)
+   333→        return matches
+   334→    
+   335→    def reload_if_needed(self):
+   336→        """Reload rules if modification time has changed."""
+   337→        if time.time() - self.last_load_time > settings.rules_reload_interval_seconds:
+   338→            self.load_rules()
+   339→
+   340→
+   341→# ============== TheHive Integration ==============
+   342→
+   343→class TheHiveClient:
+   344→    """Client for creating cases in TheHive platform."""
+   345→    
+   346→    def __init__(self, base_url: str, api_key: str):
+   347→        self.base_url = base_url.rstrip("/")
+   348→        self.api_key = api_key
+   349→        self.headers = {
+   350→            "Authorization": f"Bearer {api_key}",
+   351→            "Content-Type": "application/json",
+   352→        }
+   353→    
+   354→    async def create_case_from_alert(self, alert: SecurityAlert) -> Optional[str]:
+   355→        """Create a new case in TheHive from security alert."""
+   356→        if not settings.auto_create_cases:
+   357→            return None
+   358→        
+   359→        try:
+   360→            import httpx
+   361→            
+   362→            case_payload = {
+   363→                "title": alert.title[:200],
+   364→                "description": self._build_case_description(alert),
+   365→                "severity": settings.case_severity_map.get(alert.severity.value, 2),
+   366→                "tlp": 2,  # Amber
+   367→                "pap": 2,  # Amber
+   368→                "tags": ["ss7", "auto-created"] + [alert.rule_name] + alert.indicators,
+   369→                "observables": self._build_observables(alert),
+   370→            }
+   371→            
+   372→            async with httpx.AsyncClient(timeout=30) as client:
+   373→                response = await client.post(
+   374→                    f"{self.base_url}/api/case",
+   375→                    headers=self.headers,
+   376→                    json=case_payload,
+   377→                )
+   378→                
+   379→                if response.status_code == 201:
+   380→                    case_id = response.json().get("_id") or response.json().get("id")
+   381→                    logger.info("thehive_case_created", 
+   382→                               case_id=case_id, 
+   383→                               rule=alert.rule_name,
+   384→                               severity=alert.severity.value)
+   385→                    return case_id
+   386→                else:
+   387→                    logger.error("thehive_create_error", 
+   388→                                status=response.status_code,
+   389→                                body=response.text)
+   390→                    return None
+   391→                    
+   392→        except Exception as e:
+   393→            logger.exception("thehive_client_error")
+   394→            return None
+   395→    
+   396→    def _build_case_description(self, alert: SecurityAlert) -> str:
+   397→        """Build detailed case description."""
+   398→        msg = alert.source_message.get("message_type", "Unknown")
+   399→        protocol = alert.source_message.get("protocol", "Unknown")
+   400→        calling = alert.source_message.get("calling_party_gt", {}).get("address", "N/A")
+   401→        called = alert.source_message.get("called_party_gt", {}).get("address", "N/A")
+   402→        imsi = alert.source_message.get("imsi", "N/A")
+   403→        
+   404→        return f"""## SS7 Security Alert Details
+   405→
+   406→**Rule:** {alert.rule_name}
+   407→**Severity:** {alert.severity.value}
+   408→**Risk Score:** {alert.risk_score:.2f}
+   409→
+   410→### Source Message Information
+   411→- **Protocol:** {protocol}
+   412→- **Message Type:** {msg}
+   413→- **Calling Party GT:** {calling}
+   414→- **Called Party GT:** {called}
+   415→- **IMSI:** {imsi}
+   416→
+   417→### Detection Indicators
+   418→{chr(10).join(f'- {ind}' for ind in alert.indicators)}
+   419→
+   420→### IOCs Identified
+   421→{chr(10).join(f'- **{ioc.get("type", "unknown")}**: {ioc.get("value", "N/A")}' for ioc in alert.iocs)}
+   422→
+   423→### Raw Message Context
+   424→```json
+   425→{orjson.dumps(alert.source_message, option=orjson.OPT_INDENT_2).decode()}
+   426→```
+   427→
+   428→---
+   429→*Automatically created by Djezzy SOC SS7 Analyzer*
+   430→*Detection Time: {alert.timestamp.isoformat()}*
+   431→"""
+   432→    
+   433→    def _build_observables(self, alert: SecurityAlert) -> List[Dict]:
+   434→        """Build observables list for TheHive case."""
+   435→        observables = []
+   436→        
+   437→        # Add IOCs as observables
+   438→        for ioc in alert.iocs:
+   439→            obs = {
+   440→                "dataType": ioc.get("type", "other"),
+   441→                "data": ioc.get("value", ""),
+   442→                "tlp": 2,
+   443→                "tags": ["ss7-ioc"],
+   444→            }
+   445→            observables.append(obs)
+   446→        
+   447→        # Add source/destination addresses
+   448→        calling_gt = alert.source_message.get("calling_party_gt", {})
+   449→        if calling_gt.get("address"):
+   450→            observables.append({
+   451→                "dataType": "phone-number",
+   452→                "data": calling_gt["address"],
+   453→                "tlp": 2,
+   454→                "tags": ["calling-party-gt", "ss7"],
+   455→            })
+   456→        
+   457→        called_gt = alert.source_message.get("called_party_gt", {})
+   458→        if called_gt.get("address"):
+   459→            observables.append({
+   460→                "dataType": "phone-number",
+   461→                "data": called_gt["address"],
+   462→                "tlp": 2,
+   463→                "tags": ["called-party-gt", "ss7"],
+   464→            })
+   465→        
+   466→        return observables
+   467→
+   468→
+   469→# ============== Main Analyzer Application ==============
+   470→
+   471→app = FastAPI(
+   472→    title="Djezzy SOC - SS7 Security Analyzer",
+   473→    description="Real-time SS7 attack detection and alerting engine",
+   474→    version="1.0.0",
+   475→)
+   476→
+   477→# Global state
+   478→rules_engine: Optional[RulesEngine] = None
+   479→thehive_client: Optional[TheHiveClient] = None
+   480→counters: SlidingWindowCounter = None
+   481→stats = {
+   482→    "messages_processed": 0,
+   483→    "alerts_generated": 0,
+   484→    "cases_created": 0,
+   485→    "errors": 0,
+   486→    "start_time": time.time(),
+   487→}
+   488→
+   489→
+   490→@app.on_event("startup")
+   491→async def startup_event():
+   492→    """Initialize components on startup."""
+   493→    global rules_engine, thehive_client, counters
+   494→    
+   495→    logger.info("analyzer_startup_beginning")
+   496→    
+   497→    # Initialize rules engine
+   498→    rules_engine = RulesEngine(settings.rules_dir)
+   499→    
+   500→    # Initialize TheHive client
+   501→    if settings.thehive_api_key:
+   502→        thehive_client = TheHiveClient(settings.thehive_url, settings.thehive_api_key)
+   503→    
+   504→    # Initialize rate counters
+   505→    counters = SlidingWindowCounter(window_size_seconds=60)
+   506→    
+   507→    # Start background consumer task
+   508→    asyncio.create_task(kafka_consumer_task())
+   509→    
+   510→    logger.info("analyzer_startup_complete",
+   511→                rules_loaded=len(rules_engine.rules),
+   512→                thehive_enabled=bool(settings.thehive_api_key))
+   513→
+   514→
+   515→@app.on_event("shutdown")
+   516→async def shutdown_event():
+   517→    """Cleanup on shutdown."""
+   518→    logger.info("analyzer_shutdown", stats=stats)
+   519→
+   520→
+   521→# ============== API Endpoints ==============
+   522→
+   523→class HealthResponse(BaseModel):
+   524→    status: str
+   525→    service: str = "ss7-analyzer"
+   526→    version: str = "1.0.0"
+   527→    uptime_seconds: float = 0.0
+   528→    rules_loaded: int = 0
+   529→    alerts_generated: int = 0
+   530→
+   531→
+   532→@app.get("/health", response_model=HealthResponse)
+   533→async def health_check():
+   534→    """Health check endpoint."""
+   535→    return HealthResponse(
+   536→        status="healthy",
+   537→        uptime_seconds=time.time() - stats["start_time"],
+   538→        rules_loaded=len(rules_engine.rules) if rules_engine else 0,
+   539→        alerts_generated=stats["alerts_generated"],
+   540→    )
+   541→
+   542→
+   543→@app.get("/api/v1/rules")
+   544→async def list_rules():
+   545→    """List all loaded detection rules."""
+   546→    if not rules_engine:
+   547→        raise HTTPException(status_code=503, detail="Rules engine not initialized")
+   548→    
+   549→    return [
+   550→        {
+   551→            "name": r.name,
+   552→            "description": r.description,
+   553→            "severity": r.severity.value,
+   554→            "enabled": r.enabled,
+   555→            "tags": r.tags,
+   556→        }
+   557→        for r in rules_engine.rules.values()
+   558→    ]
+   559→
+   560→
+   561→@app.post("/api/v1/rules/reload")
+   562→async def reload_rules():
+   563→    """Force reload of detection rules from disk."""
+   564→    if not rules_engine:
+   565→        raise HTTPException(status_code=503, detail="Rules engine not initialized")
+   566→    
+   567→    rules_engine.load_rules()
+   568→    return {"status": "reloaded", "rules_count": len(rules_engine.rules)}
+   569→
+   570→
+   571→@app.get("/api/v1/alerts/recent")
+   572→async def get_recent_alerts(limit: int = 50):
+   573→    """Get recent alerts (placeholder - would query storage)."""
+   574→    return {"message": "Query alert storage backend", "limit": limit}
+   575→
+   576→
+   577→@app.get("/api/v1/stats")
+   578→async def get_statistics():
+   579→    """Get analyzer statistics."""
+   580→    uptime = time.time() - stats["start_time"]
+   581→    return {
+   582→        "uptime_seconds": uptime,
+   583→        "messages_processed": stats["messages_processed"],
+   584→        "alerts_generated": stats["alerts_generated"],
+   585→        "cases_created": stats["cases_created"],
+   586→        "errors": stats["errors"],
+   587→        "messages_per_second": stats["messages_processed"] / max(1, uptime),
+   588→        "alerts_per_minute": (stats["alerts_generated"] * 60) / max(1, uptime),
+   589→        "rules_active": len([r for r in rules_engine.rules.values() if r.enabled]) if rules_engine else 0,
+   590→    }
+   591→
+   592→
+   593→# ============== Kafka Consumer Task ==============
+   594→
+   595→async def kafka_consumer_task():
+   596→    """Background task to consume SS7 messages from Kafka and analyze them."""
+   597→    
+   598→    consumer_config = {
+   599→        'bootstrap.servers': settings.kafka_bootstrap_servers,
+   600→        'group.id': settings.consumer_group,
+   601→        'auto.offset.reset': 'latest',
+   602→        'enable.auto.commit': True,
+   603→        'auto.commit.interval.ms': 5000,
+   604→        'session.timeout.ms': 30000,
+   605→        'max.poll.interval.ms': 300000,
+   606→        'fetch.max.bytes': 52428800,  # 50MB
+   607→        'max.partition.fetch.bytes': 1048576,  # 1MB per partition
+   608→    }
+   609→    
+   610→    producer_config = {
+   611→        'bootstrap.servers': settings.kafka_bootstrap_servers,
+   612→        'client.id': 'ss7-analyzer-producer',
+   613→        'linger.ms': 10,
+   614→        'compression.type': 'lz4',
+   615→    }
+   616→    
+   617→    consumer = Consumer(consumer_config)
+   618→    producer = Producer(producer_config)
+   619→    
+   620→    consumer.subscribe([settings.input_topic])
+   621→    
+   622→    logger.info("kafka_consumer_started",
+   623→                input_topic=settings.input_topic,
+   624→                output_topic=settings.output_topic,
+   625→                group_id=settings.consumer_group)
+   626→    
+   627→    try:
+   628→        while True:
+   629→            msg = consumer.poll(timeout=1.0)
+   630→            
+   631→            if msg is None:
+   632→                continue
+   633→            
+   634→            if msg.error():
+   635→                if msg.error().code() == KafkaError._PARTITION_EOF:
+   636→                    continue
+   637→                else:
+   638→                    logger.error("kafka_consumer_error", error=msg.error())
+   639→                    stats["errors"] += 1
+   640→                    continue
+   641→            
+   642→            try:
+   643→                # Parse message
+   644→                message = orjson.loads(msg.value())
+   645→                stats["messages_processed"] += 1
+   646→                
+   647→                # Evaluate against rules
+   648→                matching_rules = rules_engine.evaluate(message)
+   649→                
+   650→                if matching_rules:
+   651→                    for rule in matching_rules:
+   652→                        alert = create_alert(rule, message)
+   653→                        
+   654→                        # Send to output topic
+   655→                        alert_json = orjson.dumps(alert.to_dict())
+   656→                        producer.produce(
+   657→                            topic=settings.output_topic,
+   658→                            key=alert.alert_id.encode('utf-8'),
+   659→                            value=alert_json,
+   660→                        )
+   661→                        
+   662→                        stats["alerts_generated"] += 1
+   663→                        
+   664→                        # Create TheHive case for high/critical alerts
+   665→                        if alert.severity in [AlertSeverity.HIGH, AlertSeverity.CRITICAL]:
+   666→                            if thehive_client:
+   667→                                case_id = await thehive_client.create_case_from_alert(alert)
+   668→                                if case_id:
+   669→                                    stats["cases_created"] += 1
+   670→                                    alert.actions_taken.append(f"Created TheHive case: {case_id}")
+   671→                        
+   672→                        logger.info("alert_generated",
+   673→                                    rule=rule.name,
+   674→                                    severity=alert.severity.value,
+   675→                                    alert_id=alert.alert_id)
+   676→                
+   677→                # Periodically check for rule reload
+   678→                rules_engine.reload_if_needed()
+   679→                
+   680→            except orjson.JSONDecodeError as e:
+   681→                stats["errors"] += 1
+   682→                logger.error("json_parse_error", error=str(e))
+   683→            except Exception as e:
+   684→                stats["errors"] += 1
+   685→                logger.exception("message_processing_error")
+   686→            
+   687→            # Periodic producer flush
+   688→            producer.poll(0)
+   689→            
+   690→    except KeyboardInterrupt:
+   691→        pass
+   692→    finally:
+   693→        logger.info("kafka_consumer_stopping")
+   694→        producer.flush()
+   695→        consumer.close()
+   696→
+   697→
+   698→def create_alert(rule: DetectionRule, message: Dict) -> SecurityAlert:
+   699→    """Create a SecurityAlert from a matched rule and message."""
+   700→    alert_id = f"ss7_alert_{int(time.time()*1000000)}"
+   701→    
+   702→    # Extract indicators from message
+   703→    indicators = extract_indicators(rule, message)
+   704→    
+   705→    # Calculate risk score
+   706→    risk_score = calculate_risk_score(rule, message, indicators)
+   707→    
+   708→    # Build title and description
+   709→    title = build_alert_title(rule, message)
+   710→    description = build_alert_description(rule, message, indicators)
+   711→    
+   712→    # Extract IOCs
+   713→    iocs = extract_iocs(message)
+   714→    
+   715→    return SecurityAlert(
+   716→        alert_id=alert_id,
+   717→        rule_name=rule.name,
+   718→        severity=rule.severity,
+   719→        title=title,
+   720→        description=description,
+   721→        source_message=message,
+   722→        indicators=indicators,
+   723→        risk_score=risk_score,
+   724→        iocs=iocs,
+   725→        actions_taken=[],
+   726→    )
+   727→
+   728→
+   729→def extract_indicators(rule: DetectionRule, message: Dict) -> List[str]:
+   730→    """Extract human-readable indicators from message."""
+   731→    indicators = []
+   732→    
+   733→    # Protocol/message type
+   734→    protocol = message.get("protocol", "Unknown")
+   735→    msg_type = message.get("message_type", "Unknown")
+   736→    indicators.append(f"Protocol: {protocol}, Type: {msg_type}")
+   737→    
+   738→    # Addresses
+   739→    calling = message.get("calling_party_gt", {})
+   740→    if calling.get("address"):
+   741→        indicators.append(f"Calling GT: {calling['address']}")
+   742→    
+   743→    called = message.get("called_party_gt", {})
+   744→    if called.get("address"):
+   745→        indicators.append(f"Called GT: {called['address']}")
+   746→    
+   747→    # Subscriber info
+   748→    if message.get("imsi"):
+   749→        indicators.append(f"IMSI present: {message['imsi'][:6]}******")
+   750→    if message.get("msisdn"):
+   751→        indicators.append(f"MSISDN present: {message['msisdn'][-4:]}****")
+   752→    
+   753→    # Location
+   754→    if message.get("location_area"):
+   755→        indicators.append("Location info present")
+   756→    
+   757→    # Rule-specific indicators
+   758→    if "location_tracking" in rule.name.lower():
+   759→        indicators.append("Potential location tracking pattern detected")
+   760→    if "fraud" in rule.name.lower() or "irsf" in rule.name.lower():
+   761→        indicators.append("Financial fraud indicator")
+   762→    if "brute_force" in rule.name.lower() or "flooding" in rule.name.lower():
+   763→        indicators.append("Rate anomaly detected")
+   764→    
+   765→    return indicators
+   766→
+   767→
+   768→def calculate_risk_score(rule: DetectionRule, message: Dict, indicators: List[str]) -> float:
+   769→    """Calculate risk score (0.0 to 1.0) for an alert."""
+   770→    score = 0.0
+   771→    
+   772→    # Base score from severity
+   773→    severity_scores = {
+   774→        AlertSeverity.CRITICAL: 0.8,
+   775→        AlertSeverity.HIGH: 0.6,
+   776→        AlertSeverity.MEDIUM: 0.4,
+   777→        AlertSeverity.LOW: 0.2,
+   778→    }
+   779→    score = severity_scores.get(rule.severity, 0.3)
+   780→    
+   781→    # Adjust based on subscriber presence
+   782→    if message.get("imsi"):
+   783→        score += 0.05
+   784→    if message.get("imei"):
+   785→        score += 0.03
+   786→    
+   787→    # Adjust based on sensitive operations
+   788→    sensitive_ops = [
+   789→        "sendRoutingInfoForSM",
+   790→        "provideRoamingNumber",
+   791→        "anyTimeInterrogation",
+   792→        "cancelLocation",
+   793→    ]
+   794→    if message.get("message_type") in sensitive_ops:
+   795→        score += 0.1
+   796→    
+   797→    # MITRE technique adjustment
+   798→    if rule.mitre_technique:
+   799→        score += 0.05
+   800→    
+   801→    # Clamp to valid range
+   802→    return min(1.0, max(0.0, score))
+   803→
+   804→
+   805→def build_alert_title(rule: DetectionRule, message: Dict) -> str:
+   806→    """Build concise alert title."""
+   807→    protocol = message.get("protocol", "SS7")
+   808→    msg_type = message.get("message_type", "Unknown")
+   809→    calling = message.get("calling_party_gt", {}).get("address", "Unknown")
+   810→    
+   811→    return f"[SS7][{rule.severity.value}] {rule.name} - {msg_type} from {calling}"
+   812→
+   813→
+   814→def build_alert_description(rule: DetectionRule, message: Dict, indicators: List[str]) -> str:
+   815→    """Build detailed alert description."""
+   816→    desc = f"""**Rule:** {rule.name}
+   817→**Description:** {rule.description}
+   818→**Protocol:** {message.get('protocol', 'Unknown')}
+   819→**Message Type:** {message.get('message_type', 'Unknown')}
+   820→**Timestamp:** {message.get('timestamp', 'Unknown')}
+   821→
+   822→### Key Indicators
+   823→{chr(10).join(f'- {ind}' for ind in indicators)}
+   824→
+   825→### Address Information
+   826→- **Calling Party:** {message.get('calling_party_gt', {}).get('address', 'N/A')}
+   827→- **Called Party:** {message.get('called_party_gt', {}).get('address', 'N/A')}
+   828→- **OPC:** {message.get('originating_point_code', 'N/A')}
+   829→- **DPC:** {message.get('destination_point_code', 'N/A')}
+   830→
+   831→### Subscriber (if present)
+   832→- **IMSI:** {message.get('imsi', 'Not available')}
+   833→- **MSISDN:** {message.get('msisdn', 'Not available')}
+   834→- **IMEI:** {message.get('imei', 'Not available')}
+   835→
+   836→### Location (if present)
+   837→- **MSC:** {message.get('msc_address', 'N/A')}
+   838→- **VLR:** {message.get('vlr_number', 'N/A')}
+   839→- **Cell ID:** {message.get('cell_id', 'N/A')}
+   840→
+   841→### MITRE ATT&CK Mapping
+   842→- **Technique:** {rule.mitre_technique or 'N/A'}
+   843→- **Tactic:** {rule.mitre_tactic or 'N/A'}
+   844→
+   845→### Recommended Actions
+   846→{chr(10).join(f'- {action}' for action in rule.action)}
+   847→"""
+   848→    return desc
+   849→
+   850→
+   851→def extract_iocs(message: Dict) -> List[Dict]:
+   852→    """Extract Indicators of Compromise from message."""
+   853→    iocs = []
+   854→    
+   855→    # Phone numbers/GTs
+   856→    for party_type in ["calling_party_gt", "called_party_gt"]:
+   857→        gt = message.get(party_type, {})
+   858→        if gt.get("address"):
+   859→            iocs.append({
+   860→                "type": "phone-number",
+   861→                "value": gt["address"],
+   862→                "source": party_type,
+   863→            })
+   864→    
+   865→    # IMSI (partial, masked)
+   866→    if message.get("imsi"):
+   867→        iocs.append({
+   868→            "type": "imsi",
+   869→            "value": message["imsi"],
+   870→            "source": "subscriber_id",
+   871→        })
+   872→    
+   873→    # IMEI
+   874→    if message.get("imei"):
+   875→        iocs.append({
+   876→            "type": "imei",
+   877→            "value": message["imei"],
+   878→            "source": "device_id",
+   879→        })
+   880→    
+   881→    # MSISDN
+   882→    if message.get("msisdn"):
+   883→        iocs.append({
+   884→            "type": "msisdn",
+   885→            "value": message["msisdn"],
+   886→            "source": "subscriber_number",
+   887→        })
+   888→    
+   889→    return iocs
+   890→
+   891→
+   892→# ============== Entry Point ==============
+   893→
+   894→if __name__ == "__main__":
+   895→    import uvicorn
+   896→    
+   897→    logger.info("starting_ss7_analyzer",
+   898→                version="1.0.0",
+   899→                listen_on=f"{settings.host}:{settings.port}",
+   900→                input_topic=settings.input_topic,
+   901→                output_topic=settings.output_topic,
+   902→                rules_dir=str(settings.rules_dir))
+   903→    
+   904→    uvicorn.run(
+   905→        app,
+   906→        host=settings.host,
+   907→        port=settings.port,
+   908→        log_level="info",
+   909→    )
+   910→

@@ -1,0 +1,1141 @@
+     1→/**
+     2→ * Suricata IDS/IPS Dashboard Component
+     3→ * National SOC Platform - Algeria 2026-2030
+     4→ * 
+     5→ * Comprehensive dashboard with:
+     6→ * - Overview with KPIs and summary statistics
+     7→ * - Alert management with filtering and analysis
+     8→ * - Rule management interface
+     9→ * - Attack map visualization
+    10→ * - Real-time monitoring
+    11→ * - Sensor health status
+    12→ */
+    13→
+    14→'use client';
+    15→
+    16→import React, { useState, useMemo } from 'react';
+    17→import {
+    18→  EveEvent,
+    19→  SuricataRule,
+    20→  SuricataStats,
+    21→  SeverityLevel,
+    22→  RuleState,
+    23→  RuleAction,
+    24→  SignatureSource,
+    25→  TimeRange,
+    26→  AlertCategory,
+    27→  IPStats,
+    28→  SignatureStats,
+    29→  SuricataSensor,
+    30→  SensorStatus,
+    31→  SEVERITY_CONFIG
+    32→} from '../types/suricata.types';
+    33→import {
+    34→  useSuricataDashboard,
+    35→  useSuricataAlerts,
+    36→  useSuricataRules,
+    37→  useAlertTrends,
+    38→  useAttackMapData
+    39→} from '../hooks/use-suricata';
+    40→
+    41→// ============================================================================
+    42→// SUB-COMPONENTS
+    43→// ============================================================================
+    44→
+    45→/** Loading spinner component */
+    46→const LoadingSpinner: React.FC<{ size?: 'sm' | 'md' | 'lg' }> = ({ size = 'md' }) => {
+    47→  const sizeClasses = { sm: 'w-4 h-4', md: 'w-8 h-8', lg: 'w-12 h-12' };
+    48→  
+    49→  return (
+    50→    <div className="flex items-center justify-center p-4">
+    51→      <div className={`${sizeClasses[size]} animate-spin rounded-full border-4 border-blue-200 border-t-blue-600`}></div>
+    52→    </div>
+    53→  );
+    54→};
+    55→
+    56→/** Error state component */
+    57→const ErrorState: React.FC<{ message: string; onRetry?: () => void }> = ({ message, onRetry }) => (
+    58→  <div className="bg-red-50 border border-red-200 rounded-lg p-6 text-center">
+    59→    <div className="text-red-500 text-lg mb-2">⚠️ Error</div>
+    60→    <p className="text-red-700 text-sm">{message}</p>
+    61→    {onRetry && (
+    62→      <button
+    63→        onClick={onRetry}
+    64→        className="mt-4 px-4 py-2 bg-red-600 text-white rounded hover:bg-red-700 transition-colors"
+    65→      >
+    66→        Retry
+    67→      </button>
+    68→    )}
+    69→  </div>
+    70→);
+    71→
+    72→/** Stat card component */
+    73→interface StatCardProps {
+    74→  title: string;
+    75→  value: string | number;
+    76→  icon?: string;
+    77→  color?: string;
+    78→  trend?: { direction: 'up' | 'down'; value: number };
+    79→  subtitle?: string;
+    80→}
+    81→
+    82→const StatCard: React.FC<StatCardProps> = ({ title, value, icon, color = 'blue', trend, subtitle }) => (
+    83→  <div className={`bg-white rounded-xl shadow-sm border border-gray-100 p-5 hover:shadow-md transition-shadow`}>
+    84→    <div className="flex items-start justify-between">
+    85→      <div>
+    86→        <p className="text-sm font-medium text-gray-500 mb-1">{title}</p>
+    87→        <p className={`text-2xl font-bold text-${color}-600`}>{value}</p>
+    88→        {subtitle && <p className="text-xs text-gray-400 mt-1">{subtitle}</p>}
+    89→      </div>
+    90→      {icon && <span className="text-3xl opacity-80">{icon}</span>}
+    91→    </div>
+    92→    {trend && (
+    93→      <div className={`mt-3 flex items-center text-xs ${
+    94→        trend.direction === 'up' ? 'text-red-500' : 'text-green-500'
+    95→      }`}>
+    96→        <span>{trend.direction === 'up' ? '↑' : '↓'} {Math.abs(trend.value)}%</span>
+    97→        <span className="ml-1 text-gray-400">vs last period</span>
+    98→      </div>
+    99→    )}
+   100→  </div>
+   101→);
+   102→
+   103→/** Badge component */
+   104→interface BadgeProps {
+   105→  text: string;
+   106→  variant?: 'default' | 'success' | 'warning' | 'danger' | 'info';
+   107→  size?: 'sm' | 'md';
+   108→}
+   109→
+   110→const Badge: React.FC<BadgeProps> = ({ text, variant = 'default', size = 'sm' }) => {
+   111→  const variants = {
+   112→    default: 'bg-gray-100 text-gray-700',
+   113→    success: 'bg-green-100 text-green-700',
+   114→    warning: 'bg-yellow-100 text-yellow-700',
+   115→    danger: 'bg-red-100 text-red-700',
+   116→    info: 'bg-blue-100 text-blue-700'
+   117→  };
+   118→
+   119→  const sizes = {
+   120→    sm: 'px-2 py-0.5 text-xs',
+   121→    md: 'px-3 py-1 text-sm'
+   122→  };
+   123→
+   124→  return (
+   125→    <span className={`${variants[variant]} ${sizes[size]} rounded-full font-medium inline-flex items-center`}>
+   126→      {text}
+   127→    </span>
+   128→  );
+   129→};
+   130→
+   131→/** Severity indicator component */
+   132→const SeverityIndicator: React.FC<{ severity: SeverityLevel; showLabel?: boolean }> = ({ 
+   133→  severity, 
+   134→  showLabel = true 
+   135→}) => {
+   136→  const config = SEVERITY_CONFIG[severity];
+   137→  
+   138→  return (
+   139→    <span className="inline-flex items-center gap-1">
+   140→      <span 
+   141→        className="w-3 h-3 rounded-full"
+   142→        style={{ backgroundColor: config.color }}
+   143→      />
+   144→      {showLabel && (
+   145→        <span className="text-sm capitalize" style={{ color: config.color }}>
+   146→          {severity.replace('_', ' ')}
+   147→        </span>
+   148→      )}
+   149→    </span>
+   150→  );
+   151→};
+   152→
+   153→// ============================================================================
+   154→// TAB COMPONENTS
+   155→// ============================================================================
+   156→
+   157→/** Overview Tab Component */
+   158→const OverviewTab: React.FC<{
+   159→  stats: SuricataStats;
+   160→  recentAlerts: EveEvent[];
+   161→  highPriorityAlerts: EveEvent[];
+   162→  topIPs: IPStats[];
+   163→  sensors: SuricataSensor[];
+   164→}> = ({ stats, recentAlerts, highPriorityAlerts, topIPs, sensors }) => {
+   165→  const totalAlerts = Object.values(stats.alerts_by_severity).reduce((a, b) => a + b, 0);
+   166→  const criticalAlerts = stats.alerts_by_severity[SeverityLevel.CRITICAL] || 0;
+   167→
+   168→  return (
+   169→    <div className="space-y-6">
+   170→      {/* KPI Cards Row */}
+   171→      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+   172→        <StatCard
+   173→          title="Total Alerts (24h)"
+   174→          value={totalAlerts.toLocaleString()}
+   175→          icon="🚨"
+   176→          color="red"
+   177→          trend={{ direction: 'up', value: 12.5 }}
+   178→          subtitle="Last 24 hours"
+   179→        />
+   180→        <StatCard
+   181→          title="Critical Alerts"
+   182→          value={criticalAlerts.toLocaleString()}
+   183→          icon="🔴"
+   184→          color="red"
+   185→          trend={{ direction: 'down', value: 5.2 }}
+   186→          subtitle="Requires immediate attention"
+   187→        />
+   188→        <StatCard
+   189→          title="Packets Processed"
+   190→          value={(stats.packets_received / 1000000).toFixed(2) + 'M'}
+   191→          icon="📦"
+   192→          color="blue"
+   193→          trend={{ direction: 'up', value: 3.1 }}
+   194→          subtitle={`${(stats.derived_metrics?.packets_per_second || 0).toLocaleString()} pps`}
+   195→        />
+   196→        <StatCard
+   197→          title="Active Sensors"
+   198→          value={`${sensors.filter(s => s.status === SensorStatus.ONLINE).length}/${sensors.length}`}
+   199→          icon="📡"
+   200→          color="green"
+   201→          subtitle="All systems operational"
+   202→        />
+   203→      </div>
+   204→
+   205→      {/* Secondary Stats */}
+   206→      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+   207→        {/* Packet Processing */}
+   208→        <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-5">
+   209→          <h3 className="font-semibold text-gray-800 mb-4 flex items-center gap-2">
+   210→            <span>📊</span> Packet Processing
+   211→          </h3>
+   212→          <div className="space-y-3">
+   213→            <div className="flex justify-between items-center">
+   214→              <span className="text-sm text-gray-600">Drop Rate</span>
+   215→              <span className="font-mono text-sm">{stats.derived_metrics?.drop_rate_percent?.toFixed(4)}%</span>
+   216→            </div>
+   217→            <div className="w-full bg-gray-200 rounded-full h-2">
+   218→              <div 
+   219→                className="h-2 rounded-full transition-all"
+   220→                style={{ 
+   221→                  width: `${Math.min(parseFloat(stats.derived_metrics?.drop_rate_percent || '0') * 10, 100)}%`,
+   222→                  backgroundColor: parseFloat(stats.derived_metrics?.drop_rate_percent || '0') > 0.1 ? '#EF4444' : '#10B981'
+   223→                }}
+   224→              />
+   225→            </div>
+   226→            <div className="flex justify-between items-center pt-2 border-t">
+   227→              <span className="text-sm text-gray-600">Throughput</span>
+   228→              <span className="font-mono text-sm">{stats.derived_metrics?.bits_per_second_formatted}</span>
+   229→            </div>
+   230→          </div>
+   231→        </div>
+   232→
+   233→        {/* Top Attacking Countries */}
+   234→        <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-5">
+   235→          <h3 className="font-semibold text-gray-800 mb-4 flex items-center gap-2">
+   236→            <span>🌍</span> Top Source Countries
+   237→          </h3>
+   238→          <div className="space-y-2">
+   239→            {topIPs.slice(0, 5).map((ip, idx) => (
+   240→              <div key={idx} className="flex items-center justify-between text-sm">
+   241→                <div className="flex items-center gap-2">
+   242→                  <span className="text-gray-400 w-5">{idx + 1}.</span>
+   243→                  <span>{ip.country || 'Unknown'}</span>
+   244→                </div>
+   245→                <Badge text={`${ip.alert_count} alerts`} variant="info" />
+   246→              </div>
+   247→            ))}
+   248→          </div>
+   249→        </div>
+   250→
+   251→        {/* Sensor Health */}
+   252→        <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-5">
+   253→          <h3 className="font-semibold text-gray-800 mb-4 flex items-center gap-2">
+   254→            <span>💚</span> Sensor Status
+   255→          </h3>
+   256→          <div className="space-y-3">
+   257→            {sensors.map(sensor => (
+   258→              <div key={sensor.id} className="flex items-center justify-between">
+   259→                <div className="flex items-center gap-2">
+   260→                  <span className={`w-2 h-2 rounded-full ${
+   261→                    sensor.status === SensorStatus.ONLINE ? 'bg-green-500' :
+   262→                    sensor.status === SensorStatus.DEGRADED ? 'bg-yellow-500' :
+   263→                    'bg-red-500'
+   264→                  }`} />
+   265→                  <span className="text-sm text-gray-700">{sensor.name}</span>
+   266→                </div>
+   267→                <Badge 
+   268→                  text={sensor.status} 
+   269→                  variant={
+   270→                    sensor.status === SensorStatus.ONLINE ? 'success' :
+   271→                    sensor.status === SensorStatus.DEGRADED ? 'warning' : 'danger'
+   272→                  }
+   273→                />
+   274→              </div>
+   275→            ))}
+   276→          </div>
+   277→        </div>
+   278→      </div>
+   279→
+   280→      {/* Recent Critical Alerts */}
+   281→      <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-5">
+   282→        <div className="flex items-center justify-between mb-4">
+   283→          <h3 className="font-semibold text-gray-800 flex items-center gap-2">
+   284→            <span>⚠️</span> High Priority Alerts
+   285→          </h3>
+   286→          <button className="text-blue-600 text-sm hover:text-blue-700 transition-colors">
+   287→            View All →
+   288→          </button>
+   289→        </div>
+   290→        
+   291→        <div className="overflow-x-auto">
+   292→          <table className="w-full text-sm">
+   293→            <thead>
+   294→              <tr className="border-b bg-gray-50">
+   295→                <th className="text-left px-4 py-3 font-medium text-gray-600">Time</th>
+   296→                <th className="text-left px-4 py-3 font-medium text-gray-600">Severity</th>
+   297→                <th className="text-left px-4 py-3 font-medium text-gray-600">Signature</th>
+   298→                <th className="text-left px-4 py-3 font-medium text-gray-600">Source</th>
+   299→                <th className="text-left px-4 py-3 font-medium text-gray-600">Target</th>
+   300→                <th className="text-left px-4 py-3 font-medium text-gray-600">Action</th>
+   301→              </tr>
+   302→            </thead>
+   303→            <tbody>
+   304→              {highPriorityAlerts.slice(0, 5).map((alert, idx) => (
+   305→                <tr key={idx} className="border-b hover:bg-gray-50 transition-colors">
+   306→                  <td className="px-4 py-3 text-gray-500 whitespace-nowrap">
+   307→                    {new Date(alert.timestamp).toLocaleTimeString()}
+   308→                  </td>
+   309→                  <td className="px-4 py-3">
+   310→                    <SeverityIndicator 
+   311→                      severity={
+   312→                        Object.entries(SEVERITY_CONFIG).find(([_, c]) => 
+   313→                          c.score === (5 - (alert.alert?.severity || 5))
+   314→                        )?.[0] as SeverityLevel || SeverityLevel.LOW
+   315→                      } 
+   316→                    />
+   317→                  </td>
+   318→                  <td className="px-4 py-3 font-medium text-gray-800 max-w-xs truncate">
+   319→                    {alert.alert?.signature || 'N/A'}
+   320→                  </td>
+   321→                  <td className="px-4 py-3 font-mono text-sm text-gray-600">
+   322→                    {alert.src_ip}:{alert.src_port}
+   323→                  </td>
+   324→                  <td className="px-4 py-3 font-mono text-sm text-gray-600">
+   325→                    {alert.dest_ip}:{alert.dest_port}
+   326→                  </td>
+   327→                  <td className="px-4 py-3">
+   328→                    <Badge 
+   329→                      text={alert.alert?.action || 'unknown'} 
+   330→                      variant={alert.alert?.action === 'drop' ? 'danger' : 'info'}
+   331→                    />
+   332→                  </td>
+   333→                </tr>
+   334→              ))}
+   335→            </tbody>
+   336→          </table>
+   337→          
+   338→          {highPriorityAlerts.length === 0 && (
+   339→            <div className="text-center py-8 text-gray-500">
+   340→              No high priority alerts at this time ✓
+   341→            </div>
+   342→          )}
+   343→        </div>
+   344→      </div>
+   345→    </div>
+   346→  );
+   347→};
+   348→
+   349→/** Alerts Tab Component */
+   350→const AlertsTab: React.FC = () => {
+   351→  const [filter, setFilter] = useState<Partial<{
+   352→    severities: SeverityLevel[];
+   353→    search: string;
+   354→    timeRange: TimeRange;
+   355→  }>>({});
+   356→
+   357→  const { alerts, total, aggregations, loading, error, setFilter: applyFilter, currentPage, totalPages, setPage } = 
+   358→    useSuricataAlerts({
+   359→      time_range: filter.timeRange || TimeRange.LAST_24_HOURS,
+   360→      severities: filter.severities
+   361→    });
+   362→
+   363→  return (
+   364→    <div className="space-y-4">
+   365→      {/* Filters Bar */}
+   366→      <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-4">
+   367→        <div className="flex flex-wrap items-center gap-4">
+   368→          {/* Search */}
+   369→          <div className="flex-1 min-w-[250px]">
+   370→            <input
+   371→              type="text"
+   372→              placeholder="Search by signature, IP, or SID..."
+   373→              className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+   374→              onChange={(e) => setFilter(prev => ({ ...prev, search: e.target.value }))}
+   375→            />
+   376→          </div>
+   377→
+   378→          {/* Severity Filter */}
+   379→          <div className="flex items-center gap-2">
+   380→            <span className="text-sm text-gray-600">Severity:</span>
+   381→            {Object.values(SeverityLevel).map(sev => (
+   382→              <button
+   383→                key={sev}
+   384→                onClick={() => {
+   385→                  const current = filter.severities || [];
+   386→                  const newSev = current.includes(sev)
+   387→                    ? current.filter(s => s !== sev)
+   388→                    : [...current, sev];
+   389→                  applyFilter({ severities: newSev });
+   390→                }}
+   391→                className={`px-3 py-1 rounded-full text-xs font-medium transition-all ${
+   392→                  filter.severities?.includes(sev)
+   393→                    ? 'ring-2 ring-offset-1'
+   394→                    : 'opacity-60 hover:opacity-100'
+   395→                }`}
+   396→                style={{
+   397→                  backgroundColor: `${SEVERITY_CONFIG[sev].color}20`,
+   398→                  color: SEVERITY_CONFIG[sev].color,
+   399→                  borderColor: filter.severities?.includes(sev) ? SEVERITY_CONFIG[sev].color : 'transparent'
+   400→                }}
+   401→              >
+   402→                {SEVERITY_CONFIG[sev].icon} {sev.split('_')[0]}
+   403→              </button>
+   404→            ))}
+   405→          </div>
+   406→
+   407→          {/* Time Range */}
+   408→          <select
+   409→            className="px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500"
+   410→            value={filter.timeRange || TimeRange.LAST_24_HOURS}
+   411→            onChange={(e) => setFilter(prev => ({ ...prev, timeRange: e.target.value as TimeRange }))}
+   412→          >
+   413→            <option value={TimeRange.LAST_HOUR}>Last Hour</option>
+   414→            <option value={TimeRange.LAST_6_HOURS}>Last 6 Hours</option>
+   415→            <option value={TimeRange.LAST_12_HOURS}>Last 12 Hours</option>
+   416→            <option value={TimeRange.LAST_24_HOURS}>Last 24 Hours</option>
+   417→            <option value={TimeRange.LAST_7_DAYS}>Last 7 Days</option>
+   418→          </select>
+   419→        </div>
+   420→      </div>
+   421→
+   422→      {/* Aggregations Summary */}
+   423→      {aggregations && (
+   424→        <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
+   425→          {Object.entries(aggregations.by_severity).map(([sev, count]) => (
+   426→            <div 
+   427→              key={sev}
+   428→              className="bg-white rounded-lg p-3 border border-gray-100 text-center cursor-pointer hover:border-blue-300 transition-colors"
+   429→              onClick={() => {
+   430→                const current = filter.severities || [];
+   431→                applyFilter({ 
+   432→                  severities: current.includes(sev as SeverityLevel)
+   433→                    ? current.filter(s => s !== sev)
+   434→                    : [...current, sev as SeverityLevel]
+   435→                });
+   436→              }}
+   437→            >
+   438→              <div className="text-lg font-bold" style={{ color: SEVERITY_CONFIG[sev as SeverityLevel]?.color }}>
+   439→                {count}
+   440→              </div>
+   441→              <div className="text-xs text-gray-500 capitalize">{sev.replace('_', ' ')}</div>
+   442→            </div>
+   443→          ))}
+   444→        </div>
+   445→      )}
+   446→
+   447→      {/* Alerts Table */}
+   448→      <div className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
+   449→        {loading ? (
+   450→          <LoadingSpinner size="lg" />
+   451→        ) : error ? (
+   452→          <ErrorState message={error} onRetry={() => window.location.reload()} />
+   453→        ) : (
+   454→          <>
+   455→            <div className="overflow-x-auto">
+   456→              <table className="w-full text-sm">
+   457→                <thead>
+   458→                  <tr className="bg-gray-50 border-b">
+   459→                    <th className="text-left px-4 py-3 font-medium text-gray-600">Timestamp</th>
+   460→                    <th className="text-left px-4 py-3 font-medium text-gray-600">Severity</th>
+   461→                    <th className="text-left px-4 py-3 font-medium text-gray-600">Signature</th>
+   462→                    <th className="text-left px-4 py-3 font-medium text-gray-600">SID</th>
+   463→                    <th className="text-left px-4 py-3 font-medium text-gray-600">Source → Target</th>
+   464→                    <th className="text-left px-4 py-3 font-medium text-gray-600">Proto</th>
+   465→                    <th className="text-left px-4 py-3 font-medium text-gray-600">Action</th>
+   466→                    <th className="text-left px-4 py-3 font-medium text-gray-600">Actions</th>
+   467→                  </tr>
+   468→                </thead>
+   469→                <tbody>
+   470→                  {alerts.map((alert, idx) => (
+   471→                    <tr key={idx} className="border-b hover:bg-blue-50 transition-colors">
+   472→                      <td className="px-4 py-3 whitespace-nowrap text-gray-500">
+   473→                        {new Date(alert.timestamp).toLocaleString()}
+   474→                      </td>
+   475→                      <td className="px-4 py-3">
+   476→                        <SeverityIndicator 
+   477→                          severity={
+   478→                            Object.entries(SEVERITY_CONFIG).find(([_, c]) => 
+   479→                              c.score === (5 - (alert.alert?.severity || 5))
+   480→                            )?.[0] as SeverityLevel || SeverityLevel.LOW
+   481→                          }
+   482→                        />
+   483→                      </td>
+   484→                      <td className="px-4 py-3 font-medium text-gray-800 max-w-xs truncate" title={alert.alert?.signature}>
+   485→                        {alert.alert?.signature || 'N/A'}
+   486→                      </td>
+   487→                      <td className="px-4 py-3 font-mono text-gray-600">
+   488→                        {alert.alert?.signature_id || '-'}
+   489→                      </td>
+   490→                      <td className="px-4 py-3 font-mono text-xs text-gray-600">
+   491→                        <div>{alert.src_ip}:{alert.src_port}</div>
+   492→                        <div className="text-gray-400">→</div>
+   493→                        <div>{alert.dest_ip}:{alert.dest_port}</div>
+   494→                      </td>
+   495→                      <td className="px-4 py-3">
+   496→                        <Badge text={alert.proto} variant="default" />
+   497→                      </td>
+   498→                      <td className="px-4 py-3">
+   499→                        <Badge 
+   500→                          text={alert.alert?.action || '-'} 
+   501→                          variant={
+   502→                            alert.alert?.action === 'drop' ? 'danger' :
+   503→                            alert.alert?.action === 'reject' ? 'warning' :
+   504→                            alert.alert?.action === 'pass' ? 'success' : 'info'
+   505→                          }
+   506→                        />
+   507→                      </td>
+   508→                      <td className="px-4 py-3">
+   509→                        <div className="flex items-center gap-2">
+   510→                          <button className="text-blue-600 hover:text-blue-700 text-xs" title="View Details">
+   511→                            👁️
+   512→                          </button>
+   513→                          <button className="text-orange-600 hover:text-orange-700 text-xs" title="Mark False Positive">
+   514→                            ⚠️
+   515→                          </button>
+   516→                          <button className="text-purple-600 hover:text-purple-700 text-xs" title="Create Case">
+   517→                            📋
+   518→                          </button>
+   519→                        </div>
+   520→                      </td>
+   521→                    </tr>
+   522→                  ))}
+   523→                </tbody>
+   524→              </table>
+   525→            </div>
+   526→
+   527→            {/* Pagination */}
+   528→            <div className="flex items-center justify-between px-4 py-3 border-t bg-gray-50">
+   529→              <div className="text-sm text-gray-600">
+   530→                Showing {alerts.length} of {total.toLocaleString()} alerts
+   531→              </div>
+   532→              <div className="flex items-center gap-2">
+   533→                <button
+   534→                  disabled={currentPage <= 1}
+   535→                  onClick={() => setPage(currentPage - 1)}
+   536→                  className="px-3 py-1 rounded border text-sm disabled:opacity-50 hover:bg-gray-100"
+   537→                >
+   538→                  Previous
+   539→                </button>
+   540→                <span className="text-sm text-gray-600">
+   541→                  Page {currentPage} of {totalPages}
+   542→                </span>
+   543→                <button
+   544→                  disabled={currentPage >= totalPages}
+   545→                  onClick={() => setPage(currentPage + 1)}
+   546→                  className="px-3 py-1 rounded border text-sm disabled:opacity-50 hover:bg-gray-100"
+   547→                >
+   548→                  Next
+   549→                </button>
+   550→              </div>
+   551→            </div>
+   552→          </>
+   553→        )}
+   554→      </div>
+   555→    </div>
+   556→  );
+   557→};
+   558→
+   559→/** Rules Tab Component */
+   560→const RulesTab: React.FC = () => {
+   561→  const [showCreateModal, setShowCreateModal] = useState(false);
+   562→  const [newRuleText, setNewRuleText] = useState('');
+   563→  const [validationResult, setValidationResult] = useState<{
+   564→    valid: boolean;
+   565→    errors: string[];
+   566→    warnings: string[];
+   567→  } | null>(null);
+   568→
+   569→  const { rules, total, loading, validateRule, setFilter, refetch } = useSuricataRules({
+   570→    state: RuleState.ENABLED
+   571→  });
+   572→
+   573→  const handleValidate = async () => {
+   574→    if (!newRuleText.trim()) return;
+   575→    
+   576→    const result = await validateRule(newRuleText);
+   577→    setValidationResult(result);
+   578→  };
+   579→
+   580→  return (
+   581→    <div className="space-y-4">
+   582→      {/* Actions Bar */}
+   583→      <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-4">
+   584→        <div className="flex items-center justify-between">
+   585→          <div className="flex items-center gap-4">
+   586→            <select
+   587→              className="px-3 py-2 border border-gray-300 rounded-lg text-sm"
+   588→              onChange={(e) => setFilter({ state: e.target.value as RuleState })}
+   589→            >
+   590→              <option value="">All States</option>
+   591→              <option value={RuleState.ENABLED}>Enabled</option>
+   592→              <option value={RuleState.DISABLED}>Disabled</option>
+   593→              <option value={RuleState.TESTING}>Testing</option>
+   594→            </select>
+   595→
+   596→            <select
+   597→              className="px-3 py-2 border border-gray-300 rounded-lg text-sm"
+   598→              onChange={(e) => setFilter({ source: e.target.value as SignatureSource })}
+   599→            >
+   600→              <option value="">All Sources</option>
+   601→              <option value={SignatureSource.ETOPEN}>ET Open</option>
+   602→              <option value={SignatureSource.ETPRO}>ET Pro</option>
+   603→              <option value={SignatureSource.CUSTOM}>Custom</option>
+   604→            </select>
+   605→          </div>
+   606→
+   607→          <button
+   608→            onClick={() => setShowCreateModal(true)}
+   609→            className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors flex items-center gap-2"
+   610→          >
+   611→            <span>➕</span> Add Custom Rule
+   612→          </button>
+   613→        </div>
+   614→      </div>
+   615→
+   616→      {/* Rules Table */}
+   617→      <div className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
+   618→        {loading ? (
+   619→          <LoadingSpinner size="lg" />
+   620→        ) : (
+   621→          <div className="overflow-x-auto">
+   622→            <table className="w-full text-sm">
+   623→              <thead>
+   624→                <tr className="bg-gray-50 border-b">
+   625→                  <th className="text-left px-4 py-3 font-medium text-gray-600">SID</th>
+   626→                  <th className="text-left px-4 py-3 font-medium text-gray-600">Action</th>
+   627→                  <th className="text-left px-4 py-3 font-medium text-gray-600">Message</th>
+   628→                  <th className="text-left px-4 py-3 font-medium text-gray-600">Source</th>
+   629→                  <th className="text-left px-4 py-3 font-medium text-gray-600">Hits</th>
+   630→                  <th className="text-left px-4 py-3 font-medium text-gray-600">FP Count</th>
+   631→                  <th className="text-left px-4 py-3 font-medium text-gray-600">Last Hit</th>
+   632→                  <th className="text-left px-4 py-3 font-medium text-gray-600">State</th>
+   633→                  <th className="text-left px-4 py-3 font-medium text-gray-600">Actions</th>
+   634→                </tr>
+   635→              </thead>
+   636→              <tbody>
+   637→                {rules.map(rule => (
+   638→                  <tr key={rule.id} className="border-b hover:bg-gray-50 transition-colors">
+   639→                    <td className="px-4 py-3 font-mono text-blue-600">{rule.sid}</td>
+   640→                    <td className="px-4 py-3">
+   641→                      <Badge 
+   642→                        text={rule.action} 
+   643→                        variant={
+   644→                          rule.action === RuleAction.DROP ? 'danger' :
+   645→                          rule.action === RuleAction.REJECT ? 'warning' :
+   646→                          rule.action === RuleAction.PASS ? 'success' : 'info'
+   647→                        }
+   648→                      />
+   649→                    </td>
+   650→                    <td className="px-4 py-3 font-medium text-gray-800 max-w-md truncate" title={rule.message}>
+   651→                      {rule.message}
+   652→                    </td>
+   653→                    <td className="px-4 py-3">
+   654→                      <Badge 
+   655→                        text={rule.source} 
+   656→                        variant={rule.source === SignatureSource.CUSTOM ? 'info' : 'default'}
+   657→                      />
+   658→                    </td>
+   659→                    <td className="px-4 py-3 font-mono text-gray-600">{rule.hit_count.toLocaleString()}</td>
+   660→                    <td className="px-4 py-3 font-mono text-orange-600">{rule.false_positive_count}</td>
+   661→                    <td className="px-4 py-3 text-gray-500 text-xs whitespace-nowrap">
+   662→                      {rule.last_hit ? new Date(rule.last_hit).toLocaleDateString() : 'Never'}
+   663→                    </td>
+   664→                    <td className="px-4 py-3">
+   665→                      <Badge 
+   666→                        text={rule.state}
+   667→                        variant={
+   668→                          rule.state === RuleState.ENABLED ? 'success' :
+   669→                          rule.state === RuleState.DISABLED ? 'danger' : 'warning'
+   670→                        }
+   671→                      />
+   672→                    </td>
+   673→                    <td className="px-4 py-3">
+   674→                      <div className="flex items-center gap-2">
+   675→                        <button 
+   676→                          className="text-green-600 hover:text-green-700 text-xs"
+   677→                          title={rule.state === RuleState.ENABLED ? 'Disable' : 'Enable'}
+   678→                        >
+   679→                          {rule.state === RuleState.ENABLED ? '⏸️' : '▶️'}
+   680→                        </button>
+   681→                        <button className="text-blue-600 hover:text-blue-700 text-xs" title="Edit">
+   682→                          ✏️
+   683→                        </button>
+   684→                        <button className="text-purple-600 hover:text-purple-700 text-xs" title="View Raw">
+   685→                          📄
+   686→                        </button>
+   687→                      </div>
+   688→                    </td>
+   689→                  </tr>
+   690→                ))}
+   691→              </tbody>
+   692→            </table>
+   693→          </div>
+   694→        )}
+   695→      </div>
+   696→
+   697→      {/* Create Rule Modal */}
+   698→      {showCreateModal && (
+   699→        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+   700→          <div className="bg-white rounded-xl shadow-xl max-w-3xl w-full mx-4 max-h-[90vh] overflow-auto">
+   701→            <div className="p-6 border-b">
+   702→              <div className="flex items-center justify-between">
+   703→                <h2 className="text-xl font-bold text-gray-800">Create Custom Rule</h2>
+   704→                <button 
+   705→                  onClick={() => setShowCreateModal(false)}
+   706→                  className="text-gray-400 hover:text-gray-600 text-2xl"
+   707→                >
+   708→                  ×
+   709→                </button>
+   710→              </div>
+   711→            </div>
+   712→
+   713→            <div className="p-6 space-y-4">
+   714→              <div>
+   715→                <label className="block text-sm font-medium text-gray-700 mb-2">
+   716→                  Rule Definition
+   717→                </label>
+   718→                <textarea
+   719→                  value={newRuleText}
+   720→                  onChange={(e) => {
+   721→                    setNewRuleText(e.target.value);
+   722→                    setValidationResult(null);
+   723→                  }}
+   724→                  placeholder="alert tcp any any -> any any (msg:&quot;My Custom Rule&quot;; sid:2000001; rev:1;)"
+   725→                  className="w-full h-40 px-4 py-3 border border-gray-300 rounded-lg font-mono text-sm focus:ring-2 focus:ring-blue-500"
+   726→                />
+   727→              </div>
+   728→
+   729→              {/* Validation Results */}
+   730→              {validationResult && (
+   731→                <div className={`rounded-lg p-4 ${
+   732→                  validationResult.valid ? 'bg-green-50 border border-green-200' : 'bg-red-50 border border-red-200'
+   733→                }`}>
+   734→                  <div className={`font-medium ${validationResult.valid ? 'text-green-700' : 'text-red-700'}`}>
+   735→                    {validationResult.valid ? '✅ Rule is valid' : '❌ Validation failed'}
+   736→                  </div>
+   737→                  
+   738→                  {validationResult.errors.length > 0 && (
+   739→                    <ul className="mt-2 space-y-1">
+   740→                      {validationResult.errors.map((err, i) => (
+   741→                        <li key={i} className="text-red-600 text-sm">• {err}</li>
+   742→                      ))}
+   743→                    </ul>
+   744→                  )}
+   745→                  
+   746→                  {validationResult.warnings.length > 0 && (
+   747→                    <ul className="mt-2 space-y-1">
+   748→                      {validationResult.warnings.map((warn, i) => (
+   749→                        <li key={i} className="text-yellow-600 text-sm">⚠️ {warn}</li>
+   750→                      ))}
+   751→                    </ul>
+   752→                  )}
+   753→                </div>
+   754→              )}
+   755→            </div>
+   756→
+   757→            <div className="p-6 border-t bg-gray-50 flex justify-end gap-3">
+   758→              <button
+   759→                onClick={() => setShowCreateModal(false)}
+   760→                className="px-4 py-2 border border-gray-300 rounded-lg text-gray-700 hover:bg-gray-100"
+   761→              >
+   762→                Cancel
+   763→              </button>
+   764→              <button
+   765→                onClick={handleValidate}
+   766→                className="px-4 py-2 bg-yellow-500 text-white rounded-lg hover:bg-yellow-600"
+   767→              >
+   768→                Validate
+   769→              </button>
+   770→              <button
+   771→                disabled={!validationResult?.valid}
+   772→                className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50"
+   773→              >
+   774→                Create Rule
+   775→              </button>
+   776→            </div>
+   777→          </div>
+   778→        </div>
+   779→      )}
+   780→    </div>
+   781→  );
+   782→};
+   783→
+   784→/** Attack Map Tab Component (Simplified - would integrate with map library) */
+   785→const AttackMapTab: React.FC = () => {
+   786→  const { data: attackMap, loading } = useAttackMapData(TimeRange.LAST_24_HOURS);
+   787→
+   788→  return (
+   789→    <div className="space-y-4">
+   790→      <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-6">
+   791→        <h3 className="font-semibold text-gray-800 mb-4 flex items-center gap-2">
+   792→          <span>🗺️</span> Global Attack Map
+   793→        </h3>
+   794→        
+   795→        {loading ? (
+   796→          <LoadingSpinner size="lg" />
+   797→        ) : (
+   798→          <div className="relative h-[500px] bg-gradient-to-b from-blue-900 to-blue-950 rounded-lg overflow-hidden">
+   799→            {/* Simplified attack visualization - In production, use Leaflet/Mapbox */}
+   800→            <div className="absolute inset-0 flex items-center justify-center">
+   801→              <div className="text-center text-white">
+   802→                <div className="text-6xl mb-4">🌍</div>
+   803→                <p className="text-xl font-semibold mb-2">Attack Visualization</p>
+   804→                <p className="text-blue-200 text-sm">
+   805→                  {attackMap?.length || 0} attack sources detected in last 24 hours
+   806→                </p>
+   807→                
+   808→                {/* Simulated attack points */}
+   809→                <div className="mt-8 grid grid-cols-2 md:grid-cols-4 gap-4 max-w-2xl mx-auto">
+   810→                  {attackMap?.slice(0, 8).map(point => (
+   811→                    <div key={point.id} className="bg-black/30 rounded-lg p-3 backdrop-blur">
+   812→                      <div className="text-2xl mb-1">
+   813→                        {point.severity === SeverityLevel.CRITICAL ? '🔴' :
+   814→                         point.severity === SeverityLevel.HIGH ? '🟠' : '🟡'}
+   815→                      </div>
+   816→                      <div className="text-xs text-blue-200 truncate">{point.location.country}</div>
+   817→                      <div className="text-xs text-blue-300">{point.count} attacks</div>
+   818→                    </div>
+   819→                  ))}
+   820→                </div>
+   821→              </div>
+   822→            </div>
+   823→          </div>
+   824→        )}
+   825→      </div>
+   826→
+   827→      {/* Attack Statistics */}
+   828→      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+   829→        <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-5">
+   830→          <h4 className="font-medium text-gray-700 mb-3">By Category</h4>
+   831→          <div className="space-y-2">
+   832→            {[
+   833→              { cat: 'C2 Communication', count: 47, pct: 35 },
+   834→              { cat: 'Brute Force', count: 32, pct: 24 },
+   835→              { cat: 'Scanning', count: 28, pct: 21 },
+   836→              { cat: 'Malware', count: 18, pct: 13 },
+   837→              { cat: 'Other', count: 10, pct: 7 }
+   838→            ].map(item => (
+   839→              <div key={item.cat} className="flex items-center gap-3">
+   840→                <span className="text-sm text-gray-600 w-28 truncate">{item.cat}</span>
+   841→                <div className="flex-1 bg-gray-200 rounded-full h-2">
+   842→                  <div className="bg-blue-600 h-2 rounded-full" style={{ width: `${item.pct}%` }}></div>
+   843→                </div>
+   844→                <span className="text-xs text-gray-500 w-8">{item.count}</span>
+   845→              </div>
+   846→            ))}
+   847→          </div>
+   848→        </div>
+   849→
+   850→        <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-5">
+   851→          <h4 className="font-medium text-gray-700 mb-3">Top Targeted Ports</h4>
+   852→          <div className="space-y-2">
+   853→            {[
+   854→              { port: 443, service: 'HTTPS', count: 12500 },
+   855→              { port: 80, service: 'HTTP', count: 5200 },
+   856→              { port: 22, service: 'SSH', count: 3100 },
+   857→              { port: 53, service: 'DNS', count: 1800 },
+   858→              { port: 4444, service: 'MSF', count: 450 }
+   859→            ].map(item => (
+   860→              <div key={item.port} className="flex items-center justify-between text-sm">
+   861→                <div className="flex items-center gap-2">
+   862→                  <span className="font-mono text-blue-600">{item.port}</span>
+   863→                  <span className="text-gray-500">({item.service})</span>
+   864→                </div>
+   865→                <span className="text-gray-600">{item.count.toLocaleString()}</span>
+   866→              </div>
+   867→            ))}
+   868→          </div>
+   869→        </div>
+   870→
+   871→        <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-5">
+   872→          <h4 className="font-medium text-gray-700 mb-3">Threat Intelligence</h4>
+   873→          <div className="space-y-3">
+   874→            <div className="flex items-center justify-between">
+   875→              <span className="text-sm text-gray-600">IOC Matches</span>
+   876→              <Badge text="234 matches" variant="danger" />
+   877→            </div>
+   878→            <div className="flex items-center justify-between">
+   879→              <span className="text-sm text-gray-600">MITRE Mapped</span>
+   880→              <Badge text="89%" variant="info" />
+   881→            </div>
+   882→            <div className="flex items-center justify-between">
+   883→              <span className="text-sm text-gray-600">Known Bad IPs</span>
+   884→              <Badge text="156 unique" variant="warning" />
+   885→            </div>
+   886→            <div className="flex items-center justify-between">
+   887→              <span className="text-sm text-gray-600">Tor Exit Nodes</span>
+   888→              <Badge text="12 nodes" variant="default" />
+   889→            </div>
+   890→          </div>
+   891→        </div>
+   892→      </div>
+   893→    </div>
+   894→  );
+   895→};
+   896→
+   897→/** Sensors Tab Component */
+   898→const SensorsTab: React.FC<{
+   899→  sensors: SuricataSensor[];
+   900→}> = ({ sensors }) => (
+   901→  <div className="space-y-4">
+   902→    {sensors.map(sensor => (
+   903→      <div key={sensor.id} className="bg-white rounded-xl shadow-sm border border-gray-100 p-6">
+   904→        <div className="flex items-start justify-between mb-4">
+   905→          <div>
+   906→            <div className="flex items-center gap-3">
+   907→              <h3 className="font-semibold text-gray-800 text-lg">{sensor.name}</h3>
+   908→              <Badge 
+   909→                text={sensor.status}
+   910→                variant={
+   911→                  sensor.status === SensorStatus.ONLINE ? 'success' :
+   912→                  sensor.status === SensorStatus.DEGRADED ? 'warning' : 'danger'
+   913→                }
+   914→              />
+   915→            </div>
+   916→            <p className="text-sm text-gray-500 mt-1">{sensor.hostname} • v{sensor.version}</p>
+   917→          </div>
+   918→          <div className="text-right text-sm text-gray-500">
+   919→            <div>Uptime: {(sensor.uptime_seconds / 3600).toFixed(1)} hours</div>
+   920→            <div>Last update: {new Date(sensor.last_rule_update).toLocaleDateString()}</div>
+   921→          </div>
+   922→        </div>
+   923→
+   924→        <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-4">
+   925→          <div className="bg-gray-50 rounded-lg p-3">
+   926→            <div className="text-xs text-gray-500">CPU Usage</div>
+   927→            <div className="text-lg font-semibold text-gray-800">{sensor.cpu_usage}%</div>
+   928→            <div className="w-full bg-gray-200 rounded-full h-1.5 mt-1">
+   929→              <div 
+   930→                className={`h-1.5 rounded-full ${sensor.cpu_usage > 80 ? 'bg-red-500' : 'bg-green-500'}`}
+   931→                style={{ width: `${sensor.cpu_usage}%` }}
+   932→              ></div>
+   933→            </div>
+   934→          </div>
+   935→          
+   936→          <div className="bg-gray-50 rounded-lg p-3">
+   937→            <div className="text-xs text-gray-500">Memory Usage</div>
+   938→            <div className="text-lg font-semibold text-gray-800">{sensor.memory_usage}%</div>
+   939→            <div className="w-full bg-gray-200 rounded-full h-1.5 mt-1">
+   940→              <div 
+   941→                className={`h-1.5 rounded-full ${sensor.memory_usage > 80 ? 'bg-red-500' : 'bg-green-500'}`}
+   942→                style={{ width: `${sensor.memory_usage}%` }}
+   943→              ></div>
+   944→            </div>
+   945→          </div>
+   946→
+   947→          <div className="bg-gray-50 rounded-lg p-3">
+   948→            <div className="text-xs text-gray-500">Rules Loaded</div>
+   949→            <div className="text-lg font-semibold text-gray-800">
+   950→              {sensor.enabled_rules.toLocaleString()} / {sensor.total_rules.toLocaleString()}
+   951→            </div>
+   952→          </div>
+   953→
+   954→          <div className="bg-gray-50 rounded-lg p-3">
+   955→            <div className="text-xs text-gray-500">Interfaces</div>
+   956→            <div className="text-sm text-gray-800 mt-1">
+   957→              {sensor.interfaces.map(iface => iface.name).join(', ')}
+   958→            </div>
+   959→          </div>
+   960→        </div>
+   961→
+   962→        {/* Health Checks */}
+   963→        <div className="border-t pt-4">
+   964→          <h4 className="text-sm font-medium text-gray-700 mb-3">Health Checks</h4>
+   965→          <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+   966→            {sensor.health_checks.map(check => (
+   967→              <div 
+   968→                key={check.check_name}
+   969→                className={`flex items-center gap-2 p-2 rounded-lg ${
+   970→                  check.status === 'pass' ? 'bg-green-50' :
+   971→                  check.status === 'warn' ? 'bg-yellow-50' : 'bg-red-50'
+   972→                }`}
+   973→              >
+   974→                <span className={`text-lg ${
+   975→                  check.status === 'pass' ? '✅' :
+   976→                  check.status === 'warn' ? '⚠️' : '❌'
+   977→                }`}></span>
+   978→                <div>
+   979→                  <div className="text-xs font-medium text-gray-700 capitalize">
+   980→                    {check.check_name.replace(/_/g, ' ')}
+   981→                  </div>
+   982→                  <div className="text-xs text-gray-500">{check.message}</div>
+   983→                </div>
+   984→              </div>
+   985→            ))}
+   986→          </div>
+   987→        </div>
+   988→      </div>
+   989→    ))}
+   990→  </div>
+   991→);
+   992→
+   993→// ============================================================================
+   994→// MAIN DASHBOARD COMPONENT
+   995→// ============================================================================
+   996→
+   997→interface SuricataDashboardProps {
+   998→  /** Initial time range for data display */
+   999→  defaultTimeRange?: TimeRange;
+  1000→  /** Enable auto-refresh */
+  1001→  autoRefresh?: boolean;
+  1002→  /** Refresh interval in milliseconds */
+  1003→  refreshInterval?: number;
+  1004→  /** Show attack map tab */
+  1005→  enableAttackMap?: boolean;
+  1006→  /** Custom class name */
+  1007→  className?: string;
+  1008→}
+  1009→
+  1010→export const SuricataDashboard: React.FC<SuricataDashboardProps> = ({
+  1011→  defaultTimeRange = TimeRange.LAST_24_HOURS,
+  1012→  autoRefresh = true,
+  1013→  refreshInterval = 30000,
+  1014→  enableAttackMap = true,
+  1015→  className = ''
+  1016→}) => {
+  1017→  const [activeTab, setActiveTab] = useState<string>('overview');
+  1018→  const tabs = [
+  1019→    { id: 'overview', label: 'Overview', icon: '📊' },
+  1020→    { id: 'alerts', label: 'Alerts', icon: '🚨' },
+  1021→    { id: 'rules', label: 'Rules', icon: '📜' },
+  1022→    ...(enableAttackMap ? [{ id: 'attack-map', label: 'Attack Map', icon: '🗺️' }] : []),
+  1023→    { id: 'sensors', label: 'Sensors', icon: '📡' })
+  1024→  ];
+  1025→
+  1026→  // Fetch all dashboard data
+  1027→  const {
+  1028→    stats,
+  1029→    recentAlerts,
+  1030→    highPriorityAlerts,
+  1031→    topIPs,
+  1032→    sensors,
+  1033→    loading,
+  1034→    error,
+  1035→    refetchAll
+  1036→  } = useSuricataDashboard({
+  1037→    refreshInterval: autoRefresh ? refreshInterval : undefined,
+  1038→    enableAttackMap
+  1039→  });
+  1040→
+  1041→  if (error) {
+  1042→    return (
+  1043→      <div className={className}>
+  1044→        <ErrorState message={error} onRetry={refetchAll} />
+  1045→      </div>
+  1046→    );
+  1047→  }
+  1048→
+  1049→  return (
+  1050→    <div className={`suricata-dashboard ${className}`}>
+  1051→      {/* Header */}
+  1052→      <div className="mb-6">
+  1053→        <div className="flex items-center justify-between">
+  1054→          <div>
+  1055→            <h1 className="text-2xl font-bold text-gray-800 flex items-center gap-3">
+  1056→              <span className="text-3xl">🛡️</span>
+  1057→              Suricata IDS/IPS
+  1058→            </h1>
+  1059→            <p className="text-gray-500 mt-1">
+  1060→              Intrusion Detection & Prevention System • National SOC Platform
+  1061→            </p>
+  1062→          </div>
+  1063→          
+  1064→          <div className="flex items-center gap-4">
+  1065→            {/* Last Updated Indicator */}
+  1066→            <div className="text-sm text-gray-500">
+  1067→              Last updated: {new Date().toLocaleTimeString()}
+  1068→            </div>
+  1069→            
+  1070→            {/* Refresh Button */}
+  1071→            <button
+  1072→              onClick={refetchAll}
+  1073→              className="px-4 py-2 bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 transition-colors flex items-center gap-2"
+  1074→            >
+  1075→              <span>🔄</span> Refresh
+  1076→            </button>
+  1077→            
+  1078→            {/* Export Button */}
+  1079→            <button className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors flex items-center gap-2">
+  1080→              <span>📥</span> Export
+  1081→            </button>
+  1082→          </div>
+  1083→        </div>
+  1084→      </div>
+  1085→
+  1086→      {/* Tabs Navigation */}
+  1087→      <div className="mb-6 border-b border-gray-200">
+  1088→        <nav className="flex gap-1">
+  1089→          {tabs.map(tab => (
+  1090→            <button
+  1091→              key={tab.id}
+  1092→              onClick={() => setActiveTab(tab.id)}
+  1093→              className={`px-4 py-3 font-medium text-sm transition-all relative ${
+  1094→                activeTab === tab.id
+  1095→                  ? 'text-blue-600'
+  1096→                  : 'text-gray-500 hover:text-gray-700'
+  1097→              }`}
+  1098→            >
+  1099→              <span className="mr-2">{tab.icon}</span>
+  1100→              {tab.label}
+  1101→              {activeTab === tab.id && (
+  1102→                <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-blue-600"></div>
+  1103→              )}
+  1104→            </button>
+  1105→          ))}
+  1106→        </nav>
+  1107→      </div>
+  1108→
+  1109→      {/* Tab Content */}
+  1110→      <div className="min-h-[500px]">
+  1111→        {loading && !stats ? (
+  1112→          <LoadingSpinner size="lg" />
+  1113→        ) : (
+  1114→          <>
+  1115→            {activeTab === 'overview' && stats && (
+  1116→              <OverviewTab
+  1117→                stats={stats}
+  1118→                recentAlerts={recentAlerts || []}
+  1119→                highPriorityAlerts={highPriorityAlerts || []}
+  1120→                topIPs={topIPs || []}
+  1121→                sensors={sensors || []}
+  1122→              />
+  1123→            )}
+  1124→
+  1125→            {activeTab === 'alerts' && <AlertsTab />}
+  1126→
+  1127→            {activeTab === 'rules' && <RulesTab />}
+  1128→
+  1129→            {activeTab === 'attack-map' && enableAttackMap && <AttackMapTab />}
+  1130→
+  1131→            {activeTab === 'sensors' && sensors && <SensorsTab sensors={sensors} />}
+  1132→          </>
+  1133→        )}
+  1134→      </div>
+  1135→    </div>
+  1136→  );
+  1137→};
+  1138→
+  1139→// Default export
+  1140→export default SuricataDashboard;
+  1141→

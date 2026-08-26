@@ -1,0 +1,1842 @@
+     1→/**
+     2→ * Grafana Monitoring Dashboard Integration - API Client
+     3→ * Algeria National SOC Platform 2026-2030
+     4→ * 
+     5→ * Complete REST API client for Grafana integration including:
+     6→ * - HTTP client with authentication (API key, basic auth)
+     7→ * - Dashboard CRUD operations (get, create, update, delete, import)
+     8→ * - Datasource management
+     9→ * - Alert rule management
+    10→ * - Organization/user administration
+    11→ * - Folder management
+    12→ * - Search functionality
+    13→ * - Tagging system
+    14→ * - Version control for dashboards
+    15→ * - Provisioning configuration helpers
+    16→ * - Error handling with specific error classes
+    17→ */
+    18→
+    19→import type {
+    20→  GrafanaDashboard,
+    21→  DashboardSearchResult,
+    22→  DashboardFolder,
+    23→  DashboardSaveResponse,
+    24→  DashboardImportResponse,
+    25→  DataSource,
+    26→  DataSourceRef,
+    27→  DataSourceTestResult,
+    28→  AlertRule,
+    29→  AlertIncident,
+    30→  AlertHistoryEntry,
+    31→  AlertState,
+    32→  ContactPoint,
+    33→  MuteTiming,
+    34→  NotificationPolicyTree,
+    35→  GrafanaUser,
+    36→  GrafanaOrganization,
+    37→  GrafanaTeam,
+    38→  TeamMember,
+    39→  GrafanaPlugin,
+    40→  SavedAnnotation,
+    41→  AnnotationDefinition,
+    42→  TemplateVariable,
+    43→  DashboardSearchParams,
+    44→  AlertSearchParams,
+    45→  DatasourceSearchParams,
+    46→  GrafanaAPIResponse,
+    47→  BulkOperationResult,
+    48→  TimeRange,
+    49→  RefreshInterval,
+    50→  PanelType,
+    51→  TargetRefID,
+    52→} from '../types/grafana.types';
+    53→
+    54→// ============================================================
+    55→// Configuration & Constants
+    56→// ============================================================
+    57→
+    58→/** Grafana client configuration options */
+    59→export interface GrafanaClientConfig {
+    60→  /** Grafana instance URL (e.g., https://grafana.algeria-soc.dz) */
+    61→  url: string;
+    62→  /** API key for authentication (Service Account or User token) */
+    63→  apiKey?: string;
+    64→  /** Username for basic authentication */
+    65→  username?: string;
+    66→  /** Password for basic authentication */
+    67→  password?: string;
+    68→  /** Request timeout in milliseconds (default: 30000) */
+    69→  timeout?: number;
+    70→  /** Enable debug logging */
+    71→  debug?: boolean;
+    72→  /** Default organization ID (default: 1) */
+    73→  defaultOrgId?: number;
+    74→  /** Whether to verify SSL certificates */
+    75→  verifyCertificate?: boolean;
+    76→}
+    77→
+    78→/** Default configuration values */
+    79→const DEFAULT_CONFIG: Required<Omit<GrafanaClientConfig, 'username' | 'password' | 'apiKey'>> = {
+    80→  url: '',
+    81→  timeout: 30000,
+    82→  debug: false,
+    83→  defaultOrgId: 1,
+    84→  verifyCertificate: true,
+    85→};
+    86→
+    87→/** Grafana API version prefix */
+    88→const API_PREFIX = '/api';
+    89→
+    90→// ============================================================
+    91→// Custom Error Classes
+    92→// ============================================================
+    93→
+    94→/** Base Grafana API error */
+    95→export class GrafanaError extends Error {
+    96→  constructor(
+    97→    message: string,
+    98→    public readonly statusCode?: number,
+    99→    public readonly errorCode?: string,
+   100→    public readonly details?: unknown
+   101→  ) {
+   102→    super(message);
+   103→    this.name = 'GrafanaError';
+   104→  }
+   105→}
+   106→
+   107→/** Authentication error */
+   108→export class GrafanaAuthError extends GrafanaError {
+   109→  constructor(message: string, statusCode?: number) {
+   110→    super(message, statusCode, 'AUTH_ERROR');
+   111→    this.name = 'GrafanaAuthError';
+   112→  }
+   113→}
+   114→
+   115→/** Not found error */
+   116→export class GrafanaNotFoundError extends GrafanaError {
+   117→  constructor(resource: string, id?: string) {
+   118→    super(
+   119→      `${resource}${id ? ` with ID ${id}` : ''} not found`,
+   120→      404,
+   121→      'NOT_FOUND'
+   122→    );
+   123→    this.name = 'GrafanaNotFoundError';
+   124→  }
+   125→}
+   126→
+   127→/** Validation error */
+   128→export class GrafanaValidationError extends GrafanaError {
+   129→  constructor(
+   130→    message: string,
+   131→    public readonly validationErrors?: Array<{ field: string; message: string }>
+   132→  ) {
+   133→    super(message, 400, 'VALIDATION_ERROR', validationErrors);
+   134→    this.name = 'GrafanaValidationError';
+   135→  }
+   136→}
+   137→
+   138→/** Rate limit error */
+   139→export class GrafanaRateLimitError extends GrafanaError {
+   140→  constructor(retryAfterSeconds?: number) {
+   141→    super(
+   142→      `Rate limit exceeded. Retry after ${retryAfterSeconds || 60} seconds.`,
+   143→      429,
+   144→      'RATE_LIMITED',
+   145→      { retryAfter: retryAfterSeconds || 60 }
+   146→    );
+   147→    this.name = 'GrafanaRateLimitError';
+   148→  }
+   149→}
+   150→
+   151→/** Connection error */
+   152→export class GrafanaConnectionError extends GrafanaError {
+   153→  constructor(originalError: Error) {
+   154→    super(`Failed to connect to Grafana: ${originalError.message}`, undefined, 'CONNECTION_ERROR', originalError);
+   155→    this.name = 'GrafanaConnectionError';
+   156→  }
+   157→}
+   158→
+   159→/** Dashboard version conflict error */
+   160→export class GrafanaVersionConflictError extends GrafanaError {
+   161→  constructor(currentVersion: number, expectedVersion: number) {
+   162→    super(
+   163→      `Dashboard version conflict. Current: ${currentVersion}, Expected: ${expectedVersion}`,
+   164→      409,
+   165→      'VERSION_CONFLICT',
+   166→      { currentVersion, expectedVersion }
+   167→    );
+   168→    this.name = 'GrafanaVersionConflictError';
+   169→  }
+   170→}
+   171→
+   172→// ============================================================
+   173→// HTTP Client
+   174→// ============================================================
+   175→
+   176→/** HTTP response wrapper */
+   177→interface HttpResponse<T> {
+   178→  data: T;
+   179→  status: number;
+   180→  headers: Headers;
+   181→}
+   182→
+   183→/** Request options interface */
+   184→interface RequestOptions {
+   185→  method: string;
+   186→  path: string;
+   187→  body?: Record<string, unknown>;
+   188→  params?: Record<string, string>;
+   189→  headers?: Record<string, string>;
+   190→  expectEmpty?: boolean;
+   191→}
+   192→
+   193→/**
+   194→ * Core HTTP client for Grafana API communication
+   195→ */
+   196→class GrafanaHttpClient {
+   197→  private config: Required<GrafanaClientConfig> & { username?: string; password?: string; apiKey?: string };
+   198→  
+   199→  constructor(config: GrafanaClientConfig) {
+   200→    this.config = { ...DEFAULT_CONFIG, ...config };
+   201→    
+   202→    // Validate required configuration
+   203→    if (!this.config.url) {
+   204→      throw new GrafanaValidationError('Grafana URL is required');
+   205→    }
+   206→    
+   207→    // Ensure URL doesn't have trailing slash
+   208→    this.config.url = this.config.url.replace(/\/+$/, '');
+   209→  }
+   210→
+   211→  /**
+   212→   * Build authorization headers
+   213→   */
+   214→  private getAuthHeaders(): Record<string, string> {
+   215→    const headers: Record<string, string> = {};
+   216→    
+   217→    if (this.config.apiKey) {
+   218→      headers['Authorization'] = `Bearer ${this.config.apiKey}`;
+   219→    } else if (this.config.username && this.config.password) {
+   220→      // Basic auth would be handled differently in browser environment
+   221→      // For server-side or proxy scenarios
+   222→      const credentials = btoa(`${this.config.username}:${this.config.password}`);
+   223→      headers['Authorization'] = `Basic ${credentials}`;
+   224→    }
+   225→    
+   226→    return headers;
+   227→  }
+   228→
+   229→  /**
+   230→   * Execute HTTP request
+   231→   */
+   232→  async request<T>(options: RequestOptions): Promise<HttpResponse<T>> {
+   233→    const { method, path, body, params, headers: customHeaders, expectEmpty } = options;
+   234→    
+   235→    // Build URL
+   236→    let url = `${this.config.url}${API_PREFIX}${path}`;
+   237→    
+   238→    // Add query parameters
+   239→    if (params && Object.keys(params).length > 0) {
+   240→      const searchParams = new URLSearchParams();
+   241→      Object.entries(params).forEach(([key, value]) => {
+   242→        if (value !== undefined && value !== null) {
+   243→          searchParams.append(key, value);
+   244→        }
+   245→      });
+   246→      url += `?${searchParams.toString()}`;
+   247→    }
+   248→
+   249→    // Build headers
+   250→    const headers: Record<string, string> = {
+   251→      'Content-Type': 'application/json',
+   252→      'Accept': 'application/json',
+   253→      ...this.getAuthHeaders(),
+   254→      ...customHeaders,
+   255→    };
+   256→
+   257→    // Log request in debug mode
+   258→    if (this.config.debug) {
+   259→      console.log(`[Grafana] ${method} ${url}`, body ? JSON.stringify(body) : '');
+   260→    }
+   261→
+   262→    try {
+   263→      // Build fetch options
+   264→      const fetchOptions: RequestInit = {
+   265→        method,
+   266→        headers,
+   267→        signal: AbortSignal.timeout(this.config.timeout),
+   268→      };
+   269→
+   270→      if (body && ['POST', 'PUT', 'PATCH'].includes(method)) {
+   271→        fetchOptions.body = JSON.stringify(body);
+   272→      }
+   273→
+   274→      const response = await fetch(url, fetchOptions);
+   275→
+   276→      // Handle empty responses
+   277→      if (expectEmpty || response.status === 204) {
+   278→        return { data: undefined as T, status: response.status, headers: response.headers };
+   279→      }
+   280→
+   281→      // Parse response
+   282→      const data = await response.json();
+   283→
+   284→      // Handle errors
+   285→      if (!response.ok) {
+   286→        return this.handleError(response, data);
+   287→      }
+   288→
+   289→      return { data, status: response.status, headers: response.headers };
+   290→    } catch (error) {
+   291→      if (error instanceof DOMException && error.name === 'TimeoutError') {
+   292→        throw new GrafanaError('Request timeout', undefined, 'TIMEOUT_ERROR');
+   293→      }
+   294→      
+   295→      if (error instanceof TypeError) {
+   296→        throw new GrafanaConnectionError(error);
+   297→      }
+   298→      
+   299→      throw error;
+   300→    }
+   301→  }
+   302→
+   303→  /**
+   304→   * Handle API error responses
+   305→   */
+   306→  private handleError<T>(response: Response, data: unknown): never {
+   307→    switch (response.status) {
+   308→      case 401:
+   309→      case 403:
+   310→        throw new GrafanaAuthError(
+   311→          (data as { message?: string })?.message || 'Authentication failed',
+   312→          response.status
+   313→        );
+   314→        
+   315→      case 404:
+   316→        throw new GrafanaNotFoundError('Resource');
+   317→        
+   318→      case 409:
+   319→        throw new GrafanaVersionConflictError(
+   320→          (data as { version?: number })?.version || 0,
+   321→          0
+   322→        );
+   323→        
+   324→      case 429:
+   325→        const retryAfter = parseInt(response.headers.get('Retry-After') || '60', 10);
+   326→        throw new GrafanaRateLimitError(retryAfter);
+   327→        
+   328→      case 400:
+   329→        throw new GrafanaValidationError(
+   330→          (data as { message?: string })?.message || 'Validation failed',
+   331→          (data as { errors?: Array<{ field: string; message: string }> })?.errors
+   332→        );
+   333→        
+   334→      default:
+   335→        throw new GrafanaError(
+   336→          (data as { message?: string })?.message || `Request failed with status ${response.status}`,
+   337→          response.status,
+   338→          undefined,
+   339→          data
+   340→        );
+   341→    }
+   342→  }
+   343→
+   344→  /**
+   345→   * GET request helper
+   346→   */
+   347→  async get<T>(path: string, params?: Record<string, string>): Promise<HttpResponse<T>> {
+   348→    return this.request<T>({ method: 'GET', path, params });
+   349→  }
+   350→
+   351→  /**
+   352→   * POST request helper
+   353→   */
+   354→  async post<T>(path: string, body?: Record<string, unknown>, expectEmpty?: boolean): Promise<HttpResponse<T>> {
+   355→    return this.request<T>({ method: 'POST', path, body, expectEmpty });
+   356→  }
+   357→
+   358→  /**
+   359→   * PUT request helper
+   360→   */
+   361→  async put<T>(path: string, body?: Record<string, unknown>): Promise<HttpResponse<T>> {
+   362→    return this.request<T>({ method: 'PUT', path, body });
+   363→  }
+   364→
+   365→  /**
+   366→   * PATCH request helper
+   367→   */
+   368→  async patch<T>(path: string, body?: Record<string, unknown>): Promise<HttpResponse<T>> {
+   369→    return this.request<T>({ method: 'PATCH', path, body });
+   370→  }
+   371→
+   372→  /**
+   373→   * DELETE request helper
+   374→   */
+   375→  async delete<T>(path: string): Promise<HttpResponse<T>> {
+   376→    return this.request<T>({ method: 'DELETE', path, expectEmpty: true });
+   377→  }
+   378→
+   379→  /**
+   380→   * Get base URL for iframe embedding
+   381→   */
+   382→  getBaseUrl(): string {
+   383→    return this.config.url;
+   384→  }
+   385→
+   386→  /**
+   387→   * Get configured organization ID
+   388→   */
+   389→  getDefaultOrgId(): number {
+   390→    return this.config.defaultOrgId;
+   391→  }
+   392→}
+   393→
+   394→// ============================================================
+   395→// Main Grafana Client Class
+   396→// ============================================================
+   397→
+   398→/**
+   399→ * Complete Grafana API client for dashboard management and monitoring
+   400→ * 
+   401→ * @example
+   402→ * ```typescript
+   403→ * const client = await initializeGrafanaClient({
+   404→ *   url: 'https://grafana.algeria-soc.dz',
+   405→ *   apiKey: 'your-api-key',
+   406→ * });
+   407→ * 
+   408→ * const dashboards = await client.searchDashboards({ query: 'SOC' });
+   409→ * ```
+   410→ */
+   411→export class GrafanaClient {
+   412→  private http: GrafanaHttpClient;
+   413→
+   414→  constructor(httpClient: GrafanaHttpClient) {
+   415→    this.http = httpClient;
+   416→  }
+   417→
+   418→  // ============================================================
+   419→  // Health Check
+   420→  // ============================================================
+   421→
+   422→  /**
+   423→   * Check Grafana server health
+   424→   * @returns Health check result
+   425→   */
+   426→  async healthCheck(): Promise<{
+   427→    commit: string;
+   428→    database: string;
+   429→    version: string;
+   430→  }> {
+   431→    const response = await this.http.get<{ commit: string; database: string; version: string }>('/health');
+   432→    return response.data;
+   433→  }
+   434→
+   435→  /**
+   436→   * Get basic frontend settings (for connectivity test)
+   437→   */
+   438→  async getFrontendSettings(): Promise<{ allowedDomains: string[] }> {
+   439→    const response = await this.http.get<{ allowedDomains: string[] }>('/frontend/settings');
+   440→    return response.data;
+   441→  }
+   442→
+   443→  // ============================================================
+   444→  // Dashboard Operations
+   445→  // ============================================================
+   446→
+   447→  /**
+   448→   * Search for dashboards
+   449→   * @param params Search parameters
+   450→   * @returns Array of matching dashboards
+   451→   */
+   452→  async searchDashboards(params?: DashboardSearchParams): Promise<DashboardSearchResult[]> {
+   453→    const searchParams: Record<string, string> = {};
+   454→
+   455→    if (params?.query) searchParams.query = params.query;
+   456→    if (params?.tag) searchParams.tag = params.tag.join(',');
+   457→    if (params?.type) searchParams.type = params.type;
+   458→    if (params?.folderIds) searchParams.folderIds = params.folderIds.join(',');
+   459→    if (params?.limit) searchParams.limit = params.limit.toString();
+   460→    if (params?.page) searchParams.page = params.page.toString();
+   461→    if (params?.sort) searchParams.sort = params.sort;
+   462→    if (params?.starred) searchParams.starred = 'true';
+   463→
+   464→    const response = await this.http.get<DashboardSearchResult[]>('/search', searchParams);
+   465→    return response.data;
+   466→  }
+   467→
+   468→  /**
+   469→   * Get dashboard by UID
+   470→   * @param uid Dashboard unique identifier
+   471→   * @returns Full dashboard object
+   472→   */
+   473→  async getDashboard(uid: string): Promise<GrafanaDashboard> {
+   474→    const response = await this.http.get<{ dashboard: GrafanaDashboard; meta: GrafanaDashboard['meta'] }>(
+   475→      `/dashboards/uid/${uid}`
+   476→    );
+   477→    return {
+   478→      ...response.data.dashboard,
+   479→      meta: response.data.meta,
+   480→    };
+   481→  }
+   482→
+   483→  /**
+   484→   * Get dashboard by slug (legacy)
+   485→   * @param slug Dashboard slug
+   486→   * @returns Full dashboard object
+   487→   */
+   488→  async getDashboardBySlug(slug: string): Promise<GrafanaDashboard> {
+   489→    const response = await this.http.get<{ dashboard: GrafanaDashboard; meta: GrafanaDashboard['meta'] }>(
+   490→      `/dashboards/db/${slug}`
+   491→    );
+   492→    return {
+   493→      ...response.data.dashboard,
+   494→      meta: response.data.meta,
+   495→    };
+   496→  }
+   497→
+   498→  /**
+   499→   * Create a new dashboard
+   500→   * @param dashboard Dashboard object to create
+   501→   * @param folderUid Optional folder UID to place dashboard in
+   502→   * @param overwrite Overwrite existing dashboard with same title
+   503→   * @returns Save response with ID and slug
+   504→   */
+   505→  async createDashboard(
+   506→    dashboard: Omit<GrafanaDashboard, 'uid' | 'id'>,
+   507→    options?: {
+   508→      folderUid?: string;
+   509→      overwrite?: boolean;
+   510→      message?: string;
+   511→    }
+   512→  ): Promise<DashboardSaveResponse> {
+   513→    const payload = {
+   514→      dashboard: {
+   515→        ...dashboard,
+   516→        id: null,
+   517→        uid: undefined,
+   518→      },
+   519→      folderUid: options?.folderUid,
+   520→      overwrite: options?.overwrite ?? false,
+   521→      message: options?.message,
+   522→    };
+   523→
+   524→    const response = await this.http.post<DashboardSaveResponse>('/dashboards/db', payload);
+   525→    return response.data;
+   526→  }
+   527→
+   528→  /**
+   529→   * Update an existing dashboard
+   530→   * @param uid Dashboard UID
+   531→   * @param dashboard Updated dashboard object
+   532→   * @param options Update options
+   533→   * @returns Save response
+   534→   */
+   535→  async updateDashboard(
+   536→    uid: string,
+   537→    dashboard: Partial<GrafanaDashboard>,
+   538→    options?: {
+   539→      folderUid?: string;
+   540→      message?: string;
+   541→      overwrite?: boolean;
+   542→    }
+   543→  ): Promise<DashboardSaveResponse> {
+   544→    const existing = await this.getDashboard(uid);
+   545→    
+   546→    const payload = {
+   547→      dashboard: {
+   548→        ...existing,
+   549→        ...dashboard,
+   550→        id: existing.id || null,
+   551→        uid,
+   552→        version: existing.version,
+   553→      },
+   554→      folderUid: options?.folderUid,
+   555→      overwrite: options?.overwrite ?? true,
+   556→      message: options?.message || 'Updated via API',
+   557→    };
+   558→
+   559→    const response = await this.http.post<DashboardSaveResponse>('/dashboards/db', payload);
+   560→    return response.data;
+   561→  }
+   562→
+   563→  /**
+   564→   * Delete a dashboard by UID
+   565→   * @param uid Dashboard UID
+   566→   * @returns Success confirmation
+   567→   */
+   568→  async deleteDashboard(uid: string): Promise<{ title: string; message: string }> {
+   569→    const response = await this.http.delete<{ title: string; message: string }>(`/dashboards/uid/${uid}`);
+   570→    return response.data;
+   571→  }
+   572→
+   573→  /**
+   574→   * Import a dashboard from JSON
+   575→   * @param dashboardJson Dashboard JSON content
+   576→   * @param options Import options
+   577→   * @returns Import result
+   578→   */
+   579→  async importDashboard(
+   580→    dashboardJson: Record<string, unknown>,
+   581→    options?: {
+   582→      folderUid?: string;
+   583→      overwrite?: boolean;
+   584→      inputs?: Array<{ name: string; type: string; pluginId: string; value: string }>;
+   585→      dashboardUid?: string;
+   586→      dashboardTitle?: string;
+   587→    }
+   588→  ): Promise<DashboardImportResponse> {
+   589→    const payload = {
+   590→      dashboard: dashboardJson,
+   591→      folderUid: options?.folderUid,
+   592→      overwrite: options?.overwrite ?? false,
+   593→      inputs: options?.inputs || [],
+   594→      options: {
+   595→        uid: options?.dashboardUid,
+   596→        title: options?.dashboardTitle,
+   597→      },
+   598→    };
+   599→
+   600→    const response = await this.http.post<DashboardImportResponse>('/dashboards/import', payload);
+   601→    return response.data;
+   602→  }
+   603→
+   604→  /**
+   605→   * Get dashboard tags
+   606→   * @returns Array of all tags used across dashboards
+   607→   */
+   608→  async getTags(): Promise<Array<{ term: string; count: number }>> {
+   609→    const response = await this.http.get<Array<{ term: string; count: number }>>('/tags');
+   610→    return response.data;
+   611→  }
+   612→
+   613→  /**
+   614→   * Star/unstar a dashboard
+   615→   * @param uid Dashboard UID
+   616→   * @param starred Star state
+   617→   */
+   618→  async setStarred(uid: string, starred: boolean): Promise<void> {
+   619→    if (starred) {
+   620→      await this.http.post(`/user/stars/dashboard/${uid}`, {}, true);
+   621→    } else {
+   622→      await this.http.delete(`/user/stars/dashboard/${uid}`);
+   623→    }
+   624→  }
+   625→
+   626→  // ============================================================
+   627→  // Folder Operations
+   628→  // ============================================================
+   629→
+   630→  /**
+   631→   * Get all folders
+   632→   * @returns Array of folders
+   633→   */
+   634→  async getFolders(): Promise<DashboardFolder[]> {
+   635→    const response = await this.http.get<DashboardFolder[]>('/folders');
+   636→    return response.data;
+   637→  }
+   638→
+   639→  /**
+   640→   * Get a specific folder by UID
+   641→   * @param uid Folder UID
+   642→   * @returns Folder details
+   643→   */
+   644→  async getFolder(uid: string): Promise<DashboardFolder> {
+   645→    const response = await this.http.get<DashboardFolder>(`/folders/${uid}`);
+   646→    return response.data;
+   647→  }
+   648→
+   649→  /**
+   650→   * Create a new folder
+   651→   * @param title Folder title
+   652→   * @param parentUid Optional parent folder UID
+   653→   * @returns Created folder
+   654→   */
+   655→  async createFolder(title: string, parentUid?: string): Promise<DashboardFolder> {
+   656→    const response = await this.http.post<DashboardFolder>('/folders', {
+   657→      title,
+   658→      parentUid,
+   659→    });
+   660→    return response.data;
+   661→  }
+   662→
+   663→  /**
+   664→   * Update a folder
+   665→   * @param uid Folder UID
+   666→   * @param title New title
+   667→   * @param version Expected version for optimistic locking
+   668→   * @returns Updated folder
+   669→   */
+   670→  async updateFolder(uid: string, title: string, version?: number): Promise<DashboardFolder> {
+   671→    const response = await this.http.put<DashboardFolder>(`/folders/${uid}`, {
+   672→      title,
+   673→      version,
+   674→      override: !version,
+   675→    });
+   676→    return response.data;
+   677→  }
+   678→
+   679→  /**
+   680→   * Delete a folder
+   681→   * @param uid Folder UID
+   682→   * @returns Success message
+   683→   */
+   684→  async deleteFolder(uid: string): Promise<{ message: string }> {
+   685→    const response = await this.http.delete<{ message: string }>(`/folders/${uid}`);
+   686→    return response.data;
+   687→  }
+   688→
+   689→  /**
+   690→   * Get dashboards in a folder
+   691→   * @param folderUid Folder UID
+   692→   * @returns Array of dashboards in the folder
+   693→   */
+   694→  async getFolderDashboards(folderUid: string): Promise<DashboardSearchResult[]> {
+   695→    const response = await this.http.get<DashboardSearchResult[]>('/search', {
+   696→      folderIds: folderUid,
+   697→    });
+   698→    return response.data;
+   699→  }
+   700→
+   701→  // ============================================================
+   702→  // Data Source Operations
+   703→  // ============================================================
+   704→
+   705→  /**
+   706→   * Get all datasources
+   707→   * @returns Array of datasources
+   708→   */
+   709→  async getDataSources(params?: DatasourceSearchParams): Promise<DataSource[]> {
+   710→    const queryParams: Record<string, string> = {};
+   711→    
+   712→    if (params?.type) queryParams.type = params.type;
+   713→    if (params?.name) queryParams.name = params.name;
+   714→
+   715→    const response = await this.http.get<DataSource[]>('/datasources', queryParams);
+   716→    
+   717→    if (params?.access) {
+   718→      return response.data.filter(ds => ds.access === params.access);
+   719→    }
+   720→    
+   721→    return response.data;
+   722→  }
+   723→
+   724→  /**
+   725→   * Get a datasource by ID
+   726→   * @param id Datasource ID
+   727→   * @returns Datasource details
+   728→   */
+   729→  async getDataSourceById(id: number): Promise<DataSource> {
+   730→    const response = await this.http.get<DataSource>(`/datasources/${id}`);
+   731→    return response.data;
+   732→  }
+   733→
+   734→  /**
+   735→   * Get a datasource by UID
+   736→   * @param uid Datasource UID
+   737→   * @returns Datasource details
+   738→   */
+   739→  async getDataSourceByUid(uid: string): Promise<DataSource> {
+   740→    const response = await this.http.get<DataSource>(`/datasources/uid/${uid}`);
+   741→    return response.data;
+   742→  }
+   743→
+   744→  /**
+   745→   * Get a datasource by name
+   746→   * @param name Datasource name
+   747→   * @returns Datasource details
+   748→   */
+   749→  async getDataSourceByName(name: string): Promise<DataSource> {
+   750→    const response = await this.http.get<DataSource>(`/datasources/name/${encodeURIComponent(name)}`);
+   751→    return response.data;
+   752→  }
+   753→
+   754→  /**
+   755→   * Create a new datasource
+   756→   * @param datasource Datasource configuration
+   757→   * @returns Created datasource
+   758→   */
+   759→  async createDataSource(datasource: Omit<DataSource, 'id' | 'created' | 'updated' | 'version' | 'apiHealthStatus' | 'lastTestError' | 'lastTestResult'>): Promise<DataSource> {
+   760→    const response = await this.http.post<DataSource>('/datasources', datasource);
+   761→    return response.data;
+   762→  }
+   763→
+   764→  /**
+   765→   * Update a datasource
+   766→   * @param id Datasource ID
+   767→   * @param datasource Updated configuration
+   768→   * @returns Updated datasource
+   769→   */
+   770→  async updateDataSource(id: number, datasource: Partial<DataSource>): Promise<DataSource> {
+   771→    const response = await this.http.put<DataSource>(`/datasources/${id}`, datasource);
+   772→    return response.data;
+   773→  }
+   774→
+   775→  /**
+   776→   * Delete a datasource
+   777→   * @param id Datasource ID
+   778→   * @returns Success message
+   779→   */
+   780→  async deleteDataSource(id: number): Promise<{ message: string }> {
+   781→    const response = await this.http.delete<{ message: string }>(`/datasources/${id}`);
+   782→    return response.data;
+   783→  }
+   784→
+   785→  /**
+   786→   * Test a datasource connection
+   787→   * @param id Datasource ID
+   788→   * @returns Test result
+   789→   */
+   790→  async testDataSourceById(id: number): Promise<DataSourceTestResult> {
+   791→    const response = await this.http.post<DataSourceTestResult>(`/datasources/${id}/health`);
+   792→    return response.data;
+   793→  }
+   794→
+   795→  /**
+   796→   * Test datasource connection without saving
+   797→   * @param datasource Datasource configuration to test
+   798→   * @returns Test result
+   799→   */
+   800→  async testDataSource(datasource: Partial<DataSource>): Promise<DataSourceTestResult> {
+   801→    const response = await this.http.post<DataSourceTestResult>('/datasources/test', datasource);
+   802→    return response.data;
+   803→  }
+   804→
+   805→  /**
+   806→   * Get datasource proxy URL for direct queries
+   807→   * @param uid Datasource UID
+   808→   * @returns Proxy URL template
+   809→   */
+   810→  getDatasourceProxyUrl(uid: string): string {
+   811→    return `${this.http.getBaseUrl()}${API_PREFIX}/datasources/proxy/${uid}`;
+   812→  }
+   813→
+   814→  // ============================================================
+   815→  // Alert Rule Operations
+   816→  // ============================================================
+   817→
+   818→  /**
+   819→   * Get alert rules
+   820→   * @param params Search parameters
+   821→   * @returns Array of alert rules
+   822→   */
+   823→  async getAlertRules(params?: AlertSearchParams): Promise<AlertRule[]> {
+   824→    const queryParams: Record<string, string> = {};
+   825→    
+   826→    if (params?.dashboardUID) queryParams.dashboardUID = params.dashboardUID;
+   827→    if (params?.panelId) queryParams.panelId = params.panelId.toString();
+   828→    if (params?.folderId) queryParams.folderId = params.folderId.toString();
+   829→    if (params?.query) queryParams.query = params.query;
+   830→    if (params?.state) queryParams.state = params.state;
+   831→    if (params?.limit) queryParams.limit = params.limit.toString();
+   832→    if (params?.page) queryParams.page = params.page.toString();
+   833→
+   834→    const response = await this.http.get<AlertRule[]>('/alertrules', queryParams);
+   835→    return response.data;
+   836→  }
+   837→
+   838→  /**
+   839→   * Get a single alert rule
+   840→   * @param uid Alert rule UID
+   841→   * @returns Alert rule details
+   842→   */
+   843→  async getAlertRule(uid: string): Promise<AlertRule> {
+   844→    const response = await this.http.get<AlertRule>(`/alertrules/${uid}`);
+   845→    return response.data;
+   846→  }
+   847→
+   848→  /**
+   849→   * Create a new alert rule
+   850→   * @param rule Alert rule definition
+   851→   * @returns Created alert rule
+   852→   */
+   853→  async createAlertRule(rule: Omit<AlertRule, 'id' | 'uid' | 'created' | 'updated' | 'version' | 'currentState' | 'stateSince' | 'stateChangesCount' | 'health'>): Promise<AlertRule> {
+   854→    const response = await this.http.post<AlertRule>('/alertrules', rule);
+   855→    return response.data;
+   856→  }
+   857→
+   858→  /**
+   859→   * Update an alert rule
+   860→   * @param uid Alert rule UID
+   861→   * @param rule Updated rule definition
+   862→   * @returns Updated alert rule
+   863→   */
+   864→  async updateAlertRule(uid: string, rule: Partial<AlertRule>): Promise<AlertRule> {
+   865→    const response = await this.http.put<AlertRule>(`/alertrules/${uid}`, rule);
+   866→    return response.data;
+   867→  }
+   868→
+   869→  /**
+   870→   * Delete an alert rule
+   871→   * @param uid Alert rule UID
+   872→   * @returns Success message
+   873→   */
+   874→  async deleteAlertRule(uid: string): Promise<{ message: string }> {
+   875→    const response = await this.http.delete<{ message: string }>(`/alertrules/${uid}`);
+   876→    return response.data;
+   877→  }
+   878→
+   879→  /**
+   880→   * Pause/resume an alert rule
+   881→   * @param uid Alert rule UID
+   882→   * @param paused Pause state
+   883→   * @returns Updated alert rule
+   884→   */
+   885→  async setAlertRulePaused(uid: string, paused: boolean): Promise<AlertRule> {
+   886→    const response = await this.http.patch<AlertRule>(`/alertrules/${uid}/pause`, {
+   887→      paused,
+   888→    });
+   889→    return response.data;
+   890→  }
+   891→
+   892→  /**
+   893→   * Batch pause/resume alert rules
+   894→   * @param ruleUids Array of rule UIDs
+   895→   * @param paused Pause state
+   896→   * @returns Operation result
+   897→   */
+   898→  async batchSetAlertRulesPaused(ruleUids: string[], paused: boolean): Promise<BulkOperationResult> {
+   899→    const results: BulkOperationResult = {
+   900→      successCount: 0,
+   901→      failedCount: 0,
+   902→      errors: [],
+   903→    };
+   904→
+   905→    for (const uid of ruleUids) {
+   906→      try {
+   907→        await this.setAlertRulePaused(uid, paused);
+   908→        results.successCount++;
+   909→      } catch (error) {
+   910→        results.failedCount++;
+   911→        results.errors.push({
+   912→          item: uid,
+   913→          reason: error instanceof Error ? error.message : 'Unknown error',
+   914→        });
+   915→      }
+   916→    }
+   917→
+   918→    return results;
+   919→  }
+   920→
+   921→  /**
+   922→   * Get alert incidents
+   923→   * @param params Filter parameters
+   924→   * @returns Array of incidents
+   925→   */
+   926→  async getAlertIncidents(params?: {
+   927→    alertRuleUID?: string;
+   928→    state?: AlertState;
+   929→    limit?: number;
+   930→    page?: number;
+   931→  }): Promise<AlertIncident[]> {
+   932→    const queryParams: Record<string, string> = {};
+   933→    
+   934→    if (params?.alertRuleUID) queryParams.alertRuleUID = params.alertRuleUID;
+   935→    if (params?.state) queryParams.state = params.state;
+   936→    if (params?.limit) queryParams.limit = params.limit.toString();
+   937→    if (params?.page) queryParams.page = params.page.toString();
+   938→
+   939→    const response = await this.http.get<AlertIncident[]>('/incidents', queryParams);
+   940→    return response.data;
+   941→  }
+   942→
+   943→  /**
+   944→   * Get alert history
+   945→   * @param params Filter parameters
+   946→   * @returns History entries
+   947→   */
+   948→  async getAlertHistory(params?: {
+   949→    dashboardUID?: string;
+   950→    panelId?: number;
+   951→    userId?: number;
+   952→    states?: AlertState[];
+   953→    limit?: number;
+   954→    page?: number;
+   955→    from?: string;
+   956→    to?: string;
+   957→  }): Promise<AlertHistoryEntry[]> {
+   958→    const queryParams: Record<string, string> = {};
+   959→    
+   960→    if (params?.dashboardUID) queryParams.dashboardUID = params.dashboardUID;
+   961→    if (params?.panelId) queryParams.panelId = params.panelId.toString();
+   962→    if (params?.userId) queryParams.userId = params.userId.toString();
+   963→    if (params?.states) queryParams.states = params.states.join(',');
+   964→    if (params?.limit) queryParams.limit = params.limit.toString();
+   965→    if (params?.page) queryParams.page = params.page.toString();
+   966→    if (params?.from) queryParams.from = params.from;
+   967→    if (params?.to) queryParams.to = params.to;
+   968→
+   969→    const response = await this.http.get<AlertHistoryEntry[]>('/annotations/graphite', queryParams);
+   970→    return response.data;
+   971→  }
+   972→
+   973→  // ============================================================
+   974→  // Notification Channel Operations
+   975→  // ============================================================
+   976→
+   977→  /**
+   978→   * Get contact points (notification channels)
+   979→   * @returns Array of contact points
+   980→   */
+   981→  async getContactPoints(): Promise<ContactPoint[]> {
+   982→    const response = await this.http.get<ContactPoint[]>('/contact-points');
+   983→    return response.data;
+   984→  }
+   985→
+   986→  /**
+   987→   * Create a contact point
+   988→   * @param contactPoint Contact point configuration
+   989→   * @returns Created contact point
+   990→   */
+   991→  async createContactPoint(contactPoint: Omit<ContactPoint, 'id' | 'uid' | 'created' | 'updated'>): Promise<ContactPoint> {
+   992→    const response = await this.http.post<ContactPoint>('/contact-points', contactPoint);
+   993→    return response.data;
+   994→  }
+   995→
+   996→  /**
+   997→   * Update a contact point
+   998→   * @param uid Contact point UID
+   999→   * @param contactPoint Updated configuration
+  1000→   * @returns Updated contact point
+  1001→   */
+  1002→  async updateContactPoint(uid: string, contactPoint: Partial<ContactPoint>): Promise<ContactPoint> {
+  1003→    const response = await this.http.put<ContactPoint>(`/contact-points/${uid}`, contactPoint);
+  1004→    return response.data;
+  1005→  }
+  1006→
+  1007→  /**
+  1008→   * Delete a contact point
+  1009→   * @param uid Contact point UID
+  1010→   * @returns Success message
+  1011→   */
+  1012→  async deleteContactPoint(uid: string): Promise<void> {
+  1013→    await this.http.delete(`/contact-points/${uid}`);
+  1014→  }
+  1015→
+  1016→  /**
+  1017→   * Test a notification channel
+  1018→   * @param uid Contact point UID
+  1019→   * @param options Test options
+  1020→   * @returns Test result
+  1021→   */
+  1022→  async testContactPoint(uid: string, options?: {
+  1023→    alertRuleUID?: string;
+  1024→    alertRuleTitle?: string;
+  1025→    state?: AlertState;
+  1026→    labels?: Record<string, string>;
+  1027→  }): Promise<{ success: boolean; message: string }> {
+  1028→    const response = await this.http.post<{ success: boolean; message: string }>(
+  1029→      `/contact-points/${uid}/test`,
+  1030→      options as Record<string, unknown>
+  1031→    );
+  1032→    return response.data;
+  1033→  }
+  1034→
+  1035→  // ============================================================
+  1036→  // Mute Timing Operations
+  1037→  // ============================================================
+  1038→
+  1039→  /**
+  1040→   * Get mute timings
+  1041→   * @returns Array of mute timings
+  1042→   */
+  1043→  async getMuteTimings(): Promise<MuteTiming[]> {
+  1044→    const response = await this.http.get<MuteTiming[]>('/mute-timings');
+  1045→    return response.data;
+  1046→  }
+  1047→
+  1048→  /**
+  1049→   * Create a mute timing
+  1050→   * @param muteTiming Mute timing configuration
+  1051→   * @returns Created mute timing
+  1052→   */
+  1053→  async createMuteTiming(muteTiming: Omit<MuteTiming, 'id' | 'uid' | 'created' | 'updated'>): Promise<MuteTiming> {
+  1054→    const response = await this.http.post<MuteTiming>('/mute-timings', muteTiming);
+  1055→    return response.data;
+  1056→  }
+  1057→
+  1058→  /**
+  1059→   * Update a mute timing
+  1060→   * @param uid Mute timing UID
+  1061→   * @param muteTiming Updated configuration
+  1062→   * @returns Updated mute timing
+  1063→   */
+  1064→  async updateMuteTiming(uid: string, muteTiming: Partial<MuteTiming>): Promise<MuteTiming> {
+  1065→    const response = await this.http.put<MuteTiming>(`/mute-timings/${uid}`, muteTiming);
+  1066→    return response.data;
+  1067→  }
+  1068→
+  1069→  /**
+  1070→   * Delete a mute timing
+  1071→   * @param uid Mute timing UID
+  1072→   * @returns Success message
+  1073→   */
+  1074→  async deleteMuteTiming(uid: string): Promise<void> {
+  1075→    await this.http.delete(`/mute-timings/${uid}`);
+  1076→  }
+  1077→
+  1078→  // ============================================================
+  1079→  // Notification Policy Operations
+  1080→  // ============================================================
+  1081→
+  1082→  /**
+  1083→   * Get notification policy tree
+  1084→   * @returns Policy tree
+  1085→   */
+  1086→  async getNotificationPolicyTree(): Promise<NotificationPolicyTree> {
+  1087→    const response = await this.http.get<NotificationPolicyTreeTree>('/routetree');
+  1088→    return response.data;
+  1089→  }
+  1090→
+  1091→  /** Type alias for policy tree response */
+  1092→  interface NotificationPolicyTreeTree extends NotificationPolicyTree {}
+  1093→
+  1094→  /**
+  1095→   * Update notification policy tree
+  1096→   * @param tree New policy tree
+  1097→   * @returns Updated policy tree
+  1098→   */
+  1099→  async updateNotificationPolicyTree(tree: NotificationPolicyTree): Promise<NotificationPolicyTree> {
+  1100→    const response = await this.http.put<NotificationPolicyTree>('/routetree', tree);
+  1101→    return response.data;
+  1102→  }
+  1103→
+  1104→  // ============================================================
+  1105→  // Organization Operations
+  1106→  // ============================================================
+  1107→
+  1108→  /**
+  1109→   * Get current user's organizations
+  1110→   * @returns Array of organizations
+  1111→   */
+  1112→  async getOrganizations(): Promise<GrafanaOrganization[]> {
+  1113→    const response = await this.http.get<GrafanaOrganization[]>('/user/orgs');
+  1114→    return response.data;
+  1115→  }
+  1116→
+  1117→  /**
+  1118→   * Switch to another organization
+  1119→   * @param orgId Organization ID
+  1120→   * @returns Success message
+  1121→   */
+  1122→  async switchOrganization(orgId: number): Promise<{ message: string }> {
+  1123→    const response = await this.http.post<{ message: string }>(`/user/orgs/${orgId}`, {}, true);
+  1124→    return response.data;
+  1125→  }
+  1126→
+  1127→  /**
+  1128→   * Get organization users (admin only)
+  1129→   * @param orgId Organization ID
+  1130→   * @param page Page number
+  1131→   * @param perPage Items per page
+  1132→   * @returns Users array with pagination info
+  1133→   */
+  1134→  async getOrgUsers(orgId: number, page: number = 1, perPage: number = 50): Promise<{
+  1135→    totalCount: number;
+  1136→    page: number;
+  1137→    perPage: number;
+  1138→    users: Array<{
+  1139→      orgId: number;
+  1140→      userId: number;
+  1141→      email: string;
+  1142→      name: string;
+  1143→      login: string;
+  1144→      role: string;
+  1145→      avatarUrl: string;
+  1146→      lastSeenAt: string;
+  1147→      lastSeenAtAge: string;
+  1148→    }>;
+  1149→  }> {
+  1150→    const response = await this.http.get<typeof this.getOrgUsers extends (...args: any[]) => infer R ? R : never>(
+  1151→      `/orgs/${orgId}/users`,
+  1152→      { page: page.toString(), perpage: perPage.toString() }
+  1153→    );
+  1154→    return response.data;
+  1155→  }
+  1156→
+  1157→  /**
+  1158→   * Add user to organization
+  1159→   * @param orgId Organization ID
+  1160→   * @param userIdOrEmail User ID or email
+  1161→   * @param role Role to assign
+  1162→   * @returns Added user info
+  1163→   */
+  1164→  async addOrgUser(
+  1165→    orgId: number,
+  1166→    userIdOrEmail: number | string,
+  1167→    role: 'Viewer' | 'Editor' | 'Admin'
+  1168→  ): Promise<{ message: string }> {
+  1169→    const body: Record<string, unknown> = { role };
+  1170→    if (typeof userIdOrEmail === 'number') {
+  1171→      body.userId = userIdOrEmail;
+  1172→    } else {
+  1173→      body.email = userIdOrEmail;
+  1174→    }
+  1175→
+  1176→    const response = await this.http.post<{ message: string }>(`/orgs/${orgId}/users`, body);
+  1177→    return response.data;
+  1178→  }
+  1179→
+  1180→  /**
+  1181→   * Remove user from organization
+  1182→   * @param orgId Organization ID
+  1183→   * @param userId User ID
+  1184→   * @returns Success message
+  1185→   */
+  1186→  async removeOrgUser(orgId: number, userId: number): Promise<{ message: string }> {
+  1187→    const response = await this.http.delete<{ message: string }>(`/orgs/${orgId}/users/${userId}`);
+  1188→    return response.data;
+  1189→  }
+  1190→
+  1191→  /**
+  1192→   * Update user role in organization
+  1193→   * @param orgId Organization ID
+  1194→   * @param userId User ID
+  1195→   * @param role New role
+  1196→   * @returns Success message
+  1197→   */
+  1198→  async updateOrgUserRole(
+  1199→    orgId: number,
+  1200→    userId: number,
+  1201→    role: 'Viewer' | 'Editor' | 'Admin'
+  1202→  ): Promise<{ message: string }> {
+  1203→    const response = await this.http.patch<{ message: string }>(
+  1204→      `/orgs/${orgId}/users/${userId}`,
+  1205→      { role }
+  1206→    );
+  1207→    return response.data;
+  1208→  }
+  1209→
+  1210→  // ============================================================
+  1211→  // Team Operations
+  1212→  // ============================================================
+  1213→
+  1214→  /**
+  1215→   * Get teams in current organization
+  1216→   * @returns Array of teams
+  1217→   */
+  1218→  async getTeams(): Promise<GrafanaTeam[]> {
+  1219→    const response = await this.http.get<GrafanaTeam[]>('/teams');
+  1220→    return response.data;
+  1221→  }
+  1222→
+  1223→  /**
+  1224→   * Search teams
+  1225→   * @param query Search query
+  1226→   * @param page Page number
+  1227→   * @param perpage Items per page
+  1228→   * @returns Teams with pagination
+  1229→   */
+  1230→  async searchTeams(query?: string, page?: number, perpage?: number): Promise<{
+  1231→    totalCount: number;
+  1232→    teams: GrafanaTeam[];
+  1233→    page: number;
+  1234→    perPage: number;
+  1235→  }> {
+  1236→    const params: Record<string, string> = {};
+  1237→    if (query) params.query = query;
+  1238→    if (page) params.page = page.toString();
+  1239→    if (perpage) params.perpage = perpage.toString();
+  1240→
+  1241→    const response = await this.http.get<typeof this.searchTeams extends (...args: any[]) => infer R ? R : never>(
+  1242→      '/teams/search',
+  1243→      params
+  1244→    );
+  1245→    return response.data;
+  1246→  }
+  1247→
+  1248→  /**
+  1249→   * Get team by ID
+  1250→   * @param teamId Team ID
+  1251→   * @returns Team details
+  1252→   */
+  1253→  async getTeam(teamId: number): Promise<GrafanaTeam> {
+  1254→    const response = await this.http.get<GrafanaTeam>(`/teams/${teamId}`);
+  1255→    return response.data;
+  1256→  }
+  1257→
+  1258→  /**
+  1259→   * Create a new team
+  1260→   * @param name Team name
+  1261→   * @param email Team email
+  1262→   * @returns Created team
+  1263→   */
+  1264→  async createTeam(name: string, email?: string): Promise<GrafanaTeam> {
+  1265→    const response = await this.http.post<GrafanaTeam>('/teams', { name, email });
+  1266→    return response.data;
+  1267→  }
+  1268→
+  1269→  /**
+  1270→   * Update a team
+  1271→   * @param teamId Team ID
+  1272→   * @param name New name
+  1273→   * @param email New email
+  1274→   * @returns Updated team
+  1275→   */
+  1276→  async updateTeam(teamId: number, name: string, email?: string): Promise<GrafanaTeam> {
+  1277→    const response = await this.http.put<GrafanaTeam>(`/teams/${teamId}`, { name, email });
+  1278→    return response.data;
+  1279→  }
+  1280→
+  1281→  /**
+  1282→   * Delete a team
+  1283→   * @param teamId Team ID
+  1284→   * @returns Success message
+  1285→   */
+  1286→  async deleteTeam(teamId: number): Promise<{ message: string }> {
+  1287→    const response = await this.http.delete<{ message: string }>(`/teams/${teamId}`);
+  1288→    return response.data;
+  1289→  }
+  1290→
+  1291→  /**
+  1292→   * Get team members
+  1293→   * @param teamId Team ID
+  1294→   * @returns Array of team members
+  1295→   */
+  1296→  async getTeamMembers(teamId: number): Promise<TeamMember[]> {
+  1297→    const response = await this.http.get<TeamMember[]>(`/teams/${teamId}/members`);
+  1298→    return response.data;
+  1299→  }
+  1300→
+  1301→  /**
+  1302→   * Add member to team
+  1303→   * @param teamId Team ID
+  1304→   * @param userId User ID
+  1305→   * @returns Success message
+  1306→   */
+  1307→  async addTeamMember(teamId: number, userId: number): Promise<{ message: string }> {
+  1308→    const response = await this.http.post<{ message: string }>(`/teams/${teamId}/members`, { userId });
+  1309→    return response.data;
+  1310→  }
+  1311→
+  1312→  /**
+  1313→   * Remove member from team
+  1314→   * @param teamId Team ID
+  1315→   * @param userId User ID
+  1316→   * @returns Success message
+  1317→   */
+  1318→  async removeTeamMember(teamId: number, userId: number): Promise<{ message: string }> {
+  1319→    const response = await this.http.delete<{ message: string }>(`/teams/${teamId}/members/${userId}`);
+  1320→    return response.data;
+  1321→  }
+  1322→
+  1323→  // ============================================================
+  1324→  // User Operations
+  1325→  // ============================================================
+  1326→
+  1327→  /**
+  1328→   * Get current authenticated user
+  1329→   * @returns User information
+  1330→   */
+  1331→  async getCurrentUser(): Promise<GrafanaUser> {
+  1332→    const response = await this.http.get<GrafanaUser>('/user');
+  1333→    return response.data;
+  1334→  }
+  1335→
+  1336→  /**
+  1337→   * Look up user by login/email
+  1338→   * @param query Login or email
+  1339→   * @returns User information
+  1340→   */
+  1341→  async lookupUser(query: string): Promise<GrafanaUser> {
+  1342→    const response = await this.http.get<GrafanaUser>(`/users/lookup?loginOrEmail=${encodeURIComponent(query)}`);
+  1343→    return response.data;
+  1344→  }
+  1345→
+  1346→  /**
+  1347→   * Get users (admin only)
+  1348→   * @param page Page number
+  1349→   * @param perPage Items per page
+  1350→   * @returns Users with pagination
+  1351→   */
+  1352→  async getUsers(page: number = 1, perPage: number = 100): Promise<{
+  1353→    totalCount: number;
+  1354→    users: Array<{
+  1355→      id: number;
+  1356→      email: string;
+  1357→      name: string;
+  1358→      login: string;
+  1359→      orgId: number;
+  1360→      isAdmin: boolean;
+  1361→      isDisabled: boolean;
+  1362→    }>;
+  1363→    page: number;
+  1364→    perPage: number;
+  1365→  }> {
+  1366→    const response = await this.http.get<typeof this.getUsers extends (...args: any[]) => infer R ? R : never>(
+  1367→      '/users',
+  1368→      { page: page.toString(), perpage: perPage.toString() }
+  1369→    );
+  1370→    return response.data;
+  1371→  }
+  1372→
+  1373→  // ============================================================
+  1374→  // Plugin Operations
+  1375→  // ============================================================
+  1376→
+  1377→  /**
+  1378→   * Get installed plugins
+  1379→   * @param includePlugins Include core plugins
+  1380→   * @param requestedPlugins Filter by plugin IDs
+  1381→   * @returns Array of plugins
+  1382→   */
+  1383→  async getPlugins(includePlugins?: boolean, requestedPlugins?: string[]): Promise<GrafanaPlugin[]> {
+  1384→    const params: Record<string, string> = {};
+  1385→    if (includePlugins) params.builtin = 'true';
+  1386→    if (requestedPlugins?.length) params.pluginIds = requestedPlugins.join(',');
+  1387→
+  1388→    const response = await this.http.get<GrafanaPlugin[]>('/plugins', params);
+  1389→    return response.data;
+  1390→  }
+  1391→
+  1392→  /**
+  1393→   * Get plugin settings
+  1394→   * @param pluginId Plugin ID
+  1395→   * @returns Plugin configuration
+  1396→   */
+  1397→  async getPluginSettings(pluginId: string): Promise<GrafanaPlugin> {
+  1398→    const response = await this.http.get<GrafanaPlugin>(`/plugins/${pluginId}/settings`);
+  1399→    return response.data;
+  1400→  }
+  1401→
+  1402→  /**
+  1403→   * Update plugin settings
+  1404→   * @param pluginId Plugin ID
+  1405→   * @param settings Plugin settings to update
+  1406→   * @returns Updated plugin
+  1407→   */
+  1408→  async updatePluginSettings(pluginId: string, settings: {
+  1409→    jsonData?: Record<string, unknown>;
+  1410→    secureJsonData?: Record<string, string>;
+  1411→    enabled?: boolean;
+  1412→    pinned?: boolean;
+  1413→  }): Promise<GrafanaPlugin> {
+  1414→    const response = await this.http.put<GrafanaPlugin>(`/plugins/${pluginId}/settings`, settings);
+  1415→    return response.data;
+  1416→  }
+  1417→
+  1418→  // ============================================================
+  1419→  // Annotation Operations
+  1420→  // ============================================================
+  1421→
+  1422→  /**
+  1423→   * Get annotations
+  1424→   * @param from Start time (epoch ms)
+  1425→   * @param to End time (epoch ms)
+  1426→   * @param alertId Filter by alert ID
+  1427→   * @param dashboardId Filter by dashboard ID
+  1428→   * @param panelId Filter by panel ID
+  1429→   * @param userId Filter by user ID
+  1430→   * @param limit Max results
+  1431→   * @param warning Filter by warning flag
+  1432→   * @returns Annotations
+  1433→   */
+  1434→  async getAnnotations(params: {
+  1435→    from: string;
+  1436→    to: string;
+  1437→    alertId?: number;
+  1438→    dashboardId?: number;
+  1439→    panelId?: number;
+  1440→    userId?: number;
+  1441→    limit?: number;
+  1442→    warning?: boolean;
+  1443→    type?: 'annotation' | 'alert';
+  1444→  }): Promise<SavedAnnotation[]> {
+  1445→    const queryParams: Record<string, string> = {
+  1446→      from: params.from,
+  1447→      to: params.to,
+  1448→    };
+  1449→    
+  1450→    if (params.alertId) queryParams.alertId = params.alertId.toString();
+  1451→    if (params.dashboardId) queryParams.dashboardId = params.dashboardId.toString();
+  1452→    if (params.panelId) queryParams.panelId = params.panelId.toString();
+  1453→    if (params.userId) queryParams.userId = params.userId.toString();
+  1454→    if (params.limit) queryParams.limit = params.limit.toString();
+  1455→    if (params.warning) queryParams.warning = 'true';
+  1456→    if (params.type) queryParams.type = params.type;
+  1457→
+  1458→    const response = await this.http.get<SavedAnnotation[]>('/annotations', queryParams);
+  1459→    return response.data;
+  1460→  }
+  1461→
+  1462→  /**
+  1463→   * Create a new annotation
+  1464→   * @param annotation Annotation to create
+  1465→   * @returns Created annotation
+  1466→   */
+  1467→  async createAnnotation(annotation: {
+  1468→    dashboardId?: number;
+  1469→    panelId?: number;
+  1470→    time: number;
+  1471→    timeEnd?: number;
+  1472→    text: string;
+  1473→    tags?: string[];
+  1474→    isRegion?: boolean;
+  1475→  }): Promise<SavedAnnotation> {
+  1476→    const response = await this.http.post<SavedAnnotation>('/annotations', annotation);
+  1477→    return response.data;
+  1478→  }
+  1479→
+  1480→  /**
+  1481→   * Update an annotation
+  1482→   * @param id Annotation ID
+  1483→   * @param updates Fields to update
+  1484→   * @returns Updated annotation
+  1485→   */
+  1486→  async updateAnnotation(id: number, updates: {
+  1487→    text?: string;
+  1488→    tags?: string[];
+  1489→    timeEnd?: number;
+  1490→  }): Promise<SavedAnnotation> {
+  1491→    const response = await this.http.patch<SavedAnnotation>(`/annotations/${id}`, updates);
+  1492→    return response.data;
+  1493→  }
+  1494→
+  1495→  /**
+  1496→   * Delete an annotation
+  1497→   * @param id Annotation ID
+  1498→   * @returns Success message
+  1499→   */
+  1500→  async deleteAnnotation(id: number): Promise<{ message: string }> {
+  1501→    const response = await this.http.delete<{ message: string }>(`/annotations/${id}`);
+  1502→    return response.data;
+  1503→  }
+  1504→
+  1505→  // ============================================================
+  1506→  // Snapshot Operations
+  1507→  // ============================================================
+  1508→
+  1509→  /**
+  1510→   * Create a snapshot from a dashboard
+  1511→   * @param dashboard Dashboard to snapshot
+  1512→   * @param expires Expiration in seconds (default: 10 days)
+  1513→   * @param name Snapshot name
+  1514→   * @param key Snapshot key (for private snapshots)
+  1515→   * @param external Make external/public
+  1516→   * @returns Snapshot result with delete key
+  1517→   */
+  1518→  async createSnapshot(dashboard: GrafanaDashboard, options?: {
+  1519→    expires?: number;
+  1520→    name?: string;
+  1521→    key?: string;
+  1522→    external?: boolean;
+  1523→  }): Promise<{
+  1524→    deleteKey: string;
+  1525→    key: string;
+  1526→    url: string;
+  1527→    revision: number;
+  1528→    success: boolean;
+  1529→    slug: string;
+  1530→  }> {
+  1531→    const payload = {
+  1532→      dashboard,
+  1533→      expires: options?.expires || 864000,
+  1534→      name: options?.name,
+  1535→      key: options?.key,
+  1536→      external: options?.external ?? false,
+  1537→    };
+  1538→
+  1539→    const response = await this.http.post<typeof this.createSnapshot extends (...args: any[]) => infer R ? R : never>(
+  1540→      '/snapshots',
+  1541→      payload
+  1542→    );
+  1543→    return response.data;
+  1544→  }
+  1545→
+  1546→  /**
+  1547→   * Get a snapshot by key
+  1548→   * @param key Snapshot key
+  1549→   * @returns Snapshot data
+  1550→   */
+  1551→  async getSnapshot(key: string): Promise<{
+  1552→    dashboard: GrafanaDashboard;
+  1553→    meta: {
+  1554→      created: string;
+  1555→      expires: string;
+  1556→      deleted: boolean;
+  1557→    };
+  1558→  }> {
+  1559→    const response = await this.http.get<typeof this.getSnapshot extends (...args: any[]) => infer R ? R : never>(
+  1560→      `/snapshots/${key}`
+  1561→    );
+  1562→    return response.data;
+  1563→  }
+  1564→
+  1565→  /**
+  1566→   * Delete a snapshot
+  1567→   * @param deleteKey Delete key (required for deletion)
+  1568→   * @returns Success message
+  1569→   */
+  1570→  async deleteSnapshot(deleteKey: string): Promise<{ message: string }> {
+  1571→    const response = await this.http.delete<{ message: string }>(`/snapshots-delete/${deleteKey}`);
+  1572→    return response.data;
+  1573→  }
+  1574→
+  1575→  // ============================================================
+  1576→  // Utility Methods
+  1577→  // ============================================================
+  1578→
+  1579→  /**
+  1580→   * Generate embedded dashboard URL
+  1581→   * @param config Embedding configuration
+  1582→   * @returns Embedded URL
+  1583→   */
+  1584→  generateEmbeddedUrl(config: {
+  1585→    dashboardUid: string;
+  1586→    panelId?: number;
+  1587→    initialTime?: TimeRange;
+  1588→    initialVariables?: Record<string, string>;
+  1589→    theme?: 'light' | 'dark' | 'current';
+  1590→    width?: number;
+  1591→    height?: number;
+  1592→    autoRefresh?: RefreshInterval;
+  1593→    showToolbar?: boolean;
+  1594→    showTimePicker?: boolean;
+  1595→    showHeader?: boolean;
+  1596→  }): string {
+  1597→    const baseUrl = this.http.getBaseUrl();
+  1598→    const params = new URLSearchParams();
+  1599→
+  1600→    // Set theme
+  1601→    if (config.theme && config.theme !== 'current') {
+  1602→      params.set('theme', config.theme);
+  1603→    }
+  1604→
+  1605→    // Set panel if specified
+  1606→    if (config.panelId) {
+  1607→      params.set('viewPanel', config.panelId.toString());
+  1608→    }
+  1609→
+  1610→    // Set time range
+  1611→    if (config.initialTime) {
+  1612→      params.set('from', config.initialTime.from);
+  1613→      params.set('to', config.initialTime.to);
+  1614→    }
+  1615→
+  1616→    // Set variables
+  1617→    if (config.initialVariables) {
+  1618→      Object.entries(config.initialVariables).forEach(([key, value]) => {
+  1619→        params.set(`var-${key}`, value);
+  1620→      });
+  1621→    }
+  1622→
+  1623→    // Set refresh interval
+  1624→    if (config.autoRefresh) {
+  1625→      params.set('refresh', config.autoRefresh);
+  1626→    }
+  1627→
+  1628→    // Set display options
+  1629→    if (config.showToolbar !== undefined) {
+  1630→      params.set('kiosk', config.showToolbar ? '' : 'tv');
+  1631→    }
+  1632→    if (config.showTimePicker !== undefined) {
+  1633→      params.set('showTimePicker', String(config.showTimePicker));
+  1634→    }
+  1635→    if (config.showHeader !== undefined) {
+  1636→      params.set('showHeader', String(config.showHeader));
+  1637→    }
+  1638→
+  1639→    const queryString = params.toString();
+  1640→    return `${baseUrl}/d/${config.dashboardUid}${queryString ? `?${queryString}` : ''}`;
+  1641→  }
+  1642→
+  1643→  /**
+  1644→   * Generate iframe HTML for embedding
+  1645→   * @param config Embedding configuration
+  1646→   * @returns HTML string for iframe
+  1647→   */
+  1648→  generateIframeHtml(config: Parameters<this.generateEmbeddedUrl>[0] & {
+  1649→    className?: string;
+  1650→    style?: Record<string, string>;
+  1651→  }): string {
+  1652→    const src = this.generateEmbeddedUrl(config);
+  1653→    const style = config.style || {
+  1654→      border: 'none',
+  1655→      width: config.width ? `${config.width}px` : '100%',
+  1656→      height: config.height ? `${config.height}px` : '600px',
+  1657→    };
+  1658→
+  1659→    const styleString = Object.entries(style)
+  1660→      .map(([k, v]) => `${k}: ${v}`)
+  1661→      .join('; ');
+  1662→
+  1663→    return `<iframe src="${src}" class="${config.className || ''}" style="${styleString}" allow="fullscreen"></iframe>`;
+  1664→  }
+  1665→
+  1666→  /**
+  1667→   * Export dashboard to JSON file download
+  1668→   * @param dashboard Dashboard to export
+  1669→   * @param filename Filename for download
+  1670→   */
+  1671→  exportDashboard(dashboard: GrafanaDashboard, filename?: string): void {
+  1672→    const json = JSON.stringify(dashboard, null, 2);
+  1673→    const blob = new Blob([json], { type: 'application/json' });
+  1674→    const url = URL.createObjectURL(blob);
+  1675→    
+  1676→    const link = document.createElement('a');
+  1677→    link.href = url;
+  1678→    link.download = filename || `${dashboard.title.replace(/\s+/g, '-').toLowerCase()}.json`;
+  1679→    document.body.appendChild(link);
+  1680→    link.click();
+  1681→    document.body.removeChild(link);
+  1682→    URL.revokeObjectURL(url);
+  1683→  }
+  1684→
+  1685→  /**
+  1686→   * Validate dashboard JSON structure
+  1687→   * @param json Dashboard JSON to validate
+  1688→   * @returns Validation result with errors if any
+  1689→   */
+  1690→  validateDashboard(json: Record<string, unknown>): {
+  1691→    valid: boolean;
+  1692→    errors: string[];
+  1693→    warnings: string[];
+  1694→  } {
+  1695→    const errors: string[] = [];
+  1696→    const warnings: string[] = [];
+  1697→
+  1698→    // Check required fields
+  1699→    if (!json.title) {
+  1700→      errors.push('Dashboard must have a title');
+  1701→    }
+  1702→
+  1703→    if (!json.panels || !Array.isArray(json.panels)) {
+  1704→      errors.push('Dashboard must have panels array');
+  1705→    } else if ((json.panels as unknown[]).length === 0) {
+  1706→      warnings.push('Dashboard has no panels');
+  1707→    }
+  1708→
+  1709→    // Check schema version
+  1710→    if (json.schemaVersion && typeof json.schemaVersion === 'number' && json.schemaVersion < 30) {
+  1711→      warnings.push(`Schema version ${json.schemaVersion} may be outdated. Consider updating.`);
+  1712→    }
+  1713→
+  1714→    // Check panels structure
+  1715→    if (Array.isArray(json.panels)) {
+  1716→      json.panels.forEach((panel: unknown, index: number) => {
+  1717→        const p = panel as Record<string, unknown>;
+  1718→        if (!p.id) {
+  1719→          errors.push(`Panel at index ${index} missing required "id" field`);
+  1720→        }
+  1721→        if (!p.type) {
+  1722→          errors.push(`Panel at index ${index} missing required "type" field`);
+  1723→        }
+  1724→        if (!p.gridPos) {
+  1725→          warnings.push(`Panel "${p.title || index}" has no grid position defined`);
+  1726→        }
+  1727→      });
+  1728→    }
+  1729→
+  1730→    return {
+  1731→      valid: errors.length === 0,
+  1732→      errors,
+  1733→      warnings,
+  1734→    };
+  1735→  }
+  1736→}
+  1737→
+  1738→// ============================================================
+  1739→// Singleton Pattern
+  1740→// ============================================================
+  1741→
+  1742→/** Global client instance */
+  1743→let grafanaClientInstance: GrafanaClient | null = null;
+  1744→
+  1745→/**
+  1746→ * Initialize the Grafana client singleton
+  1747→ * @param config Client configuration
+  1748→ * @returns Initialized client instance
+  1749→ * 
+  1750→ * @example
+  1751→ * ```typescript
+  1752→ * await initializeGrafanaClient({
+  1753→ *   url: process.env.GRAFANA_URL!,
+  1754→ *   apiKey: process.env.GRAFANA_API_KEY!,
+  1755→ * });
+  1756→ * 
+  1757→ * const client = getGrafanaClient();
+  1758→ * ```
+  1759→ */
+  1760→export function initializeGrafanaClient(config: GrafanaClientConfig): GrafanaClient {
+  1761→  const httpClient = new GrafanaHttpClient(config);
+  1762→  grafanaClientInstance = new GrafanaClient(httpClient);
+  1763→  return grafanaClientInstance;
+  1764→}
+  1765→
+  1766→/**
+  1767→ * Get the initialized Grafana client instance
+  1768→ * @throws Error if client not initialized
+  1769→ * @returns Grafana client instance
+  1770→ */
+  1771→export function getGrafanaClient(): GrafanaClient {
+  1772→  if (!grafanaClientInstance) {
+  1773→    throw new GrafanaError('Grafana client not initialized. Call initializeGrafanaClient() first.');
+  1774→  }
+  1775→  return grafanaClientInstance;
+  1776→}
+  1777→
+  1778→/**
+  1779→ * Check if Grafana client is initialized
+  1780→ * @returns True if initialized
+  1781→ */
+  1782→export function isGrafanaClientInitialized(): boolean {
+  1783→  return grafanaClientInstance !== null;
+  1784→}
+  1785→
+  1786→/**
+  1787→ * Reset the Grafana client instance (useful for testing)
+  1788→ */
+  1789→export function resetGrafanaClient(): void {
+  1790→  grafanaClientInstance = null;
+  1791→}
+  1792→
+  1793→// ============================================================
+  1794→// Export All Types
+  1795→// ============================================================
+  1796→
+  1797→// Re-export types for convenience
+  1798→export type {
+  1799→  GrafanaDashboard,
+  1800→  DashboardSearchResult,
+  1801→  DashboardFolder,
+  1802→  DashboardSaveResponse,
+  1803→  DashboardImportResponse,
+  1804→  DataSource,
+  1805→  DataSourceRef,
+  1806→  DataSourceTestResult,
+  1807→  AlertRule,
+  1808→  AlertIncident,
+  1809→  AlertHistoryEntry,
+  1810→  AlertState,
+  1811→  ContactPoint,
+  1812→  MuteTiming,
+  1813→  NotificationPolicyTree,
+  1814→  GrafanaUser,
+  1815→  GrafanaOrganization,
+  1816→  GrafanaTeam,
+  1817→  TeamMember,
+  1818→  GrafanaPlugin,
+  1819→  SavedAnnotation,
+  1820→  AnnotationDefinition,
+  1821→  TemplateVariable,
+  1822→  DashboardSearchParams,
+  1823→  AlertSearchParams,
+  1824→  DatasourceSearchParams,
+  1825→  GrafanaAPIResponse,
+  1826→  BulkOperationResult,
+  1827→  TimeRange,
+  1828→  RefreshInterval,
+  1829→  PanelType,
+  1830→  TargetRefID,
+  1831→};
+  1832→
+  1833→export {
+  1834→  GrafanaError,
+  1835→  GrafanaAuthError,
+  1836→  GrafanaNotFoundError,
+  1837→  GrafanaValidationError,
+  1838→  GrafanaRateLimitError,
+  1839→  GrafanaConnectionError,
+  1840→  GrafanaVersionConflictError,
+  1841→};
+  1842→

@@ -1,0 +1,1202 @@
+     1→/**
+     2→ * Suricata IDS/IPS Type Definitions
+     3→ * National SOC Platform - Algeria 2026-2030
+     4→ * 
+     5→ * Complete TypeScript types for:
+     6→ * - EVE JSON log format (Suricata's unified output)
+     7→ * - Alert classification and severity
+     8→ * - Rule management
+     9→ * - Signature metadata
+    10→ * - Statistics and metrics
+    11→ * - Network flow data
+    12→ */
+    13→
+    14→// ============================================================================
+    15→// ENUMS & CONSTANTS
+    16→// ============================================================================
+    17→
+    18→/** Alert severity levels based on priority and impact */
+    19→export enum SeverityLevel {
+    20→  CRITICAL = 'critical',
+    21→  HIGH = 'high',
+    22→  MEDIUM = 'medium',
+    23→  LOW = 'low',
+    24→  INFORMATIONAL = 'informational'
+    25→}
+    26→
+    27→/** Alert classification categories */
+    28→export enum AlertCategory {
+    29→  MALWARE = 'malware',
+    30→  EXPLOIT = 'exploit',
+    31→  RECONNAISSANCE = 'reconnaissance',
+    32→  DENIAL_OF_SERVICE = 'denial_of_service',
+    33→  POLICY_VIOLATION = 'policy_violation',
+    34→  ANOMALY = 'anomaly',
+    35→  PHISHING = 'phishing',
+    36→  COMMAND_AND_CONTROL = 'command_and_control',
+    37→  DATA_EXFILTRATION = 'data_exfiltration',
+    38→  UNKNOWN = 'unknown'
+    39→}
+    40→
+    41→/** Attack vectors for MITRE ATT&CK mapping */
+    42→export enum AttackVector {
+    43→  NETWORK = 'network',
+    44→  ADJACENT = 'adjacent',
+    45→  LOCAL = 'local',
+    46→  PHYSICAL = 'physical'
+    47→}
+    48→
+    49→/** Protocol types */
+    50→export enum Protocol {
+    51→  TCP = 'TCP',
+    52→  UDP = 'UDP',
+    53→  ICMP = 'ICMP',
+    54→  HTTP = 'HTTP',
+    55→  DNS = 'DNS',
+    56→  TLS = 'TLS',
+    57→  SMB = 'SMB',
+    58→  DHCP = 'DHCP',
+    59→  SSH = 'SSH',
+    60→  FTP = 'FTP',
+    61→  SMTP = 'SMTP',
+    62→  UNKNOWN = 'UNKNOWN'
+    63→}
+    64→
+    65→/** Rule actions */
+    66→export enum RuleAction {
+    67→  ALERT = 'alert',
+    68→  DROP = 'drop',
+    69→  REJECT = 'reject',
+    70→  PASS = 'pass'
+    71→}
+    72→
+    73→/** Rule states */
+    74→export enum RuleState {
+    75→  ENABLED = 'enabled',
+    76→  DISABLED = 'disabled',
+    77→  TESTING = 'testing'
+    78→}
+    79→
+    80→/** EVE JSON event types */
+    81→export enum EveEventType {
+    82→  ALERT = 'alert',
+    83→  HTTP = 'http',
+    84→  DNS = 'dns',
+    85→  TLS = 'tls',
+    86→  FILES = 'files',
+    87→  FLOW = 'flow',
+    88→  NETFLOW = 'netflow',
+    89→  ANomalY = 'anomaly',
+    90→  EXTRACTED = 'extracted',
+    91→  SMTP = 'smtp',
+    92→  FTP = 'ftp',
+    93→  SSH = 'ssh',
+    94→  DHCP = 'dhcp',
+    95→  SIP = 'sip',
+    96→  MQTT = 'mqtt'
+    97→}
+    98→
+    99→/** Signature sources */
+   100→export enum SignatureSource {
+   101→  ETOPEN = 'etopen',
+   102→  ETPRO = 'etpro',
+   103→  TALOS = 'talos',
+   104→  CUSTOM = 'custom',
+   105→  COMMUNITY = 'community'
+   106→}
+   107→
+   108→/** Severity configuration mapping */
+   109→export const SEVERITY_CONFIG: Record<SeverityLevel, {
+   110→  color: string;
+   111→  icon: string;
+   112→  score: number;
+   113→  responseTime: string;
+   114→}> = {
+   115→  [SeverityLevel.CRITICAL]: {
+   116→    color: '#DC2626',
+   117→    icon: '🔴',
+   118→    score: 100,
+   119→    responseTime: '< 15 minutes'
+   120→  },
+   121→  [SeverityLevel.HIGH]: {
+   122→    color: '#EA580C',
+   123→    icon: '🟠',
+   124→    score: 75,
+   125→    responseTime: '< 1 hour'
+   126→  },
+   127→  [SeverityLevel.MEDIUM]: {
+   128→    color: '#D97706',
+   129→    icon: '🟡',
+   130→    score: 50,
+   131→    responseTime: '< 4 hours'
+   132→  },
+   133→  [SeverityLevel.LOW]: {
+   134→    color: '#059669',
+   135→    icon: '🟢',
+   136→    score: 25,
+   137→    responseTime: '< 24 hours'
+   138→  },
+   139→  [SeverityLevel.INFORMATIONAL]: {
+   140→    color: '#6B7280',
+   141→    icon: '⚪',
+   142→    score: 10,
+   143→    responseTime: 'Best effort'
+   144→  }
+   145→};
+   146→
+   147→/** Default port mappings */
+   148→export const DEFAULT_PORTS: Record<string, number> = {
+   149→  HTTP: 80,
+   150→  HTTPS: 443,
+   151→  SSH: 22,
+   152→  FTP: 20,
+   153→  FTP_DATA: 21,
+   154→  SMTP: 25,
+   155→  DNS: 53,
+   156→  DHCP: 67,
+   157→  SNMP: 161,
+   158→  LDAP: 389,
+   159→  HTTPS_ALT: 8443,
+   160→  MYSQL: 3306,
+   161→  REDIS: 6379,
+   162→  MONGODB: 27017,
+   163→  RDP: 3389
+   164→};
+   165→
+   166→// ============================================================================
+   167→// CORE TYPES - EVE JSON FORMAT
+   168→// ============================================================================
+   169→
+   170→/** Base EVE JSON event structure */
+   171→export interface EveEvent {
+   172→  timestamp: string;
+   173→  flow_id: number;
+   174→  pcap_cnt?: number;
+   175→  event_type: EveEventType;
+   176→  src_ip: string;
+   177→  src_port: number;
+   178→  dest_ip: string;
+   179→  dest_port: number;
+   180→  proto: string;
+   181→  community_id?: string;
+   182→  tx_id?: number;
+   183→  in_iface?: string;
+   184→  vlan?: number[];
+   185→  /** Type-specific payload */
+   186→  alert?: EveAlert;
+   187→  http?: EveHTTP;
+   188→  dns?: EveDNS;
+   189→  tls?: EveTLS;
+   190→  files?: EveFile[];
+   191→  flow?: EveFlow;
+   192→  smtp?: EveSMTP;
+   193→  ftp?: EveFTP;
+   194→  ssh?: EveSSH;
+   195→  dhcp?: EveDHCP;
+   196→}
+   197→
+   198→/** EVE Alert structure */
+   199→export interface EveAlert {
+   200→  action: RuleAction;
+   201→  gid: number;
+   202→  signature_id: number;
+   203→  rev: number;
+   204→  signature: string;
+   205→  category: string;
+   206→  severity: number;
+   207→  metadata?: Record<string, string[]>;
+   208→  class_id?: string;
+   209→  priority?: number;
+   210→  /** Extended fields */
+   211→  signature_revision?: string;
+   212→  rule?: RawRuleInfo;
+   213→  /** Enrichment data */
+   214→  threat_intel?: ThreatIntelMatch;
+   215→  mitre?: MITREMapping;
+   216→  /** Analysis results */
+   217→  classification?: AlertClassification;
+   218→  /** Context */
+   219→  source?: AlertSource;
+   220→  /** Correlation */
+   221→  related_alerts?: RelatedAlertSummary[];
+   222→}
+   223→
+   224→/** Raw rule information from signature */
+   225→export interface RawRuleInfo {
+   226→  sid: number;
+   227→  rev: number;
+   228→  action: RuleAction;
+   229→  msg: string;
+   230→  options: RuleOption[];
+   231→  raw: string;
+   232→  source: SignatureSource;
+   233→  last_modified: string;
+   234→}
+   235→
+   236→/** Rule option (content, pcre, etc.) */
+   237→export interface RuleOption {
+   238→  type: string;
+   239→  value: string;
+   240→  negated?: boolean;
+   241→}
+   242→
+   243→/** Threat intelligence match */
+   244→export interface ThreatIntelMatch {
+   245→  matched: boolean;
+   246→  source: string;
+   247→  confidence: number;
+   248→  context: string;
+   249→  first_seen?: string;
+   250→  last_seen?: string;
+   251→  tags?: string[];
+   252→}
+   253→
+   254→/** MITRE ATT&CK mapping */
+   255→export interface MITREMapping {
+   256→  tactic?: string;
+   257→  technique_id?: string;
+   258→  technique_name?: string;
+   259→  sub_techniques?: string[];
+   260→  software?: string[];
+   261→  groups?: string[];
+   262→}
+   263→
+   264→/** Alert classification result */
+   265→export interface AlertClassification {
+   266→  category: AlertCategory;
+   267→  confidence: number;
+   268→  is_false_positive: boolean;
+   269→  false_positive_reason?: string;
+   270→  risk_score: number;
+   271→  indicators: ClassificationIndicator[];
+   272→}
+   273→
+   274→/** Classification indicator */
+   275→export interface ClassificationIndicator {
+   276→  type: string;
+   277→  value: string;
+   278→  weight: number;
+   279→  description: string;
+   280→}
+   281→
+   282→/** Alert source information */
+   283→export interface AlertSource {
+   284→  sensor_id: string;
+   285→  sensor_name: string;
+   286→  interface: string;
+   287→  capture_file?: string;
+   288→  packet_number?: number;
+   289→}
+   290→
+   291→/** Related alerts summary */
+   292→export interface RelatedAlertSummary {
+   293→  alert_id: string;
+   294→  timestamp: string;
+   295→  signature: string;
+   296→  src_ip: string;
+   297→  dest_ip: string;
+   298→  similarity: number;
+   299→}
+   300→
+   301→// ============================================================================
+   302→// HTTP EVENT TYPES
+   303→// ============================================================================
+   304→
+   305→/** EVE HTTP event */
+   306→export interface EveHTTP {
+   307→  hostname: string;
+   308→  url: string;
+   309→  http_method: string;
+   310→  http_user_agent: string;
+   311→  http_content_type: string;
+   312→  http_referer?: string;
+   313→  request_body_len: number;
+   314→  response_body_len: number;
+   315→  status_code: number;
+   316→  protocol: string;
+   317→  redirect?: string;
+   318→  length?: number;
+   319→  http_version?: string;
+   320→  /** Extended analysis */
+   321→  request_headers?: Record<string, string>;
+   322→  response_headers?: Record<string, string>;
+   323→  /** Security findings */
+   324→  sql_injection_detected?: boolean;
+   325→  xss_detected?: boolean;
+   326→  path_traversal_detected?: boolean;
+   327→  command_injection_detected?: boolean;
+   328→}
+   329→
+   330→// ============================================================================
+   331→// DNS EVENT TYPES
+   332→// ============================================================================
+   333→
+   334→/** EVE DNS event */
+   335→export interface EveDNS {
+   336→  type: 'query' | 'answer';
+   337→  rrtype: string;
+   338→  rrname: string;
+   339→  rdata?: string | string[];
+   340→  ttl?: number;
+   341→  /** Extended fields */
+   342→  tx_id?: number;
+   343→  rcode?: string;
+   344→  authoritative?: boolean;
+   345→  /** Analysis */
+   346→  is_dga?: boolean;
+   347→  dga_score?: number;
+   348→  is_tunneling?: boolean;
+   349→  threat_category?: string;
+   350→}
+   351→
+   352→// ============================================================================
+   353→// TLS EVENT TYPES
+   354→// ============================================================================
+   355→
+   356→/** EVE TLS event */
+   357→export interface EveTLS {
+   358→  version: string;
+   359→  cipher: string;
+   360→  ja3?: string;
+   361→  ja3s?: string;
+   362→  certificate?: TLSCertificate[];
+   363→  sni?: string;
+   364→  resumed: boolean;
+   365→  fingerprint?: string;
+   366→  not_before?: string;
+   367→  not_after?: string;
+   368→}
+   369→
+   370→/** TLS Certificate info */
+   371→export interface TLSCertificate {
+   372→  subject: string;
+   373→  issuer: string;
+   374→  serial: string;
+   375→  fingerprint: string;
+   376→  fingerprint_md5?: string;
+   377→  validity_from: string;
+   378→  validity_to: string;
+   379→  /** Analysis */
+   380→  is_self_signed: boolean;
+   381→  is_expired: boolean;
+   382→  is_revoked?: boolean;
+   383→  issuer_match: boolean;
+   384→}
+   385→
+   386→// ============================================================================
+   387→// FILE EVENT TYPES
+   388→// ============================================================================
+   389→
+   390→/** EVE File event */
+   391→export interface EveFile {
+   392→  filename: string;
+   393→  name?: string;
+   394→  magic: string;
+   395→  md5: string;
+   396→  sha1: string;
+   397→  sha256: string;
+   398→  size: number;
+   399→  stored: boolean;
+   400→  stored_filename?: string;
+   401→  /** File type details */
+   402→  type?: string;
+   403→  encoding?: string;
+   404→  /** Malware analysis */
+   405→  malware_scan_result?: MalwareScanResult;
+   406→  yara_matches?: YARAMatch[];
+   407→}
+   408→
+   409→/** Malware scan result */
+   410→export interface MalwareScanResult {
+   411→  scanned: boolean;
+   412→  malicious: boolean;
+   413→  engine_name: string;
+   414→  detection_name?: string;
+   415→  scan_time: string;
+   416→}
+   417→
+   418→/** YARA match on file */
+   419→export interface YARAMatch {
+   420→  rule_name: string;
+   421→  rule_namespace: string;
+   422→  meta: Record<string, string>;
+   423→  strings: YARAStringMatch[];
+   424→}
+   425→
+   426→/** YARA string match */
+   427→export interface YARAStringMatch {
+   428→  identifier: string;
+   429→  offset: number;
+   430→  data: string;
+   431→}
+   432→
+   433→// ============================================================================
+   434→// FLOW EVENT TYPES
+   435→// ============================================================================
+   436→
+   437→/** EVE Flow event */
+   438→export interface EveFlow {
+   439→  app_proto: string;
+   440→  /** Traffic statistics */
+   441→  pkts_toserver: number;
+   442→  pkts_toclient: number;
+   443→  bytes_toserver: number;
+   444→  bytes_toclient: number;
+   445→  /** Timing */
+   446→  start: string;
+   447→  /** State */
+   448→  state: string;
+   449→  /** TCP specific */
+   450→  tcp_flags?: TCPFlags;
+   451→  /** Analysis */
+   452→  is_long_connection?: boolean;
+   453→  is_data_transfer?: boolean;
+   454→  bytes_per_second?: number;
+   455→  duration_seconds?: number;
+   456→}
+   457→
+   458→/** TCP flags */
+   459→export interface TCPFlags {
+   460→  syn: boolean;
+   461→  ack: boolean;
+   462→  psh: boolean;
+   463→  fin: boolean;
+   464→  rst: boolean;
+   465→  urg: boolean;
+   466→  ece: boolean;
+   467→  cwr: boolean;
+   468→  raw: number;
+   469→}
+   470→
+   471→// ============================================================================
+   472→// OTHER PROTOCOL EVENTS
+   473→// ============================================================================
+   474→
+   475→/** EVE SMTP event */
+   476→export interface EveSMTP {
+   477→  mail_from: string;
+   478→  rcpt_to: string[];
+   479→  subject?: string;
+   480→  attachment_filenames?: string[];
+   481→  /** Analysis */
+   482→  has_executable_attachment?: boolean;
+   483→  spam_score?: number;
+   484→  phishing_indicators?: PhishingIndicator[];
+   485→}
+   486→
+   487→/** Phishing indicator */
+   488→export interface PhishingIndicator {
+   489→  type: string;
+   490→  description: string;
+   491→  confidence: number;
+   492→}
+   493→
+   494→/** EVE FTP event */
+   495→export interface EveFTP {
+   496→  command: string;
+   497→  command_data?: string?
+   498→  completion_code?: string;
+   499→  reply?: string;
+   500→  file?: FTPFileInfo;
+   501→}
+   502→
+   503→/** FTP file info */
+   504→export interface FTPFileInfo {
+   505→  filename: string;
+   506→  size: number;
+   507→  type: string;
+   508→}
+   509→
+   510→/** EVE SSH event */
+   511→export interface EveSSH {
+   512→  client: SSHClientInfo;
+   513→  server: SSHServerInfo;
+   514→  version: string;
+   515→}
+   516→
+   517→/** SSH client/server info */
+   518→export interface SSHClientInfo {
+   519→  proto_version: string;
+   520→  software_version: string;
+   521→  algorithms: SSHAlgorithms;
+   522→}
+   523→
+   524→export interface SSHServerInfo {
+   525→  proto_version: string;
+   526→  software_version: string;
+   527→  algorithms: SSHAlgorithms;
+   528→}
+   529→
+   530→/** SSH algorithms */
+   531→export interface SSHAlgorithms {
+   532→  kex?: string[];
+   533→  host_key?: string[];
+   534→  encryption?: string[];
+   535→  mac?: string[];
+   536→  compression?: string[];
+   537→}
+   538→
+   539→/** EVE DHCP event */
+   540→export interface EveDHCP {
+   541→  type: 'request' | 'reply' | 'ack' | 'offer';
+   542→  id: string;
+   543→  ip: string;
+   544→  mac: string;
+   545→  hostname?: string;
+   546→  assigned_ip?: string;
+   547→  lease_time?: number;
+   548→  dhcp_server?: string;
+   549→}
+   550→
+   551→// ============================================================================
+   552→// RULE MANAGEMENT TYPES
+   553→// ============================================================================
+   554→
+   555→/** Suricata rule definition */
+   556→export interface SuricataRule {
+   557→  id: string;
+   558→  sid: number;
+   559→  action: RuleAction;
+   560→  protocol: string;
+   561→  source: RuleAddressSpec;
+   562→  source_port: RulePortSpec;
+   563→  direction: string;
+   564→  destination: RuleAddressSpec;
+   565→  destination_port: RulePortSpec;
+   566→  options: RuleOption[];
+   567→  raw: string;
+   568→  state: RuleState;
+   569→  /** Metadata */
+   570→  message: string;
+   571→  class_type?: string;
+   572→  priority?: number;
+   573→  metadata: Record<string, string[]>;
+   574→  reference?: string[];
+   575→  /** Source tracking */
+   576→  source: SignatureSource;
+   577→  created_at: string;
+   578→  updated_at: string;
+   579→  last_modified_by?: string;
+   580→  revision_history: RuleRevision[];
+   581→  /** Performance & stats */
+   582→  hit_count: number;
+   583→  last_hit?: string;
+   584→  false_positive_count: number;
+   585→  enabled_sensors: string[];
+   586→  /** Validation */
+   587→  validation_status: RuleValidationStatus;
+   588→  validation_errors?: string[];
+   589→}
+   590→
+   591→/** Rule address specification */
+   592→export interface RuleAddressSpec {
+   593→  type: 'any' | 'ip' | 'cidr' | 'group' | 'variable';
+   594→  value: string;
+   595→  negated?: boolean;
+   596→}
+   597→
+   598→/** Rule port specification */
+   599→export interface RulePortSpec {
+   600→  type: 'any' | 'single' | 'range' | 'group' | 'variable';
+   601→  value: string;
+   602→  negated?: boolean;
+   603→}
+   604→
+   605→/** Rule validation status */
+   606→export enum RuleValidationStatus {
+   607→  VALID = 'valid',
+   608→  INVALID_SYNTAX = 'invalid_syntax',
+   609→  INVALID_OPTION = 'invalid_option',
+   610→  DEPRECATED = 'deprecated',
+   611→  CONFLICTING = 'conflicting',
+   612→  UNTESTED = 'untested'
+   613→}
+   614→
+   615→/** Rule revision history entry */
+   616→export interface RuleRevision {
+   617→  version: number;
+   618→  changed_at: string;
+   619→  changed_by: string;
+   620→  change_description: string;
+   621→  diff?: string;
+   622→}
+   623→
+   624→/** Rule set information */
+   625→export interface RuleSet {
+   626→  id: string;
+   627→  name: string;
+   628→  description: string;
+   629→  rules: SuricataRule[];
+   630→  total_rules: number;
+   631→  enabled_rules: number;
+   632→  disabled_rules: number;
+   633→  custom_rules: number;
+   634→  last_updated: string;
+   635→  version: string;
+   636→  /** Sources */
+   637→  sources: RuleSourceInfo[];
+   638→}
+   639→
+   640→/** Rule source information */
+   641→export interface RuleSourceInfo {
+   642→  name: string;
+   643→  url?: string;
+   644→  type: SignatureSource;
+   645→  rule_count: number;
+   646→  last_sync: string;
+   647→  sync_status: RuleSyncStatus;
+   648→}
+   649→
+   650→/** Rule sync status */
+   651→export enum RuleSyncStatus {
+   652→  SYNCED = 'synced',
+   653→  PENDING = 'pending',
+   654→  FAILED = 'failed',
+   655→  OUTDATED = 'outdated'
+   656→}
+   657→
+   658→/** Rule update options */
+   659→export interface RuleUpdateOptions {
+   660→  source: SignatureSource;
+   661→  force_update?: boolean;
+   662→  test_mode?: boolean;
+   663→  backup_existing?: boolean;
+   664→  notify_on_complete?: boolean;
+   665→  include_etpro?: boolean;
+   666→  etpro_oinkcode?: string;
+   667→}
+   668→
+   669→/** Rule update result */
+   670→export interface RuleUpdateResult {
+   671→  success: boolean;
+   672→  source: SignatureSource;
+   673→  previous_version?: string;
+   674→  new_version?: string;
+   675→  rules_added: number;
+   676→  rules_updated: number;
+   677→  rules_removed: number;
+   678→  errors: string[];
+   679→  warnings: string[];
+   680→  timestamp: string;
+   681→  duration_ms: number;
+   682→}
+   683→
+   684→// ============================================================================
+   685→// STATISTICS & METRICS TYPES
+   686→// ============================================================================
+   687→
+   688→/** Suricata statistics snapshot */
+   689→export interface SuricataStats {
+   690→  timestamp: string;
+   691→  uptime_seconds: number;
+   692→  /** Packet processing */
+   693→  packets_received: number;
+   694→  packets_dropped: number;
+   695→  packets_ifdropped: number;
+   696→  packets_processed: number;
+   697→  /** Bytes processed */
+   698→  bytes_received: number;
+   699→  bytes_dropped: number;
+   700→  /** Alert statistics */
+   701→  total_alerts: number;
+   702→  alerts_by_severity: Record<SeverityLevel, number>;
+   703→  alerts_by_category: Record<AlertCategory, number>;
+   704→  alerts_by_action: Record<RuleAction, number>;
+   705→  /** Top signatures */
+   706→  top_signatures: SignatureStats[];
+   707→  /** Network stats */
+   708→  top_source_ips: IPStats[];
+   709→  top_destination_ips: IPStats[];
+   710→  top_ports: PortStats[];
+   711→  /** Protocol distribution */
+   712→  protocol_distribution: Record<string, number>;
+   713→  /** Flow statistics */
+   714→  active_flows: number;
+   715→  total_flows: number;
+   716→  avg_flow_duration_ms: number;
+   717→  /** Memory usage */
+   718→  memory_usage_bytes: number;
+   719→  cpu_usage_percent: number;
+   720→  /** Capture method */
+   721→  capture_method: string;
+   722→  capture_kernel_drops: number;
+   723→}
+   724→
+   725→/** Signature statistics */
+   726→export interface SignatureStats {
+   727→  signature_id: number;
+   728→  signature: string;
+   729→  count: number;
+   730→  severity: SeverityLevel;
+   731→  category: string;
+   732→  trend: 'up' | 'down' | 'stable';
+   733→  trend_percentage: number;
+   734→}
+   735→
+   736→/** IP address statistics */
+   737→export interface IPStats {
+   738→  ip: string;
+   739→  country?: string;
+   740→  asn?: number;
+   741→  as_org?: string;
+   742→  is_internal: boolean;
+   743→  reputation_score?: number;
+   744→  alert_count: number;
+   745→  first_seen: string;
+   746→  last_seen: string;
+   747→  tags?: string[];
+   748→}
+   749→
+   750→/** Port statistics */
+   751→export interface PortStats {
+   752→  port: number;
+   753→  protocol: string;
+   754→  service?: string;
+   755→  alert_count: number;
+   756→  percentage: number;
+   757→  top_signatures: { name: string; count: number }[];
+   758→}
+   759→
+   760→/** Time-series data point */
+   761→export interface StatsTimePoint {
+   762→  timestamp: string;
+   763→  value: number;
+   764→  breakdown?: Record<string, number>;
+   765→}
+   766→
+   767→/** Alert trends over time */
+   768→export interface AlertTrend {
+   769→  period: string;
+   770→  points: StatsTimePoint[];
+   771→  total: number;
+   772→  average: number;
+   773→  peak: number;
+   774→  peak_timestamp: string;
+   775→  change_percentage: number;
+   776→  change_direction: 'up' | 'down' | 'stable';
+   777→}
+   778→
+   779→/** Geolocation data for attack map */
+   780→export interface GeoLocation {
+   781→  ip: string;
+   782→  country: string;
+   783→  country_code: string;
+   784→  city?: string;
+   785→  region?: string;
+   786→  latitude: number;
+   787→  longitude: number;
+   788→  accuracy_radius: number;
+   789→}
+   790→
+   791→/** Attack map data point */
+   792→export interface AttackMapPoint {
+   793→  id: string;
+   794→  location: GeoLocation;
+   795→  timestamp: string;
+   796→  severity: SeverityLevel;
+   797→  category: AlertCategory;
+   798→  signature: string;
+   799→  target_ip: string;
+   800→  count: number;
+   801→  is_targeted_attack: boolean;
+   802→}
+   803→
+   804→// ============================================================================
+   805→// SENSOR/ENGINE TYPES
+   806→// ============================================================================
+   807→
+   808→/** Suricata engine/sensor information */
+   809→export interface SuricataSensor {
+   810→  id: string;
+   811→  name: string;
+   812→  hostname: string;
+   813→  /** Engine info */
+   814→  version: string;
+   815→  build_info: string;
+   816→  git_hash?: string;
+   817→  /** Status */
+   818→  status: SensorStatus;
+   819→  uptime_seconds: number;
+   820→  started_at: string;
+   821→  /** Configuration */
+   822→  interfaces: SensorInterface[];
+   823→  run_modes: RunMode[];
+   824→  /** Performance */
+   825→  cpu_usage: number;
+   826→  memory_usage: number;
+   827→  max_memory_usage: number;
+   828→  /** Capture stats */
+   829→  capture_method: string;
+   830→  capture_threads: number;
+   831→  /** Rule status */
+   832→  total_rules: number;
+   833→  enabled_rules: number;
+   834→  last_rule_update: string;
+   835→  /** Health checks */
+   836→  health_checks: HealthCheckResult[];
+   837→}
+   838→
+   839→/** Sensor status */
+   840→export enum SensorStatus {
+   841→  ONLINE = 'online',
+   842→  OFFLINE = 'offline',
+   843→  DEGRADED = 'degraded',
+   844→  MAINTENANCE = 'maintenance',
+   845→  ERROR = 'error'
+   846→}
+   847→
+   848→/** Sensor network interface config */
+   849→export interface SensorInterface {
+   850→  name: string;
+   851→  description: string;
+   852→  is_promiscuous: boolean;
+   853→  is_capture_interface: boolean;
+   854→  bpf_filter?: string;
+   855→  speed_mbps?: number;
+   856→  mtu?: number;
+   857→}
+   858→
+   859→/** Run mode */
+   860→export interface RunMode {
+   861→  mode: string;
+   862→  workers: number;
+   863→  checksum_validation: string;
+   864→}
+   865→
+   866→/** Health check result */
+   867→export interface HealthCheckResult {
+   868→  check_name: string;
+   869→  status: 'pass' | 'fail' | 'warn';
+   870→  message: string;
+   871→  timestamp: string;
+   872→  value?: number;
+   873→  threshold?: number;
+   874→}
+   875→
+   876→// ============================================================================
+   877→// DASHBOARD & UI TYPES
+   878→// ============================================================================
+   879→
+   880→/** Dashboard configuration */
+   881→export interface SuricataDashboardConfig {
+   882→  refresh_interval_ms: number;
+   883→  auto_refresh: boolean;
+   884→  default_time_range: TimeRange;
+   885→  display_options: DisplayOptions;
+   886→  widgets: WidgetConfig[];
+   887→}
+   888→
+   889→/** Time range options */
+   890→export enum TimeRange {
+   891→  LAST_HOUR = 'last_hour',
+   892→  LAST_6_HOURS = 'last_6_hours',
+   893→  LAST_12_HOURS = 'last_12_hours',
+   894→  LAST_24_HOURS = 'last_24_hours',
+   895→  LAST_7_DAYS = 'last_7_days',
+   896→  LAST_30_DAYS = 'last_30_days',
+   897→  CUSTOM = 'custom'
+   898→}
+   899→
+   900→/** Display options */
+   901→export interface DisplayOptions {
+   902→  show_geomap: boolean;
+   903→  show_timeline: boolean;
+   904→  show_top_lists: boolean;
+   905→  show_protocol_breakdown: boolean;
+   906→  max_chart_points: number;
+   907→  items_per_page: number;
+   908→  enable_sound_alerts: boolean;
+   909→  severity_threshold: SeverityLevel;
+   910→}
+   911→
+   912→/** Widget configuration */
+   913→export interface WidgetConfig {
+   914→  id: string;
+   915→  type: WidgetType;
+   916→  title: string;
+   917→  position: WidgetPosition;
+   918→  size: WidgetSize;
+   919→  config: Record<string, unknown>;
+   920→  enabled: boolean;
+   921→}
+   922→
+   923→/** Widget types */
+   924→export enum WidgetType {
+   925→  ALERT_COUNT = 'alert_count',
+   926→  SEVERITY_DISTRIBUTION = 'severity_distribution',
+   927→  ATTACK_MAP = 'attack_map',
+   928→  TIMELINE_CHART = 'timeline_chart',
+   929→  TOP_SIGNATURES = 'top_signatures',
+   930→  TOP_IPS = 'top_ips',
+   931→  PROTOCOL_BREAKDOWN = 'protocol_breakdown',
+   932→  SENSOR_STATUS = 'sensor_status',
+   933→  THREAT_FEED = 'threat_feed',
+   934→  RULE_STATUS = 'rule_status'
+   935→}
+   936→
+   937→/** Widget position */
+   938→export interface WidgetPosition {
+   939→  x: number;
+   940→  y: number;
+   941→}
+   942→
+   943→/** Widget size */
+   944→export interface WidgetSize {
+   945→  width: number;
+   946→  height: number;
+   947→}
+   948→
+   949→// ============================================================================
+   950→// FILTER & SEARCH TYPES
+   951→// ============================================================================
+   952→
+   953→/** Alert filter criteria */
+   954→export interface AlertFilter {
+   955→  /** Time range */
+   956→  time_range?: TimeRange;
+   957→  time_start?: string;
+   958→  time_end?: string;
+   959→  /** Severity filter */
+   960→  severities?: SeverityLevel[];
+   961→  min_severity?: SeverityLevel;
+   962→  /** Category filter */
+   963→  categories?: AlertCategory[];
+   964→  /** Network filters */
+   965→  src_ip?: string;
+   966→  src_cidr?: string;
+   967→  dest_ip?: string;
+   968→  dest_cidr?: string;
+   969→  src_port?: number;
+   970→  dest_port?: number;
+   971→  protocol?: Protocol;
+   972→  /** Signature filters */
+   973→  signature_id?: number;
+   974→  signature_pattern?: string;
+   975→  category_pattern?: string;
+   976→  /** Action filter */
+   977→  actions?: RuleAction[];
+   978→  /** Sensor filter */
+   979→  sensor_id?: string;
+   980→  sensor_ids?: string[];
+   981→  /** Threat intel */
+   982→  has_threat_intel_match?: boolean;
+   983→  has_mitre_mapping?: boolean;
+   984→  /** Classification */
+   985→  is_false_positive?: boolean;
+   986→  is_classified?: boolean;
+   987→  /** Pagination */
+   988→  page?: number;
+   989→  page_size?: number;
+   990→  sort_by?: AlertSortField;
+   991→  sort_order?: 'asc' | 'desc';
+   992→}
+   993→
+   994→/** Sortable fields */
+   995→export enum AlertSortField {
+   996→  TIMESTAMP = 'timestamp',
+   997→  SEVERITY = 'severity',
+   998→  SRC_IP = 'src_ip',
+   999→  DEST_IP = 'dest_ip',
+  1000→  SIGNATURE = 'signature',
+  1001→  COUNT = 'count'
+  1002→}
+  1003→
+  1004→/** Filtered alert result set */
+  1005→export interface AlertResultSet {
+  1006→  alerts: EveEvent[];
+  1007→  total: number;
+  1008→  page: number;
+  1009→  page_size: number;
+  1010→  total_pages: number;
+  1011→  /** Aggregations */
+  1012→  aggregations: AlertAggregations;
+  1013→  /** Execution time */
+  1014→  query_time_ms: number;
+  1015→  /** Applied filters summary */
+  1016→  applied_filters: Partial<AlertFilter>;
+  1017→}
+  1018→
+  1019→/** Alert aggregations */
+  1020→export interface AlertAggregations {
+  1021→  by_severity: Record<SeverityLevel, number>;
+  1022→  by_category: Record<AlertCategory, number>;
+  1023→  by_protocol: Record<string, number>;
+  1024→  by_sensor: Record<string, number>;
+  1025→  by_hour: Record<string, number>;
+  1026→  by_action: Record<RuleAction, number>;
+  1027→}
+  1028→
+  1029→/** Rule filter criteria */
+  1030→export interface RuleFilter {
+  1031→  state?: RuleState;
+  1032→  action?: RuleAction;
+  1033→  source?: SignatureSource;
+  1034→  category_pattern?: string;
+  1035→  signature_pattern?: string;
+  1036→  sid_range?: { min: number; max: number };
+  1037→  has_hits?: boolean;
+  1038→  is_custom?: boolean;
+  1039→  page?: number;
+  1040→  page_size?: number;
+  1041→  sort_by?: RuleSortField;
+  1042→  sort_order?: 'asc' | 'desc';
+  1043→}
+  1044→
+  1045→/** Rule sortable fields */
+  1046→export enum RuleSortField {
+  1047→  SID = 'sid',
+  1048→  HIT_COUNT = 'hit_count',
+  1049→  UPDATED_AT = 'updated_at',
+  1050→  SEVERITY = 'severity',
+  1051→  NAME = 'name'
+  1052→}
+  1053→
+  1054→/** Filtered rule result set */
+  1055→export interface RuleResultSet {
+  1056→  rules: SuricataRule[];
+  1057→  total: number;
+  1058→  page: number;
+  1059→  page_size: number;
+  1060→  total_pages: number;
+  1061→  query_time_ms: number;
+  1062→}
+  1063→
+  1064→// ============================================================================
+  1065→// INTEGRATION TYPES
+  1066→// ============================================================================
+  1067→
+  1068→/** Integration with other SOC components */
+  1069→export interface SuricataIntegration {
+  1070→  misp?: MISPIntegrationConfig;
+  1071→  wazuh?: WazuhIntegrationConfig;
+  1072→  thehive?: TheHiveIntegrationConfig;
+  1073→  elasticsearch?: ElasticsearchConfig;
+  1074→}
+  1075→
+  1076→/** MISP integration config */
+  1077→export interface MISPIntegrationConfig {
+  1078→  enabled: boolean;
+  1079→  auto_create_events: boolean;
+  1080→  ioc_export_enabled: boolean;
+  1081→  event_template_id?: string;
+  1082→  sync_interval_minutes: number;
+  1083→  last_sync?: string;
+  1084→}
+  1085→
+  1086→/** Wazuh integration config */
+  1087→export interface WazuhIntegrationConfig {
+  1088→  enabled: boolean;
+  1089→  forward_alerts: boolean;
+  1090→  alert_level_mapping: Record<SeverityLevel, number>;
+  1091→  custom_decoder_path?: string;
+  1092→  custom_rule_path?: string;
+  1093→}
+  1094→
+  1095→/** TheHive integration config */
+  1096→export interface TheHiveIntegrationConfig {
+  1097→  enabled: boolean;
+  1098→  auto_create_cases: boolean;
+  1099→  case_severity_mapping: Record<SeverityLevel, string>;
+  1100→  case_template_id?: string;
+  1101→  observable_types: string[];
+  1102→}
+  1103→
+  1104→/** Elasticsearch config */
+  1105→export interface ElasticsearchConfig {
+  1106→  enabled: boolean;
+  1107→  index_prefix: string;
+  1108→  batch_size: number;
+  1109→  flush_interval_seconds: number;
+  1110→  retention_days: number;
+  1111→  index_templates?: string[];
+  1112→}
+  1113→
+  1114→// ============================================================================
+  1115→// EXPORT TYPES
+  1116→// ============================================================================
+  1117→
+  1118→/** Export format options */
+  1119→export enum ExportFormat {
+  1120→  PCAP = 'pcap',
+  1121→  JSON = 'json',
+  1122→  CSV = 'csv',
+  1123→  STIX = 'stix',
+  1124→  SURICATA_RULES = 'suricata_rules'
+  1125→}
+  1126→
+  1127→/** Export job */
+  1128→export interface ExportJob {
+  1129→  id: string;
+  1130→  user_id: string;
+  1131→  format: ExportFormat;
+  1132→  status: ExportStatus;
+  1133→  progress: number;
+  1134→  file_url?: string;
+  1135→  file_size?: byte_count: number;
+  1136→  record_count: number;
+  1137→  filters: AlertFilter | RuleFilter;
+  1138→  created_at: string;
+  1139→  completed_at?: string;
+  1140→  error_message?: string;
+  1141→}
+  1142→
+  1143→/** Export status */
+  1144→export enum ExportStatus {
+  1145→  PENDING = 'pending',
+  1146→  PROCESSING = 'processing',
+  1147→  COMPLETED = 'completed',
+  1148→  FAILED = 'failed',
+  1149→  EXPIRED = 'expired'
+  1150→}
+  1151→
+  1152→// ============================================================================
+  1153→// UTILITY TYPES
+  1154→// ============================================================================
+  1155→
+  1156→/** API response wrapper */
+  1157→export interface ApiResponse<T> {
+  1158→  success: boolean;
+  1159→  data: T;
+  1160→  error?: ApiError;
+  1161→  meta?: ResponseMeta;
+  1162→}
+  1163→
+  1164→/** API error */
+  1165→export interface ApiError {
+  1166→  code: string;
+  1167→  message: string;
+  1168→  details?: string[];
+  1169→  timestamp: string;
+  1170→}
+  1171→
+  1172→/** Response metadata */
+  1173→export interface ResponseMeta {
+  1174→  page?: number;
+  1175→  per_page?: number;
+  1176→  total?: number;
+  1177→  total_pages?: number;
+  1178→  execution_time_ms: number;
+  1179→  cached: boolean;
+  1180→  rate_limit_remaining?: number;
+  1181→}
+  1182→
+  1183→/** Paginated response */
+  1184→export interface PaginatedResponse<T> extends ApiResponse<T[]> {
+  1185→  pagination: {
+  1186→    current_page: number;
+  1187→    total_pages: number;
+  1188→    total_items: number;
+  1189→    items_per_page: number;
+  1190→    has_next: boolean;
+  1191→    has_prev: boolean;
+  1192→  };
+  1193→}
+  1194→
+  1195→/** Bulk operation result */
+  1196→export interface BulkOperationResult {
+  1197→  succeeded: number;
+  1198→  failed: number;
+  1199→  errors: Array<{ item: string; error: string }>;
+  1200→  operation_id: string;
+  1201→}
+  1202→

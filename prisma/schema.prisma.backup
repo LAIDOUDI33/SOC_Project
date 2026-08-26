@@ -1,0 +1,2232 @@
+// This is your Prisma schema file,
+// National SOC Platform - Production Schema (PostgreSQL)
+// Algeria 2026-2030 | 100% Open Source
+// Phase 11: Production Data Persistence Layer
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ============= USER & AUTHENTICATION =============
+
+model User {
+  id              String      @id @default(cuid())
+  email           String      @unique
+  name            String
+  passwordHash    String?
+  
+  // Role & Permissions
+  role            UserRole    @default(ANALYST)
+  department      String?
+  permissions     Jsonb?      @db.JsonB // Granular permission overrides
+  
+  // Contact Information
+  phone           String?
+  alternativePhone String?
+  avatar          String?
+  locale          String      @default("fr-DZ") // Default: Algerian French
+  
+  // Account Status
+  isActive        Boolean     @default(true)
+  isLocked        Boolean     @default(false)
+  lockedUntil     DateTime?
+  failedLoginAttempts Int     @default(0)
+  lastLoginAt     DateTime?
+  lastLoginIp     String?
+  passwordChangedAt DateTime?
+  passwordExpiresAt DateTime?
+  
+  // MFA Configuration
+  mfaEnabled      Boolean     @default(false)
+  mfaSecret       String?     // Encrypted TOTP secret
+  mfaBackupCodes  String?     @db.JsonB // Encrypted backup codes array
+  mfaVerifiedAt   DateTime?
+  mfaMethod       MfaMethod? @default(TOTP) // TOTP, SMS, EMAIL, FIDO2
+  
+  // API Keys for programmatic access
+  apiKeys         ApiKey[]
+  
+  // Audit Fields
+  createdBy       String?
+  updatedBy       String?
+  deletedAt       DateTime?   // Soft delete support
+  
+  // Timestamps
+  createdAt       DateTime    @default(now()) @db.Timestamptz
+  updatedAt       DateTime    @updatedAt @db.Timestamptz
+
+  // Relations
+  alerts          Alert[]             @relation("AssignedAnalyst")
+  incidents       Incident[]          @relation("IncidentHandler")
+  assignedTasks   Task[]              @relation("TaskAssignee")
+  auditLogs       AuditLog[]
+  sessions        Session[]
+  notifications   Notification[]
+  comments        Comment[]
+  createdAssets   Asset[]             @relation("AssetCreator")
+  createdReports  ComplianceReport[]  @relation("ReportAuthor")
+
+  @@index([email])
+  @@index([role])
+  @@index([isActive])
+  @@index([department])
+  @@index([createdAt])
+  @@map("users")
+}
+
+enum MfaMethod {
+  TOTP
+  SMS
+  EMAIL
+  FIDO2
+  WEBAUTHN
+}
+
+model ApiKey {
+  id              String      @id @default(cuid())
+  name            String
+  keyHash         String      // Hashed API key
+  keyPrefix       String      // First 8 chars for identification
+  userId          String
+  user            User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  // Permissions & Scopes
+  scopes          String[]    @db.Text[] // Array of permission scopes
+  rateLimit       Int         @default(1000) // Requests per hour
+  
+  // Status
+  isActive        Boolean     @default(true)
+  lastUsedAt      DateTime?
+  lastUsedIp      String?
+  usageCount      BigInt      @default(0)
+  
+  // Expiration
+  expiresAt       DateTime?
+  
+  // Audit
+  createdBy       String?
+  createdAt       DateTime    @default(now()) @db.Timestamptz
+  revokedAt       DateTime?
+  revokedBy       String?
+
+  @@index([userId])
+  @@index([keyPrefix])
+  @@map("api_keys")
+}
+
+model Session {
+  id              String      @id @default(cuid())
+  sessionToken    String      @unique
+  userId          String
+  user            User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  // Session Metadata
+  ipAddress       String?
+  userAgent       String?     @db.Text
+  deviceFingerprint String?
+  
+  // Security
+  isTwoFactorVerified Boolean @default(false)
+  isAuthenticated    Boolean @default(true)
+  
+  // Timing
+  expiresAt        DateTime   @db.Timestamptz
+  lastActivityAt   DateTime   @default(now()) @db.Timestamptz
+  
+  createdAt        DateTime   @default(now()) @db.Timestamptz
+
+  @@index([userId])
+  @@index([sessionToken])
+  @@index([expiresAt])
+  @@map("sessions")
+}
+
+enum UserRole {
+  VIEWER
+  ANALYST
+  SENIOR_ANALYST
+  INCIDENT_RESPONDER
+  THREAT_HUNTER
+  MANAGER
+  ADMIN
+  SUPER_ADMIN
+}
+
+// ============= SECURITY ALERTS =============
+
+model Alert {
+  id                  String          @id @default(cuid())
+  alertId             String          @unique // External alert ID (e.g., ALT-001)
+  title               String
+  description         String?         @db.Text
+  
+  // Classification
+  severity            AlertSeverity   @default(MEDIUM)
+  status              AlertStatus     @default(NEW)
+  category            AlertCategory?
+  confidence          Float           @default(0.0) // 0.0 to 1.0
+  
+  // Source Information
+  source              String          // Wazuh, Suricata, MISP, TheHive, etc.
+  sourceRef           String?         // Reference ID in source system
+  platform            String?         // Platform identifier
+  rawEvent            Jsonb?          @db.JsonB // Original event data
+  
+  // Network Details
+  sourceIp            String?
+  destinationIp       String?
+  sourcePort          Int?
+  destinationPort     Int?
+  protocol            String?
+  icmpCode            Int?
+  icmpType            Int?
+  packetLength        Int?
+  
+  // Telecom-Specific Fields (for mobile operator integration)
+  telecomProtocol     TelecomProtocol?
+  imsi                String?         // International Mobile Subscriber Identity
+  imei                String?         // International Mobile Equipment Identity
+  msisdn              String?         // Mobile station international subscriber directory number
+  iccid               String?         // Integrated Circuit Card Identifier (SIM)
+  gtpSessionId        String?         // GTP tunnel session identifier
+  ss7OpCode           String?         // SS7 operation code
+  ss7CallingParty     String?         // SS7 calling party address
+  ss7CalledParty      String?         // SS7 called party address
+  apn                 String?         // Access Point Name
+  cellId              String?         // Cell tower identifier
+  lac                 String?         // Location Area Code
+  tac                 String?         // Tracking Area Code (LTE)
+  ratType             RatType?        // Radio Access Technology type
+  roamingStatus       RoamingStatus?
+  
+  // Endpoint Details
+  hostname            String?
+  agentId             String?
+  username            String?
+  processName         String?
+  processId           Int?
+  filePath            String?
+  registryKey         String?
+  
+  // MITRE ATT&CK Mapping
+  mitreTactic         String?
+  mitreTechnique      String?
+  mitreId             String?
+  mitreSubtechnique   String?
+  
+  // Threat Intelligence Enrichment
+  threatIntelMatch    Boolean         @default(false)
+  iocIndicator        String?
+  iocType             IndicatorType?
+  threatActor         String?
+  campaign            String?
+  
+  // Assignment & Response
+  assignedToId        String?
+  assignedTo          User?           @relation("AssignedAnalyst", fields: [assignedToId], references: [id])
+  incidentId          String?
+  incident            Incident?       @relation(fields: [incidentId], references: [id])
+  escalationLevel     Int             @default(0)
+  slaDeadline         DateTime?       @db.Timestamptz
+  slaBreached         Boolean         @default(false)
+  
+  // Timeline
+  timestamp           DateTime        @db.Timestamptz
+  firstSeen           DateTime        @db.Timestamptz
+  lastSeen            DateTime?       @db.Timestamptz
+  acknowledgedAt      DateTime?       @db.Timestamptz
+  resolvedAt          DateTime?       @db.Timestamptz
+  
+  // ARPT Compliance Fields
+  arptReportable      Boolean         @default(false)
+  arptReportedAt      DateTime?       @db.Timestamptz
+  arptReference       String?         // Reference to regulatory filing
+  dataRetentionExpiry DateTime?       @db.Timestamptz
+  
+  // Metadata
+  tags                String[]        @db.Text[]
+  customFields        Jsonb?          @db.JsonB
+  suppressionRule     String?         // If suppressed by a rule
+  isSuppressed        Boolean         @default(false)
+  isFalsePositive     Boolean         @default(false)
+  falsePositiveReason String?         @db.Text
+  
+  // Soft Delete & Audit
+  deletedAt           DateTime?       @db.Timestamptz
+  createdBy           String?
+  updatedBy           String?
+  
+  createdAt           DateTime        @default(now()) @db.Timestamptz
+  updatedAt           DateTime        @updatedAt @db.Timestamptz
+
+  @@index([severity])
+  @@index([status])
+  @@index([source])
+  @@index([timestamp])
+  @@index([assignedToId])
+  @@index([incidentId])
+  @@index([sourceIp])
+  @@index([destinationIp])
+  @@index([threatIntelMatch])
+  @@index([telecomProtocol])
+  @@index([imsi])
+  @@index([msisdn])
+  @@index([createdAt])
+  // Full-text search index (via generated column or separate table)
+  @@map("alerts")
+}
+
+enum TelecomProtocol {
+  GTP
+  GTP_V2
+  DIAMETER
+  RADIUS
+  SS7_MAP
+  SS7_CAP
+  SS7_ISUP
+  SIP
+  H248_MEGACO
+  SMPP
+  HTTP_REST
+  GRPC
+  WEBRTC
+  LTE_NAS
+  NR_NAS
+}
+
+enum RatType {
+  GSM_GPRS
+  UMTS
+  LTE
+  NR_5G
+  WLAN
+  WIMAX
+  HSPA
+  CDMA2000
+  EVDO
+  UNKNOWN
+}
+
+enum RoamingStatus {
+  HOME
+  ROAMING_INTERNATIONAL
+  ROAMING_NATIONAL
+  UNKNOWN
+}
+
+enum AlertSeverity {
+  CRITICAL
+  HIGH
+  MEDIUM
+  LOW
+  INFO
+}
+
+enum AlertStatus {
+  NEW
+  ACKNOWLEDGED
+  INVESTIGATING
+  CONTAINED
+  ERADICATED
+  RESOLVED
+  FALSE_POSITIVE
+  ESCALATED
+  CLOSED
+  SUPPRESSED
+}
+
+enum AlertCategory {
+  MALWARE
+  PHISHING
+  UNAUTHORIZED_ACCESS
+  DATA_BREACH
+  DOS
+  INSIDER_THREAT
+  SUPPLY_CHAIN
+  PHYSICAL
+  POLICY_VIOLATION
+  VULNERABILITY
+  NETWORK_ANOMALY
+  FRAUD
+  TELECOM_FRAUD
+  SIM_SWAP
+  SS7_ATTACK
+  IMSI_CATCHER
+  LOCATION_TRACKING
+  SIGNALLING_STORM
+  BSS_FRAUD
+  IRREVENT_FRAUD
+  PREMIUM_RATE_FRAUD
+  INTERCONNECT_FRAUD
+}
+
+// ============= INCIDENT MANAGEMENT =============
+
+model Incident {
+  id                    String              @id @default(cuid())
+  incidentId            String              @unique // e.g., INC-2026-042
+  title                 String
+  description           String?             @db.Text
+  severity              IncidentSeverity    @default(SEV1)
+  status                IncidentStatus      @default(DETECTED)
+  category              IncidentCategory?
+  
+  // Classification
+  classification        IncidentClassification?
+  impact                ImpactLevel         @default(MODERATE)
+  urgency               UrgencyLevel        @default(MEDIUM)
+  
+  // Assignment
+  handlerId             String?
+  handler               User?               @relation("IncidentHandler", fields: [handlerId], references: [id])
+  team                  String?
+  escalationTeam        String?             @db.Text[] // Array of team names
+  
+  // SLA Tracking
+  slaTarget             SlaTarget?
+  slaActualResponse     Int?                // Minutes to first response
+  slaActualResolution   Int?                // Minutes to resolution
+  slaBreached           Boolean             @default(false)
+  slaBreachReason       String?             @db.Text
+  
+  // Timeline
+  detectedAt            DateTime            @db.Timestamptz
+  reportedAt            DateTime?           @db.Timestamptz
+  acknowledgedAt        DateTime?           @db.Timestamptz
+  containedAt           DateTime?           @db.Timestamptz
+  eradicatedAt          DateTime?           @db.Timestamptz
+  recoveredAt           DateTime?           @db.Timestamptz
+  closedAt              DateTime?           @db.Timestamptz
+  targetResolution      DateTime?           @db.Timestamptz
+  
+  // Metrics
+  mttdMinutes           Int?                // Mean Time To Detect
+  mttrMinutes           Int?                // Mean Time To Respond
+  totalDowntime         Int?                // Minutes
+  
+  // Telecom Impact Assessment
+  telecomImpact         TelecomImpactAssessment? @db.JsonB
+  subscribersAffected   BigInt?             @default(0)
+  baseStationsAffected  Int?                @default(0)
+  networkRegion         String?             // Affected region code
+  servicesImpacted      String[]            @db.Text[] // Array of affected services
+  
+  // Scope
+  affectedAssets        String[]            @db.Text[]
+  affectedUsers         Int?                @default(0)
+  dataBreach            Boolean             @default(false)
+  recordsAffected       Int?
+  dataSensitivity       DataSensitivity?
+  
+  // Resolution
+  rootCause             String?             @db.Text
+  resolution            String?             @db.Text
+  lessonsLearned        String?             @db.Text
+  remediationActions    String[]            @db.Text[]
+  
+  // Relations
+  alerts                Alert[]
+  tasks                 Task[]
+  evidence              Evidence[]
+  
+  // Escalation Chain
+  escalationHistory     Jsonb?              @db.JsonB // Array of escalation events
+  
+  // ARPT Compliance
+  arptNotifiable        Boolean             @default(false)
+  arptNotificationDate  DateTime?           @db.Timestamptz
+  arptReference         String?
+  regulatoryFindings    String?             @db.Text
+  
+  // Cost Tracking
+  costEstimate          Float?
+  actualCost           Float?
+  currency              String              @default("DZD")
+  
+  // Metadata
+  tags                  String[]            @db.Text[]
+  externalRefs          Jsonb?              @db.JsonB
+  complianceImpact      String[]            @db.Text[]
+  
+  // Soft Delete & Audit
+  deletedAt             DateTime?           @db.Timestamptz
+  createdBy             String?
+  updatedBy             String?
+  
+  createdAt             DateTime            @default(now()) @db.Timestamptz
+  updatedAt             DateTime            @updatedAt @db.Timestamptz
+
+  @@index([status])
+  @@index([severity])
+  @@index([handlerId])
+  @@index([detectedAt])
+  @@index([category])
+  @@index([arptNotifiable])
+  @@map("incidents")
+}
+
+enum SlaTarget {
+  P1_CRITICAL_15MIN  // Critical: 15 minutes
+  P2_HIGH_1HOUR      // High: 1 hour
+  P3_MEDIUM_4HOURS   // Medium: 4 hours
+  P4_LOW_24HOURS     // Low: 24 hours
+  P5_PLANNED_72HOURS // Planned: 72 hours
+}
+
+enum DataSensitivity {
+  PUBLIC
+  INTERNAL
+  CONFIDENTIAL
+  RESTRICTED
+  TOP_SECRET
+  PERSONAL_DATA_PII
+  TELECOM_SUBSCRIBER
+  NATIONAL_SECURITY
+}
+
+type TelecomImpactAssessment {
+  voiceServiceAffected     Boolean
+  dataServiceAffected      Boolean
+  smsServiceAffected       Boolean
+  roamingAffected          Boolean
+  prepaidAffected          Boolean
+  postpaidAffected         Boolean
+  enterpriseAffected       Boolean
+  wholesaleAffected        Boolean
+  estimatedRevenueLoss     Float
+  customerComplaintCount   Int
+  mediaCoverage            Boolean
+  governmentNotified       Boolean
+  recoveryEstimateHours    Int
+}
+
+enum IncidentSeverity {
+  SEV0 // Critical - Immediate action required
+  SEV1 // High - Business impact
+  SEV2 // Medium - Significant impact
+  SEV3 // Low - Limited impact
+  SEV4 // Informational - No immediate impact
+}
+
+enum IncidentStatus {
+  DETECTED
+  TRIAGE
+  IN_PROGRESS
+  CONTAINED
+  ERADICATED
+  RECOVERY
+  POST_INCIDENT
+  CLOSED
+  CANCELLED
+}
+
+enum IncidentCategory {
+  SECURITY_BREACH
+  MALWARE
+  PHISHING
+  DATA_EXFILTRATION
+  RANSOMWARE
+  DDoS
+  INSIDER_THREAT
+  SUPPLY_CHAIN
+  PHYSICAL_SECURITY
+  TELECOM_FRAUD
+  SUBSCRIPTION_FRAUD
+  SIM_SWAP_ATTACK
+  SS7_VULNERABILITY
+  IMSI_CATCHER_ATTACK
+  SIGNALLING_ATTACK
+  NETWORK_OUTAGE
+  REGULATORY_COMPLIANCE
+  DATA_PRIVACY
+  THIRD_PARTY_BREACH
+}
+
+enum IncidentClassification {
+  TRUE_POSITIVE
+  FALSE_POSITIVE
+  BENIGN_POSITIVE
+  UNKNOWN
+}
+
+enum ImpactLevel {
+  CRITICAL
+  MAJOR
+  MODERATE
+  MINOR
+  NEGLIGIBLE
+}
+
+enum UrgencyLevel {
+  CRITICAL
+  HIGH
+  MEDIUM
+  LOW
+}
+
+// ============= TASK MANAGEMENT =============
+
+model Task {
+  id                  String      @id @default(cuid())
+  title               String
+  description         String?     @db.Text
+  status              TaskStatus  @default(PENDING)
+  priority            Priority    @default(MEDIUM)
+  taskType            TaskType?
+  
+  // Assignment
+  assignedToId        String?
+  assignedTo          User?       @relation("TaskAssignee", fields: [assignedToId], references: [id])
+  incidentId          String
+  incident            Incident    @relation(fields: [incidentId], references: [id], onDelete: Cascade)
+  
+  // Timing
+  dueDate             DateTime?   @db.Timestamptz
+  startedAt           DateTime?   @db.Timestamptz
+  completedAt         DateTime?   @db.Timestamptz
+  timeEstimated       Int?        // Minutes
+  timeSpent           Int?        // Actual minutes spent
+  
+  // Dependencies
+  parentTaskId        String?
+  dependsOn           String[]    @db.Text[] // Array of task IDs this depends on
+  order               Int         @default(0)
+  
+  // Automation
+  automationJobId     String?     // External job reference
+  autoRetryCount      Int         @default(0)
+  maxRetries          Int         @default(3)
+  
+  // Audit
+  createdBy           String?
+  updatedBy           String?
+  
+  createdAt           DateTime    @default(now()) @db.Timestamptz
+  updatedAt           DateTime    @updatedAt @db.Timestamptz
+
+  @@index([incidentId])
+  @@index([status])
+  @@index([assignedToId])
+  @@index([dueDate])
+  @@map("tasks")
+}
+
+enum TaskStatus {
+  PENDING
+  IN_PROGRESS
+  BLOCKED
+  COMPLETED
+  CANCELLED
+  SKIPPED
+  FAILED
+  AUTO_RUNNING
+}
+
+enum Priority {
+  CRITICAL
+  HIGH
+  MEDIUM
+  LOW
+}
+
+enum TaskType {
+  INVESTIGATION
+  CONTAINMENT
+  ERADICATION
+  RECOVERY
+  COMMUNICATION
+  DOCUMENTATION
+  ESCALATION
+  COORDINATION
+  AUTOMATION
+  ANALYSIS
+  FORENSICS
+  NOTIFICATION
+  PATCHING
+  ISOLATION
+  BLOCKLIST_UPDATE
+  TELECOM_SPECIFIC
+}
+
+// ============= EVIDENCE MANAGEMENT =============
+
+model Evidence {
+  id                  String          @id @default(cuid())
+  title               String
+  description         String?         @db.Text
+  type                EvidenceType
+  status              EvidenceStatus  @default(COLLECTING)
+  
+  // File/Artifact
+  fileName            String?
+  fileType            String?
+  fileSize            BigInt?         // in bytes
+  fileHashSha256      String?         // SHA256 hash
+  fileHashMd5         String?         // MD5 hash (legacy compatibility)
+  filePath            String?
+  fileUrl             String?
+  storageBucket       String?         // For cloud storage integration
+  
+  // Collection Details
+  collectedBy         String?
+  collectedAt         DateTime?       @db.Timestamptz
+  location            String?         @db.Text // Where evidence was found
+  collectionMethod    String?
+  preserved           Boolean         @default(false)
+  chainOfCustody      Jsonb?          @db.JsonB // Array of custody transfers with timestamps and signatures
+  
+  // Relation
+  incidentId          String
+  incident            Incident        @relation(fields: [incidentId], references: [id], onDelete: Cascade)
+  
+  // Analysis
+  analysisResult      String?         @db.Text
+  analysisTools       String?         @db.Text[] // Tools used for analysis
+  analyzedAt          DateTime?       @db.Timestamptz
+  analyzedBy          String?
+  
+  // Legal Hold
+  legalHold           Boolean         @default(false)
+  legalHoldReason     String?         @db.Text
+  legalHoldPlacedBy   String?
+  legalHoldDate       DateTime?       @db.Timestamptz
+  
+  // Metadata
+  tags                String[]        @db.Text[]
+  isSensitive         Boolean         @default(false)
+  classification      DataSensitivity?
+  retentionUntil      DateTime?       @db.Timestamptz
+  retentionPolicy     String?         // Policy reference
+  
+  // Audit
+  createdBy           String?
+  updatedBy           String?
+  deletedAt           DateTime?       @db.Timestamptz
+  
+  createdAt           DateTime        @default(now()) @db.Timestamptz
+  updatedAt           DateTime        @updatedAt @db.Timestamptz
+
+  @@index([incidentId])
+  @@index([status])
+  @@index([type])
+  @@index([fileHashSha256])
+  @@map("evidence")
+}
+
+enum EvidenceType {
+  FILE
+  MEMORY_DUMP
+  DISK_IMAGE
+  NETWORK_CAPTURE
+  LOG_FILE
+  SCREENSHOT
+  EMAIL
+  MALWARE_SAMPLE
+  REGISTRY_ENTRY
+  DATABASE_RECORD
+  CLOUD_ARTIFACT
+  MOBILE_DEVICE
+  SIM_CARD
+  CALL_RECORD
+  SMS_RECORD
+  LOCATION_DATA
+  CDR_RECORD          // Call Detail Record
+  SIGNALING_CAPTURE
+  PACKET_CAPTURE
+  PCAP_FILE
+  ETLR_RECORD         // Electronic Transaction Log Record
+  HLR_RECORD
+  VLR_RECORD
+  AUCE_RECORD
+}
+
+enum EvidenceStatus {
+  COLLECTING
+  COLLECTED
+  PROCESSING
+  ANALYZED
+  PRESERVED
+  EXPIRED
+  DESTROYED
+  DISPUTED
+}
+
+// ============= THREAT INTELLIGENCE =============
+
+model ThreatActor {
+  id                  String            @id @default(cuid())
+  name                String            @unique
+  alias               Jsonb?            @db.JsonB // Array of aliases
+  description         String?           @db.Text
+  type                ThreatActorType
+  motivation          ThreatMotivation?
+  capability          CapabilityLevel   @default(INTERMEDIATE)
+  confidence          Float             @default(0.0) // 0.0 to 1.0
+  
+  // Attribution
+  country             String?           // ISO 3166-1 alpha-2
+  region              String?           // Geographic region
+  originConfidence    OriginConfidence? @default(MEDIUM
+  firstSeen           DateTime?         @db.Timestamptz
+  lastSeen           DateTime?          @db.Timestamptz
+  isActive            Boolean           @default(true)
+  
+  // Targeting Focus
+  targetSectors       String[]          @db.Text[]
+  targetCountries     String[]          @db.Text[] // ISO codes
+  targetRegions       String[]          @db.Text[]
+  
+  // TTPs (Tactics, Techniques, Procedures)
+  tactics             Jsonb?            @db.JsonB // MITRE ATT&CK tactics
+  techniques          Jsonb?            @db.JsonB // MITRE ATT&CK techniques
+  
+  // Financial Intelligence
+  financialMotivation String?           @db.Text
+  knownInfrastructure String[]          @db.Text[] // Known infrastructure (domains, IPs)
+  
+  // Relations
+  indicators          Indicator[]
+  campaigns           Campaign[]
+  
+  // Metadata
+  externalRefs        Jsonb?            @db.JsonB
+  notes               String?           @db.Text
+  sourceQuality       SourceQuality?    @default(MEDIUM)
+  
+  // Audit
+  createdBy           String?
+  updatedBy           String?
+  deletedAt           DateTime?         @db.Timestamptz
+  
+  createdAt           DateTime          @default(now()) @db.Timestamptz
+  updatedAt           DateTime          @updatedAt @db.Timestamptz
+
+  @@index([type])
+  @@index([country])
+  @@index([isActive])
+  @@map("threat_actors")
+}
+
+enum OriginConfidence {
+  VERY_HIGH
+  HIGH
+  MEDIUM
+  LOW
+  VERY_LOW
+  UNKNOWN
+}
+
+enum SourceQuality {
+  EXCELLENT
+  GOOD
+  MEDIUM
+  LOW
+  UNVERIFIED
+}
+
+enum ThreatActorType {
+  APT
+  CRIME_SYNDICATE
+  HACKTIVIST
+  INSIDER
+  NATION_STATE
+  TERRORIST
+  UNKNOWN
+  SCRIPT_KIDDIE
+  COMPETITOR
+  TELECOM_FRAUD_RING
+  STATE_SPONSORED
+  MERcenARY
+}
+
+enum ThreatMotivation {
+  ESPIONAGE
+  FINANCIAL_GAIN
+  DESTRUCTION
+  IDEOLOGICAL
+  POLITICAL
+  PERSONAL_GRATIFICATION
+  REPUTATIONAL
+  STRATEGIC_ADVANTAGE
+  TERRORISM
+  TELECOM_REVENUE_FRAUD
+  SUBSCRIPTION_THEFT
+  INTELLIGENCE_GATHERING
+  UNKNOWN
+}
+
+enum CapabilityLevel {
+  NOVICE
+  INTERMEDIATE
+  ADVANCED
+  EXPERT
+  ELITE
+}
+
+model Indicator {
+  id                  String              @id @default(cuid())
+  type                IndicatorType
+  value               String
+  valueNormalized     String?             // Normalized form for matching
+  description         String?             @db.Text
+  
+  // Classification
+  tlp                 TLPLevel            @default(WHITE)
+  confidence          Float               @default(0.0)
+  severity            IndicatorSeverity   @default(UNKNOWN)
+  
+  // Source
+  source              String?             // Where indicator came from
+  sourceUrl           String?
+  sourceDate          DateTime?           @db.Timestamptz
+  threatActorId       String?
+  threatActor         ThreatActor?        @relation(fields: [threatActorId], references: [id])
+  campaignId          String?
+  campaign            Campaign?           @relation(fields: [campaignId], references: [id])
+  
+  // Validity
+  validFrom           DateTime?           @db.Timestamptz
+  validUntil          DateTime?           @db.Timestamptz
+  isActive            Boolean             @default(true)
+  
+  // Enrichment
+  context             Jsonb?              @db.JsonB
+  detectionCount      Int                 @default(0)
+  firstDetected       DateTime?           @db.Timestamptz
+  lastDetected        DateTime?           @db.Timestamptz
+  falsePositiveRate   Float               @default(0.0)
+  truePositiveRate    Float               @default(0.0)
+  
+  // Kill Chain / MITRE
+  killChainPhase      KillChainPhase?
+  mitreTechniqueIds   String[]            @db.Text[]
+  
+  // Actions
+  action              IndicatorAction     @default(ALERT_ONLY)
+  
+  // Tags & Labels
+  tags                String[]            @db.Text[]
+  labels              String[]            @db.Text[]
+  externalRefs        Jsonb?              @db.JsonB
+  
+  // Audit
+  createdBy           String?
+  updatedBy           String?
+  deletedAt           DateTime?           @db.Timestamptz
+  
+  createdAt           DateTime            @default(now()) @db.Timestamptz
+  updatedAt           DateTime            @updatedAt @db.Timestamptz
+
+  @@index([type])
+  @@index([value])
+  @@index([valueNormalized])
+  @@index([isActive])
+  @@index([tlp])
+  @@index([firstDetected])
+  @@index([lastDetected])
+  @@map("indicators")
+}
+
+enum KillChainPhase {
+  RECONNAISSANCE
+  WEAPONIZATION
+  DELIVERY
+  EXPLOITATION
+  INSTALLATION
+  COMMAND_AND_CONTROL
+  ACTIONS_ON_OBJECTIVES
+  EXFILTRATION
+  UNKNOWN
+}
+
+enum IndicatorType {
+  IP_DOMAIN
+  IP_ADDRESS
+  DOMAIN
+  URL
+  URL_PATH
+  EMAIL
+  EMAIL_SUBJECT
+  FILE_HASH_MD5
+  FILE_HASH_SHA1
+  FILE_HASH_SHA256
+  FILE_HASH_SSDEEP
+  CVE
+  MUTANT
+  REGISTRY_KEY
+  USER_AGENT
+  YARA_RULE
+  SIGMA_RULE
+  SURICATA_RULE
+  SNORT_RULE
+  IMEI
+  IMSI
+  MSISDN
+  ICCID
+  PHONE_NUMBER
+  BITCOIN_ADDRESS
+  CIDR_BLOCK
+  JA3_HASH
+  JARM_HASH
+  CERTIFICATE_HASH
+  SSH_KEY_FINGERPRINT
+  MAC_ADDRESS
+  BSSID
+  APN_NAME
+  GTP_TUNNEL_ID
+  SS7_GLOBAL_TITLE
+  DNS_QUERY
+  TLS_SNI
+  HOSTNAME
+  PROCESS_NAME
+  MUTEX
+  NAMED_PIPE
+  SERVICE_NAME
+  DRIVER_NAME
+  Scheduled_TASK
+}
+
+enum TLPLevel {
+  RED
+  AMBER
+  GREEN
+  WHITE
+  CLEAR
+  AMBER_STRICT
+}
+
+enum IndicatorSeverity {
+  CRITICAL
+  HIGH
+  MEDIUM
+  LOW
+  INFO
+  UNKNOWN
+}
+
+enum IndicatorAction {
+  ALERT_ONLY
+  BLOCK
+  BLOCK_AND_ALERT
+  ALLOW_LIST
+  REDIRECT
+  RATE_LIMIT
+  CAPTCHA_CHALLENGE
+  ISOLATE_ENDPOINT
+  QUARANTINE_FILE
+  DISABLE_ACCOUNT
+  NOTIFY_OPERATOR
+}
+
+model Campaign {
+  id                  String            @id @default(cuid())
+  name                String
+  description         String?           @db.Text
+  
+  // Timeline
+  startDate           DateTime?         @db.Timestamptz
+  endDate             DateTime?         @db.Timestamptz
+  isActive            Boolean           @default(true)
+  
+  // Targeting
+  targetSector        String[]          @db.Text[]
+  targetCountry       String[]          @db.Text[] // ISO codes
+  targetRegion        String?           // e.g., MENA, North Africa, Maghreb
+  
+  // Attribution
+  threatActorId       String
+  threatActor         ThreatActor       @relation(fields: [threatActorId], references: [id])
+  
+  // Relations
+  indicators          Indicator[]
+  
+  // Intelligence
+  objectives          String?           @db.Text
+  intendedEffect      String?           @db.Text
+  
+  // Metadata
+  externalRefs        Jsonb?            @db.JsonB
+  notes               String?           @db.Text
+  
+  // Audit
+  createdBy           String?
+  updatedBy           String?
+  deletedAt           DateTime?         @db.Timestamptz
+  
+  createdAt           DateTime          @default(now()) @db.Timestamptz
+  updatedAt           DateTime          @updatedAt @db.Timestamptz
+
+  @@index([threatActorId])
+  @@index([isActive])
+  @@map("campaigns")
+}
+
+// ============= ASSET MANAGEMENT (Telecom Infrastructure) =============
+
+model Asset {
+  id                  String            @id @default(cuid())
+  assetId             String            @unique // e.g., AST-HLR-001
+  name                String
+  description         String?           @db.Text
+  type                AssetType
+  category            AssetCategory
+  criticality         AssetCriticality  @default(MEDIUM)
+  
+  // Location & Network
+  location            String?           // Data center/site name
+  locationCode        String?           // Site code
+  region              String?           // Region code
+  zone                String?           // Availability zone
+  networkSegment      String?           // VLAN/network segment
+  
+  // Network Identity
+  ipAddress           String?           // Primary IP
+  ipAddresses         String[]          @db.Text[] // All IPs
+  hostname            String?
+  fqdn                String?
+  macAddress          String?
+  
+  // Telecom-Specific Attributes
+  vendor              String?           // Equipment vendor (Huawei, Ericsson, Nokia, ZTE)
+  model               String?           // Equipment model
+  softwareVersion     String?
+  serialNumber        String?
+  licenseInfo         String?           @db.Text
+  
+  // Capacity Information
+  capacityMax         Int?              // Maximum capacity
+  capacityCurrent     Int?              // Current utilization
+  capacityUnit        String?           // Unit of measurement
+  
+  // Operational Status
+  operationalStatus   AssetOperationalStatus @default(OPERATIONAL)
+  maintenanceWindow   String?           @db.Text
+  lastMaintenance     DateTime?         @db.Timestamptz
+  nextMaintenance     DateTime?         @db.Timestamptz
+  
+  // Ownership
+  owner               String?           // Team/department owner
+  ownerId             String?           // User who manages this asset
+  ownerUser           User?             @relation("AssetCreator", fields: [ownerId], references: [id])
+  
+  // Security
+  securityZone        SecurityZone?
+  complianceRequired  String[]          @db.Text[] // Required compliance frameworks
+  lastVulnerabilityScan DateTime?      @db.Timestamptz
+  vulnerabilityScore  Int?              // CVSS score
+  openVulnerabilities Int?             @default(0)
+  
+  // Monitoring
+  monitoringEnabled   Boolean           @default(true)
+  monitoringTool      String?
+  alertingProfile    String?
+  
+  // Relations
+  parentAssetId       String?
+  childAssets         Asset[]           @relation("AssetHierarchy")
+  incidents           Incident[]        @relation("AssetIncident") // Incidents affecting this asset
+  
+  // Configuration
+  configuration       Jsonb?            @db.JsonB // Current configuration snapshot
+  tags                String[]          @db.Text[]
+  customFields        Jsonb?            @db.JsonB
+  
+  // ARPT Compliance
+  arptRegistered      Boolean           @default(false)
+  arptRegistrationRef String?
+  
+  // Audit
+  createdBy           String?
+  updatedBy           String?
+  deletedAt           DateTime?         @db.Timestamptz
+  
+  createdAt           DateTime          @default(now()) @db.Timestamptz
+  updatedAt           DateTime          @updatedAt @db.Timestamptz
+
+  @@index([type])
+  @@index([category])
+  @@index([criticality])
+  @@index([operationalStatus])
+  @@index([ipAddress])
+  @@index([hostname])
+  @@index([location])
+  @@index([vendor])
+  @@map("assets")
+}
+
+enum AssetType {
+  // Core Network Elements
+  HLR                 // Home Location Register
+  VLR                 // Visitor Location Register
+  MSC                 // Mobile Switching Center
+  GMSC                // Gateway MSC
+  SGSN                // Serving GPRS Support Node
+  GGSN                // Gateway GPRS Support Node
+  MME                 // Mobility Management Entity (LTE)
+  SGW                 // Serving Gateway (EPC)
+  PGW                 // PDN Gateway (EPC)
+  HSS                 // Home Subscriber Server (LTE/5G)
+  PCRF                // Policy and Charging Rules Function
+  IMS                 // IP Multimedia Subsystem core
+  
+  // Radio Access Network
+  NODEB               // NodeB (3G)
+  ENODEB              // eNodeB (LTE)
+  GNODEB              // gNodeB (5G-NR)
+  RNC                 // Radio Network Controller
+  BSC                 // Base Station Controller
+  BTS                 // Base Transceiver Station
+  
+  // Signaling & Transport
+  STP                 // Signaling Transfer Point
+  SSP                 // Signaling Switching Point
+  SIGTRAN_GATEWAY     // SIGTRAN/SS7 Gateway
+  DRA                 // Diameter Routing Agent
+  
+  // IT Infrastructure
+  SERVER
+  WORKSTATION
+  FIREWALL
+  LOAD_BALANCER
+  ROUTER
+  SWITCH
+  ACCESS_POINT
+  STORAGE
+  BACKUP_SYSTEM
+  
+  // Security Systems
+  SIEM
+  IDS_IPS
+  EDR
+  NAC                 // Network Access Control
+  WAF                 // Web Application Firewall
+  EMAIL_SECURITY
+  DNS_SECURITY
+  VPN_CONCENTRATOR
+  HSM                 // Hardware Security Module
+  
+  // Applications
+  APPLICATION
+  DATABASE
+  MESSAGE_QUEUE
+  CACHE
+  API_GATEWAY
+  SERVICE_BUS
+  
+  // Telecom Specific
+  IN Billing System
+  CRM_SYSTEM
+  PROVISIONING_SYSTEM
+  MEDiation_DEVICE
+  IN_CPE              // Customer Premises Equipment
+  SIM_REGISTRATION
+  NUMBER_PORTABILITY
+}
+
+enum AssetCategory {
+  CORE_NETWORK
+  RADIO_ACCESS_NETWORK
+  TRANSPORT_NETWORK
+  IT_INFRASTRUCTURE
+  SECURITY_SYSTEMS
+  APPLICATIONS
+  ENDPOINTS
+  FACILITIES
+  THIRD_PARTY
+  CLOUD_SERVICE
+  MOBILE_DEVICE
+  IOT_DEVICE
+  OT_ICS              // Operational Technology / Industrial Control System
+}
+
+enum AssetCriticality {
+  MISSION_CRITICAL    // Single point of failure, national impact
+  BUSINESS_CRITICAL   // Major business impact
+  HIGH                // Significant regional impact
+  MEDIUM              // Moderate impact
+  LOW                 // Minimal impact
+}
+
+enum AssetOperationalStatus {
+  OPERATIONAL
+  DEGRADED
+  MAINTENANCE
+  FAILED
+  DECOMMISSIONED
+  PROVISIONING
+  TESTING
+  UNKNOWN
+}
+
+enum SecurityZone {
+  DMZ
+  INTERNAL
+  RESTRICTED
+  HIGH_SECURITY
+  OPERATIONS
+  MANAGEMENT
+  EXTERNAL
+  ISOLATED
+  SCADA_OT
+}
+
+// ============= SYSTEM HEALTH & MONITORING =============
+
+model SystemComponent {
+  id                      String              @id @default(cuid())
+  name                    String              @unique
+  displayName             String
+  category                ComponentCategory
+  description             String?             @db.Text
+  
+  // Status
+  status                  ComponentStatus     @default(UNKNOWN)
+  healthScore             Int                 @default(0) // 0-100
+  
+  // Version & Uptime
+  version                 String?
+  uptimeSeconds           BigInt              @default(0)
+  lastCheck               DateTime?           @db.Timestamptz
+  
+  // Resources
+  cpuUsage                Float?              // percentage
+  memoryUsage             Float?              // percentage
+  diskUsage               Float?              // percentage
+  networkIn               BigInt?
+  networkOut              BigInt?
+  
+  // Endpoints
+  endpoint                String?
+  apiKey                  String?             // encrypted reference
+  config                  Jsonb?              @db.JsonB
+  
+  // Statistics
+  eventsToday             BigInt              @default(0)
+  alertsToday             Int                 @default(0)
+  errorsToday             Int                 @default(0)
+  
+  // Health Checks
+  healthChecks            Jsonb?              @db.JsonB // Array of health check results
+  dependencies            String[]            @db.Text[] // Component IDs this depends on
+  
+  isEnabled               Boolean             @default(true)
+  
+  // Maintenance
+  maintenanceWindowStart  DateTime?           @db.Timestamptz
+  maintenanceWindowEnd    DateTime?           @db.Timestamptz
+  nextMaintenance         DateTime?           @db.Timestamptz
+  
+  // SLA
+  slaUptimeTarget         Float               @default(99.9) // percentage
+  slaUptimeActual         Float?              // percentage
+  lastIncidentDate        DateTime?           @db.Timestamptz
+  
+  // Audit
+  createdBy               String?
+  updatedBy               String?
+  
+  createdAt               DateTime            @default(now()) @db.Timestamptz
+  updatedAt               DateTime            @updatedAt @db.Timestamptz
+
+  @@index([category])
+  @@index([status])
+  @@map("system_components")
+}
+
+enum ComponentCategory {
+  SIEM
+  SOAR
+  EDR
+  TIP
+  IDS_IPS
+  LOGGING
+  MONITORING
+  SECURITY
+  INFRASTRUCTURE
+  DATABASE
+  CACHE
+  MESSAGE_QUEUE
+  OBJECT_STORAGE
+  IDENTITY
+  NETWORK
+  BACKUP
+  TELECOM_CORE
+  TELECOM_RAN
+  TELECOM_SIGNALLING
+  BILLING
+  PROVISIONING
+  CUSTOMER_FACING
+}
+
+enum ComponentStatus {
+  OPERATIONAL
+  DEGRADED
+  DOWN
+  STARTING
+  MAINTENANCE
+  ERROR
+  UNKNOWN
+  PARTIAL_OUTAGE
+}
+
+// ============= AUDIT LOGGING =============
+
+model AuditLog {
+  id                  String          @id @default(cuid())
+  userId              String?
+  user                User?           @relation(fields: [userId], references: [id])
+  userName            String?         // Snapshot of username at time of action
+  userRole            UserRole?
+  
+  action              AuditAction
+  resourceType        ResourceType
+  resourceId          String
+  resourceName        String?
+  
+  // Request Context
+  ipAddress           String?
+  userAgent           String?         @db.Text
+  sessionId           String?
+  requestId           String?         // Correlation ID for distributed tracing
+  
+  // Change Details
+  oldValue            Jsonb?          @db.JsonB // Snapshot of old value
+  newValue            Jsonb?          @db.JsonB // Snapshot of new value
+  changedFields       String[]        @db.Text[] // List of changed field names
+  metadata            Jsonb?          @db.JsonB // Additional context
+  
+  // Result
+  success             Boolean         @default(true)
+  errorMessage        String?         @db.Text
+  errorCode           String?
+  durationMs          Int?            // Operation duration in milliseconds
+  
+  // Regulatory
+  arptRetainUntil     DateTime?       @db.Timestamptz // Mandatory retention period
+  complianceTag       String?         // Compliance framework tag
+  
+  // Timestamp
+  timestamp           DateTime        @default(now()) @db.Timestamptz
+
+  @@index([userId])
+  @@index([action])
+  @@index([resourceType])
+  @@index([resourceId])
+  @@index([timestamp])
+  @@index([ipAddress])
+  @@index([success])
+  @@map("audit_logs")
+}
+
+enum AuditAction {
+  CREATE
+  READ
+  UPDATE
+  DELETE
+  LOGIN
+  LOGOUT
+  LOGIN_FAILED
+  EXPORT
+  IMPORT
+  CONFIG_CHANGE
+  ROLE_CHANGE
+  PERMISSION_CHANGE
+  PASSWORD_CHANGE
+  MFA_ENABLED
+  MFA_DISABLED
+  API_KEY_CREATED
+  API_KEY_REVOKED
+  ALERT_ACKNOWLEDGE
+  ALERT_ESCALATE
+  ALERT_RESOLVE
+  ALERT_SUPPRESS
+  ALERT_FALSE_POSITIVE
+  INCIDENT_CREATE
+  INCIDENT_UPDATE
+  INCIDENT_ESCALATE
+  INCIDENT_CLOSE
+  TASK_CREATE
+  TASK_UPDATE
+  TASK_COMPLETE
+  EVIDENCE_UPLOAD
+  EVIDENCE_ACCESS
+  EVIDENCE_DELETE
+  INDICATOR_CREATE
+  INDICATOR_UPDATE
+  INDICATOR_ACTIVATE
+  INDICATOR_DEACTIVATE
+  SYSTEM_START
+  SYSTEM_STOP
+  BACKUP_CREATE
+  RESTORE_PERFORM
+  INTEGRATION_CONFIGURE
+  INTEGRATION_DISABLE
+  REPORT_GENERATE
+  REPORT_EXPORT
+  USER_CREATE
+  USER_UPDATE
+  USER_DISABLE
+  USER_UNLOCK
+  ASSET_REGISTER
+  ASSET_UPDATE
+  ASSET_DECOMMISSION
+  PLAYBOOK_EXECUTE
+  PLAYBOOK_APPROVE
+  DATA_PURGE
+  RETENTION_POLICY_CHANGE
+}
+
+enum ResourceType {
+  USER
+  ALERT
+  INCIDENT
+  TASK
+  EVIDENCE
+  INDICATOR
+  THREAT_ACTOR
+  CAMPAIGN
+  SYSTEM_COMPONENT
+  CONFIGURATION
+  REPORT
+  API_KEY
+  INTEGRATION
+  PLAYBOOK
+  RULE
+  DASHBOARD
+  ASSET
+  SESSION
+  COMPLIANCE_REPORT
+  AUDIT_LOG
+  API_TOKEN
+  ROLE
+  PERMISSION
+  TELECOM_EVENT
+  SUBSCRIBER_RECORD
+}
+
+// ============= NOTIFICATIONS =============
+
+model Notification {
+  id                  String                @id @default(cuid())
+  userId              String
+  user                User                  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  type                NotificationType
+  title               String
+  message             String?               @db.Text
+  severity            NotificationSeverity  @default(INFO)
+  
+  // Status
+  isRead              Boolean               @default(false)
+  readAt              DateTime?             @db.Timestamptz
+  
+  // Action
+  actionUrl           String?
+  actionText          String?
+  resourceId          String?
+  resourceType        String?
+  
+  // Delivery Channels
+  deliveryChannels    NotificationChannel[] @default([IN_APP])
+  deliveryStatus      Jsonb?                @db.JsonB // Per-channel delivery status
+  emailSent           Boolean               @default(false)
+  smsSent             Boolean               @default(false)
+  pushSent            Boolean               @default(false)
+  webhookSent         Boolean               @default(false)
+  slackSent           Boolean               @default(false)
+  
+  // Timestamps
+  sendAt              DateTime              @db.Timestamptz
+  deliveredAt         DateTime?             @db.Timestamptz
+  expireAt            DateTime?             @db.Timestamptz
+  
+  // Retry
+  retryCount          Int                   @default(0)
+  maxRetries          Int                   @default(3)
+  lastError           String?               @db.Text
+  
+  // Audit
+  createdBy           String?
+  
+  createdAt           DateTime              @default(now()) @db.Timestamptz
+
+  @@index([userId])
+  @@index([isRead])
+  @@index([type])
+  @@index([sendAt])
+  @@map("notifications")
+}
+
+enum NotificationChannel {
+  IN_APP
+  EMAIL
+  SMS
+  PUSH
+  WEBHOOK
+  SLACK
+  TEAMS
+  PAGERDUTY
+  TELEGRAM
+}
+
+enum NotificationType {
+  ALERT_ASSIGNED
+  ALERT_ESCALATED
+  ALERT_SLA_WARNING
+  ALERT_SLA_BREACH
+  INCIDENT_CREATED
+  INCIDENT_UPDATED
+  INCIDENT_ASSIGNED
+  INCIDENT_SLA_WARNING
+  INCIDENT_SLA_BREACH
+  TASK_ASSIGNED
+  TASK_DUE
+  TASK_OVERDUE
+  THREAT_INTEL_UPDATE
+  IOC_MATCH
+  SYSTEM_ALERT
+  SYSTEM_DOWN
+  SYSTEM_DEGRADED
+  COMPLIANCE_REMINDER
+  REPORT_READY
+  MAINTENANCE_SCHEDULED
+  ANNOUNCEMENT
+  SECURITY_BULLETIN
+  PHISHING_SIMULATION
+  BACKUP_SUCCESS
+  BACKUP_FAILURE
+  INTEGRATION_ERROR
+  DATA_RETENTION_ALERT
+  ARPT_DEADLINE
+  LICENSE_EXPIRY
+  CAPACITY_THRESHOLD
+}
+
+enum NotificationSeverity {
+  CRITICAL
+  HIGH
+  MEDIUM
+  LOW
+  INFO
+}
+
+// ============= COMMENTS & COLLABORATION =============
+
+model Comment {
+  id                  String          @id @default(cuid())
+  content             String          @db.Text
+  userId              String
+  user                User            @relation(fields: [userId], references: [id])
+  
+  // Polymorphic relation
+  commentableType     CommentableType
+  commentableId       String
+  
+  // Thread
+  parentId            String?
+  parent              Comment?        @relation("CommentReplies", fields: [parentId], references: [id])
+  replies             Comment[]       @relation("CommentReplies")
+  
+  // Metadata
+  isEdited            Boolean         @default(false)
+  editedAt            DateTime?       @db.Timestamptz
+  isInternal          Boolean         @default(false) // Internal-only note
+  isMentionEnabled    Boolean         @default(true)
+  mentions            String[]        @db.Text[] // Mentioned user IDs
+  
+  // Attachments
+  attachments         Jsonb?          @db.JsonB // Array of attachment references
+  
+  // Audit
+  createdBy           String?
+  updatedAt           DateTime        @updatedAt @db.Timestamptz
+  deletedAt           DateTime?       @db.Timestamptz
+  
+  createdAt           DateTime        @default(now()) @db.Timestamptz
+
+  @@index([userId])
+  @@index([commentableType])
+  @@index([commentableId])
+  @@index([parentId])
+  @@map("comments")
+}
+
+enum CommentableType {
+  ALERT
+  INCIDENT
+  TASK
+  EVIDENCE
+  INDICATOR
+  THREAT_ACTOR
+  CAMPAIGN
+  ASSET
+  PLAYBOOK
+  REPORT
+}
+
+// ============= PLAYBOOKS & AUTOMATION =============
+
+model Playbook {
+  id                  String              @id @default(cuid())
+  name                String
+  description         String?             @db.Text
+  category            PlaybookCategory
+  severity            PlaybookSeverity     @default(MEDIUM)
+  
+  // Content
+  content             String              @db.Text // Markdown or structured content
+  steps               Jsonb?              @db.JsonB // Array of playbook steps
+  
+  // Automation
+  isAutomated         Boolean             @default(false)
+  automationEngine    AutomationEngine?   @default(CUSTOM)
+  automationScript    String?             @db.Text
+  triggers            Jsonb?              @db.JsonB // Array of trigger conditions
+  inputs              Jsonb?              @db.JsonB // Expected input parameters
+  outputs             Jsonb?              @db.JsonB // Expected outputs
+  
+  // Approval Workflow
+  approvalRequired    Boolean             @default(false)
+  approverRoles       String[]            @db.Text[]
+  approvalWorkflow    Jsonb?              @db.JsonB
+  
+  // Versioning
+  version             String              @default("1.0")
+  isPublished         Boolean             @default(false)
+  parentPlaybookId    String?
+  
+  // Usage Stats
+  executionCount      Int                 @default(0)
+  successRate         Float               @default(0.0)
+  avgExecutionTime    Int?                // minutes
+  lastExecutedAt      DateTime?           @db.Timestamptz
+  
+  // Testing
+  testCases           Jsonb?              @db.JsonB
+  lastTestResult      TestResult?
+  lastTestedAt        DateTime?           @db.Timestamptz
+  
+  // Metadata
+  authorId            String?
+  reviewers           String[]            @db.Text[]
+  tags                String[]            @db.Text[]
+  externalDocs        Jsonb?              @db.JsonB
+  
+  // Audit
+  createdBy           String?
+  updatedBy           String?
+  deletedAt           DateTime?           @db.Timestamptz
+  
+  createdAt           DateTime            @default(now()) @db.Timestamptz
+  updatedAt           DateTime            @updatedAt @db.Timestamptz
+
+  @@index([category])
+  @@index([isPublished])
+  @@map("playbooks")
+}
+
+enum AutomationEngine {
+  CUSTOM
+  THEHIVE
+  SOCRATIC
+  STACKSTORM
+  RANSOMWARE
+  CALIPSO
+  SHUFFLE
+  COURIER
+  PLAYBOOK_AUTOMATOR
+}
+
+enum TestResult {
+  PASSED
+  FAILED
+  ERROR
+  SKIPPED
+  NOT_TESTED
+}
+
+enum PlaybookCategory {
+  MALWARE_RESPONSE
+  PHISHING_RESPONSE
+  NETWORK_INTRUSION
+  DATA_EXFILTRATION
+  DENIAL_OF_SERVICE
+  INSIDER_THREAT
+  VULNERABILITY_RESPONSE
+  PRIVILEGE_ESCALATION
+  SUPPLY_CHAIN
+  TELECOM_FRAUD
+  SIM_SWAP_RESPONSE
+  SS7_ATTACK_RESPONSE
+  IMSI_CATCHER_RESPONSE
+  SIGNALLING_ATTACK_RESPONSE
+  DDoS_MITIGATION
+  RANSOMWARE_RESPONSE
+  DATA_BREACH_RESPONSE
+  COMPLIANCE_VIOLATION
+  GENERAL_SECURITY
+  INCIDENT_TRIAGE
+  THREAT_HUNTING
+  PEN_TEST_RESPONSE
+  PHYSICAL_SECURITY
+}
+
+enum PlaybookSeverity {
+  CRITICAL
+  HIGH
+  MEDIUM
+  LOW
+}
+
+// ============= COMPLIANCE & REPORTING =============
+
+model ComplianceReport {
+  id                  String                @id @default(cuid())
+  name                String
+  framework           ComplianceFramework
+  status              ReportStatus          @default(DRAFT)
+  
+  // Period
+  periodStart         DateTime              @db.Timestamptz
+  periodEnd           DateTime              @db.Timestamptz
+  generatedAt         DateTime?             @db.Timestamptz
+  
+  // Content
+  summary             String?               @db.Text
+  findings            Jsonb?                @db.JsonB // Array of findings
+  recommendations     Jsonb?                @db.JsonB
+  score               Float?                // 0-100 compliance score
+  riskScore           Float?                // Risk assessment score
+  
+  // People
+  authorId            String?
+  author              User?                 @relation("ReportAuthor", fields: [authorId], references: [id])
+  reviewerId          String?
+  approvedBy          String?
+  approvedAt          DateTime?             @db.Timestamptz
+  
+  // File
+  filePath            String?
+  fileSize            BigInt?
+  fileHash            String?
+  fileFormat          ReportFormat?         @default(PDF)
+  
+  // Distribution
+  distributedTo       Jsonb?                @db.JsonB // Array of recipients
+  distributionDate    DateTime?             @db.Timestamptz
+  distributionMethod  String?               // Email, Portal, etc.
+  
+  // ARPT Specific
+  arptSubmissionId    String?               // ARPT tracking number
+  arptSubmissionDate  DateTime?             @db.Timestamptz
+  arptAcknowledged    Boolean               @default(false)
+  arptAckDate         DateTime?             @db.Timestamptz
+  
+  // Retention
+  retentionClass      RetentionClass?      @default(STANDARD)
+  retainUntil         DateTime?             @db.Timestamptz
+  
+  // Metadata
+  version             String                @default("1.0")
+  externalRef         String?
+  tags                String[]              @db.Text[]
+  
+  // Audit
+  createdBy           String?
+  updatedBy           String?
+  deletedAt           DateTime?             @db.Timestamptz
+  
+  createdAt           DateTime              @default(now()) @db.Timestamptz
+  updatedAt           DateTime              @updatedAt @db.Timestamptz
+
+  @@index([framework])
+  @@index([status])
+  @@index([periodStart])
+  @@index([periodEnd])
+  @@map("compliance_reports")
+}
+
+enum ReportFormat {
+  PDF
+  HTML
+  DOCX
+  XLSX
+  CSV
+  JSON
+  XML
+}
+
+enum RetentionClass {
+  SHORT_TERM          // 90 days
+  STANDARD            // 1 year
+  EXTENDED            // 3 years
+  LONG_TERM           // 7 years
+  PERMANENT           // Never delete
+  REGULATORY          // As required by regulation
+  LEGAL_HOLD          // Until legal hold released
+}
+
+enum ComplianceFramework {
+  ISO_27001
+  ISO_27035
+  ISO_22301
+  NIST_CSF
+  NIST_800_53
+  SOC2
+  GDPR
+  PCI_DSS
+  HIPAA
+  ARPT_TELECOM
+  NCSA_ALGERIA
+  ITU_T_X805
+  ETSI_EN303
+  GSMA_NAAS
+  CUSTOM
+}
+
+enum ReportStatus {
+  DRAFT
+  GENERATING
+  REVIEWING
+  APPROVED
+  PUBLISHED
+  ARCHIVED
+  REJECTED
+  SCHEDULED
+  FAILED
+}
+
+// ============= INTEGRATIONS =============
+
+model Integration {
+  id                  String              @id @default(cuid())
+  name                String
+  type                IntegrationType
+  description         String?             @db.Text
+  
+  // Connection
+  endpoint            String
+  apiKey              String?             // Encrypted reference
+  apiSecret           String?             // Encrypted reference
+  config              Jsonb?              @db.JsonB // Full configuration
+  
+  // Authentication
+  authType            AuthType?           @default(API_KEY)
+  oauthConfig         Jsonb?              @db.JsonB // OAuth configuration
+  certificatePath    String?
+  
+  // Status
+  status              IntegrationStatus   @default(CONFIGURED)
+  lastSync            DateTime?           @db.Timestamptz
+  lastError           String?             @db.Text
+  lastHealthCheck     DateTime?           @db.Timestamptz
+  
+  // Statistics
+  syncFrequency       String?             // e.g., "5m", "1h", "24h", "cron expression"
+  eventsProcessed     BigInt              @default(0)
+  errorCount          Int                 @default(0)
+  consecutiveErrors   Int                 @default(0)
+  
+  // Capabilities
+  capabilities        String[]            @db.Text[]
+  supportedActions    String[]            @db.Text[]
+  
+  // Health
+  healthScore         Int                 @default(0) // 0-100
+  responseTimeAvg     Int?                // milliseconds
+  responseTimeLast    Int?                // milliseconds
+  uptimePercent       Float?              @default(100)
+  
+  // Rate Limiting
+  rateLimit           Int?                // Requests per minute
+  rateLimitRemaining  Int?
+  rateLimitReset      DateTime?           @db.Timestamptz
+  
+  isEnabled           Boolean             @default(true)
+  
+  // Version Info
+  runningVersion      String?
+  minSupportedVersion String?
+  
+  // Telecom Operator Config (for Mobilis/Djezzy/Ooredoo integrations)
+  operatorConfig      Jsonb?              @db.JsonB // Operator-specific config
+  
+  // Audit
+  createdBy           String?
+  updatedBy           String?
+  
+  createdAt           DateTime            @default(now()) @db.Timestamptz
+  updatedAt           DateTime            @updatedAt @db.Timestamptz
+
+  @@index([type])
+  @@index([status])
+  @@index([isEnabled])
+  @@map("integrations")
+}
+
+enum AuthType {
+  API_KEY
+  BASIC_AUTH
+  OAUTH2
+  OAUTH1
+  BEARER_TOKEN
+  MTLS
+  SSH_KEY
+  HEADER_AUTH
+  NO_AUTH
+}
+
+enum IntegrationType {
+  SIEM
+  SOAR
+  EDR
+  TIP
+  IDS_IPS
+  FIREWALL
+  DNS_SECURITY
+  EMAIL_SECURITY
+  PROXY
+  VULN_SCANNER
+  ASSET_MANAGEMENT
+  TICKETING
+  MESSAGING
+  DIRECTORY
+  CLOUD_PROVIDER
+  BACKUP
+  MONITORING
+  LOGGING
+  THREAT_FEED
+  TELECOM_HLR
+  TELECOM_GTP
+  TELECOM_RADIUS
+  TELECOM_SIGTRAN
+  TELECOM_PROVISIONING
+  TELECOM_BILLING
+  TELECOM_CDR
+  TELECOM_FRAUD
+  TELECOM_NMS
+  OSS_BSS
+  CASE_MANAGEMENT
+  GRC
+  DATA_LOSS_PREVENTION
+  SANDOX
+  MALWARE_ANALYSIS
+  INTELLIGENCE_PLATFORM
+  ORCHESTRATION
+  TICKET_SYSTEM
+  COLLABORATION
+  NOTIFICATION
+  IDENTITY_PROVIDER
+  SECRET_MANAGER
+  CONFIG_MANAGEMENT
+  DEPLOYMENT
+  OBSERVABILITY
+}
+
+enum IntegrationStatus {
+  ACTIVE
+  INACTIVE
+  ERROR
+  CONFIGURED
+  TESTING
+  DISABLED
+  DEPRECATED
+  MAINTENANCE
+  SYNCING
+}
+
+// ============= DASHBOARD & WIDGET CONFIGURATIONS =============
+
+model Dashboard {
+  id                  String          @id @default(cuid())
+  name                String
+  description         String?         @db.Text
+  type                DashboardType   @default(CUSTOM)
+  
+  // Layout
+  layout              Jsonb?          @db.JsonB // Grid layout configuration
+  refreshInterval     Int?            // Seconds between auto-refresh
+  
+  // Scope
+  scope               DashboardScope? @default(PERSONAL)
+  ownerId             String?
+  
+  // Access Control
+  sharedWith          String[]        @db.Text[] // User IDs
+  editableBy          String[]        @db.Text[] // User IDs that can edit
+  
+  // Widgets
+  widgets             Widget[]
+  
+  // Filters (saved filter state)
+  defaultFilters      Jsonb?          @db.JsonB
+  
+  // Metadata
+  isFavorite          Boolean         @default(false)
+  isDefault           Boolean         @default(false)
+  
+  // Audit
+  createdBy           String?
+  updatedBy           String?
+  deletedAt           DateTime?       @db.Timestamptz
+  
+  createdAt           DateTime        @default(now()) @db.Timestamptz
+  updatedAt           DateTime        @updatedAt @db.Timestamptz
+
+  @@index([scope])
+  @@index([ownerId])
+  @@map("dashboards")
+}
+
+enum DashboardType {
+  CUSTOM
+  EXECUTIVE
+  SOC_OVERVIEW
+  THREAT_INTELLIGENCE
+  INCIDENT_RESPONSE
+  COMPLIANCE
+  OPERATIONS
+  TELECOM_OPERATIONS
+  NETWORK_SECURITY
+  ENDPOINT_SECURITY
+  CLOUD_SECURITY
+  THIRD_RISK
+  SYSTEM_HEALTH
+  REPORTING
+}
+
+enum DashboardScope {
+  GLOBAL
+  TEAM
+  ROLE_BASED
+  PERSONAL
+  PUBLIC
+}
+
+model Widget {
+  id                  String          @id @default(cuid())
+  dashboardId         String
+  dashboard           Dashboard       @relation(fields: [dashboardId], references: [id], onDelete: Cascade)
+  type                WidgetType
+  title               String
+  
+  // Configuration
+  config              Jsonb?          @db.JsonB // Widget-specific configuration
+  dataSource          String?         // Data source identifier
+  query               String?         // Query/filter string
+  
+  // Position & Size
+  positionX           Int             @default(0)
+  positionY           Int             @default(0)
+  width               Int             @default(4)
+  height              Int             @default(3)
+  
+  // State
+  isVisible           Boolean         @default(true)
+  isCollapsed         Boolean         @default(false)
+  
+  // Refresh
+  refreshInterval     Int?            // Override dashboard refresh
+  
+  // Audit
+  createdAt           DateTime        @default(now()) @db.Timestamptz
+  updatedAt           DateTime        @updatedAt @db.Timestamptz
+
+  @@index([dashboardId])
+  @@index([type])
+  @@map("widgets")
+}
+
+enum WidgetType {
+  METRIC_CARD
+  LINE_CHART
+  BAR_CHART
+  PIE_CHART
+  DONUT_CHART
+  AREA_CHART
+  SCATTER_PLOT
+  GAUGE
+  TABLE
+  LIST
+  HEATMAP
+  TREEMAP
+  GEO_MAP
+  TIMELINE
+  FUNNEL
+  SANKEY
+  RADAR
+  STAT_BOX
+  PROGRESS
+  STATUS_GRID
+  ALERT_FEED
+  INCIDENT_LIST
+  THREAT_FEED
+  ASSET_STATUS
+  SYSTEM_HEALTH
+  COMPLIANCE_SCORE
+  TREND_INDICATOR
+  TOP_N
+  COMPARISON
+  KPI_TRACKER
+  SCORECARD
+  TELECOM_TRAFFIC
+  SUBSCRIBER_STATS
+  NETWORK_TOPOLOGY
+  SIGNALING_FLOW
+}
+
+// ============= DATA RETENTION POLICIES =============
+
+model RetentionPolicy {
+  id                  String              @id @default(cuid())
+  name                String
+  description         String?             @db.Text
+  entityType          ResourceType
+  action              RetentionAction     @default(ARCHIVE)
+  
+  // Duration
+  retentionPeriodDays Int
+  gracePeriodDays     Int?                @default(30)
+  
+  // Conditions
+  conditions          Jsonb?              @db.JsonB // Conditions for applying policy
+  filters             Jsonb?              @db.JsonB // Filter criteria
+  
+  // Schedule
+  schedule            String?             // Cron expression
+  lastRun             DateTime?           @db.Timestamptz
+  nextRun             DateTime?           @db.Timestamptz
+  
+  // Statistics
+  recordsProcessed    BigInt              @default(0)
+  recordsArchived     BigInt              @default(0)
+  recordsDeleted      BigInt              @default(0)
+  
+  // Status
+  isEnabled           Boolean             @default(true)
+  isSystemPolicy      Boolean             @default(false) // Cannot be deleted
+  
+  // Audit
+  createdBy           String?
+  updatedBy           String?
+  
+  createdAt           DateTime            @default(now()) @db.Timestamptz
+  updatedAt           DateTime            @updatedAt @db.Timestamptz
+
+  @@index([entityType])
+  @@index([isEnabled])
+  @@map("retention_policies")
+}
+
+enum RetentionAction {
+  ARCHIVE
+  DELETE
+  ANONYMIZE
+  AGGREGATE
+  MOVE_TO_COLD_STORAGE
+  EXPORT_AND_DELETE
+}

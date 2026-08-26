@@ -1,0 +1,337 @@
+# =============================================================================
+# Security Role - Main Tasks
+# Handles: SSL certificates, firewall, SSH hardening, Fail2ban
+# =============================================================================
+---
+
+- name: "SECURITY | Display role start message"
+  debug:
+    msg: "═══ Starting Security Hardening ═══"
+
+# ============================================================================
+# SECTION 1: Firewall Configuration (UFW)
+# ============================================================================
+- name: "SECURITY | Install UFW"
+  package:
+    name: ufw
+    state: present
+  when: ansible_os_family == "Debian"
+  tags: [security-firewall]
+
+- name: "SECURITY | Reset UFW to defaults"
+  ufw:
+    state: reset
+  when: ansible_os_family == "Debian"
+  tags: [security-firewall]
+
+- name: "SECURITY | Configure default UFW policies"
+  ufw:
+    direction: "{{ item.direction }}"
+    policy: "{{ item.policy }}"
+    state: enabled
+  loop:
+    - { direction: incoming, policy: deny }
+    - { direction: outgoing, policy: allow }
+  when: ansible_os_family == "Debian"
+  tags: [security-firewall]
+
+- name: "SECURITY | Allow SSH through firewall"
+  ufw:
+    rule: allow
+    port: "{{ ssh_port }}"
+    proto: tcp
+    comment: "SSH Access"
+  when: ansible_os_family == "Debian"
+  tags: [security-firewall]
+
+- name: "SECURITY | Allow HTTP/HTTPS traffic"
+  ufw:
+    rule: allow
+    port: "{{ item }}"
+    proto: tcp
+    comment: "Web Traffic"
+  loop:
+    - "80"
+    - "443"
+  when: ansible_os_family == "Debian"
+  tags: [security-firewall]
+
+- name: "SECURITY | Allow Docker networks through firewall"
+  ufw:
+    rule: allow
+    direction: in
+    interface: docker0
+    out: ""
+  when: ansible_os_family == "Debian"
+  tags: [security-firewall]
+  ignore_errors: yes
+
+- name: "SECURITY | Allow SOC platform ports"
+  ufw:
+    rule: allow
+    port: "{{ item.port }}"
+    proto: "{{ item.proto | default('tcp') }}"
+    comment: "{{ item.comment }}"
+  loop:
+    - { port: "5432", proto: "tcp", comment: "PostgreSQL" }
+    - { port: "6379", proto: "tcp", comment: "Redis" }
+    - { port: "9200", proto: "tcp", comment: "Elasticsearch" }
+    - { port: "5601", proto: "tcp", comment: "Kibana" }
+    - { port: "3000", proto: "tcp", comment: "Grafana" }
+    - { port: "9090", proto: "tcp", comment: "Prometheus" }
+    - { port: "55000", proto: "tcp", comment: "Wazuh API" }
+    - { port: "9000", proto: "tcp", comment: "TheHive" }
+    - { port: "8081", proto: "tcp", comment: "MISP" }
+  when: 
+    - ansible_os_family == "Debian"
+    - soc_environment != "production" or item.port in ["80", "443"]
+  tags: [security-firewall]
+
+- name: "SECURITY | Enable UFW firewall"
+  ufw:
+    state: enabled
+  when: ansible_os_family == "Debian"
+  tags: [security-firewall]
+
+# ============================================================================
+# SECTION 2: SSH Hardening
+# ============================================================================
+- name: "SECURITY | Create SSH configuration directory"
+  file:
+    path: "{{ ssh_config_dir }}"
+    state: directory
+    mode: '0755'
+  tags: [security-ssh]
+
+- name: "SECURITY | Apply SSH hardening configuration"
+  template:
+    src: sshd-hardening.conf.j2
+    dest: "{{ ssh_config_dir }}/01-hardening.conf"
+    mode: '0644'
+  notify: Restart sshd
+  tags: [security-ssh]
+
+- name: "SECURITY | Disable weak SSH ciphers and MACs"
+  lineinfile:
+    path: /etc/ssh/sshd_config
+    regexp: "^{{ item.key }}"
+    line: "{{ item.key }} {{ item.value }}"
+    state: present
+  loop:
+    - { key: "Ciphers", value: "chacha20-poly1305@openssh.com,aes256-gcm@openssh.com,aes128-gcm@openssh.com,aes256-ctr,aes192-ctr,aes128-ctr" }
+    - { key: "MACs", value: "hmac-sha2-512-etm@openssh.com,hmac-sha2-256-etm@openssh.com,hmac-sha2-512,hmac-sha2-256" }
+    - { key: "KexAlgorithms", value: "curve25519-sha256@libssh.org,ecdh-sha2-nistp521,ecdh-sha2-nistp384,ecdh-sha2-nistp256,diffie-hellman-group-exchange-sha256" }
+  notify: Restart sshd
+  tags: [security-ssh]
+
+# ============================================================================
+# SECTION 3: Fail2Ban Configuration
+# ============================================================================
+- name: "SECURITY | Configure Fail2ban jail for SSH"
+  copy:
+    content: |
+      [DEFAULT]
+      bantime = {{ fail2ban_bantime }}
+      findtime = 600
+      maxretry = {{ fail2ban_maxretry }}
+      backend = systemd
+      banaction = iptables-multiport
+      
+      [sshd]
+      enabled = true
+      port = {{ ssh_port }}
+      filter = sshd
+      logpath = /var/log/auth.log
+      maxretry = 3
+      bantime = 86400
+      
+      [nginx-http-auth]
+      enabled = true
+      filter = nginx-http-auth
+      port = http,https
+      logpath = /var/log/nginx/error.log
+      maxretry = 3
+      
+      [nginx-botsearch]
+      enabled = true
+      filter = nginx-botsearch
+      port = http,https
+      logpath = /var/log/nginx/access.log
+      maxretry = 2
+      
+      [recidive]
+      enabled = true
+      filter = recidive
+      logpath = /var/log/fail2ban.log
+      bantime = 604800
+      findtime = 86400
+      maxretry = 3
+    dest: /etc/fail2ban/jail.local
+    mode: '0644'
+  notify: Restart fail2ban
+  tags: [security-fail2ban]
+
+- name: "SECURITY | Ensure Fail2ban is running"
+  service:
+    name: fail2ban
+    state: started
+    enabled: yes
+  tags: [security-fail2ban]
+
+# ============================================================================
+# SECTION 4: SSL/TLS Certificate Management
+# ============================================================================
+- name: "SECURITY | Create SSL certificate directory"
+  file:
+    path: /opt/soc-platform/certs
+    state: directory
+    mode: '0700'
+    owner: root
+    group: root
+  tags: [security-ssl]
+
+- name: "SECURITY | Install Certbot for Let's Encrypt"
+  apt:
+    name: certbot
+    state: present
+  when: ansible_os_family == "Debian"
+  tags: [security-ssl]
+
+- name: "SECURITY | Generate self-signed certificate for development"
+  command: >
+    openssl req -x509 -nodes -days 365
+    -newkey rsa:4096
+    -keyout /opt/soc-platform/certs/soc-platform.key
+    -out /opt/soc-platform/certs/soc-platform.crt
+    -subj "/C=DZ/O=National SOC/CN={{ inventory_hostname }}"
+    creates: /opt/soc-platform/certs/soc-platform.crt
+  when: soc_environment == "development"
+  tags: [security-ssl]
+
+- name: "SECURITY | Set proper permissions on SSL certificates"
+  file:
+    path: "/opt/soc-platform/certs/{{ item }}"
+    mode: '{{ "0600" if "key" in item else "0644" }}'
+    owner: root
+    group: root
+  loop:
+    - soc-platform.key
+    - soc-platform.crt
+  when: soc_environment == "development"
+  tags: [security-ssl]
+
+# ============================================================================
+# SECTION 5: Security Headers Configuration
+# ============================================================================
+- name: "SECURITY | Create security headers configuration"
+  copy:
+    content: |
+      # Security Headers for SOC Platform
+      add_header X-Frame-Options "SAMEORIGIN" always;
+      add_header X-Content-Type-Options "nosniff" always;
+      add_header X-XSS-Protection "1; mode=block" always;
+      add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+      add_header Content-Security-Policy "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; font-src 'self'; connect-src 'self' wss: https:;" always;
+      add_header Strict-Transport-Security "max-age=31536000; includeSubDomains; preload" always;
+      add_header Permissions-Policy "camera=(), microphone=(), geolocation=()" always;
+    dest: /opt/soc-platform/configs/nginx/security-headers.conf
+    mode: '0644'
+  tags: [security-headers]
+
+# ============================================================================
+# SECTION 6: Automatic Security Updates
+# ============================================================================
+- name: "SECURITY | Configure unattended upgrades (Debian/Ubuntu)"
+  copy:
+    content: |
+      APT::Periodic::Update-Package-Lists "1";
+      APT::Periodic::Unattended-Upgrade "1";
+      APT::Periodic::AutocleanInterval "7";
+      Unattended-Upgrade::AutoFixInterruptedDpkg "true";
+      Unattended-Upgrade::Remove-Unused-Dependencies "true";
+      Unattended-Upgrade::Automatic-Reboot "false";
+      Unattended-Upgrade::Allowed-Origins {
+        "${distro_id}:${distro_codename}-security";
+      };
+    dest: /etc/apt/apt.conf.d/50unattended-upgrades
+    mode: '0644'
+  when: ansible_os_family == "Debian"
+  tags: [security-updates]
+
+- name: "SECURITY | Ensure unattended-upgrades is installed"
+  package:
+    name: unattended-upgrades
+    state: present
+  when: ansible_os_family == "Debian"
+  tags: [security-updates]
+
+- name: "SECURITY | Ensure unattended-upgrades service is running"
+  service:
+    name: unattended-upgrades
+    state: started
+    enabled: yes
+  when: ansible_os_family == "Debian"
+  tags: [security-updates]
+
+# ============================================================================
+# SECTION 7: File Integrity Monitoring
+# ============================================================================
+- name: "SECURITY | Install AIDE for file integrity"
+  package:
+    name: aide
+    state: present
+  when: ansible_os_family == "Debian"
+  tags: [security-integrity]
+
+- name: "SECURITY | Initialize AIDE database"
+  command: aide --init
+  args:
+    creates: /var/lib/aide/aide.db.new
+  when: ansible_os_family == "Debian"
+  register: aide_init
+  tags: [security-integrity]
+
+- name: "SECURITY | Move new AIDE database to active"
+  command: mv /var/lib/aide/aide.db.new /var/lib/aide/aide.db
+  when: 
+    - ansible_os_family == "Debian"
+    - aide_init.changed
+  tags: [security-integrity]
+
+# ============================================================================
+# SECTION 8: Security Verification
+# ============================================================================
+- name: "SECURITY | Run security baseline check"
+  block:
+    - name: "SECURITY | Check if password authentication is disabled"
+      shell: grep "^PasswordAuthentication" /etc/ssh/sshd_config.d/*.conf /etc/ssh/sshd_config 2>/dev/null | head -1 || echo "not found"
+      register: ssh_password_check
+      changed_when: false
+
+    - name: "SECURITY | Check firewall status"
+      command: ufw status
+      register: ufw_status
+      changed_when: false
+      when: ansible_os_family == "Debian"
+
+    - name: "SECURITY | Check Fail2ban status"
+      command: fail2ban-client status sshd
+      register: fail2ban_status
+      changed_when: false
+      ignore_errors: yes
+
+    - name: "SECURITY | Display security status summary"
+      debug:
+        msg: |
+          ┌─────────────────────────────────────────┐
+          │         SECURITY STATUS SUMMARY         │
+          ├─────────────────────────────────────────┤
+          │ SSH Password Auth: {{ 'DISABLED ✓' if 'no' in ssh_password_check.stdout else 'CHECK ✗' }}     │
+          │ Firewall Status:  {{ ufw_status.stdout_lines[0] if ansible_os_family == 'Debian' else 'N/A' }}   │
+          │ Fail2Ban Status:  {{ fail2ban_status.stdout_lines[0] if fail2ban_status.rc == 0 else 'Not running' }} │
+          └─────────────────────────────────────────┘
+  tags: [security-verify]
+
+- name: "SECURITY | Display role completion message"
+  debug:
+    msg: "═══ Security Hardening Complete ═══"

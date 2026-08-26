@@ -1,0 +1,910 @@
+     1→/**
+     2→ * Grafana Alerts API Route
+     3→ * Algeria National SOC Platform 2026-2030
+     4→ * 
+     5→ * Endpoints:
+     6→ * - GET /api/grafana/alerts - List alert rules
+     7→ * - POST /api/grafana/alerts - Create alert rule
+     8→ * - PUT /api/grafana/alerts/[id] - Update alert rule
+     9→ * - DELETE /api/grafana/alerts/[id] - Delete alert rule
+    10→ * - GET /api/grafana/alerts/history - Alert history/incidents
+    11→ * - POST /api/grafana/alerts/pause - Pause/resume alerts
+    12→ */
+    13→
+    14→import { NextRequest, NextResponse } from 'next/server';
+    15→import type {
+    16→  AlertRule,
+    17→  AlertIncident,
+    18→  AlertHistoryEntry,
+    19→  AlertState,
+    20→  GrafanaAPIResponse,
+    21→} from '../../types/grafana.types';
+    22→
+    23→// ============================================================
+    24→// Mock Data for Development
+    25→// ============================================================
+    26→
+    27→/** Mock alert rules for development/testing */
+    28→const mockAlertRules: AlertRule[] = [
+    29→  {
+    30→    id: 1,
+    31→    uid: 'alert-high-events-rate',
+    32→    orgId: 1,
+    33→    folderId: 0,
+    34→    folderUid: 'soc-dashboards',
+    35→    title: 'High Security Events Rate',
+    36→    condition: 'B',
+    37→    data: [
+    38→      {
+    39→        refId: 'A',
+    40→        datasource: { type: 'prometheus', uid: 'prometheus' },
+    41→        queryType: '',
+    42→        model: { refId: 'A', expr: 'sum(rate(wazuh_events_total[5m]))', intervalMs: 30000, maxDataPoints: 43200 },
+    43→      },
+    44→      {
+    45→        refId: 'B',
+    46→        operator: { type: 'and' },
+    47→        conditions: [
+    48→          {
+    49→            type: 'query',
+    50→            query: { params: ['A'] },
+    51→            reducer: { type: 'last', params: [] },
+    52→            evaluator: { type: 'gt', params: [1000] },
+    53→          },
+    54→        ],
+    55→      },
+    56→    ],
+    57→    ruleGroup: 'SOC Critical Alerts',
+    58→    noDataState: 'NoData',
+    59→    execErrState: 'Alerting',
+    60→    for: '5m',
+    61→    annotations: {
+    62→      summary: 'Security events rate is above threshold ({{ $value }} events/min)',
+    63→      description: 'The security events rate has exceeded 1000 events per minute for more than 5 minutes.\n\n**Dashboard:** [SOC Overview](/d/soc-overview)\n\n**Action Required:** Investigate potential security incident.',
+    64→    },
+    65→    labels: { severity: 'critical', team: 'soc-tier1' },
+    66→    isPaused: false,
+    67→    currentState: 'ok',
+    68→    stateSince: '2026-02-14T10:30:00Z',
+    69→    stateChangesCount: 12,
+    70→    intervalSeconds: 60,
+    71→    notifications: [
+    72→      { uid: 'slack-soc-alerts', resolvedMessage: false, groupWait: '30s', groupInterval: '5m' },
+    73→      { uid: 'email-oncall', resolvedMessage: true, groupWait: '5m', groupInterval: '15m' },
+    74→    ],
+    75→    created: '2026-01-15T08:00:00Z',
+    76→    updated: '2026-02-14T08:00:00Z',
+    77→    version: 3,
+    78→    health: 'ok',
+    79→    lastEvaluation: '2026-02-14T12:34:56Z',
+    80→    nextEvaluation: '2026-02-14T12:35:56Z',
+    81→  },
+    82→  {
+    83→    id: 2,
+    84→    uid: 'alert-critical-wazuh-alerts',
+    85→    orgId: 1,
+    86→    folderId: 0,
+    87→    folderUid: 'soc-dashboards',
+    88→    title: 'Critical Wazuh Alerts Detected',
+    89→    condition: 'B',
+    90→    data: [
+    91→      {
+    92→        refId: 'A',
+    93→        datasource: { type: 'prometheus', uid: 'prometheus' },
+    94→        queryType: '',
+    95→        model: { refId: 'A', expr: 'wazuh_alerts{level="critical"}', intervalMs: 60000, maxDataPoints: 43200 },
+    96→      },
+    97→      {
+    98→        refId: 'B',
+    99→        operator: { type: 'and' },
+   100→        conditions: [
+   101→          {
+   102→            type: 'query',
+   103→            query: { params: ['A'] },
+   104→            reducer: { type: 'count', params: [] },
+   105→            evaluator: { type: 'gt', params: [0] },
+   106→          },
+   107→        ],
+   108→      },
+   109→    ],
+   110→    ruleGroup: 'SOC Critical Alerts',
+   111→    noDataState: 'NoData',
+   112→    execErrState: 'Alerting',
+   113→    for: '1m',
+   114→    annotations: {
+   115→      summary: '{{ $value }} critical Wazuh alerts detected',
+   116→      description: 'Critical level alerts have been detected by Wazuh SIEM.\n\n**Immediate investigation required.**\n\n[View in Wazuh](/wazuh)',
+   117→    },
+   118→    labels: { severity: 'critical', source: 'wazuh', team: 'soc-tier2' },
+   119→    isPaused: false,
+   120→    currentState: 'alerting',
+   121→    stateSince: '2026-02-14T11:45:00Z',
+   122→    stateChangesCount: 28,
+   123→    intervalSeconds: 60,
+   124→    notifications: [
+   125→      { uid: 'slack-critical', resolvedMessage: false, groupWait: '10s', groupInterval: '1m' },
+   126→      { uid: 'pagerduty-soc', resolvedMessage: true, groupWait: '30s', groupInterval: '5m' },
+   127→    ],
+   128→    created: '2026-01-15T08:00:00Z',
+   129→    updated: '2026-02-13T16:20:00Z',
+   130→    version: 7,
+   131→    health: 'ok',
+   132→    lastEvaluation: '2026-02-14T12:34:50Z',
+   133→    nextEvaluation: '2026-02-14T12:35:50Z',
+   134→  },
+   135→  {
+   136→    id: 3,
+   137→    uid: 'alert-suricata-intrusion',
+   138→    orgId: 1,
+   139→    folderId: 0,
+   140→    folderUid: 'soc-dashboards',
+   141→    title: 'Suricata Intrusion Detection Alert',
+   142→    condition: 'B',
+   143→    data: [
+   144→      {
+   145→        refId: 'A',
+   146→        datasource: { type: 'prometheus', uid: 'prometheus' },
+   147→        queryType: '',
+   148→        model: { refId: 'A', expr: 'suricata_alerts{action="blocked"}', intervalMs: 30000, maxDataPoints: 43200 },
+   149→      },
+   150→      {
+   151→        refId: 'B',
+   152→        operator: { type: 'and' },
+   153→        conditions: [
+   154→          {
+   155→            type: 'query',
+   156→            query: { params: ['A'] },
+   157→            reducer: { type: 'count', params: [] },
+   158→            evaluator: { type: 'gt', params: [10] },
+   159→          },
+   160→        ],
+   161→      },
+   162→    ],
+   163→    ruleGroup: 'Network Security Alerts',
+   164→    noDataState: 'NoData',
+   165→    execErrState: 'Alerting',
+   166→    for: '3m',
+   167→    annotations: {
+   168→      summary: 'Multiple intrusion attempts blocked ({{ $value }} in 3min)',
+   169→      description: 'Suricata has blocked multiple intrusion attempts within a short time window.\n\n**Possible attack pattern detected.**\n\n[View Suricata Dashboard](/d/suricata-ids)',
+   170→    },
+   171→    labels: { severity: 'high', source: 'suricata', category: 'network' },
+   172→    isPaused: false,
+   173→    currentState: 'ok',
+   174→    stateSince: '2026-02-14T09:15:00Z',
+   175→    stateChangesCount: 8,
+   176→    intervalSeconds: 30,
+   177→    notifications: [
+   178→      { uid: 'slack-network', resolvedMessage: false, groupWait: '30s', groupInterval: '5m' },
+   179→    ],
+   180→    created: '2026-01-20T10:00:00Z',
+   181→    updated: '2026-02-14T07:30:00Z',
+   182→    version: 4,
+   183→    health: 'ok',
+   184→    lastEvaluation: '2026-02-14T12:34:55Z',
+   185→    nextEvaluation: '2026-02-14T12:35:25Z',
+   186→  },
+   187→  {
+   188→    id: 4,
+   189→    uid: 'alert-misp-ioc-match',
+   190→    orgId: 1,
+   191→    folderId: 0,
+   192→    folderUid: 'soc-dashboards',
+   193→    title: 'MISP IOC Match Detected',
+   194→    condition: 'B',
+   195→    data: [
+   196→      {
+   197→        refId: 'A',
+   198→        datasource: { type: 'elasticsearch', uid: 'elasticsearch' },
+   199→        queryType: '',
+   200→        model: { refId: 'A', index: 'wazuh-alerts-*', query: { bool: { must: [{ match: { "rule.misp_matched": true } }] } } },
+   201→      },
+   202→      {
+   203→        refId: 'B',
+   204→        operator: { type: 'and' },
+   205→        conditions: [
+   206→          {
+   207→            type: 'query',
+   208→            query: { params: ['A'] },
+   209→            reducer: { type: 'count', params: [] },
+   210→            evaluator: { type: 'gt', params: [0] },
+   211→          },
+   212→        ],
+   213→      },
+   214→    ],
+   215→    ruleGroup: 'Threat Intelligence Alerts',
+   216→    noDataState: 'NoData',
+   217→    execErrState: 'Ok',
+   218→    for: '0s',
+   219→    annotations: {
+   220→      summary: 'Threat intelligence IOC match found',
+   221→      description: 'An indicator of compromise from MISP has been matched in recent logs.\n\n**Review immediately for potential breach.**\n\n[View MISP Event](/misp)',
+   222→    },
+   223→    labels: { severity: 'critical', source: 'misp', category: 'threat-intel' },
+   224→    isPaused: false,
+   225→    currentState: 'ok',
+   226→    stateSince: '2026-02-13T18:22:00Z',
+   227→    stateChangesCount: 5,
+   228→    intervalSeconds: 120,
+   229→    notifications: [
+   230→      { uid: 'slack-threat-intel', resolvedMessage: false, groupWait: '10s', groupInterval: '1m' },
+   231→      { uid: 'email-analysts', resolvedMessage: true, groupWait: '5m', groupInterval: '30m' },
+   232→    ],
+   233→    created: '2026-02-01T14:00:00Z',
+   234→    updated: '2026-02-14T06:00:00Z',
+   235→    version: 2,
+   236→    health: 'ok',
+   237→    lastEvaluation: '2026-02-14T12:33:00Z',
+   238→    nextEvaluation: '2026-02-14T12:35:00Z',
+   239→  },
+   240→  {
+   241→    id: 5,
+   242→    uid: 'alert-system-memory-high',
+   243→    orgId: 1,
+   244→    folderId: 0,
+   245→    folderUid: 'system-monitoring',
+   246→    title: 'System Memory Usage High',
+   247→    condition: 'B',
+   248→    data: [
+   249→      {
+   250→        refId: 'A',
+   251→        datasource: { type: 'prometheus', uid: 'prometheus' },
+   252→        queryType: '',
+   253→        model: { refId: 'A', expr: '(1 - (node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes)) * 100', intervalMs: 15000, maxDataPoints: 43200 },
+   254→      },
+   255→      {
+   256→        refId: 'B',
+   257→        operator: { type: 'and' },
+   258→        conditions: [
+   259→          {
+   260→            type: 'query',
+   261→            query: { params: ['A'] },
+   262→            reducer: { type: 'avg', params: [] },
+   263→            evaluator: { type: 'gt', params: [90] },
+   264→          },
+   265→        ],
+   266→      },
+   267→    ],
+   268→    ruleGroup: 'Infrastructure Alerts',
+   269→    noDataState: 'NoData',
+   270→    execErrState: 'Alerting',
+   271→    for: '10m',
+   272→    annotations: {
+   273→      summary: 'Memory usage on {{ $labels.instance }} is {{ $value }}%',
+   274→      description: 'System memory usage has been above 90% for more than 10 minutes.\n\n**Potential memory leak or resource exhaustion.**\n\nInstance: {{ $labels.instance }}',
+   275→    },
+   276→    labels: { severity: 'warning', category: 'infrastructure' },
+   277→    isPaused: true,
+   278→    currentState: 'paused',
+   279→    stateSince: '2026-02-10T20:00:00Z',
+   280→    stateChangesCount: 3,
+   281→    intervalSeconds: 60,
+   282→    notifications: [
+   283→      { uid: 'email-ops', resolvedMessage: true, groupWait: '15m', groupInterval: '1h' },
+   284→    ],
+   285→    created: '2026-01-10T09:00:00Z',
+   286→    updated: '2026-02-10T20:05:00Z',
+   287→    version: 5,
+   288→    health: 'nodata',
+   289→    lastEvaluation: '2026-02-10T20:04:59Z',
+   290→    nextEvaluation: null as unknown as string,
+   291→  },
+   292→  {
+   293→    id: 6,
+   294→    uid: 'alert-thehive-new-case',
+   295→    orgId: 1,
+   296→    folderId: 0,
+   297→    folderUid: 'soc-dashboards',
+   298→    title: 'New TheHive Case Created',
+   299→    condition: 'B',
+   300→    data: [
+   301→      {
+   302→        refId: 'A',
+   303→        datasource: { type: 'prometheus', uid: 'prometheus' },
+   304→        queryType: '',
+   305→        model: { refId: 'A', expr: 'thehive_cases_created_total', intervalMs: 60000, maxDataPoints: 1440 },
+   306→      },
+   307→      {
+   308→        refId: 'B',
+   309→        operator: { type: 'and' },
+   310→        conditions: [
+   311→          {
+   312→            type: 'query',
+   313→            query: { params: ['A'] },
+   314→            reducer: { type: 'increase', params: ['5m'] },
+   315→            evaluator: { type: 'gt', params: [0] },
+   316→          },
+   317→        ],
+   318→      },
+   319→    ],
+   320→    ruleGroup: 'Incident Response Alerts',
+   321→    noDataState: 'NoData',
+   322→    execErrState: 'Ok',
+   323→    for: '0s',
+   324→    annotations: {
+   325→      summary: '{{ $value }} new case(s) created in TheHive',
+   326→      description: 'New incident case(s) have been created in TheHive SOAR platform.\n\n[View Cases](/thehive)',
+   327→    },
+   328→    labels: { severity: 'info', source: 'thehive', category: 'incident-response' },
+   329→    isPaused: false,
+   330→    currentState: 'ok',
+   331→    stateSince: '2026-02-14T11:00:00Z',
+   332→    stateChangesCount: 45,
+   333→    intervalSeconds: 60,
+   334→    notifications: [
+   335→      { uid: 'slack-incidents', resolvedMessage: false, groupWait: '1m', groupInterval: '10m' },
+   336→    ],
+   337→    created: '2026-01-15T08:00:00Z',
+   338→    updated: '2026-02-14T08:00:00Z',
+   339→    version: 2,
+   340→    health: 'ok',
+   341→    lastEvaluation: '2026-02-14T12:34:58Z',
+   342→    nextEvaluation: '2026-02-14T12:35:58Z',
+   343→  },
+   344→];
+   345→
+   346→/** Mock alert incidents */
+   347→const mockIncidents: AlertIncident[] = [
+   348→  {
+   349→    id: 1001,
+   350→    alertRuleUID: 'alert-critical-wazuh-alerts',
+   351→    ruleName: 'Critical Wazuh Alerts Detected',
+   352→    orgId: 1,
+   353→    startedAt: '2026-02-14T11:45:00Z',
+   354→    endedAt: undefined,
+   355→    stateDuringIncident: 'alerting',
+   356→    currentState: 'alerting',
+   357→    labels: { severity: 'critical', source: 'wazuh' },
+   358→    annotations: {},
+   359→    severity: 'critical',
+   360→  },
+   361→  {
+   362→    id: 1002,
+   363→    alertRuleUID: 'alert-suricata-intrusion',
+   364→    ruleName: 'Suricata Intrusion Detection Alert',
+   365→    orgId: 1,
+   366→    startedAt: '2026-02-14T03:22:00Z',
+   367→    endedAt: '2026-02-14T04:15:00Z',
+   368→    stateDuringIncident: 'alerting',
+   369→    currentState: 'ok',
+   370→    labels: { severity: 'high', source: 'suricata' },
+   371→    annotations: {},
+   372→    severity: 'high',
+   373→  },
+   374→  {
+   375→    id: 1003,
+   376→    alertRuleUID: 'alert-misp-ioc-match',
+   377→    ruleName: 'MISP IOC Match Detected',
+   378→    orgId: 1,
+   379→    startedAt: '2026-02-13T18:22:00Z',
+   380→    endedAt: '2026-02-13T19:45:00Z',
+   381→    stateDuringIncident: 'alerting',
+   382→    currentState: 'ok',
+   383→    labels: { severity: 'critical', source: 'misp' },
+   384→    annotations: {},
+   385→    severity: 'critical',
+   386→  },
+   387→];
+   388→
+   389→/** Mock alert history */
+   390→const mockHistory: AlertHistoryEntry[] = [
+   391→  {
+   392→    id: 5001,
+   393→    timestamp: '2026-02-14T11:45:23Z',
+   394→    previousState: 'ok',
+   395→    newState: 'alerting',
+   396→    ruleId: 2,
+   397→    ruleUID: 'alert-critical-wazuh-alerts',
+   398→    ruleName: 'Critical Wazuh Alerts Detected',
+   399→    ruleGroup: 'SOC Critical Alerts',
+   400→    folderId: 0,
+   401→    orgId: 1,
+   402→    info: 'Alert Rule State Changed',
+   403→    durationSeconds: 0,
+   404→    labels: { severity: 'critical' },
+   405→    annotations: {},
+   406→    data: { evaluatedAt: '2026-02-14T11:45:23Z', values: [5] },
+   407→    version: 1,
+   408→  },
+   409→  {
+   410→    id: 5002,
+   411→    timestamp: '2026-02-14T09:15:00Z',
+   412→    previousState: 'alerting',
+   413→    newState: 'ok',
+   414→    ruleId: 3,
+   415→    ruleUID: 'alert-suricata-intrusion',
+   416→    ruleName: 'Suricata Intrusion Detection Alert',
+   417→    ruleGroup: 'Network Security Alerts',
+   418→    folderId: 0,
+   419→    orgId: 1,
+   420→    info: 'Alert Rule State Changed',
+   421→    durationSeconds: 3600,
+   422→    labels: { severity: 'high' },
+   423→    annotations: {},
+   424→    data: { evaluatedAt: '2026-02-14T09:15:00Z', values: [0] },
+   425→    version: 1,
+   426→  },
+   427→  {
+   428→    id: 5003,
+   429→    timestamp: '2026-02-14T08:22:33Z',
+   430→    previousState: 'ok',
+   431→    newState: 'alerting',
+   432→    ruleId: 3,
+   433→    ruleUID: 'alert-suricata-intrusion',
+   434→    ruleName: 'Suricata Intrusion Detection Alert',
+   435→    ruleGroup: 'Network Security Alerts',
+   436→    folderId: 0,
+   437→    orgId: 1,
+   438→    info: 'Alert Rule State Changed',
+   439→    durationSeconds: 0,
+   440→    labels: { severity: 'high' },
+   441→    annotations: {},
+   442→    data: { evaluatedAt: '2026-02-14T08:22:33Z', values: [15] },
+   443→    version: 1,
+   444→  },
+   445→  {
+   446→    id: 5004,
+   447→    timestamp: '2026-02-13T19:45:12Z',
+   448→    previousState: 'alerting',
+   449→    newState: 'ok',
+   450→    ruleId: 4,
+   451→    ruleUID: 'alert-misp-ioc-match',
+   452→    ruleName: 'MISP IOC Match Detected',
+   453→    ruleGroup: 'Threat Intelligence Alerts',
+   454→    folderId: 0,
+   455→    orgId: 1,
+   456→    info: 'Alert Rule State Changed',
+   457→    durationSeconds: 4692,
+   458→    labels: { severity: 'critical' },
+   459→    annotations: {},
+   460→    data: { evaluatedAt: '2026-02-13T19:45:12Z', values: [0] },
+   461→    version: 1,
+   462→  },
+   463→  {
+   464→    id: 5005,
+   465→    timestamp: '2026-02-13T18:22:45Z',
+   466→    previousState: 'ok',
+   467→    newState: 'alerting',
+   468→    ruleId: 4,
+   469→    ruleUID: 'alert-misp-ioc-match',
+   470→    ruleName: 'MISP IOC Match Detected',
+   471→    ruleGroup: 'Threat Intelligence Alerts',
+   472→    folderId: 0,
+   473→    orgId: 1,
+   474→    info: 'Alert Rule State Changed',
+   475→    durationSeconds: 0,
+   476→    labels: { severity: 'critical' },
+   477→    annotations: {},
+   478→    data: { evaluatedAt: '2026-02-13T18:22:45Z', values: [3] },
+   479→    version: 1,
+   480→  },
+   481→];
+   482→
+   483→// ============================================================
+   484→// Helper Functions
+   485→// ============================================================
+   486→
+   487→/** Create standardized API response */
+   488→function createApiResponse<T>(
+   489→  data: T,
+   490→  status: number = 200,
+   491→  message?: string
+   492→): NextResponse<GrafanaAPIResponse<T>> {
+   493→  return NextResponse.json(
+   494→    {
+   495→      success: status >= 200 && status < 300,
+   496→      message: message || (status >= 200 && status < 300 ? 'Success' : 'Error'),
+   497→      data,
+   498→    },
+   499→    { status }
+   500→  );
+   501→}
+   502→
+   503→/** Parse search parameters */
+   504→function parseSearchParams(request: NextRequest): {
+   505→  state?: AlertState;
+   506→  limit?: number;
+   507→  page?: number;
+   508→  query?: string;
+   509→} {
+   510→  const { searchParams } = new URL(request.url);
+   511→  
+   512→  return {
+   513→    state: searchParams.get('state') as AlertState | undefined,
+   514→    limit: parseInt(searchParams.get('limit') || '50', 10),
+   515→    page: parseInt(searchParams.get('page') || '1', 10),
+   516→    query: searchParams.get('query') || undefined,
+   517→  };
+   518→}
+   519→
+   520→/** Filter alerts based on parameters */
+   521→function filterAlerts(params: ReturnType<typeof parseSearchParams>): {
+   522→  alerts: AlertRule[];
+   523→  total: number;
+   524→} {
+   525→  let filtered = [...mockAlertRules];
+   526→  
+   527→  if (params.state) {
+   528→    filtered = filtered.filter(a => 
+   529→      a.currentState === params.state ||
+   530→      (params.state === 'paused' && a.isPaused)
+   531→    );
+   532→  }
+   533→  
+   534→  if (params.query) {
+   535→    const query = params.query.toLowerCase();
+   536→    filtered = filtered.filter(a =>
+   537→      a.title.toLowerCase().includes(query) ||
+   538→      a.ruleGroup.toLowerCase().includes(query) ||
+   539→      Object.values(a.labels).some(l => String(l).toLowerCase().includes(query))
+   540→    );
+   541→  }
+   542→  
+   543→  const total = filtered.length;
+   544→  const limit = params.limit || 50;
+   545→  const page = params.page || 1;
+   546→  const start = (page - 1) * limit;
+   547→  
+   548→  return {
+   549→    alerts: filtered.slice(start, start + limit),
+   550→    total,
+   551→  };
+   552→}
+   553→
+   554→// ============================================================
+   555→// API Handlers
+   556→// ============================================================
+   557→
+   558→/**
+   559→ * GET /api/grafana/alerts
+   560→ * List all alert rules with optional filtering
+   561→ */
+   562→export async function GET(request: NextRequest): Promise<NextResponse> {
+   563→  try {
+   564→    const { searchParams } = new URL(request.url);
+   565→    const action = searchParams.get('action');
+   566→
+   567→    // Handle different actions
+   568→    if (action === 'history') {
+   569→      return getAlertHistory(request);
+   570→    }
+   571→
+   572→    if (action === 'incidents') {
+   573→      return getAlertIncidents(request);
+   574→    }
+   575→
+   576→    if (action === 'summary') {
+   577→      return getAlertSummary();
+   578→    }
+   579→
+   580→    // Default: list alert rules
+   581→    const params = parseSearchParams(request);
+   582→    const { alerts, total } = filterAlerts(params);
+   583→
+   584→    // Calculate summary stats
+   585→    const summary = {
+   586→      total: mockAlertRules.length,
+   587→      byState: {
+   588→        ok: mockAlertRules.filter(a => a.currentState === 'ok').length,
+   589→        alerting: mockAlertRules.filter(a => a.currentState === 'alerting').length,
+   590→        paused: mockAlertRules.filter(a => a.isPaused).length,
+   591→        nodata: mockAlertRules.filter(a => a.health === 'nodata').length,
+   592→        error: mockAlertRules.filter(a => a.health === 'error').length,
+   593→      },
+   594→      bySeverity: {
+   595→        critical: mockAlertRules.filter(a => a.labels.severity === 'critical').length,
+   596→        high: mockAlertRules.filter(a => a.labels.severity === 'high').length,
+   597→        warning: mockAlertRules.filter(a => a.labels.severity === 'warning').length,
+   598→        info: mockAlertRules.filter(a => a.labels.severity === 'info').length,
+   599→      },
+   600→    };
+   601→
+   602→    return createApiResponse({
+   603→      items: alerts,
+   604→      total,
+   605→      page: params.page || 1,
+   606→      pageSize: params.limit || 50,
+   607→      totalPages: Math.ceil(total / (params.limit || 50)),
+   608→      summary,
+   609→    });
+   610→  } catch (error) {
+   611→    console.error('Error fetching alerts:', error);
+   612→    return createApiResponse(
+   613→      { error: 'Failed to fetch alerts' } as unknown as never,
+   614→      500,
+   615→      'Internal server error'
+   616→    );
+   617→  }
+   618→}
+   619→
+   620→/**
+   621→ * POST /api/grafana/alerts
+   622→ * Create new alert rule or batch operations
+   623→ */
+   624→export async function POST(request: NextRequest): Promise<NextResponse> {
+   625→  try {
+   626→    const body = await request.json();
+   627→    const { action, ...alertData } = body;
+   628→
+   629→    if (action === 'pause') {
+   630→      return handlePauseResume(alertData);
+   631→    }
+   632→
+   633→    if (action === 'batch-pause') {
+   634→      return handleBatchPauseResume(alertData);
+   635→    }
+   636→
+   637→    // Create new alert rule
+   638→    const newAlert: AlertRule = {
+   639→      id: mockAlertRules.length + 1,
+   640→      uid: `alert-${Date.now()}`,
+   641→      orgId: 1,
+   642→      folderId: body.folderId || 0,
+   643→      folderUid: body.folderUid || 'default',
+   644→      title: body.title || 'Untitled Alert',
+   645→      condition: body.condition || 'B',
+   646→      data: body.data || [],
+   647→      ruleGroup: body.ruleGroup || 'Default',
+   648→      noDataState: body.noDataState || 'NoData',
+   649→      execErrState: body.execErrState || 'Alerting',
+   650→      for: body.for || '5m',
+   651→      annotations: body.annotations || {},
+   652→      labels: body.labels || {},
+   653→      isPaused: body.isPaused ?? false,
+   654→      currentState: 'normal',
+   655→      stateSince: new Date().toISOString(),
+   656→      stateChangesCount: 0,
+   657→      intervalSeconds: body.intervalSeconds || 60,
+   658→      notifications: body.notifications || [],
+   659→      created: new Date().toISOString(),
+   660→      updated: new Date().toISOString(),
+   661→      version: 1,
+   662→      health: 'ok',
+   663→    };
+   664→
+   665→    mockAlertRules.push(newAlert);
+   666→
+   667→    return createApiResponse(newAlert, 201, 'Alert rule created successfully');
+   668→  } catch (error) {
+   669→    console.error('Error creating alert:', error);
+   670→    return createApiResponse(
+   671→      { error: 'Failed to create alert rule' } as unknown as never,
+   672→      400,
+   673→      'Invalid request body'
+   674→    );
+   675→  }
+   676→}
+   677→
+   678→/**
+   679→ * Get alert history entries
+   680→ */
+   681→async function getAlertHistory(request: NextRequest): Promise<NextResponse> {
+   682→  const { searchParams } = new URL(request.url);
+   683→  const limit = parseInt(searchParams.get('limit') || '50', 10);
+   684→  const page = parseInt(searchParams.get('page') || '1', 10);
+   685→
+   686→  const start = (page - 1) * limit;
+   687→  const paginatedHistory = mockHistory.slice(start, start + limit);
+   688→
+   689→  return createApiResponse({
+   690→    items: paginatedHistory,
+   691→    total: mockHistory.length,
+   692→    page,
+   693→    pageSize: limit,
+   694→    totalPages: Math.ceil(mockHistory.length / limit),
+   695→  });
+   696→}
+   697→
+   698→/**
+   699→ * Get active alert incidents
+   700→ */
+   701→async function getAlertIncidents(request: NextRequest): Promise<NextResponse> {
+   702→  const { searchParams } = new URL(request.url);
+   703→  const state = searchParams.get('state') as AlertState | undefined;
+   704→
+   705→  let incidents = [...mockIncidents];
+   706→  
+   707→  if (state) {
+   708→    incidents = incidents.filter(i => i.stateDuringIncident === state);
+   709→  }
+   710→
+   711→  return createApiResponse({
+   712→    items: incidents,
+   713→    total: incidents.length,
+   714→  });
+   715→}
+   716→
+   717→/**
+   718→ * Get alert summary statistics
+   719→ */
+   720→function getAlertSummary(): NextResponse {
+   721→  const now = new Date();
+   722→  const oneHourAgo = new Date(now.getTime() - 60 * 60 * 1000);
+   723→  const twentyFourHoursAgo = new Date(now.getTime() - 24 * 60 * 60 * 1000);
+   724→
+   725→  return createApiResponse({
+   726→    totalRules: mockAlertRules.length,
+   727→    activeRules: mockAlertRules.filter(a => !a.isPaused).length,
+   728→    pausedRules: mockAlertRules.filter(a => a.isPaused).length,
+   729→    currentlyAlerting: mockAlertRules.filter(a => a.currentState === 'alerting').length,
+   730→    healthyRules: mockAlertRules.filter(a => a.health === 'ok').length,
+   731→    unhealthyRules: mockAlertRules.filter(a => a.health !== 'ok').length,
+   732→    states: {
+   733→      ok: mockAlertRules.filter(a => a.currentState === 'ok').length,
+   734→      alerting: mockAlertRules.filter(a => a.currentState === 'alerting').length,
+   735→      pending: mockAlertRules.filter(a => a.currentState === 'pending').length,
+   736→      paused: mockAlertRules.filter(a => a.isPaused).length,
+   737→    },
+   738→    severities: {
+   739→      critical: mockAlertRules.filter(a => a.labels.severity === 'critical'),
+   740→      high: mockAlertRules.filter(a => a.labels.severity === 'high'),
+   741→      warning: mockAlertRules.filter(a => a.labels.severity === 'warning'),
+   742→      info: mockAlertRules.filter(a => a.labels.severity === 'info'),
+   743→    },
+   744→    activeIncidents: mockIncidents.filter(i => !i.endedAt),
+   745→    incidentsLast24h: mockIncidents.filter(
+   746→      i => new Date(i.startedAt) > twentyFourHoursAgo
+   747→    ).length,
+   748→    stateChangesLastHour: mockHistory.filter(
+   749→      h => new Date(h.timestamp) > oneHourAgo
+   750→    ).length,
+   751→  });
+   752→}
+   753→
+   754→/**
+   755→ * Handle pause/resume single alert
+   756→ */
+   757→function handlePauseResume(data: Record<string, unknown>): NextResponse {
+   758→  const { uid, paused } = data;
+   759→
+   760→  if (!uid || typeof paused !== 'boolean') {
+   761→    return createApiResponse(null, 400, 'uid and paused fields are required');
+   762→  }
+   763→
+   764→  const alertIndex = mockAlertRules.findIndex(a => a.uid === uid);
+   765→  
+   766→  if (alertIndex === -1) {
+   767→    return createApiResponse(null, 404, 'Alert rule not found');
+   768→  }
+   769→
+   770→  mockAlertRules[alertIndex].isPaused = paused;
+   771→  mockAlertRules[alertIndex].currentState = paused ? 'paused' : 'ok';
+   772→  mockAlertRules[alertIndex].updated = new Date().toISOString();
+   773→
+   774→  return createApiResponse({
+   775→    ...mockAlertRules[alertIndex],
+   776→    message: `Alert ${paused ? 'paused' : 'resumed'} successfully`,
+   777→  });
+   778→}
+   779→
+   780→/**
+   781→ * Handle batch pause/resume
+   782→ */
+   783→function handleBatchPauseResume(data: Record<string, unknown>): NextResponse {
+   784→  const { uids, paused } = data;
+   785→
+   786→  if (!Array.isArray(uids) || typeof paused !== 'boolean') {
+   787→    return createApiResponse(null, 400, 'uids array and paused boolean are required');
+   788→  }
+   789→
+   790→  let successCount = 0;
+   791→  let failedCount = 0;
+   792→  const errors: Array<{ item: string; reason: string }> = [];
+   793→
+   794→  uids.forEach((uid: unknown) => {
+   795→    const alertIndex = mockAlertRules.findIndex(a => a.uid === uid);
+   796→    
+   797→    if (alertIndex === -1) {
+   798→      failedCount++;
+   799→      errors.push({ item: String(uid), reason: 'Alert not found' });
+   800→      return;
+   801→    }
+   802→
+   803→    mockAlertRules[alertIndex].isPaused = paused;
+   804→    mockAlertRules[alertIndex].currentState = paused ? 'paused' : 'ok';
+   805→    mockAlertRules[alertIndex].updated = new Date().toISOString();
+   806→    successCount++;
+   807→  });
+   808→
+   809→  return createApiResponse({
+   810→    successCount,
+   811→    failedCount,
+   812→    errors,
+   813→    message: `${successCount} alerts ${paused ? 'paused' : 'resumed'}, ${failedCount} failed`,
+   814→  });
+   815→}
+   816→
+   817→/**
+   818→ * Handle individual alert operations by ID
+   819→ */
+   820→export async function alertByID(
+   821→  request: NextRequest,
+   822→  { params }: { params: { id: string } }
+   823→): Promise<NextResponse> {
+   824→  const id = params.id;
+   825→
+   826→  switch (request.method) {
+   827→    case 'GET':
+   828→      return getAlertByID(id);
+   829→    case 'PUT':
+   830→      return updateAlert(id, request);
+   831→    case 'DELETE':
+   832→      return deleteAlert(id);
+   833→    default:
+   834→      return createApiResponse(null, 405, 'Method not allowed');
+   835→  }
+   836→}
+   837→
+   838→/**
+   839→ * Get single alert by ID
+   840→ */
+   841→async function getAlertByID(id: string): Promise<NextResponse> {
+   842→  const alert = mockAlertRules.find(a => a.id === parseInt(id, 10));
+   843→
+   844→  if (!alert) {
+   845→    return createApiResponse(null, 404, 'Alert rule not found');
+   846→  }
+   847→
+   848→  return createApiResponse(alert);
+   849→}
+   850→
+   851→/**
+   852→ * Update alert by ID
+   853→ */
+   854→async function updateAlert(id: string, request: NextRequest): Promise<NextResponse> {
+   855→  const alertIndex = mockAlertRules.findIndex(a => a.id === parseInt(id, 10));
+   856→
+   857→  if (alertIndex === -1) {
+   858→    return createApiResponse(null, 404, 'Alert rule not found');
+   859→  }
+   860→
+   861→  try {
+   862→    const updates = await request.json();
+   863→
+   864→    mockAlertRules[alertIndex] = {
+   865→      ...mockAlertRules[alertIndex],
+   866→      ...(updates.title && { title: updates.title }),
+   867→      ...(updates.annotations && { annotations: updates.annotations }),
+   868→      ...(updates.labels && { labels: updates.labels }),
+   869→      ...(updates.isPaused !== undefined && { isPaused: updates.isPaused }),
+   870→      ...(updates.condition && { condition: updates.condition }),
+   871→      ...(updates.data && { data: updates.data }),
+   872→      ...(updates.for && { for: updates.for }),
+   873→      ...(updates.noDataState && { noDataState: updates.noDataState }),
+   874→      ...(updates.execErrState && { execErrState: updates.execErrState }),
+   875→      ...(updates.notifications && { notifications: updates.notifications }),
+   876→      updated: new Date().toISOString(),
+   877→      version: mockAlertRules[alertIndex].version + 1,
+   878→    };
+   879→
+   880→    return createApiResponse(mockAlertRules[alertIndex]);
+   881→  } catch (error) {
+   882→    return createApiResponse(
+   883→      { error: 'Invalid request body' } as unknown as never,
+   884→      400,
+   885→      'Invalid request body'
+   886→    );
+   887→  }
+   888→}
+   889→
+   890→/**
+   891→ * Delete alert by ID
+   892→ */
+   893→async function deleteAlert(id: string): Promise<NextResponse> {
+   894→  const alertIndex = mockAlertRules.findIndex(a => a.id === parseInt(id, 10));
+   895→
+   896→  if (alertIndex === -1) {
+   897→    return createApiResponse(null, 404, 'Alert rule not found');
+   898→  }
+   899→
+   900→  const deleted = mockAlertRules.splice(alertIndex, 1)[0];
+   901→
+   902→  return createApiResponse({
+   903→    message: 'Alert rule deleted successfully',
+   904→    deleted: deleted,
+   905→  });
+   906→}
+   907→
+   908→// Export handlers for dynamic routes
+   909→export { alertByID as GET, alertByID as PUT, alertByID as DELETE };
+   910→

@@ -1,0 +1,588 @@
+# ============================================================
+# National SOC Platform - Production Gates (Helm Template)
+# Djezzy Production Environment
+# ============================================================
+# This template implements production-grade reliability gates:
+#
+# 1. Readiness Probes - With configurable thresholds
+# 2. Liveness Probes - For container health detection
+# 3. Startup Probes - For slow-starting services
+# 4. PodDisruptionBudget - High availability guarantees
+# 5. HorizontalPodAutoscaler - Automatic scaling targets
+# 6. PodAntiAffinity - Pod distribution across nodes
+#
+# These gates ensure the application is resilient, observable,
+# and can handle production traffic patterns.
+# ============================================================
+
+{{- if .Values.productionGates.enabled }}
+---
+# ============================================================
+# PRODUCTION GATES: READINESS & LIVENESS PROBES
+# ============================================================
+# These probes are applied to the main application deployment.
+# They define how Kubernetes determines if a pod is healthy
+# and ready to receive traffic.
+
+{{/* Merge with existing deployment or create as patch */}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "soc-platform.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "soc-platform.labels" . | nindent 4 }}
+    app.kubernetes.io/component: application-with-gates
+spec:
+  template:
+    spec:
+      # === CONTAINER SPECIFICATION WITH PROBES ===
+      containers:
+        - name: {{ .Chart.Name }}
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          
+          # === PORTS ===
+          ports:
+            - name: http
+              containerPort: {{ .Values.service.targetPort | default 3000 }}
+              protocol: TCP
+            - name: metrics
+              containerPort: {{ .Values.monitoring.prometheus.port | default 3000 }}
+              protocol: TCP
+          
+          # === ENVIRONMENT VARIABLES ===
+          env:
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            - name: NODE_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+          
+          envFrom:
+            - configMapRef:
+                name: {{ include "soc-platform.fullname" . }}-config
+                optional: false
+            - secretRef:
+                name: {{ include "soc-platform.fullname" . }}-secrets
+                optional: false
+          
+          # === RESOURCE REQUESTS & LIMITS ===
+          resources:
+            requests:
+              cpu: {{ .Values.resources.requests.cpu | default "2" }}
+              memory: {{ .Values.resources.requests.memory | default "4Gi" }}
+            limits:
+              cpu: {{ .Values.resources.limits.cpu | default "8" }}
+              memory: {{ .Values.resources.limits.memory | default "16Gi" }}
+          
+          # === LIVENESS PROBE ===
+          # Determines if the container should be restarted.
+          # If this probe fails, kubelet kills and restarts the container.
+          livenessProbe:
+            httpGet:
+              path: {{ .Values.probes.liveness.path | default "/api/health" }}
+              port: http
+              scheme: {{ .Values.probes.liveness.scheme | default "HTTP" }}
+              httpHeaders:
+                - name: X-Probe
+                  value: liveness
+            initialDelaySeconds: {{ .Values.probes.liveness.initialDelaySeconds | default 30 }}
+            periodSeconds: {{ .Values.probes.liveness.periodSeconds | default 15 }}
+            timeoutSeconds: {{ .Values.probes.liveness.timeoutSeconds | default 5 }}
+            failureThreshold: {{ .Values.probes.liveness.failureThreshold | default 3 }}
+            successThreshold: {{ .Values.probes.liveness.successThreshold | default 1 }}
+          
+          # === READINESS PROBE ===
+          # Determines if the container is ready to receive traffic.
+          # If this probe fails, the pod is removed from service endpoints.
+          readinessProbe:
+            httpGet:
+              path: {{ .Values.probes.readiness.path | default "/api/health" }}
+              port: http
+              scheme: {{ .Values.probes.readiness.scheme | default "HTTP" }}
+              httpHeaders:
+                - name: X-Probe
+                  value: readiness
+            initialDelaySeconds: {{ .Values.probes.readiness.initialDelaySeconds | default 10 }}
+            periodSeconds: {{ .Values.probes.readiness.periodSeconds | default 10 }}
+            timeoutSeconds: {{ .Values.probes.readiness.timeoutSeconds | default 5 }}
+            failureThreshold: {{ .Values.probes.readiness.failureThreshold | default 3 }}
+            successThreshold: {{ .Values.probes.readiness.successThreshold | default 1 }}
+          
+          # === STARTUP PROBE ===
+          # For slow-starting applications. Disables liveness/readiness
+          # until the startup probe succeeds, giving the app time to initialize.
+          startupProbe:
+            httpGet:
+              path: {{ .Values.probes.startup.path | default "/api/health" }}
+              port: http
+              scheme: {{ .Values.probes.startup.scheme | default "HTTP" }}
+              httpHeaders:
+                - name: X-Probe
+                  value: startup
+            initialDelaySeconds: {{ .Values.probes.startup.initialDelaySeconds | default 10 }}
+            periodSeconds: {{ .Values.probes.startup.periodSeconds | default 5 }}
+            timeoutSeconds: {{ .Values.probes.startup.timeoutSeconds | default 5 }}
+            failureThreshold: {{ .Values.probes.startup.failureThreshold | default 30 }}
+            successThreshold: {{ .Values.probes.startup.successThreshold | default 1 }}
+          
+          # === LIFECYCLE HOOKS ===
+          lifecycle:
+            preStop:
+              exec:
+                command:
+                  - /bin/sh
+                  - -c
+                  - |
+                    echo "Received SIGTERM, starting graceful shutdown..."
+                    sleep 15  # Allow connections to drain
+                    echo "Graceful shutdown complete"
+          
+          # === VOLUME MOUNTS ===
+          volumeMounts:
+            - name: app-logs
+              mountPath: /app/logs
+            - name: tmp-dir
+              mountPath: /tmp
+            {{- range .Values.persistence.extraVolumeMounts }}
+            - name: {{ .name }}
+              mountPath: {{ .mountPath }}
+              {{- end }}
+      
+      # === SECURITY CONTEXT (POD LEVEL) ===
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: {{ .Values.securityContext.runAsUser | default 1001 }}
+        runAsGroup: {{ .Values.securityContext.runAsGroup | default 1001 }}
+        fsGroup: {{ .Values.securityContext.fsGroup | default 1001 }}
+        seccompProfile:
+          type: RuntimeDefault
+      
+      # === SERVICE ACCOUNT ===
+      serviceAccountName: {{ .Values.serviceAccount.name | default "soc-platform-sa" }}
+      automountServiceAccountToken: {{ .Values.serviceAccount.automountServiceAccountToken | default false }}
+      
+      # === TERMINATION GRACE PERIOD ===
+      terminationGracePeriodSeconds: {{ .Values.terminationGracePeriodSeconds | default 60 }}
+      
+      # === PRIORITY CLASS ===
+      priorityClassName: {{ .Values.productionGates.priorityClassName | default "soc-high" }}
+      
+      # === DNS CONFIGURATION ===
+      dnsPolicy: ClusterFirst
+      dnsConfig:
+        searches:
+          - {{ .Release.Namespace }}.svc.cluster.local
+          - svc.cluster.local
+          - cluster.local
+
+---
+# ============================================================
+# PRODUCTION GATE: POD DISRUPTION BUDGET (PDB)
+# ============================================================
+# Ensures minimum number of pods available during voluntary
+# disruptions (node drains, cluster upgrades, etc.)
+# This is critical for maintaining SLA during maintenance.
+
+{{- if .Values.productionGates.podDisruptionBudget.enabled }}
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "soc-platform.fullname" . }}-pdb
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "soc-platform.labels" . | nindent 4 }}
+    app.kubernetes.io/component: availability-gate
+  annotations:
+    description: "Ensures minimum pod availability during disruptions"
+spec:
+  {{- if .Values.productionGates.podDisruptionBudget.minAvailable }}
+  minAvailable: {{ .Values.productionGates.podDisruptionBudget.minAvailable }}
+  {{- else }}
+  maxUnavailable: {{ .Values.productionGates.podDisruptionBudget.maxUnavailable | default 1 }}
+  {{- end }}
+  selector:
+    matchLabels:
+      {{- include "soc-platform.selectorLabels" . | nindent 6 }}
+{{- end }}
+
+---
+# ============================================================
+# PRODUCTION GATE: HORIZONTAL POD AUTOSCALER (HPA)
+# ============================================================
+# Automatically scales the deployment based on CPU/memory
+# utilization or custom metrics. Ensures capacity matches demand.
+
+{{- if .Values.autoscaling.enabled }}
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: {{ include "soc-platform.fullname" . }}-hpa
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "soc-platform.labels" . | nindent 4 }}
+    app.kubernetes.io/component: scaling-gate
+  annotations:
+    description: "Auto-scales based on CPU and memory utilization"
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: {{ include "soc-platform.fullname" . }}
+  
+  # === REPLICA BOUNDS ===
+  minReplicas: {{ .Values.autoscaling.minReplicas | default 5 }}
+  maxReplicas: {{ .Values.autoscaling.maxReplicas | default 30 }}
+  
+  # === SCALING BEHAVIOR ===
+  behavior:
+    scaleUp:
+      stabilizationWindowSeconds: {{ .Values.autoscaling.scaleUp.stabilizationWindowSeconds | default 60 }}
+      policies:
+        - type: Pods
+          value: {{ .Values.autoscaling.scaleUp.podsValue | default 4 }}
+          periodSeconds: {{ .Values.autoscaling.scaleUp.periodSeconds | default 60 }}
+        - type: Percent
+          value: {{ .Values.autoscaling.scaleUp.percentValue | default 100 }}
+          periodSeconds: {{ .Values.autoscaling.scaleUp.periodSeconds | default 60 }}
+      selectPolicy: Max
+    scaleDown:
+      stabilizationWindowSeconds: {{ .Values.autoscaling.scaleDown.stabilizationWindowSeconds | default 300 }}
+      policies:
+        - type: Pods
+          value: {{ .Values.autoscaling.scaleDown.podsValue | default 2 }}
+          periodSeconds: {{ .Values.autoscaling.scaleDown.periodSeconds | default 120 }}
+        - type: Percent
+          value: {{ .Values.autoscaling.scaleDown.percentValue | default 10 }}
+          periodSeconds: {{ .Values.autoscaling.scaleDown.periodSeconds | default 120 }}
+      selectPolicy: Min
+  
+  # === METRICS FOR SCALING ===
+  metrics:
+    # CPU Utilization Target
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: {{ .Values.autoscaling.targetCPUUtilizationPercentage | default 65 }}
+    
+    # Memory Utilization Target (optional)
+    {{- if .Values.autoscaling.targetMemoryUtilizationPercentage }}
+    - type: Resource
+      resource:
+        name: memory
+        target:
+          type: Utilization
+          averageUtilization: {{ .Values.autoscaling.targetMemoryUtilizationPercentage }}
+    {{- end }}
+    
+    # Custom Metrics (optional - requires Prometheus adapter)
+    {{- range .Values.autoscaling.customMetrics }}
+    - type: Pods
+      pods:
+        metric:
+          name: {{ .name }}
+        target:
+          type: AverageValue
+          averageValue: {{ .targetValue }}
+    {{- end }}
+{{- end }}
+
+---
+# ============================================================
+# PRODUCTION GATE: POD ANTI-AFFINITY RULES
+# ============================================================
+# Distributes pods across nodes for high availability.
+# Prevents single point of failure by ensuring pods are
+# spread across multiple nodes and availability zones.
+# (This is typically included in the main deployment spec,
+# but we provide it here as an explicit gate.)
+
+{{- if .Values.productionGates.podAntiAffinity.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "soc-platform.fullname" . }}-with-affinity
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "soc-platform.labels" . | nindent 4 }}
+    app.kubernetes.io/component: distribution-gate
+spec:
+  replicas: {{ .Values.replicaCount | default 5 }}
+  selector:
+    matchLabels:
+      {{- include "soc-platform.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "soc-platform.selectorLabels" . | nindent 8 }}
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "{{ .Values.service.targetPort | default 3000 }}"
+        prometheus.io/path: "{{ .Values.monitoring.prometheus.path | default "/api/metrics" }}"
+    spec:
+      # === AFFINITY RULES ===
+      affinity:
+        # === POD ANTI-AFFINITY ===
+        # Spread pods across different nodes
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                labelSelector:
+                  matchExpressions:
+                    - key: app.kubernetes.io/name
+                      operator: In
+                      values:
+                        - {{ .Chart.Name }}
+                topologyKey: kubernetes.io/hostname
+            {{- if .Values.productionGates.podAntiAffinity.strictMode }}
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - labelSelector:
+                matchLabels:
+                  {{- include "soc-platform.selectorLabels" . | nindent 18 }}
+              topologyKey: kubernetes.io/hostname
+            {{- end }}
+        
+        # === NODE AFFINITY (OPTIONAL) ===
+        # Prefer specific node pools for application workloads
+        nodeAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 80
+              preference:
+                matchExpressions:
+                  - key: nodepool.djezzy.dz/type
+                    operator: In
+                    values:
+                      - application
+            - weight: 60
+              preference:
+                matchExpressions:
+                  - key: topology.kubernetes.io/zone
+                    operator: In
+                    values:
+                      - {{ .Values.productionGates.preferredZone | default "dz-west-1a" }}
+        
+        # === ZONE ANTI-AFFINITY ===
+        # Spread pods across availability zones (if multi-AZ)
+        {{- if .Values.productionGates.podAntiAffinity.zoneAntiAffinity }}
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - labelSelector:
+                matchLabels:
+                  {{- include "soc-platform.selectorLabels" . | nindent 18 }}
+              topologyKey: topology.kubernetes.io/zone
+        {{- end }}
+      
+      # === TOLERATIONS ===
+      # Allow scheduling on dedicated nodes
+      tolerations:
+        - key: "dedicated"
+          operator: "Equal"
+          value: "soc-platform"
+          effect: "NoSchedule"
+        - key: "nodepool.djezzy.dz/type"
+          operator: "Equal"
+          value: "application"
+          effect: "NoSchedule"
+      
+      containers:
+        - name: {{ .Chart.Name }}
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+          ports:
+            - name: http
+              containerPort: {{ .Values.service.targetPort | default 3000 }}
+          resources:
+            requests:
+              cpu: {{ .Values.resources.requests.cpu | default "2" }}
+              memory: {{ .Values.resources.requests.memory | default "4Gi" }}
+            limits:
+              cpu: {{ .Values.resources.limits.cpu | default "8" }}
+              memory: {{ .Values.resources.limits.memory | default "16Gi" }}
+          livenessProbe:
+            httpGet:
+              path: /api/health
+              port: http
+            initialDelaySeconds: 30
+            periodSeconds: 15
+          readinessProbe:
+            httpGet:
+              path: /api/health
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 10
+{{- end }}
+
+---
+# ============================================================
+# PRODUCTION GATE: SERVICE MONITOR (PROMETHEUS OPERATOR)
+# ============================================================
+# Enables automatic Prometheus scraping configuration.
+# Requires Prometheus Operator installed in the cluster.
+
+{{- if .Values.monitoring.prometheus.serviceMonitor.enabled }}
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ include "soc-platform.fullname" . }}-service-monitor
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "soc-platform.labels" . | nindent 4 }}
+    app.kubernetes.io/component: observability-gate
+    release: {{ .Values.monitoring.prometheus.serviceMonitor.release | default "prometheus-stack" }}
+    team: soc-ops
+  annotations:
+    description: "Prometheus ServiceMonitor for SOC Platform metrics"
+spec:
+  selector:
+    matchLabels:
+      {{- include "soc-platform.selectorLabels" . | nindent 6 }}
+  
+  endpoints:
+    - port: http
+      path: {{ .Values.monitoring.prometheus.path | default "/api/metrics" }}
+      interval: {{ .Values.monitoring.prometheus.interval | default "15s" }}
+      scrapeTimeout: {{ .Values.monitoring.prometheus.scrapeTimeout | default "10s" }}
+      honorLabels: true
+      metricRelabelings:
+        - sourceLabels: [__meta_kubernetes_pod_name]
+          targetLabel: pod
+        - sourceLabels: [__meta_kubernetes_namespace]
+          targetLabel: namespace
+        - sourceLabels: [__meta_kubernetes_service_name]
+          targetLabel: service
+  
+  namespaceSelector:
+    matchNames:
+      - {{ .Release.Namespace }}
+{{- end }}
+
+---
+# ============================================================
+# PRODUCTION GATE: POD SCHEDULER POLICY
+# ============================================================
+# Additional scheduling constraints for production workloads.
+
+{{- if .Values.productionGates.schedulerPolicy.enabled }}
+apiVersion: scheduling.k8s.io/v1
+kind: PriorityClass
+metadata:
+  name: {{ include "soc-platform.fullname" . }}-priority
+  labels:
+    {{- include "soc-platform.labels" . | nindent 4 }}
+value: {{ .Values.productionGates.schedulerPolicy.priorityValue | default 100000000 }}
+globalDefault: false
+preemptionPolicy: PreemptLowerPriority
+description: >
+  Priority class for {{ include "soc-platform.fullname" . }} production workloads.
+  Ensures critical SOC platform pods are scheduled ahead of lower-priority workloads.
+{{- end }}
+
+{{- end }} {{/* End of productionGates.enabled */}}
+
+---
+# ============================================================
+# VALUES REFERENCE (for values.yaml)
+# ============================================================
+# Add these to your values-production.yaml:
+
+# productionGates:
+#   enabled: true
+#   
+#   # Pod Disruption Budget
+#   podDisruptionBudget:
+#     enabled: true
+#     minAvailable: 3  # or maxUnavailable: 1
+#   
+#   # Auto-scaling Configuration
+#   autoscaling:
+#     enabled: true
+#     minReplicas: 5
+#     maxReplicas: 30
+#     targetCPUUtilizationPercentage: 65
+#     targetMemoryUtilizationPercentage: 75
+#     scaleUp:
+#       stabilizationWindowSeconds: 60
+#       podsValue: 4
+#       percentValue: 100
+#       periodSeconds: 60
+#     scaleDown:
+#       stabilizationWindowSeconds: 300
+#       podsValue: 2
+#       percentValue: 10
+#       periodSeconds: 120
+#     customMetrics: []
+#   
+#   # Pod Anti-Affinity
+#   podAntiAffinity:
+#     enabled: true
+#     strictMode: false  # Set to true for hard anti-affinity
+#     zoneAntiAffinity: false  # Enable for multi-AZ clusters
+#     preferredZone: "dz-west-1a"
+#   
+#   # Probe Configurations
+#   probes:
+#     liveness:
+#       path: /api/health
+#       scheme: HTTP
+#       initialDelaySeconds: 30
+#       periodSeconds: 15
+#       timeoutSeconds: 5
+#       failureThreshold: 3
+#       successThreshold: 1
+#     readiness:
+#       path: /api/health
+#       scheme: HTTP
+#       initialDelaySeconds: 10
+#       periodSeconds: 10
+#       timeoutSeconds: 5
+#       failureThreshold: 3
+#       successThreshold: 1
+#     startup:
+#       path: /api/health
+#       scheme: HTTP
+#       initialDelaySeconds: 10
+#       periodSeconds: 5
+#       timeoutSeconds: 5
+#       failureThreshold: 30  # Allows ~150s for slow startups
+#       successThreshold: 1
+#   
+#   # Scheduler Policy
+#   schedulerPolicy:
+#     enabled: false  # Use shared priority class instead
+#     priorityValue: 100000000
+#   
+#   priorityClassName: "soc-high"
+
+# ============================================================
+# DOCUMENTATION: PRODUCTION GATES SUMMARY
+# ============================================================
+#
+# Gate Type               | Purpose                          | Status |
+# ------------------------|----------------------------------|--------|
+# Readiness Probe         | Traffic routing decisions         | ✅     |
+# Liveness Probe          | Container restart on failure      | ✅     |
+# Startup Probe           | Graceful initialization time      | ✅     |
+# PodDisruptionBudget     | HA during maintenance             | ✅     |
+# HorizontalPodAutoscaler | Automatic scaling                 | ✅     |
+# PodAntiAffinity         | Node/zone distribution           | ✅     |
+# ServiceMonitor          | Prometheus metric collection      | ✅     |
+# PriorityClass           | Scheduling priority              | ✅     |
+#
+# Testing Recommendations:
+# 1. Test probe thresholds in staging before production
+# 2. Verify HPA scaling behavior under load
+# 3. Test PDB behavior during node drain
+# 4. Validate anti-affinity with multi-node cluster
+# 5. Confirm ServiceMonitor discovers all pods
+#
+# ============================================================

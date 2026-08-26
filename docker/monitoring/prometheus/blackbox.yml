@@ -1,0 +1,86 @@
+# ===========================================
+# National SOC Platform - Blackbox Exporter Config
+# Algeria 2026-2030 | Uptime & Endpoint Monitoring
+# ===========================================
+
+modules:
+  # ============= HTTP CHECKS =============
+  
+  http_2xx:
+    prober: http
+    timeout: 10s
+    http:
+      valid_http_versions: ["HTTP/1.1", "HTTP/2", "HTTP/3"]
+      method: GET
+      follow_redirects: true
+      fail_if_ssl: false
+      fail_if_not_ssl: false
+      preferred_ip_protocol: "ip4"
+      no_compress: true
+      headers:
+        User-Agent: "SOC-Platform-Uptime/1.0"
+        Accept: "*/*"
+    http_2xx:
+      status_codes: [200, 201, 202, 204]
+
+  http_health_check:
+    prober: http
+    timeout: 5s
+    http:
+      valid_http_versions: ["HTTP/1.1", "HTTP/2"]
+      method: GET
+      follow_redirects: false
+      headers:
+        Accept: "application/json"
+    http_2xx:
+      status_codes: [200]
+    
+    # Response body validation for health endpoints
+    body_json:
+      - jsonpath: '$.status'
+        expected: 'ok'
+        error_status_if_null: true
+
+  # ============= TCP PORT CHECKS =============
+  
+  tcp_connect:
+    prober: tcp
+    timeout: 5s
+    tcp:
+      preferred_ip_protocol: "ip4"
+
+  postgres_tcp:
+    prober: tcp
+    timeout: 5s
+    tcp:
+      query_response:
+        - expect: "^.*PostgreSQL.*ready.*$"
+          send: "\\n"
+
+  redis_tcp:
+    prober: tcp
+    timeout: 5s
+    tcp:
+      query_response:
+        - expect: "+PONG"
+          send: "PING\r\n"
+
+  # ============= ICMP (Ping) =============
+  
+  icmp_ping:
+    prober: icmp
+    timeout: 5s
+    icmp:
+      preferred_ip_protocol: "ip4"
+      dont_fragment: true
+
+  # ============= TLS/SSL CERTIFICATE CHECKS =============
+  
+  tls_connect:
+    prober: tcp
+    timeout: 10s
+    tcp:
+      tls: true
+      tls_config:
+        insecure_skip_verify: false
+        min_version: "TLS12"

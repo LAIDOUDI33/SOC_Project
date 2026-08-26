@@ -1,0 +1,109 @@
+# =============================================================================
+# Base Role - Default Variables
+# =============================================================================
+---
+# System User Configuration
+soc_system_user: soc-admin
+soc_system_group: soc-admin
+soc_user_shell: /bin/bash
+
+# SSH Configuration
+ssh_config_dir: /etc/ssh/sshd_config.d
+ssh_max_auth_tries: 6
+ssh_login_grace_time: 60
+ssh_permit_root_login: "prohibit-password"
+ssh_password_authentication: "no"
+ssh_pubkey_authentication: "yes"
+
+# Time Synchronization
+ntp_enabled: true
+timezone: "Africa/Algiers"
+
+# Package Management
+common_packages:
+  - curl
+  - wget
+  - git
+  - vim
+  - htop
+  - tmux
+  - unzip
+  - tar
+  - gzip
+  - jq
+  - net-tools
+  - dnsutils
+  - apt-transport-https  # For Debian/Ubuntu
+  - ca-certificates
+  - gnupg
+  - lsb-release
+  - software-properties-common
+
+security_packages:
+  - fail2ban
+  - ufw
+  - auditd
+  - rsyslog
+  - logrotate
+
+# Kernel Parameters
+sysctl_settings:
+  # Network Security
+  - { name: "net.ipv4.ip_forward", value: 1 }
+  - { name: "net.ipv4.conf.all.rp_filter", value: 1 }
+  - { name: "net.ipv4.conf.default.rp_filter", value: 1 }
+  - { name: "net.ipv4.icmp_echo_ignore_broadcasts", value: 1 }
+  - { name: "net.ipv4.conf.all.accept_redirects", value: 0 }
+  - { name: "net.ipv4.conf.default.accept_redirects", value: 0 }
+  - { name: "net.ipv6.conf.all.accept_redirects", value: 0 }
+  - { name: "net.ipv6.conf.default.accept_redirects", value: 0 }
+  - { name: "net.ipv4.conf.all.send_redirects", value: 0 }
+  - { name: "net.ipv4.conf.default.send_redirects", value: 0 }
+  
+  # Memory and Process Security
+  - { name: "vm.swappiness", value: 10 }
+  - { name: "vm.dirty_ratio", value: 10 }
+  - { name: "vm.dirty_background_ratio", value: 5 }
+  - { name: "fs.file-max", value: 1048576 }
+  - { name: "fs.inotify.max_user_watches", value: 524288 }
+  
+  # Network Performance
+  - { name: "net.core.somaxconn", value: 65535 }
+  - { name: "net.core.netdev_max_backlog", value: 5000 }
+  - { name: "net.core.rmem_max", value: 16777216 }
+  - { name: "net.core.wmem_max", value: 16777216 }
+  - { name: "net.ipv4.tcp_rmem", value: "4096 87380 16777216" }
+  - { name: "net.ipv4.tcp_wmem", value: "4096 65536 16777216" }
+  - { name: "net.ipv4.tcp_tw_reuse", value: 1 }
+  - { name: "net.ipv4.tcp_fin_timeout", value: 15 }
+  - { name: "net.ipv4.tcp_keepalive_time", value: 300 }
+  - { name: "net.ipv4.tcp_keepalive_intvl", value: 30 }
+  - { name: "net.ipv4.tcp_keepalive_probes", value: 5 }
+  - { name: "net.ipv4.tcp_max_syn_backlog", value: 65535 }
+
+# File Limits (ulimits)
+file_limits:
+  - domain: "*"
+    type: soft
+    item: nofile
+    value: 1048576
+  - domain: "*"
+    type: hard
+    item: nofile
+    value: 1048576
+  - domain: "*"
+    type: soft
+    item: nproc
+    value: 65535
+  - domain: "*"
+    type: hard
+    item: nproc
+    value: 65535
+  - domain: root
+    type: soft
+    item: nofile
+    value: 1048576
+  - domain: root
+    type: hard
+    item: nofile
+    value: 1048576

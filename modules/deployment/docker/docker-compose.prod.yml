@@ -1,0 +1,1250 @@
+# =============================================================================
+# National SOC Platform for Algeria (2026-2030)
+# Production Docker Compose Configuration
+# Module 9: Production Deployment Scripts
+#
+# This compose file includes ALL services required for a complete
+# Security Operations Center deployment.
+#
+# Networks:
+#   - soc-frontend: Public-facing services (Nginx)
+#   - soc-backend: Internal application services
+#   - soc-data: Database and storage services
+#   - soc-monitoring: Observability stack
+# =============================================================================
+
+version: '3.9'
+
+# =============================================================================
+# VOLUMES
+# =============================================================================
+volumes:
+  postgres_data:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: /var/lib/soc/postgres
+  
+  redis_data:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: /var/lib/soc/redis
+
+  elasticsearch_data:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: /var/lib/soc/elasticsearch
+
+  wazuh_data:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: /var/lib/soc/wazuh
+
+  suricata_logs:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: /var/lib/soc/suricata
+
+  misp_data:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: /var/lib/soc/misp
+
+  thehive_data:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: /var/lib/soc/thehive
+
+  cortex_data:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: /var/lib/soc/cortex
+
+  grafana_data:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: /var/lib/soc/grafana
+
+  prometheus_data:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: /var/lib/soc/prometheus
+
+  minio_data:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: /var/lib/soc/minio
+
+  rabbitmq_data:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: /var/lib/soc/rabbitmq
+
+  keycloak_data:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: /var/lib/soc/keycloak
+
+  nginx_logs:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: /var/log/soc/nginx
+
+  nginx_certs:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: /etc/letsencrypt
+
+# =============================================================================
+# NETWORKS
+# =============================================================================
+networks:
+  soc-frontend:
+    name: soc-frontend
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.20.0.0/24
+    driver_opts:
+      com.docker.network.bridge.enable_ip_masquerade: "true"
+
+  soc-backend:
+    name: soc-backend
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.21.0.0/22
+    internal: true
+
+  soc-data:
+    name: soc-data
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.22.0.0/22
+    internal: true
+
+  soc-monitoring:
+    name: soc-monitoring
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.23.0.0/22
+    internal: true
+
+# =============================================================================
+# SERVICES
+# =============================================================================
+services:
+
+  # ===========================================================================
+  # CORE INFRASTRUCTURE
+  # ===========================================================================
+
+  # ---------------------------------------------------------------------------
+  # PostgreSQL 16 - Primary Database
+  # ---------------------------------------------------------------------------
+  postgres:
+    image: postgres:16-alpine
+    container_name: soc-postgres
+    restart: unless-stopped
+    networks:
+      - soc-data
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./configs/postgresql:/etc/postgresql/conf.d:ro
+      - ./scripts/init-sql:/docker-entrypoint-initdb.d:ro
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-soc_admin}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
+      POSTGRES_DB: ${POSTGRES_DB:-soc_platform}
+      PGDATA: /var/lib/postgresql/data/pgdata
+    command: >
+      postgres
+      -c shared_buffers=${POSTGRES_SHARED_BUFFERS:-2GB}
+      -c effective_cache_size=${POSTGRES_EFFECTIVE_CACHE:-6GB}
+      -c maintenance_work_mem=${POSTGRES_MAINTENANCE_MEM:-512MB}
+      -c work_mem=${POSTGRES_WORK_MEM:-64MB}
+      -c max_connections=${POSTGRES_MAX_CONNECTIONS:-300}
+      -c random_page_cost=1.1
+      -c effective_io_concurrency=200
+      -c default_statistics_target=100
+      -c wal_level=replica
+      -c max_wal_senders=3
+      -c checkpoint_completion_target=0.9
+      -c min_wal_size=1GB
+      -c max_wal_size=4GB
+      -c log_min_duration_statement=500
+      -c log_checkpoints=on
+      -c log_connections=on
+      -c log_disconnections=on
+      -c log_lock_waits=on
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-soc_admin} -d ${POSTGRES_DB:-soc_platform}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    deploy:
+      resources:
+        limits:
+          cpus: '4.0'
+          memory: 8G
+        reservations:
+          cpus: '2.0'
+          memory: 4G
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "5"
+    labels:
+      - "com.soc.service=database"
+      - "com.soc.critical=true"
+      - "com.soc.backup=true"
+
+  # ---------------------------------------------------------------------------
+  # Redis 7 - Cache and Message Broker
+  # ---------------------------------------------------------------------------
+  redis:
+    image: redis:7-alpine
+    container_name: soc-redis
+    restart: unless-stopped
+    networks:
+      - soc-data
+    volumes:
+      - redis_data:/data
+      - ./configs/redis/redis.conf:/usr/local/etc/redis/redis.conf:ro
+    command: redis-server /usr/local/etc/redis/redis.conf --requirepass ${REDIS_PASSWORD:?REDIS_PASSWORD is required}
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD}", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    deploy:
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: 4G
+        reservations:
+          cpus: '0.5'
+          memory: 512M
+    sysctls:
+      net.core.somaxconn: 1024
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "5"
+    labels:
+      - "com.soc.service=cache"
+      - "com.soc.critical=true"
+
+  # ---------------------------------------------------------------------------
+  # Nginx - Reverse Proxy & SSL Termination
+  # ---------------------------------------------------------------------------
+  nginx:
+    image: nginx:1.25-alpine
+    container_name: soc-nginx
+    restart: unless-stopped
+    networks:
+      - soc-frontend
+      - soc-backend
+    volumes:
+      - ./configs/nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./configs/nginx/conf.d:/etc/nginx/conf.d:ro
+      - ./configs/nginx/includes:/etc/nginx/includes:ro
+      - nginx_logs:/var/log/nginx
+      - nginx_certs:/etc/letsencrypt:ro
+      - ./static:/var/www/static:ro
+    ports:
+      - "80:80"
+      - "443:443"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:80/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    deploy:
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: 1G
+        reservations:
+          cpus: '0.25'
+          memory: 256M
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "10"
+    labels:
+      - "com.soc.service=proxy"
+      - "com.soc.public=true"
+
+  # ===========================================================================
+  # SECURITY TOOLS - SIEM/SOAR/IDS/Threat Intel
+  # ===========================================================================
+
+  # ---------------------------------------------------------------------------
+  # Wazuh Manager - SIEM Core
+  # ---------------------------------------------------------------------------
+  wazuh-manager:
+    image: wazuh/wazuh-manager:4.7.4
+    container_name: soc-wazuh-manager
+    restart: unless-stopped
+    networks:
+      - soc-backend
+      - soc-data
+    volumes:
+      - wazuh_data:/var/ossec/data
+      - ./configs/wazuh:/var/ossec/etc/custom-config:ro
+      - ./configs/wazuh/rules:/var/ossec/etc/rules:ro
+      - /var/ossec/api/configuration:/var/ossec/api/configuration
+      - filebeat_etc:/usr/share/filebeat/config
+    environment:
+      - INDEXER_URL=https://elasticsearch:9200
+      - INDEXER_USERNAME=${ELASTICSEARCH_USERNAME:-wazuh}
+      - INDEXER_PASSWORD=${ELASTICSEARCH_PASSWORD:?ELASTICSEARCH_PASSWORD is required}
+      - FILEBEAT_SSL_VERIFICATION_MODE=none
+      - API_ENABLED=true
+      - API_PORT=55000
+      - API_USERNAME=${WAZUH_API_USERNAME:-wazuh}
+      - API_PASSWORD=${WAZUH_API_PASSWORD:?WAZUH_API_PASSWORD is required}
+      - WAZUH_CLUSTER_KEY=${WAZUH_CLUSTER_KEY:-}
+    ports:
+      - "1514:1514/udp"   # Syslog
+      - "1514:1514/tcp"   # Syslog TCP
+      - "55000:55000"     # Wazuh API
+    depends_on:
+      elasticsearch:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:55000/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 120s
+    deploy:
+      resources:
+        limits:
+          cpus: '4.0'
+          memory: 4G
+        reservations:
+          cpus: '1.0'
+          memory: 2G
+    logging:
+      driver: json-file
+      options:
+        max-size: "100m"
+        max-file: "10"
+    labels:
+      - "com.soc.service=siem"
+      - "com.soc.critical=true"
+      - "com.soc.category=security"
+
+  # ---------------------------------------------------------------------------
+  # Wazuh Indexer (Filebeat) - Log Shipping
+  # ---------------------------------------------------------------------------
+  wazuh-indexer:
+    image: wazuh/wazuh-indexer:4.7.4
+    container_name: soc-wazuh-indexer
+    restart: unless-stopped
+    networks:
+      - soc-data
+    volumes:
+      - filebeat_etc:/usr/share/filebeat/config
+    environment:
+      - SSL_CERTIFICATE_AUTHORITIES=/certs/root-ca.pem
+      - SSL_CERTIFICATE=/certs/indexer.pem
+      - SSL_KEY=/certs/indexer-key.pem
+    depends_on:
+      wazuh-manager:
+        condition: service_started
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:9200/_cluster/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+    deploy:
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: 2G
+        reservations:
+          cpus: '0.5'
+          memory: 512M
+    profiles:
+      - full
+    labels:
+      - "com.soc.service=log-shipping"
+      - "com.soc.category=security"
+
+  # ---------------------------------------------------------------------------
+  # Suricata - IDS/IPS
+  # ---------------------------------------------------------------------------
+  suricata:
+    image: jasonish/suricata:7.0.3
+    container_name: soc-suricata
+    restart: unless-stopped
+    network_mode: host
+    privileged: true
+    cap_add:
+      - NET_ADMIN
+      - SYS_NICE
+      - NET_RAW
+    volumes:
+      - suricata_logs:/var/log/suricata
+      - ./configs/suricata/suricata.yaml:/etc/suricata/suricata.yaml:ro
+      - ./configs/suricata/rules:/var/lib/suricata/rules:ro
+      - ./configs/suricata/threshold:/var/lib/suricata/threshold:ro
+    environment:
+      - SURICATA_INTERFACE=${SURICATA_INTERFACE:-eth0}
+      - SURICATA_AF_PACKET=true
+    command: >
+      --af-packet=${SURICATA_INTERFACE:-eth0}
+      -c /etc/suricata/suricata.yaml
+    depends_on:
+      elasticsearch:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "pgrep suricata || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    deploy:
+      resources:
+        limits:
+          cpus: '8.0'
+          memory: 8G
+        reservations:
+          cpus: '2.0'
+          memory: 2G
+    logging:
+      driver: json-file
+      options:
+        max-size: "200m"
+        max-file: "10"
+    labels:
+      - "com.soc.service=ids-ips"
+      - "com.soc.critical=true"
+      - "com.soc.category=security"
+
+  # ---------------------------------------------------------------------------
+  # MISP - Threat Intelligence Platform
+  # ---------------------------------------------------------------------------
+  misp:
+    image: misp/misp:latest
+    container_name: soc-misp
+    restart: unless-stopped
+    networks:
+      - soc-backend
+      - soc-data
+    volumes:
+      - misp_data:/var/www/MISP/app/files
+      - misp_data:/var/www/MISP/.gnupg
+      - misp_data:/var/www/MISP/.cake
+      - ./configs/misp:/var/www/MISP/app/Config:ro
+    environment:
+      - MYSQL_HOST=${MISP_MYSQL_HOST:-postgres}
+      - MYSQL_PORT=${MISP_MYSQL_PORT:-3306}
+      - MYSQL_USER=${MISP_MYSQL_USER:-misp}
+      - MYSQL_PASSWORD=${MISP_MYSQL_PASSWORD:?MISP_MYSQL_PASSWORD is required}
+      - MYSQL_DATABASE=${MISP_MYSQL_DATABASE:-misp}
+      - MISP_BASEURL=https://${MISP_DOMAIN:-misp.soc.local}
+      - MISP_ADMIN_EMAIL=${MISP_ADMIN_EMAIL:-admin@soc.dz}
+      - MISP_ADMIN_PASSPHRASE=${MISP_ADMIN_PASSPHRASE:?MISP_ADMIN_PASSPHRASE is required}
+      - MISP_REDIS_HOST=redis
+      - MISP_REDIS_PORT=6379
+      - MISP_REDIS_PASSWORD=${REDIS_PASSWORD}
+      - PHP_MEMORY_LIMIT=${MISP_PHP_MEMORY_LIMIT:-512M}
+      - PHP_MAX_EXECUTION_TIME=${MISP_PHP_MAX_EXECUTION_TIME:-300}
+      - PHP_UPLOAD_MAX_FILESIZE=${MISP_PHP_UPLOAD_MAX_FILESIZE:-50M}
+    ports:
+      - "${MISP_PORT:-8081}:80"
+      - "${MISP_SSL_PORT:-8443}:443"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost/users/login || exit 1"]
+      interval: 60s
+      timeout: 15s
+      retries: 5
+      start_period: 180s
+    deploy:
+      resources:
+        limits:
+          cpus: '4.0'
+          memory: 4G
+        reservations:
+          cpus: '1.0'
+          memory: 1G
+    logging:
+      driver: json-file
+      options:
+        max-size: "100m"
+        max-file: "10"
+    labels:
+      - "com.soc.service=threat-intel"
+      - "com.soc.category=security"
+
+  # ---------------------------------------------------------------------------
+  # TheHive - Incident Response Platform
+  # ---------------------------------------------------------------------------
+  thehive:
+    name: thehive/thehive4:latest
+    container_name: soc-thehive
+    restart: unless-stopped
+    networks:
+      - soc-backend
+      - soc-data
+    volumes:
+      - thehive_data:/opt/thehive/data
+      - ./configs/thehive/application.conf:/etc/thehive/application.conf:ro
+    environment:
+      - JAVA_OPTS=-Xms${THEHIVE_JVM_MIN_HEAP:-1g} -Xmx${THEHIVE_JVM_MAX_HEAP:-2g}
+      - THEHIVE_SECRET=${THEHIVE_SECRET:?THEHIVE_SECRET is required}
+    ports:
+      - "${THEHIVE_PORT:-9000}:9000"
+    depends_on:
+      elasticsearch:
+        condition: service_healthy
+      cortex:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:9000/api/status || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 120s
+    deploy:
+      resources:
+        limits:
+          cpus: '4.0'
+          memory: 4G
+        reservations:
+          cpus: '1.0'
+          memory: 1G
+    logging:
+      driver: json-file
+      options:
+        max-size: "100m"
+        max-file: "10"
+    labels:
+      - "com.soc.service=soar"
+      - "com.soc.category=security"
+
+  # ---------------------------------------------------------------------------
+  # Cortex - Analysis Engine for TheHive
+  # ---------------------------------------------------------------------------
+  cortex:
+    name: thehive/cortex:latest
+    container_name: soc-cortex
+    restart: unless-stopped
+    networks:
+      - soc-backend
+      - soc-data
+    volumes:
+      - cortex_data:/opt/cortex/data
+      - ./configs/cortex/application.conf:/etc/cortex/application.conf:ro
+    environment:
+      - JAVA_OPTS=-Xms${CORTEX_JVM_MIN_HEAP:-512m} -Xmx${CORTEX_JVM_MAX_HEAP:-1g}
+      - CORTEX_SECRET=${CORTEX_SECRET:?CORTEX_SECRET is required}
+    ports:
+      - "${CORTEX_PORT:-9001}:9001"
+    depends_on:
+      elasticsearch:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:9001/api/status || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 90s
+    deploy:
+      resources:
+        limits:
+          cpus: '4.0'
+          memory: 4G
+        reservations:
+          cpus: '0.5'
+          memory: 512M
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "5"
+    labels:
+      - "com.soc.service=analysis-engine"
+      - "com.soc.category=security"
+
+  # ===========================================================================
+  # OBSERVABILITY STACK (ELK + Monitoring)
+  # ===========================================================================
+
+  # ---------------------------------------------------------------------------
+  # Elasticsearch - Log Storage and Search Engine
+  # ---------------------------------------------------------------------------
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.11.0
+    container_name: soc-elasticsearch
+    restart: unless-stopped
+    networks:
+      - soc-data
+      - soc-monitoring
+    volumes:
+      - elasticsearch_data:/usr/share/elasticsearch/data
+      - ./configs/elasticsearch/elasticsearch.yml:/usr/share/elasticsearch/config/elasticsearch.yml:ro
+      - ./configs/elasticsearch/jvm.options:/usr/share/elasticsearch/config/jvm.options.d/jvm.options:ro
+    environment:
+      - node.name=soc-es-node-1
+      - cluster.name=soc-cluster
+      - discovery.type=single-node
+      - bootstrap.memory_lock=true
+      - xpack.security.enabled=true
+      - xpack.security.http.ssl.enabled=false
+      - xpack.security.transport.ssl.enabled=false
+      - ELASTIC_PASSWORD=${ELASTICSEARCH_PASSWORD:?ELASTICSEARCH_PASSWORD is required}
+      - ES_JAVA_OPTS=-Xms${ES_JVM_MIN_HEAP:-2g} -Xmx${ES_JVM_MAX_HEAP:-4g}
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+      nofile:
+        soft: 65536
+        hard: 65536
+    ports:
+      - "${ES_PORT:-9200}:9200"
+      - "${ES_TRANSPORT_PORT:-9300}:9300"
+    healthcheck:
+      test: [
+        "CMD-SHELL",
+        "curl -sf http://localhost:9200/_cluster/health?wait_for_status=yellow&timeout=5s || exit 1"
+      ]
+      interval: 30s
+      timeout: 10s
+      retries: 10
+      start_period: 120s
+    deploy:
+      resources:
+        limits:
+          cpus: '8.0'
+          memory: 16G
+        reservations:
+          cpus: '2.0'
+          memory: 4G
+    logging:
+      driver: json-file
+      options:
+        max-size: "200m"
+        max-file: "10"
+    labels:
+      - "com.soc.service=search-engine"
+      - "com.soc.critical=true"
+      - "com.soc.category=observability"
+
+  # ---------------------------------------------------------------------------
+  # Kibana - Visualization Dashboard
+  # ---------------------------------------------------------------------------
+  kibana:
+    image: docker.elastic.co/kibana/kibana:8.11.0
+    container_name: soc-kibana
+    restart: unless-stopped
+    networks:
+      - soc-frontend
+      - soc-data
+    volumes:
+      - ./configs/kibana/kibana.yml:/usr/share/kibana/config/kibana.yml:ro
+    environment:
+      - ELASTICSEARCH_HOSTS=http://elasticsearch:9200
+      - ELASTICSEARCH_USERNAME=kibana_system
+      - ELASTICSEARCH_PASSWORD=${KIBANA_PASSWORD:-${ELASTICSEARCH_PASSWORD}}
+      - SERVER_NAME=${KIBANA_SERVER_NAME:-kibana.soc.local}
+      - SERVER_PUBLICBASEURL=https://${KIBANA_DOMAIN:-kibana.soc.local}
+    ports:
+      - "${KIBANA_PORT:-5601}:5601"
+    depends_on:
+      elasticsearch:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:5601/api/status || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 180s
+    deploy:
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: 4G
+        reservations:
+          cpus: '0.5'
+          memory: 1G
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "5"
+    labels:
+      - "com.soc.service=visualization"
+      - "com.soc.category=observability"
+
+  # ---------------------------------------------------------------------------
+  # Grafana - Monitoring Dashboards
+  # ---------------------------------------------------------------------------
+  grafana:
+    image: grafana/grafana:10.2.0
+    container_name: soc-grafana
+    restart: unless-stopped
+    networks:
+      - soc-frontend
+      - soc-monitoring
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./configs/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./configs/grafana/dashboards:/var/lib/grafana/dashboards:ro
+    environment:
+      - GF_SECURITY_ADMIN_USER=${GRAFANA_ADMIN_USER:-admin}
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD:?GRAFANA_ADMIN_PASSWORD is required}
+      - GF_SERVER_ROOT_URL=https://${GRAFANA_DOMAIN:-grafana.soc.local}
+      - GF_USERS_ALLOW_SIGN_UP=false
+      - GF_AUTH_ANONYMOUS_ENABLED=false
+      - GF_INSTALL_PLUGINS=grafana-piechart-panel,grafana-worldmap-panel,vertigo-datasource
+    ports:
+      - "${GRAFANA_PORT:-3000}:3000"
+    depends_on:
+      prometheus:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:3000/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+    deploy:
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: 2G
+        reservations:
+          cpus: '0.25'
+          memory: 256M
+    user: "472:472"
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "5"
+    labels:
+      - "com.soc.service=monitoring-dashboard"
+      - "com.soc.category=observability"
+
+  # ---------------------------------------------------------------------------
+  # Prometheus - Metrics Collection
+  # ---------------------------------------------------------------------------
+  prometheus:
+    image: prom/prometheus:v2.49.0
+    container_name: soc-prometheus
+    restart: unless-stopped
+    networks:
+      - soc-monitoring
+      - soc-backend
+    volumes:
+      - prometheus_data:/prometheus
+      - ./configs/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./configs/prometheus/alerting:/etc/prometheus/alerting:ro
+      - ./configs/prometheus/rules:/etc/prometheus/rules:ro
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--storage.tsdb.retention.time=${PROMETHEUS_RETENTION:-30d}'
+      - '--storage.tsdb.retention.size=${PROMETHEUS_RETENTION_SIZE:-50GB}'
+      - '--web.console.libraries=/etc/prometheus/console_libraries'
+      - '--web.console.templates=/etc/prometheus/consoles'
+      - '--web.enable-lifecycle'
+      - '--web.enable-admin-api'
+    ports:
+      - "${PROMETHEUS_PORT:-9090}:9090"
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:9090/-/healthy"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    deploy:
+      resources:
+        limits:
+          cpus: '4.0'
+          memory: 8G
+        reservations:
+          cpus: '0.5'
+          memory: 512M
+    logging:
+      driver: json-file
+      options:
+        max-size: "100m"
+        max-file: "5"
+    labels:
+      - "com.soc.service=metrics-collection"
+      - "com.soc.category=observability"
+
+  # ---------------------------------------------------------------------------
+  # AlertManager - Alert Routing
+  # ---------------------------------------------------------------------------
+  alertmanager:
+    image: prom/alertmanager:v0.27.0
+    container_name: soc-alertmanager
+    restart: unless-stopped
+    networks:
+      - soc-monitoring
+    volumes:
+      - ./configs/alertmanager/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+      - ./configs/alertmanager/templates:/templates:ro
+    command:
+      - '--config.file=/etc/alertmanager/alertmanager.yml'
+      - '--storage.path=/alertmanager'
+      - '--web.external-url=https://${ALERTMANAGER_DOMAIN:-alertmanager.soc.local}'
+    ports:
+      - "${ALERTMANAGER_PORT:-9093}:9093"
+    depends_on:
+      prometheus:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:9093/-/healthy"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 512M
+        reservations:
+          cpus: '0.1'
+          memory: 128M
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "3"
+    labels:
+      - "com.soc.service=alert-routing"
+      - "com.soc.category=observability"
+
+  # ---------------------------------------------------------------------------
+  # Node Exporter - Host Metrics
+  # ---------------------------------------------------------------------------
+  node-exporter:
+    image: prom/node-exporter:v1.7.0
+    container_name: soc-node-exporter
+    restart: unless-stopped
+    networks:
+      - soc-monitoring
+    pid: host
+    volumes:
+      - /:/host:ro,rslave
+    command:
+      - '--path.rootfs=/host'
+      - '--collector.filesystem.mount-points-exclude=^/(sys|proc|dev|host|etc)($$|/)'
+      - '--collector.netclass.ignored-devices=^(veth.*|docker.*)$$'
+    ports:
+      - "${NODE_EXPORTER_PORT:-9100}:9100"
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:9100/metrics"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 128M
+        reservations:
+          cpus: '0.05'
+          memory: 32M
+    labels:
+      - "com.soc.service=metrics-exporter"
+      - "com.soc.category=observability"
+
+  # ---------------------------------------------------------------------------
+  # Cadvisor - Container Metrics
+  # ---------------------------------------------------------------------------
+  cadvisor:
+    image: gcr.io/cadvisor/cadvisor:v0.47.2
+    container_name: soc-cadvisor
+    restart: unless-stopped
+    networks:
+      - soc-monitoring
+    privileged: true
+    volumes:
+      - /:/rootfs:ro
+      - /var/run:/var/run:rw
+      - /sys:/sys:ro
+      - /var/lib/docker/:/var/lib/docker:ro
+      - /dev/disk/:/dev/disk:ro
+    devices:
+      - /dev/kmsg
+    ports:
+      - "${CADVISOR_PORT:-8080}:8080"
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8080/healthz"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 512M
+        reservations:
+          cpus: '0.1'
+          memory: 128M
+    labels:
+      - "com.soc.service=container-metrics"
+      - "com.soc.category=observability"
+
+  # ===========================================================================
+  # STORAGE SERVICES
+  # ===========================================================================
+
+  # ---------------------------------------------------------------------------
+  # MinIO - Object Storage for Evidence/Files
+  # ---------------------------------------------------------------------------
+  minio:
+    image: minio/minio:RELEASE.2023-11-20T22-40-07Z
+    container_name: soc-minio
+    restart: unless-stopped
+    networks:
+      - soc-backend
+      - soc-data
+    volumes:
+      - minio_data:/data
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?MINIO_ROOT_PASSWORD is required}
+      MINIO_BROWSER_REDIRECT_URL: https://${MINIO_DOMAIN:-minio.soc.local}
+    command: server /data --console-address ":9001"
+    ports:
+      - "${MINIO_API_PORT:-9000}:9000"
+      - "${MINIO_CONSOLE_PORT:-9001}:9001"
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    deploy:
+      resources:
+        limits:
+          cpus: '4.0'
+          memory: 8G
+        reservations:
+          cpus: '0.5'
+          memory: 512M
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "5"
+    labels:
+      - "com.soc.service=object-storage"
+      - "com.soc.critical=true"
+
+  # ===========================================================================
+  # MESSAGE BROKER
+  # ===========================================================================
+
+  # ---------------------------------------------------------------------------
+  # RabbitMQ - Message Queue
+  # ---------------------------------------------------------------------------
+  rabbitmq:
+    image: rabbitmq:3.12-management-alpine
+    container_name: soc-rabbitmq
+    restart: unless-stopped
+    networks:
+      - soc-backend
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+      - ./configs/rabbitmq/rabbitmq.conf:/etc/rabbitmq/rabbitmq.conf:ro
+      - ./configs/rabbitmq/definitions.json:/etc/rabbitmq/definitions.json:ro
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER:-soc_user}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD:?RABBITMQ_PASSWORD is required}
+      RABBITMQ_DEFAULT_VHOST: /
+    ports:
+      - "${RABBITMQ_AMQP_PORT:-5672}:5672"
+      - "${RABBITMQ_MGMT_PORT:-15672}:15672"
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    deploy:
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: 2G
+        reservations:
+          cpus: '0.25'
+          memory: 256M
+    logging:
+      driver: json-file
+      options:
+        max-size: "30m"
+        max-file: "5"
+    labels:
+      - "com.soc.service=message-broker"
+
+  # ===========================================================================
+  # IDENTITY AND ACCESS MANAGEMENT
+  # ===========================================================================
+
+  # ---------------------------------------------------------------------------
+  # Keycloak - Identity Provider
+  # ---------------------------------------------------------------------------
+  keycloak:
+    image: quay.io/keycloak/keycloak:23.0
+    container_name: soc-keycloak
+    restart: unless-stopped
+    networks:
+      - soc-backend
+      - soc-data
+    volumes:
+      - keycloak_data:/opt/keycloak/data
+    command: start-dev --import-realm --proxy=edge --hostname-strict=false
+    environment:
+      KC_HEALTH_ENABLED: true
+      KC_METRICS_ENABLED: true
+      KC_DB: postgres
+      KC_DB_URL: jdbc:postgresql://postgres:5432/${KEYCLOAK_DB:-keycloak}
+      KC_DB_USERNAME: ${KEYCLOAK_DB_USER:-keycloak}
+      KC_DB_PASSWORD: ${KEYCLOAK_DB_PASSWORD:?KEYCLOAK_DB_PASSWORD is required}
+      KEYCLOAK_ADMIN: ${KEYCLOAK_ADMIN:-admin}
+      KEYCLOAK_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD:?KEYCLOAK_ADMIN_PASSWORD is required}
+      KC_HTTP_RELATIVE_PATH: /auth
+      KC_SPI_LOGIN_PROTOCOL_OPENID_CONNECT_LEGACY_LOGOUT_REDIRECT_URI: true
+    ports:
+      - "${KEYCLOAK_PORT:-8080}:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8080/health/ready || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 120s
+    deploy:
+      resources:
+        limits:
+          cpus: '4.0'
+          memory: 2G
+        reservations:
+          cpus: '0.5'
+          memory: 512M
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "5"
+    labels:
+      - "com.soc.service=identity-provider"
+      - "com.soc.critical=true"
+
+  # ===========================================================================
+  # APPLICATION SERVICES
+  # ===========================================================================
+
+  # ---------------------------------------------------------------------------
+  # SOC API Gateway
+  # ---------------------------------------------------------------------------
+  api-gateway:
+    image: ${DOCKER_REGISTRY:-ghcr.io}/national-soc-platform/api-gateway:${VERSION:-latest}
+    container_name: soc-api-gateway
+    restart: unless-stopped
+    networks:
+      - soc-frontend
+      - soc-backend
+      - soc-data
+    volumes:
+      - ./configs/api-gateway:/app/config:ro
+      - ./logs/api-gateway:/app/logs
+    environment:
+      NODE_ENV: production
+      PORT: ${API_GATEWAY_PORT:-4000}
+      DATABASE_URL: postgresql://${POSTGRES_USER:-soc_admin}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-soc_platform}
+      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379
+      JWT_SECRET: ${JWT_SECRET:?JWT_SECRET is required}
+      ENCRYPTION_KEY: ${ENCRYPTION_KEY:?ENCRYPTION_KEY is required}
+      ELASTICSEARCH_URL: http://elasticsearch:9200
+      ELASTICSEARCH_USERNAME: ${ELASTICSEARCH_USERNAME:-elastic}
+      ELASTICSEARCH_PASSWORD: ${ELASTICSEARCH_PASSWORD}
+      WAZUH_API_URL: http://wazuh-manager:55000
+      WAZUH_API_USERNAME: ${WAZUH_API_USERNAME:-wazuh}
+      WIZUH_API_PASSWORD: ${WAZUH_API_PASSWORD}
+      MISP_URL: http://misp
+      MISP_API_KEY: ${MISP_API_KEY}
+      THEHIVE_URL: http://thehive:9000
+      THEHIVE_API_KEY: ${THEHIVE_API_KEY}
+      CORTEX_URL: http://cortex:9001
+      CORTEX_API_KEY: ${CORTEX_API_KEY}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      RATE_LIMIT_WINDOW_MS: ${RATE_LIMIT_WINDOW_MS:-60000}
+      RATE_LIMIT_MAX: ${RATE_LIMIT_MAX:-1000}
+    ports:
+      - "${API_GATEWAY_PORT:-4000}:4000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      elasticsearch:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:4000/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+    deploy:
+      resources:
+        limits:
+          cpus: '4.0'
+          memory: 4G
+        reservations:
+          cpus: '1.0'
+          memory: 1G
+      replicas: ${API_GATEWAY_REPLICAS:-2}
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "10"
+    labels:
+      - "com.soc.service=api-gateway"
+      - "com.soc.critical=true"
+      - "com.soc.application=true"
+
+  # ---------------------------------------------------------------------------
+  # SOC Frontend (Next.js)
+  # ---------------------------------------------------------------------------
+  frontend:
+    image: ${DOCKER_REGISTRY:-ghcr.io}/national-soc-platform/frontend:${VERSION:-latest}
+    container_name: soc-frontend
+    restart: unless-stopped
+    networks:
+      - soc-frontend
+    environment:
+      NEXT_PUBLIC_API_URL: https://${API_DOMAIN:-api.soc.local}
+      NEXT_PUBLIC_GRAFANA_URL: https://${GRAFANA_DOMAIN:-grafana.soc.local}
+      NEXT_PUBLIC_KIBANA_URL: https://${KIBANA_DOMAIN:-kibana.soc.local}
+      NEXT_PUBLIC_KEYCLOAK_URL: https://${KEYCLOAK_DOMAIN:-auth.soc.local}/auth
+      NEXT_PUBLIC_KEYCLOAK_REALM: ${KEYCLOAK_REALM:-soc-platform}
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:3000 || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    deploy:
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: 2G
+        reservations:
+          cpus: '0.25'
+          memory: 256M
+      replicas: ${FRONTEND_REPLICAS:-2}
+    logging:
+      driver: json-file
+      options:
+        max-size: "30m"
+        max-file: "5"
+    labels:
+      - "com.soc.service=frontend"
+      - "com.soc.application=true"
+
+  # ===========================================================================
+  # UTILITY SERVICES
+  # ===========================================================================
+
+  # ---------------------------------------------------------------------------
+  # MailHog - Email Testing (Development/Staging Only)
+  # ---------------------------------------------------------------------------
+  mailhog:
+    image: mailhog/mailhog:v1.0.1
+    container_name: soc-mailhog
+    restart: unless-stopped
+    networks:
+      - soc-backend
+    ports:
+      - "${MAILHOG_SMTP_PORT:-1025}:1025"
+      - "${MAILHOG_WEB_PORT:-8025}:8025"
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8025"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 256M
+        reservations:
+          cpus: '0.05'
+          memory: 32M
+    profiles:
+      - development
+      - staging
+    labels:
+      - "com.soc.service=email-testing"

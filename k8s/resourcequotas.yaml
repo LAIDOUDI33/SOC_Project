@@ -1,0 +1,339 @@
+# ============================================================
+# National SOC Platform - Resource Quotas
+# Djezzy Production Environment
+# ============================================================
+# Resource quotas prevent any single namespace or team from
+# consuming excessive cluster resources. This ensures fair
+# resource allocation and protects against runaway workloads.
+#
+# Quota Categories:
+#   1. Compute Limits (CPU, Memory)
+#   2. Object Counts (Pods, Services, etc.)
+#   3. Storage Quotas
+#   4. PVC Limits per Namespace
+#
+# Note: These quotas should be adjusted based on actual cluster
+# capacity and workload requirements. Review quarterly.
+# ============================================================
+
+---
+# ============================================================
+# QUOTA SET 1: PRODUCTION NAMESPACE (soc-platform)
+# ============================================================
+# Primary production environment with generous but bounded limits.
+# Designed for 5-30 pod auto-scaling with headroom for operations.
+
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: soc-platform-compute-quota
+  namespace: soc-platform
+  labels:
+    app.kubernetes.io/name: soc-platform
+    app.kubernetes.io/part-of: national-soc
+    quota-type: compute
+    environment: production
+  annotations:
+    description: "Compute resource limits for SOC Platform production"
+    last-reviewed: "2026-01-20"
+    next-review: "2026-04-20"
+spec:
+  hard:
+    # === CPU Limits ===
+    # Total CPU requests across all pods in namespace
+    requests.cpu: "40"
+    # Total CPU limits (burst capacity)
+    limits.cpu: "100"
+    
+    # === Memory Limits ===
+    # Total memory requests (guaranteed)
+    requests.memory: "80Gi"
+    # Total memory limits (maximum)
+    limits.memory: "200Gi"
+    
+    # === Extended Resources ===
+    # GPU resources (if needed for ML workloads)
+    requests.nvidia.com/gpu: "0"
+    limits.nvidia.com/gpu: "2"
+
+---
+# ============================================================
+# QUOTA SET 2: OBJECT COUNTS - PRODUCTION
+# ============================================================
+# Limits on Kubernetes object creation to prevent abuse.
+
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: soc-platform-object-quota
+  namespace: soc-platform
+  labels:
+    app.kubernetes.io/name: soc-platform
+    app.kubernetes.io/part-of: national-soc
+    quota-type: objects
+    environment: production
+  annotations:
+    description: "Object count limits for SOC Platform production"
+spec:
+  hard:
+    # === Core Objects ===
+    # Maximum number of pods (including replicas)
+    pods: "60"
+    
+    # Maximum number of services
+    services: "20"
+    
+    # Maximum number of secrets (sensitive data storage)
+    secrets: "50"
+    
+    # Maximum number of configmaps
+    configmaps: "50"
+    
+    # === Persistent Storage ===
+    # Maximum persistent volume claims
+    persistentvolumeclaims: "15"
+    
+    # === Deprecated/Restricted Types ===
+    # Disable legacy replication controllers
+    replicationcontrollers: "0"
+    
+    # No LoadBalancer services (use Ingress instead)
+    services.loadbalancers: "0"
+    
+    # No NodePort services (security risk)
+    services.nodeports: "0"
+    
+    # === RBAC & Policy ===
+    # Limit roles and bindings that can be created
+    roles: "10"
+    rolebindings: "20"
+    
+    # Limit service accounts
+    serviceaccounts: "10"
+    
+    # === Workload Types ===
+    # Deployments
+    apps/deployments: "10"
+    
+    # StatefulSets (for databases, etc.)
+    apps/statefulsets: "5"
+    
+    # DaemonSets (for monitoring agents)
+    apps/daemonsets: "5"
+    
+    # Jobs (batch processing)
+    batch/jobs: "20"
+    
+    # CronJobs (scheduled tasks)
+    batch/cronjobs: "10"
+    
+    # === Networking ===
+    # Network policies
+    networkpolicies: "20"
+    
+    # Ingress rules
+    networking.k8s.io/ingresses: "10"
+    
+    # === Extensions ===
+    # Horizontal Pod Autoscalers
+    autoscaling/horizontalpodautoscalers: "10"
+    
+    # Pod Disruption Budgets
+    policy/poddisruptionbudgets: "10"
+
+---
+# ============================================================
+# QUOTA SET 3: STORAGE QUOTAS - PRODUCTION
+# ============================================================
+# Storage class-specific quotas to control disk usage.
+
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: soc-platform-storage-quota
+  namespace: soc-platform
+  labels:
+    app.kubernetes.io/name: soc-platform
+    app.kubernetes.io/part-of: national-soc
+    quota-type: storage
+    environment: production
+  annotations:
+    description: "Storage resource limits for SOC Platform production"
+spec:
+  hard:
+    # === Default Storage Class Requests ===
+    # Total storage requests using default storage class
+    requests.storage: "500Gi"
+    
+    # === Fast SSD Storage (for databases) ===
+    # Using fast-ssd storage class for performance-critical data
+    requests.storageclass.storage.k8s.io/fast-ssd.requests.storage: "200Gi"
+    
+    # === Standard Storage (for logs, etc.) ===
+    requests.storageclass.storage.k8s.io/standard.requests.storage: "300Gi"
+    
+    # === Backup Storage (NFS) ===
+    requests.storageclass.storage.k8s.io/nfs-backup.requests.storage: "1Ti"
+
+---
+# ============================================================
+# QUOTA SET 4: LIMIT RANGES - DEFAULTS
+# ============================================================
+# Sets default resource requests and limits for containers
+# that don't specify them explicitly.
+
+apiVersion: v1
+kind: LimitRange
+metadata:
+  name: soc-platform-limit-range
+  namespace: soc-platform
+  labels:
+    app.kubernetes.io/name: soc-platform
+    app.kubernetes.io/part-of: national-soc
+    limit-range: defaults
+    environment: production
+  annotations:
+    description: "Default resource limits for containers in SOC Platform"
+spec:
+  limits:
+    # === Container Defaults ===
+    - type: Container
+      max:
+        cpu: "16"           # Max CPU per container
+        memory: "32Gi"      # Max memory per container
+      min:
+        cpu: "100m"         # Minimum CPU request
+        memory: "256Mi"     # Minimum memory request
+      default:
+        cpu: "4"            # Default CPU limit
+        memory: "8Gi"       # Default memory limit
+      defaultRequest:
+        cpu: "500m"         # Default CPU request
+        memory: "1Gi"       # Default memory request
+    
+    # === Persistent Volume Claims ===
+    - type: PersistentVolumeClaim
+      max:
+        storage: "500Gi"     # Max PVC size
+      min:
+        storage: "1Gi"       # Min PVC size
+    
+    # === Pod Limits (aggregate of all containers) ===
+    - type: Pod
+      max:
+        cpu: "32"            # Max total CPU per pod
+        memory: "64Gi"       # Max total memory per pod
+
+---
+# ============================================================
+# QUOTA SET 5: MONITORING NAMESPACE
+# ============================================================
+# Separate quotas for monitoring stack components.
+
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: monitoring-compute-quota
+  namespace: monitoring
+  labels:
+    app.kubernetes.io/part-of: national-soc
+    quota-type: compute
+    component: monitoring-stack
+spec:
+  hard:
+    requests.cpu: "20"
+    limits.cpu: "40"
+    requests.memory: "40Gi"
+    limits.memory: "80Gi"
+
+---
+
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: monitoring-object-quota
+  namespace: monitoring
+  labels:
+    app.kubernetes.io/part-of: national-soc
+    quota-type: objects
+    component: monitoring-stack
+spec:
+  hard:
+    pods: "30"
+    services: "15"
+    secrets: "30"
+    configmaps: "30"
+    persistentvolumeclaims: "10"
+    replicationcontrollers: "0"
+
+---
+# ============================================================
+# QUOTA SET 6: SECURITY/POLICY ENFORCEMENT
+# ============================================================
+# Additional constraints to enforce security policies.
+
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: soc-platform-security-constraints
+  namespace: soc-platform
+  labels:
+    app.kubernetes.io/name: soc-platform
+    app.kubernetes.io/part-of: national-soc
+    quota-type: security
+  annotations:
+    description: "Security-related resource constraints"
+spec:
+  hard:
+    # Prevent creation of privileged pods via quota
+    # (complements PodSecurityPolicy / Pod Security Standards)
+    
+    # Limit total endpoints (attack surface reduction)
+    endpoints: "30"
+    
+    # Limit maps (config injection risk)
+    maps: "20"
+
+---
+# ============================================================
+# DOCUMENTATION: QUOTA REVIEW PROCESS
+# ============================================================
+#
+# When to Review Quotas:
+# 1. Quarterly (minimum) or when adding significant new workloads
+# 2. After major version upgrades or architecture changes
+# 3. When receiving alerts about resource exhaustion
+# 4. When onboarding new teams or applications
+#
+# Review Checklist:
+# [ ] Current utilization metrics gathered
+# [ ] Growth projections calculated (next quarter)
+# [ ] Headroom requirements assessed (20% minimum recommended)
+# [ ] Stakeholder input obtained
+# [ ] Changes documented with rationale
+# [ ] Change tested in staging first
+# [ ] Rollback plan prepared
+#
+# Monitoring Commands:
+#
+# # Check current quota usage:
+# kubectl describe resourcequota -n soc-platform
+#
+# # Check specific quota details:
+# kubectl get resourcequota soc-platform-compute-quota -n soc-platform -o yaml
+#
+# # See what's consuming resources:
+# kubectl top pods -n soc-platform --sort-by=memory
+# kubectl top pods -n soc-platform --sort-by=cpu
+#
+# Alerting Recommendations:
+# - Alert at 70% quota utilization (warning)
+# - Alert at 85% quota utilization (critical)
+# - Alert on quota exceeded events (immediate)
+#
+# References:
+# - K8s Resource Quotas: https://kubernetes.io/docs/concepts/policy/resource-quotas/
+# - K8s Limit Ranges: https://kubernetes.io/docs/concepts/policy/limit-range/
+# - Resource Management Best Practices: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/
+#
+# ============================================================

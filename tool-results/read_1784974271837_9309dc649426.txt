@@ -1,0 +1,2002 @@
+     1→/**
+     2→ * Grafana Monitoring Dashboard Integration - TypeScript Type Definitions
+     3→ * Algeria National SOC Platform 2026-2030
+     4→ * 
+     5→ * Complete type system for:
+     6→ * - Dashboard and panel configurations
+     7→ * - Data sources (Prometheus, Elasticsearch, MySQL, etc.)
+     8→ * - Query types and responses
+     9→ * - Alert rule definitions
+    10→ * - Annotation types
+    11→ * - User/team/organization models
+    12→ * - Folder structures
+    13→ * - Plugin types
+    14→ * - Variable/template types
+    15→ * - Datasource query results
+    16→ * - Time range configurations
+    17→ */
+    18→
+    19→// ============================================================
+    20→// Core Dashboard Types
+    21→// ============================================================
+    22→
+    23→/** Grafana dashboard unique identifier */
+    24→export type DashboardUID = string;
+    25→
+    26→/** Grafana dashboard internal ID */
+    27→export type DashboardID = number;
+    28→
+    29→/** Dashboard metadata */
+    30→export interface DashboardMeta {
+    31→  /** Can the current user edit this dashboard */
+    32→  canEdit: boolean;
+    33→  /** Can the current user save this dashboard */
+    34→  canSave: boolean;
+    35→  /** Can the current user make this dashboard a star (favorite) */
+    36→  canStar: boolean;
+    37→  /** Is this dashboard starred by the current user */
+    38→  isStarred: boolean;
+    39→  /** Number of users who have starred this dashboard */
+    40→  stars: number;
+    41→  /** Slug derived from title for URL */
+    42→  slug: string;
+    43→  /** Dashboard URL path */
+    44→  url: string;
+    45→  /** Dashboard folder UID if in a folder */
+    46→  folderUid?: string;
+    47→  /** Folder title if in a folder */
+    48→  folderTitle?: string;
+    49→  /** Folder URL if in a folder */
+    50→  folderUrl?: string;
+    51→  /** Creation timestamp */
+    52→  created: string;
+    53→  /** Last update timestamp */
+    54→  updated: string;
+    55→  /** User who created the dashboard */
+    56→  createdBy: string;
+    57→  /** User who last updated the dashboard */
+    58→  updatedBy: string;
+    59→  /** Version number of the dashboard */
+    60→  version: number;
+    61→  /** Whether to check for new versions */
+    62→  hasAcl: boolean;
+    63→  /** Public dashboard enabled */
+    64→  publicDashboardEnabled?: boolean;
+    65→  /** Public dashboard URL */
+    66→  publicDashboardUrl?: string;
+    67→}
+    68→
+    69→/** Grafana panel position and size */
+    70→export interface GridPos {
+    71→  /** Horizontal position (0-indexed) */
+    72→  x: number;
+    73→  /** Vertical position (0-indexed) */
+    74→  y: number;
+    75→  /** Width in grid units */
+    76→  w: number;
+    77→  /** Height in grid units */
+    78→  h: number;
+    79→  /** Minimum width (optional) */
+    80→  minW?: number;
+    81→  /** Minimum height (optional) */
+    82→  minH?: number;
+    83→  /** Maximum width (optional) */
+    84→  maxW?: number;
+    85→  /** Maximum height (optional) */
+    86→  maxH?: number;
+    87→}
+    88→
+    89→/** Panel repeat configuration */
+    90→export interface PanelRepeatConfig {
+    91→  /** Variable to repeat by */
+    92→  variableName: string;
+    93→  /** Direction of repetition */
+    94→  direction: 'horizontal' | 'vertical';
+    95→  /** Maximum repetitions */
+    96→  maxPerRow?: number;
+    97→}
+    98→
+    99→/** Panel options base */
+   100→export interface PanelOptions {
+   101→  /** Display panel title */
+   102→  showTitle?: boolean;
+   103→  /** Display legend */
+   104→  showLegend?: boolean;
+   105→  /** Legend position */
+   106→  legendPosition?: 'bottom' | 'right' | 'hidden';
+   107→  /** Legend display mode */
+   108→  legendDisplayMode?: 'list' | 'table' | 'hidden';
+   109→  /** Tooltip display mode */
+   110→  tooltipMode?: 'single' | 'multi' | 'none';
+   111→  /** Thresholds display */
+   112→  thresholdsStyle?: 'line' | 'area' | 'dashed' | 'none';
+   113→  /** Color scheme */
+   114→  colorScheme?: string;
+   115→  /** Graph orientation */
+   116→  orient?: 'auto' | 'vertical' | 'horizontal';
+   117→  /** Text alignment (for stat panels) */
+   118→  align?: 'auto' | 'left' | 'center' | 'right';
+   119→  /** Reduce value calculation */
+   120→  reduceOptions?: ReduceOptions;
+   121→  /** Sparkline settings */
+   122→  sparkline?: SparklineOptions;
+   123→  /** No value state text */
+   124→  noValue?: string;
+   125→}
+   126→
+   127→/** Value reduction options */
+   128→export interface ReduceOptions {
+   129→  /** Values to include */
+   130→  values: boolean;
+   131→  /** Fields to calculate on */
+   132→  calcs: Array<'lastNotNull' | 'mean' | 'max' | 'min' | 'sum' | 'count' | 'firstNotNull'>;
+   133→  /** Current row only */
+   134→  current?: boolean;
+   135→}
+   136→
+   137→/** Sparkline visualization options */
+   138→export interface SparklineOptions {
+   139→  /** Enable sparkline */
+   140→  enabled: boolean;
+   141→  /** Line fill opacity */
+   142→  fillOpacity?: number;
+   143→  /** Show data points */
+   144→  showDataPoints?: boolean;
+   145→  /** Line width */
+   146→  lineWidth?: number;
+   147→  /** Y-axis minimum */
+   148→  yAxisMin?: number;
+   149→  /** Y-axis maximum */
+   150→  yAxisMax?: number;
+   151→}
+   152→
+   153→/** Threshold step definition */
+   154→export interface ThresholdStep {
+   155→  /** Value at which threshold activates */
+   156→  value: number;
+   157→  /** Color for values above this threshold */
+   158→  color: string;
+   159→  /** Threshold state */
+   160→  state: 'green' | 'yellow' | 'red';
+   161→}
+   162→
+   163→/** Threshold configuration */
+   164→export interface Thresholds {
+   165→  /** Mode: absolute or percentage */
+   166→  mode: 'absolute' | 'percentage';
+   167→  /** Threshold steps */
+   168→  steps: ThresholdStep[];
+   169→}
+   170→
+   171→/** Field override rule */
+   172→export interface FieldOverrideRule {
+   173→  /** Matcher properties */
+   174→  matcher: {
+   175→    id: string;
+   176→    options: Record<string, unknown>;
+   177→  };
+   178→  /** Properties to override */
+   179→  properties: Array<{
+   180→    id: string;
+   181→    value: unknown;
+   182→  }>;
+   183→}
+   184→
+   185→/** Data transformation */
+   186→export interface DataTransformation {
+   187→  /** Transformation ID */
+   188→  id: string;
+   189→  /** Transformation options */
+   190→  options: Record<string, unknown>;
+   191→}
+   192→
+   193→/** Query target ref */
+   194→export type TargetRefID = string;
+   195→
+   196→/** Standard Grafana panel */
+   197→export interface GrafanaPanel {
+   198→  /** Panel identifier (unique within dashboard) */
+   199→  id: number;
+   200→  /** Panel type (graph, table, stat, logs, etc.) */
+   201→  type: PanelType;
+   202→  /** Panel title */
+   203→  title: string;
+   204→  /** Grid position */
+   205→  gridPos: GridPos;
+   206→  /** Panel options (type-specific) */
+   207→  options: Record<string, unknown> & Partial<PanelOptions>;
+   208→  /** Data targets/queries */
+   209→  targets: DataSourceQuery[];
+   210→  /** Field overrides */
+   211→  fieldConfig?: {
+   212→    defaults: Record<string, unknown>;
+   213→    overrides: FieldOverrideRule[];
+   214→  };
+   215→  /** Transformations */
+   216→  transformations?: DataTransformation[];
+   217→  /** Thresholds */
+   218→  thresholds?: Thresholds;
+   219→  /** Repeat configuration */
+   220→  repeat?: string;
+   221→  repeatDirection?: 'horizontal' | 'vertical';
+   222→  /** Panel description */
+   223→  description?: string;
+   224→  /** Whether panel is transparent */
+   225→  transparent?: boolean;
+   226→  /** Links associated with panel */
+   227→  links?: PanelLink[];
+   228→  /** Datasource UID (overrides per-target) */
+   229→  datasource?: DataSourceRef;
+   230→  /** Panel plugin version */
+   231→  pluginVersion?: string;
+   232→  /** Time from relative to dashboard time */
+   233→  timeFrom?: string;
+   234→  /** Time shift relative to dashboard time */
+   235→  timeShift?: string;
+   236→  /** Hide time info */
+   237→  hideTimeOverride?: boolean;
+   238→  /** Maximum number of data points */
+   239→  maxDataPoints?: number;
+   240→  /** Interval between data points */
+   241→  interval?: string;
+   242→  /** Cache timeout */
+   243→  cacheTimeout?: string;
+   244→}
+   245→
+   246→/** Supported panel types */
+   247→export type PanelType =
+   248→  // Visualization panels
+   249→  | 'timeseries'
+   250→  | 'stat'
+   251→  | 'gauge'
+   252→  | 'bargauge'
+   253→  | 'barchart'
+   254→  | 'heatmap'
+   255→  | 'piechart'
+   256→  | 'state-timeline'
+   257→  | 'status-history'
+   258→  | 'xychart'
+   259→  | 'histogram'
+   260→  | 'candlestick'
+   261→  | 'scatter'
+   262→  | 'node-graph'
+   263→  | 'flame-graph'
+   264→  | 'trace-viewer'
+   265→  // Table & log panels
+   266→  | 'table'
+   267→  | 'logs'
+   268→  | 'annotation-list'
+   269→  | 'data-links'
+   270→  // Geo & map panels
+   271→  | 'geomap'
+   272→  | 'worldmap'
+   273→  // Canvas & custom
+   274→  | 'canvas'
+   275→  | 'text'
+   276→  | 'news'
+   277→  | 'dashboard-list'
+   278→  // Enterprise panels
+   279→  | 'alertgroup'
+   280→  | 'alert-list';
+   281→
+   282→/** Panel link configuration */
+   283→export interface PanelLink {
+   284→  /** Link title */
+   285→  title: string;
+   286→  /** Link URL or dashboard reference */
+   287→  url?: string;
+   288→  /** Dashboard UID for internal link */
+   289→  dashUid?: string;
+   290→  /** Dashboard tab name */
+   291→  dashTab?: string;
+   292→  /** Open in new tab */
+   293→  asDropdown?: boolean;
+   294→  /** Include variables in URL */
+   295→  keepTime?: boolean;
+   296→  /** Tooltip text */
+   297→  tooltip?: string;
+   298→  /** Target blank */
+   299→  targetBlank?: boolean;
+   300→}
+   301→
+   302→/** Complete Grafana dashboard model */
+   303→export interface GrafanaDashboard {
+   304→  /** Dashboard schema version */
+   305→  schemaVersion: number;
+   306→  /** Dashboard type */
+   307→  type: 'dashdb' | 'direct';
+   308→  /** Dashboard UID */
+   309→  uid: DashboardUID;
+   310→  /** Dashboard title */
+   311→  title: string;
+   312→  /** Dashboard tags */
+   313→  tags: string[];
+   314→  /** Dashboard timezone */
+   315→  timezone: 'browser' | 'utc' | string;
+   316→  /** Refresh interval */
+   317→  refresh: RefreshInterval | false;
+   318→  /** Time range */
+   319→  time: TimeRange;
+   320→  /** Time picker configuration */
+   321→  timepicker: TimePickerConfig;
+   322→  /** Graph tooltip behavior */
+   323→  graphTooltip: GraphTooltipMode;
+   324→  /** Annotation definitions */
+   325→  annotations: AnnotationDefinition[];
+   326→  /** Template variables */
+   327→  templating: TemplatingConfig;
+   328→  /** All panels */
+   329→  panels: GrafanaPanel[];
+   330→  /** Dashboard metadata */
+   331→  meta?: DashboardMeta;
+   332→  /** Live refresh settings */
+   333→  liveNow?: boolean;
+   334→  /** Shared crosshair */
+   335→  sharedCrosshair?: boolean;
+   336→  /** Editable flag */
+   337→  editable?: boolean;
+   338→  /** Folders structure */
+   339→  folders?: DashboardFolder[];
+   340→  /** Links */
+   341→  links?: DashboardLink[];
+   342→  /** Description */
+   343→  description?: string;
+   344→  /** Version */
+   345→  version?: number;
+   346→}
+   347→
+   348→/** Dashboard list/search result item */
+   349→export interface DashboardSearchResult {
+   350→  /** Dashboard ID */
+   351→  id: number;
+   352→  /** Dashboard UID */
+   353→  uid: DashboardUID;
+   354→  /** Dashboard title */
+   355→  title: string;
+   356→  /** Dashboard URL */
+   357→  url: string;
+   358→  /** Dashboard type */
+   359→  type: 'dash-db' | 'dash-folder' | 'dash-public';
+   360→  /** Tags */
+   361→  tags: string[];
+   362→  /** Is starred */
+   363→  isStarred: boolean;
+   364→  /** Folder information */
+   365→  folderId: number;
+   366→  folderUid: string;
+   367→  folderTitle: string;
+   368→  folderUrl: string;
+   369→  /** Sort info */
+   370→  sortMeta?: string;
+   371→  sortValue?: number;
+   372→  sortName?: string;
+   373→}
+   374→
+   375→/** Dashboard folder */
+   376→export interface DashboardFolder {
+   377→  /** Folder ID */
+   378→  id: number;
+   379→  /** Folder UID */
+   380→  uid: string;
+   381→  /** Folder title */
+   382→  title: string;
+   383→  /** Folder URL */
+   384→  url: string;
+   385→  /** Has ACL */
+   386→  hasAcl: boolean;
+   387→  /** Can save */
+   388→  canSave: boolean;
+   389→  /** Can edit */
+   390→  canEdit: boolean;
+   391→  /** Can admin */
+   392→  canAdmin: boolean;
+   393→  /** Created by */
+   394→  created: string;
+   395→  /** Updated by */
+   396→  updated: string;
+   397→  /** Created timestamp */
+   398→  createdBy: string;
+   399→  /** Updated by */
+   400→  updatedBy: string;
+   401→  /** Version */
+   402→  version: number;
+   403→}
+   404→
+   405→/** Dashboard link */
+   406→export interface DashboardLink {
+   407→  /** Link type */
+   408→  type: 'link' | 'dashboards';
+   409→  /** Display as dropdown */
+   410→  asDropdown: boolean;
+   411→  /** Icon class */
+   412→  iconClass: string;
+   413→  /** Include time range */
+   414→  includeVars: boolean;
+   415→  /** Keep time */
+   416→  keepTime: boolean;
+   417→  /** Tags filter */
+   418→  tags: string[];
+   419→  /** Target blanks */
+   420→  targetBlank: boolean;
+   421→  /** Title */
+   422→  title: string;
+   423→  /** Tooltip */
+   424→  tooltip: string;
+   425→  /** URL */
+   426→  url: string;
+   427→  /** Dashboard UID */
+   428→  dashUid?: string;
+   429→  /** Dashboard URI */
+   430→  dashboard?: string;
+   431→  /** Panel ID */
+   432→  panelId?: number;
+   433→}
+   434→
+   435→// ============================================================
+   436→// Data Source Types
+   437→// ============================================================
+   438→
+   439→/** Data source type identifiers */
+   440→export enum DataSourceType {
+   441→  PROMETHEUS = 'prometheus',
+   442→  ELASTICSEARCH = 'elasticsearch',
+   443→  MYSQL = 'mysql',
+   444→  POSTGRESQL = 'postgres',
+   445→  GRAFANA_POSTGRES = 'grafana-postgresql-datasource',
+   446→  INFLUXDB = 'influxdb',
+   447→  GRAPHITE = 'graphite',
+   448→  LOKI = 'loki',
+   449→  TEMPOSTACK = 'tempo',
+   450→  JAEGGER = 'jaeger',
+   451→  AZURE_MONITOR = 'azuremonitor',
+   452→  CLOUDWATCH = 'cloudwatch',
+   453→  STACKDRIVER = 'stackdriver',
+   454→  DATADOG = 'datadog',
+   455→  DYNAMODB = 'dynamodb',
+   456→  OPENTSDB = 'opentsdb',
+   457→  MYSQL_LEGACY = 'grafana-mysql-datasource',
+   458→  MSSQL = 'mssql',
+   459→  ORACLE = 'oracle',
+   460→  TESTDATA = 'testdata',
+   461→  MIXED = 'mixed',
+   462→  ALERTMANAGER = 'alertmanager',
+   463→}
+   464→
+   465→/** Data source reference (minimal) */
+   466→export interface DataSourceRef {
+   467→  /** Data source type */
+   468→  type: DataSourceType | string;
+   469→  /** Data source UID */
+   470→  uid: string;
+   471→}
+   472→
+   473→/** Full data source configuration */
+   474→export interface DataSource {
+   475→  /** Database ID */
+   476→  id: number;
+   477→  /** Organization ID */
+   478→  orgId: number;
+   479→  /** Unique identifier */
+   480→  uid: string;
+   481→  /** Display name */
+   482→  name: string;
+   483→  /** Data source type */
+   484→  type: DataSourceType | string;
+   485→  /** Type logo URL */
+   486→  typeLogoUrl: string;
+   487→  /** Access mode */
+   488→  access: 'proxy' | 'direct' | 'server';
+   489→  /** Default URL */
+   490→  url: string;
+   491→  /** Password (encrypted) */
+   492→  password?: string;
+   493→  /** Username */
+   494→  user?: string;
+   495→  /** Database name */
+   496→  database?: string;
+   497→  /** Basic auth enabled */
+   498→  basicAuth?: boolean;
+   499→  /** Basic auth user */
+   500→  basicAuthUser?: string;
+   501→  /** Basic auth password */
+   502→  basicAuthPassword?: boolean;
+   503→  /** JSON data (type-specific config) */
+   504→  jsonData: Record<string, unknown>;
+   505→  /** Secure JSON fields mask */
+   506→  secureJsonFields: Record<string, boolean>;
+   507→  /** Read-only flag */
+   508→  isDefault: boolean;
+   509→  /** Version */
+   510→  version: number;
+   511→  /** Created date */
+   512→  created: string;
+   513→  /** Updated date */
+   514→  updated: string;
+   515→  /** API health status */
+   516→  apiHealthStatus?: DataSourceHealthStatus;
+   517→  /** Last test error */
+   518→  lastTestError?: string;
+   519→  /** Last test result */
+   520→  lastTestResult?: DataSourceTestResult;
+   521→}
+   522→
+   523→/** Data source health status */
+   524→export type DataSourceHealthStatus = 'OK' | 'ERROR' | 'UNKNOWN';
+   525→
+   526→/** Data source test result */
+   527→export interface DataSourceTestResult {
+   528→  /** Test success */
+   529→  success: boolean;
+   530→  /** Error message */
+   531→  message?: string;
+   532→  /** Response details */
+   533→  details?: Record<string, unknown>;
+   534→}
+   535→
+   536→/** Prometheus-specific data source config */
+   537→export interface PrometheusDataSourceConfig {
+   538→  /** HTTP method */
+   539→  httpMethod: 'GET' | 'POST' | 'POST_for_large_queries';
+   540→  /** Query timeout */
+   541→  queryTimeout: string;
+   542→  /** Cancel queries on navigation */
+   543→  cancelOnNavigate: boolean;
+   544→  /** Cache TTL */
+   545→  cacheLevel: 'Low' | 'Medium' | 'High' | 'None';
+   546→  /** Incremental query support */
+   547→  incrementalQuerying: boolean;
+   548→  /** Disable recording rules */
+   549→  disableRecordingRules: boolean;
+   550→  /** Exemplar tracking */
+   551→  exemplarTraceIdDestinations?: Array<{ name: string; datasourceUid: string }>;
+   552→  /** API version */
+   553→  promType: 'Prometheus' | 'Cortex' | 'Mimir' | 'Thanos' | 'VictoriaMetrics';
+   554→  /** Custom query parameters */
+   555→  customQueryParameters?: string;
+   556→  /** Manage alerts via UI */
+   557→  manageAlerts?: boolean;
+   558→  /** PromQL editor */
+   559→  promqlEditor?: boolean;
+   560→}
+   561→
+   562→/** Elasticsearch-specific data source config */
+   563→export interface ElasticsearchDataSourceConfig {
+   564→  /** Index pattern */
+   565→  index: string;
+   566→  /** Time field */
+   567→  timeField: string;
+   568→  /** Message field */
+   569→  messageField?: string;
+   570→  /** Version */
+   571→  esVersion: string;
+   572→  /** Data frame config */
+   573→  dataFrameConfig?: {
+   574→    /** Max concurrent shard requests */
+   575→    maxConcurrentShardRequests: number;
+   576→    /** Sample size */
+   577→    sampleSize: number;
+   578→    /** Scroll duration */
+   579→    scrollDuration: string;
+   580→    /** Treat fields as numeric */
+   581→    treatFieldsAsNumeric: boolean;
+   582→    /** Default bucket limit */
+   583→    defaultBucketLimit: number;
+   584→  };
+   585→  /** Log message field */
+   586→  logMessageField?: string;
+   587→  /** Log level field */
+   588→  logLevelField?: string;
+   589→  /** Doc key */
+   590→  docKey?: string;
+   591→  /** Interval */
+   592→  interval?: string;
+   593→  /** Changed field */
+   594→  changedField?: string;
+   595→  /** Avoid prefix */
+   596→  avoidPrefix?: boolean;
+   597→  /** Max concurrent shard requests */
+   598→  maxConcurrentShardRequests?: number;
+   599→}
+   600→
+   601→/** MySQL/PostgreSQL data source config */
+   602→export interface SQLDataSourceConfig {
+   603→  /** Database name */
+   604→  database: string;
+   605→  /** Max open connections */
+   606→  maxOpenConns?: number;
+   607→  /** Max idle connections */
+   608→  maxIdleConns?: number;
+   609→  /** Connection max lifetime */
+   610→  connMaxLifetime?: number;
+   611→  /** TLS config */
+   612→  tlsConfig?: {
+   613→    /** Enable TLS */
+   614→    enableTls: boolean;
+   615→    /** Skip TLS verification */
+   616→    skipTlsVerify: boolean;
+   617→    /** CA certificate */
+   618→    caCert?: string;
+   619→    /** Client certificate */
+   620→    clientCert?: string;
+   621→    /** Client key */
+   622→    clientKey?: string;
+   623→    /** Server name */
+   624→    serverName?: string;
+   625→  };
+   626→  /** PostgreSQL specific */
+   627→  postgresVersion?: number;
+   628→  /** TimescaleDB mode */
+   629→  timescaledb?: boolean;
+   630→}
+   631→
+   632→/** Loki data source config */
+   633→export interface LokiDataSourceConfig {
+   634→  /** Maximum lines */
+   635→  maxLines: number;
+   636→  /** Derive field names */
+   637→  deriveFieldNames: boolean;
+   638→  /** Query timeout */
+   639→  queryTimeout: string;
+   640→  /** Step mode */
+   641→  stepMode: 'min' | 'custom';
+   642→  /** Step value */
+   643→  step?: number;
+   644→  /** Custom query parameters */
+   645→  customQueryParameters?: string;
+   646→}
+   647→
+   648→// ============================================================
+   649→// Query Types
+   650→// ============================================================
+   651→
+   652→/** Base data source query */
+   653→export interface DataSourceQuery {
+   654→  /** Reference ID (A, B, C...) */
+   655→  refId: TargetRefID;
+   656→  /** Hide query from legend */
+   657→  hide?: boolean;
+   658→  /** Query type (for some datasources) */
+   659→  queryType?: string;
+   660→  /** Datasource reference */
+   661→  datasource?: DataSourceRef;
+   662→  /** Raw query expression */
+   663→  expr?: string;
+   664→  /** Raw SQL query */
+   665→  rawSql?: string;
+   666→  /** Query format */
+   667→  format?: string;
+   668→  /** Instant query */
+   669→  instant?: boolean;
+   670→  /** Range query */
+   671→  range?: boolean;
+   672→  /** Legend formatter */
+   673→  legendFormat?: string;
+   674→  /** Interval factor */
+   675→  intervalFactor?: number;
+   676→  /** Interval */
+   677→  interval?: string;
+   678→  /** Exemplar */
+   679→  exemplar?: boolean;
+   680→  /** Request ID */
+   681→  requestId?: string;
+   682→  /** UTC offset */
+   683→  utcOffsetSec?: number;
+   684→  /** Editor mode */
+   685→  editorMode?: 'code' | 'builder';
+   686→  /** Query options */
+   687→  options?: Record<string, unknown>;
+   688→  /** Additional query parameters */
+   689→  [key: string]: unknown;
+   690→}
+   691→
+   692→/** Prometheus query */
+   693→export interface PrometheusQuery extends DataSourceQuery {
+   694→  /** PromQL expression */
+   695→  expr: string;
+   696→  /** Instant query flag */
+   697→  instant?: boolean;
+   698→  /** Range flag */
+   699→  range?: boolean;
+   700→  /** Legend format */
+   701→  legendFormat?: string;
+   702→  /** Interval */
+   703→  interval?: string;
+   704→  /** Exemplar flag */
+   705→  exemplar?: boolean;
+   706→  /** Request ID */
+   707→  requestId?: string;
+   708→  /** UTC offset */
+   709→  utcOffsetSec?: number;
+   710→  /** Query type */
+   711→  queryType?: string;
+   712→}
+   713→
+   714→/** Elasticsearch query */
+   715→export interface ElasticsearchQuery extends DataSourceQuery {
+   716→  /** Query type */
+   717→  query: string;
+   718→  /** Index pattern override */
+   719→  indexOverride?: string;
+   720→  /** Alias pattern */
+   721→  alias?: string;
+   722→  /** Metrics */
+   723→  metrics: Array<{
+   724→    id: string;
+   725→    type: 'count' | 'avg' | 'sum' | 'min' | 'max' | 'value_count' | 'cardinality' | 'percentiles' | 'derivative' | 'cumulative_sum' | 'moving_avg' | 'rate';
+   726→    settings?: Record<string, unknown>;
+   727→  }>;
+   728→  /** Bucket aggregations */
+   729→  bucketAggs: Array<{
+   730→    id: string;
+   731→    type: 'date_histogram' | 'filters' | 'terms' | 'histogram' | 'range' | 'geohash_grid';
+   732→    settings: Record<string, unknown>;
+   733→  }>;
+   734→  /** Time field */
+   735→  timeField?: string;
+   736→  /** Change detection fields */
+   737→  changeDetectionFields?: string[];
+   738→}
+   739→
+   740→/** Loki query */
+   741→export interface LokiQuery extends DataSourceQuery {
+   742→  /** LogQL expression */
+   743→  expr: string;
+   744→  /** Query type */
+   745→  queryType?: 'range' | 'instant';
+   746→  /** Maximum lines */
+   747→  maxLines?: number;
+   748→  /** Stream rate limit */
+   749→  streamRateLimitMs?: number;
+   750→}
+   751→
+   752→/** SQL query */
+   753→export interface SQLQuery extends DataSourceQuery {
+   754→  /** SQL statement */
+   755→  rawSql: string;
+   756→  /** SQL dialect */
+   757→  sqlLanguage?: string;
+   758→  /** Columns formatting */
+   759→  columns?: Array<{ text: string; type: string }>;
+   760→}
+   761→
+   762→/** Generic query result */
+   763→export interface QueryResult<T = unknown> {
+   764→  /** Reference ID matching query */
+   765→  refId: TargetRefID;
+   766→  /** Result frames */
+   767→  data: DataFrame[];
+   768→  /** Error if any */
+   769→  error?: QueryError;
+   770→  /** Metadata */
+   771→  meta?: Record<string, unknown>;
+   772→}
+   773→
+   774→/** Data frame (column-oriented) */
+   775→export interface DataFrame {
+   776→  /** Frame name */
+   777→  name?: string;
+   778→  /** Frame labels */
+   779→  labels?: Record<string, string>;
+   780→  /** Columns */
+   781→  fields: Field[];
+   782→  /** Metadata */
+   783→  meta?: Record<string, unknown>;
+   784→  /** Total rows */
+   785→  length: number;
+   786→}
+   787→
+   788→/** Field in a data frame */
+   789→export interface Field {
+   790→  /** Field name */
+   791→  name: string;
+   792→  /** Field type */
+   793→  type: FieldType;
+   794→  /** Field config */
+   795→  config?: FieldConfig;
+   796→  /** Values array */
+   797→  values: unknown[];
+   798→  /** Labels */
+   799→  labels?: Record<string, string>;
+   800→}
+   801→
+   802→/** Field types */
+   803→export type FieldType =
+   804→  | 'time'
+   805→  | 'number'
+   806→  | 'string'
+   807→  | 'boolean'
+   808→  | 'enum'
+   809→  | 'traceid'
+   810→  | 'spanid'
+   811→  | 'other'
+   812→  | 'uint64'
+   813→  | 'numeric';
+   814→
+   815→/** Field configuration */
+   816→export interface FieldConfig {
+   817→  /** Display name */
+   818→  displayName?: string;
+   819→  /** Unit */
+   820→  unit?: string;
+   821→  /** Decimals */
+   822→  decimals?: number;
+   823→  /** Min value */
+   824→  min?: number;
+   825→  /** Max value */
+   826→  max?: number;
+   827→  /** Mappings */
+   828→  mappings?: ValueMapping[];
+   829→  /** Thresholds */
+   830→  thresholds?: Thresholds;
+   831→  /** No value */
+   832→  noValue?: string;
+   833→  /** Color mode */
+   834→  color?: FieldColorConfig;
+   835→  /** Custom */
+   836→  custom?: Record<string, unknown>;
+   837→}
+   838→
+   839→/** Value mapping */
+   840→export interface ValueMapping {
+   841→  /** Mapping type */
+   842→  type: 'value' | 'range' | 'regex' | 'special' | 'hide';
+   843→  /** Options based on type */
+   844→  options: Record<string, unknown>;
+   845→  /** Result value */
+   846→  result: ValueMappingResult;
+   847→}
+   848→
+   849→/** Value mapping result */
+   850→export interface ValueMappingResult {
+   851→  /** Text */
+   852→  text: string;
+   853→  /** Color */
+   854→  color?: string;
+   855→  /** Icon */
+   856→  icon?: string;
+   857→  /** Index */
+   858→  index?: number;
+   859→}
+   860→
+   861→/** Field color configuration */
+   862→export interface FieldColorConfig {
+   863→  /** Mode */
+   864→  mode: 'thresholds' | 'palette-classic' | 'palette-spectral' | 'continuous-GrYlRd' | 'continuous-RdYlGr' | 'continuous-blues' | 'continuous-reds' | 'continuous-greens' | 'fixed' | 'series-name' | 'dark-plus' | 'light-plus' | 'thresholds-by-value';
+   865→  /** Fixed color */
+   866→  fixedColor?: string;
+   867→  /** Card color */
+   868→  cardColor?: string;
+   869→  /** Color scheme */
+   870→  colorScheme?: string;
+   871→  /** Gradient mode */
+   872→  gradientMode?: 'none' | 'opacity' | 'hue' | 'scheme';
+   873→  /** Reverse colors */
+   874→  reverse?: boolean;
+   875→  /** Steps */
+   876→  steps?: number;
+   877→  /** Min/max */
+   878→  min?: number;
+   879→  max?: number;
+   880→  /** Thresholds */
+   881→  thresholds?: { value: number; color: string }[];
+   882→}
+   883→
+   884→/** Query error */
+   885→export interface QueryError {
+   886→  /** Error message */
+   887→  message: string;
+   888→  /** Error code */
+   889→  code?: number;
+   890→  /** Error data */
+   891→  data?: unknown;
+   892→  /** Ref IDs that failed */
+   893→  refIds?: string[];
+   894→}
+   895→
+   896→// ============================================================
+   897→// Alert Rule Types
+   898→// ============================================================
+   899→
+   900→/** Alert rule state */
+   901→export type AlertState = 
+   902→  | 'normal'
+   903→  | 'pending'
+   904→  | 'alerting'
+   905→  | 'no_data'
+   906→  | 'error'
+   907→  | 'ok'
+   908→  | 'paused'
+   909→  | 'unknown';
+   910→
+   911→/** Alert rule execution mode */
+   912→export type ExecutionMode = 'Scheduled' | 'EvaluationGroup' | 'Alerting' | 'Recovery';
+   913→
+   914→/** Alert evaluation condition */
+   915→export interface AlertCondition {
+   916→  /** Condition type */
+   917→  type: 'query' | 'reduce' | 'math' | 'threshold';
+   918→  /** Query reference */
+   919→  query?: {
+   920→    params: string[];
+   921→  };
+   922→  /** Reducer */
+   923→  reducer?: {
+   924→    type: 'avg' | 'sum' | 'min' | 'max' | 'count' | 'last' | 'median' | 'diff' | 'percent_diff' | 'count_non_null' | 'step' | 'range';
+   925→    params: string[];
+   926→  };
+   927→  /** Evaluator */
+   928→  evaluator?: {
+   929→    type: 'gt' | 'lt' | 'within_range' | 'outside_range' | 'no_value' | 'is_above' | 'is_below';
+   930→    params: number[] | string[];
+   931→  };
+   932→  /** Operator */
+   933→  operator?: {
+   934→    type: 'and' | 'or';
+   935→  };
+   936→  /** Conditions (nested) */
+   937→  conditions?: AlertCondition[];
+   938→}
+   939→
+   940→/** Alert notification channel */
+   941→export interface AlertNotificationChannel {
+   942→  /** Channel UID */
+   943→  uid: string;
+   944→  /** Resolved flag */
+   945→  resolvedMessage?: boolean;
+   946→  /** Group wait */
+   947→  groupWait?: string;
+   948→  /** Group interval */
+   949→  groupInterval?: string;
+   950→  /** Repeat interval */
+   951→  repeatInterval?: string;
+   952→  /** Frequency */
+   953→  frequency?: string;
+   954→  /** Mute timings */
+   955→  muteTimings?: string[];
+   956→  /** Group by */
+   957→  groupBy?: string[];
+   958→  /** Policy */
+   959→  policy?: string[];
+   960→}
+   961→
+   962→/** Alert rule definition */
+   963→export interface AlertRule {
+   964→  /** Rule ID */
+   965→  id: number;
+   966→  /** Rule UID */
+   967→  uid: string;
+   968→  /** Organization ID */
+   969→  orgId: number;
+   970→  /** Folder ID */
+   971→  folderId: number;
+   972→  /** Folder UID */
+   973→  folderUid: string;
+   974→  /** Rule name */
+   975→  title: string;
+   976→  /** Condition */
+   977→  condition: string;
+   978→  /** Data queries */
+   979→  data: Array<Record<string, unknown>>;
+   980→  /** Rule group */
+   981→  ruleGroup: string;
+   982→  /** No data state */
+   983→  noDataState: 'NoData' | 'Alerting' | 'Ok';
+   984→  /** Exec error state */
+   985→  execErrState: 'Alerting' | 'Ok';
+   986→  /** For duration */
+   987→  for: string;
+   988→  /** Annotations */
+   989→  annotations: Record<string, string>;
+   990→  /** Labels */
+   991→  labels: Record<string, string>;
+   992→  /** Is paused */
+   993→  isPaused: boolean;
+   994→  /** Current state */
+   995→  currentState: AlertState;
+   996→  /** State since timestamp */
+   997→  stateSince: string;
+   998→  /** State changes count */
+   999→  stateChangesCount: number;
+  1000→  /** Evaluation frequency */
+  1001→  intervalSeconds: number;
+  1002→  /** Notification settings */
+  1003→  notifications: AlertNotificationChannel[];
+  1004→  /** Created date */
+  1005→  created: string;
+  1006→  /** Updated date */
+  1007→  updated: string;
+  1008→  /** Version */
+  1009→  version: number;
+  1010→  /** Health */
+  1011→  health: 'ok' | 'error' | 'nodata' | 'unknown';
+  1012→  /** Last evaluation */
+  1013→  lastEvaluation?: string;
+  1014→  /** Next evaluation */
+  1015→  nextEvaluation?: string;
+  1016→  /** Evaluation data */
+  1017→  evalData?: AlertEvalData;
+  1018→}
+  1019→
+  1020→/** Alert evaluation data */
+  1021→export interface AlertEvalData {
+  1022→  /** Evaluation count */
+  1023→  evaluationCount: number;
+  1024→  /** Current state */
+  1025→  currentState: AlertState;
+  1026→  /** Pending count */
+  1027→  pendingCount: number;
+  1028→  /** Alerting count */
+  1029→  alertingCount: number;
+  1030→  /** Ok count */
+  1031→  okCount: number;
+  1032→  /** No data count */
+  1033→  noDataCount: number;
+  1034→  /** Error count */
+  1035→  errorCount: number;
+  1036→  /** Last evaluation duration */
+  1037→  lastEvaluationDuration?: number;
+  1038→}
+  1039→
+  1040→/** Alert incident */
+  1041→export interface AlertIncident {
+  1042→  /** Incident ID */
+  1043→  id: number;
+  1044→  /** Alert rule ID */
+  1045→  alertRuleUID: string;
+  1046→  /** Alert rule name */
+  1047→  ruleName: string;
+  1048→  /** Organization ID */
+  1049→  orgId: number;
+  1050→  /** Start time */
+  1051→  startedAt: string;
+  1052→  /** End time (if resolved) */
+  1053→  endedAt?: string;
+  1054→  /** State during incident */
+  1055→  stateDuringIncident: AlertState;
+  1056→  /** Resolved by */
+  1057→  resolvedBy?: string;
+  1058→  /** Current state */
+  1059→  currentState: AlertState;
+  1060→  /** Labels */
+  1061→  labels: Record<string, string>;
+  1062→  /** Annotations */
+  1063→  annotations: Record<string, string;
+  1064→  /** Assignment */
+  1065→  assignedTo?: string;
+  1066→  /** Creator */
+  1067→  creator?: string;
+  1068→  /** Severity */
+  1069→  severity?: AlertSeverity;
+  1070→}
+  1071→
+  1072→/** Alert severity levels */
+  1073→export type AlertSeverity = 'critical' | 'high' | 'warning' | 'info' | 'none';
+  1074→
+  1075→/** Alert history entry */
+  1076→export interface AlertHistoryEntry {
+  1077→  /** Entry ID */
+  1078→  id: number;
+  1079→  /** Timestamp */
+  1080→  timestamp: string;
+  1081→  /** Previous state */
+  1082→  previousState: AlertState;
+  1083→  /** New state */
+  1084→  newState: AlertState;
+  1085→  /** Rule ID */
+  1086→  ruleId: number;
+  1087→  /** Rule UID */
+  1088→  ruleUID: string;
+  1089→  /** Rule name */
+  1090→  ruleName: string;
+  1091→  /** Rule group */
+  1092→  ruleGroup: string;
+  1093→  /** Folder ID */
+  1094→  folderId: number;
+  1095→  /** Organization ID */
+  1096→  orgId: number;
+  1097→  /** Info */
+  1098→  info: string;
+  1099→  /** Duration seconds */
+  1100→  durationSeconds: number;
+  1101→  /** Labels */
+  1102→  labels: Record<string, string>;
+  1103→  /** Annotations */
+  1104→  annotations: Record<string, string>;
+  1105→  /** Data */
+  1106→  data: Record<string, unknown>;
+  1107→  /** Version */
+  1108→  version: number;
+  1109→}
+  1110→
+  1111→/** Contact point / notification channel */
+  1112→export interface ContactPoint {
+  1113→  /** Channel ID */
+  1114→  id: number;
+  1115→  /** Channel UID */
+  1116→  uid: string;
+  1117→  /** Organization ID */
+  1118→  orgId: number;
+  1119→  /** Channel name */
+  1120→  name: string;
+  1121→  /** Settings */
+  1122→  settings: Record<string, unknown>;
+  1123→  /** Disable resolve message */
+  1124→  disableResolveMessage?: boolean;
+  1125→  /** Created date */
+  1126→  created: string;
+  1127→  /** Updated date */
+  1128→  updated: string;
+  1129→}
+  1130→
+  1131→/** Mute timing */
+  1132→export interface MuteTiming {
+  1133→  /** Timing ID */
+  1134→  id: number;
+  1135→  /** Timing UID */
+  1136→  uid: string;
+  1137→  /** Name */
+  1138→  name: string;
+  1139→  /** Time intervals */
+  1140→  timeIntervals: TimeInterval[];
+  1141→  /** Created date */
+  1142→  created: string;
+  1143→  /** Updated date */
+  1144→  updated: string;
+  1145→}
+  1146→
+  1147→/** Time interval for muting */
+  1148→export interface TimeInterval {
+  1149→  /** Start time */
+  1150→  start_time: string;
+  1151→  /** End time */
+  1152→  end_time: string;
+  1153→  /** Weekdays */
+  1154→  weekdays: string[];
+  1155→  /** Months */
+  1156→  months: number[];
+  1157→  /** Days of year */
+  1158→  days_of_year: string[];
+  1159→  /** Days of month */
+  1160→  days_of_month: number[];
+  1161→  /** Years */
+  1162→  years: number[];
+  1163→  /** Location */
+  1164→  location: string;
+  1165→}
+  1166→
+  1167→/** Notification policy tree */
+  1168→export interface NotificationPolicyTree {
+  1169→  /** Default contact point */
+  1170→  defaultContactPointUID: string;
+  1171→  /** Routes */
+  1172→  routes: PolicyRoute[];
+  1173→  /** Parent route */
+  1174→  parent?: PolicyRoute;
+  1175→}
+  1176→
+  1177→/** Policy route */
+  1178→export interface PolicyRoute {
+  1179→  /** Route receiver */
+  1180→  receiver: string;
+  1181→  /** Route object matchers */
+  1182→  objectMatchers: ObjectMatcher[];
+  1183→  /** Child routes */
+  1184→  routes?: PolicyRoute[];
+  1185→  /** Continue on match */
+  1186→  continue: boolean;
+  1187→  /** Mute time intervals */
+  1188→  muteTimeIntervals: string[];
+  1189→  /** Group by */
+  1190→  groupBy: string[];
+  1191→  /** Group wait */
+  1192→  groupWait: string;
+  1193→  /** Group interval */
+  1194→  groupInterval: string;
+  1195→  /** Repeat interval */
+  1196→  repeatInterval: string;
+  1197→  /** Route ID */
+  1198→  id: string;
+  1199→}
+  1200→
+  1201→/** Object matcher for routing */
+  1202→export interface ObjectMatcher {
+  1203→  /** Matcher type */
+  1204→  type: '=' | '!=' | '=~' | '!~';
+  1205→  /** Label name */
+  1206→  name: string;
+  1207→  /** Label value */
+  1208→  value: string;
+  1209→}
+  1210→
+  1211→// ============================================================
+  1212→// Annotation Types
+  1213→// ============================================================
+  1214→
+  1215→/** Annotation definition in dashboard */
+  1216→export interface AnnotationDefinition {
+  1217→  /** Definition name */
+  1218→  name: string;
+  1219→  /** Enable annotation */
+  1220→  enable: boolean;
+  1221→  /** Datasource */
+  1222→  datasource?: DataSourceRef | null;
+  1223→  /** Show in dashboard */
+  1224→  showIn: number;
+  1225→  /** Hide in dashboard */
+  1226→  hideIn: number;
+  1227→  /** Icon color */
+  1228→  iconColor: string;
+  1229→  /** Line color */
+  1230→  lineColor?: string;
+  1231→  /** Query type */
+  1232→  queryType?: string;
+  1233→  /** Expression */
+  1234→  expr?: string;
+  1235→  /** Step */
+  1236→  step?: string;
+  1237→  /** Tag keys */
+  1238→  tagKeys?: string;
+  1239→  /** Title template */
+  1240→  titleTemplate?: string;
+  1241→  /** Text template */
+  1242→  textTemplate?: string;
+  1243→  /** Snapshot endpoint */
+  1244→  snapshotEndpoint?: string;
+  1245→  /** Tooltip style */
+  1246→  tooltipStyle?: 'default' | 'multiline';
+  1247→  /** Target */
+  1248→  target?: DataSourceQuery;
+  1249→  /** Built-in type */
+  1250→  builtIn?: number;
+  1251→  /** Type */
+  1252→  type?: 'dashboard' | 'annotation' | 'tags';
+  1253→  /** Tags */
+  1254→  tags?: string[];
+  1255→  /** Text */
+  1256→  text?: string;
+  1257→  /** Editable */
+  1258→  editable?: boolean;
+  1259→  /** Filter by dashboard */
+  1260→  filterByDashboardIds?: number[];
+  1261→}
+  1262→
+  1263→/** Saved annotation */
+  1264→export interface SavedAnnotation {
+  1265→  /** Annotation ID */
+  1266→  id: number;
+  1267→  /** Alert ID */
+  1268→  alertId?: number;
+  1269→  /** Dashboard ID */
+  1270→  dashboardId: number;
+  1271→  /** Dashboard UID */
+  1272→  dashboardUID: number;
+  1273→  /** Panel ID */
+  1274→  panelId?: number;
+  1275→  /** User ID */
+  1276→  userId: number;
+  1277→  /** Username */
+  1278→  username: string;
+  1279→  /** Email */
+  1280→  email: string;
+  1281→  /** Text */
+  1282→  text: string;
+  1283→  /** Epoch millisecond */
+  1284→  epoch: number;
+  1285→  /** Region ID */
+  1286→  regionId: number;
+  1287→  /** Time */
+  1288→  time: number;
+  1289→  /** Time end (for range annotations) */
+  1290→  timeEnd?: number;
+  1291→  /** New state */
+  1292→  newState: string;
+  1293→  /** Previous state */
+  1294→  prevState: string;
+  1295→  /** Category */
+  1296→  category: string;
+  1297→  /** Tags */
+  1298→  tags: string[];
+  1299→  /** Data */
+  1300→  data: Record<string, unknown>;
+  1301→  /** Edited by */
+  1302→  editedBy?: string;
+  1303→  /** Updated */
+  1304→  updated: number;
+  1305→  /** Alert alertId */
+  1306→  alertAlertId?: number;
+  1307→  /** Alert name */
+  1308→  alertName?: string;
+  1309→  /** Alert state */
+  1310→  alertState?: string;
+  1311→  /** Alert URL */
+  1312→  alertUrl?: string;
+  1313→  /** Is region */
+  1314→  isRegion: boolean;
+  1315→  /** Source */
+  1316→  source: 'alert' | 'annotation' | 'manual';
+  1317→}
+  1318→
+  1319→// ============================================================
+  1320→// Template/Variable Types
+  1321→// ============================================================
+  1322→
+  1323→/** Template variable types */
+  1324→export type VariableType =
+  1325→  | 'query'
+  1326→  | 'interval'
+  1327→  | 'custom'
+  1328→  | 'constant'
+  1329→  | 'datasource'
+  1330→  | 'adhoc'
+  1331→  | 'textbox'
+  1332→  | 'system';
+  1333→
+  1334→/** Variable refresh options */
+  1335→export type VariableRefresh =
+  1336→  | 'on_dashboard_load'
+  1337→  | 'on_time_range_changed'
+  1338→  | 'never';
+  1339→
+  1340→/** Variable hide options */
+  1341→export type VariableHide = 0 | 1 | 2; // 0=show, 1=label, 2=hide
+  1342→
+  1343→/** Variable selection options */
+  1344→export type VariableIncludeAll = boolean;
+  1345→
+  1346→/** Multi-value option */
+  1347→export type VariableMultiValue = boolean;
+  1348→
+  1349→/** Base template variable */
+  1350→export interface TemplateVariable {
+  1351→  /** Variable name */
+  1352→  name: string;
+  1353→  /** Variable type */
+  1354→  type: VariableType;
+  1355→  /** Display label */
+  1356→  label?: string;
+  1357→  /** Hide option */
+  1358→  hide: VariableHide;
+  1359→  /** Current value(s) */
+  1360→  current: VariableValue | VariableValue[];
+  1361→  /** Options */
+  1362→  options: VariableOption[];
+  1363→  /** Query parameters */
+  1364→  query: string;
+  1365→  /** Regex filter */
+  1366→  regex?: string;
+  1367→  /** Sort order */
+  1368→  sort: number;
+  1369→  /** Tag values query */
+  1370→  tagValuesQuery?: string;
+  1371→  /** Tags query */
+  1372→  tagsQuery?: string;
+  1373→  /** Tags */
+  1374→  tags?: string[];
+  1375→  /** Use tags */
+  1376→  useTags?: boolean;
+  1377→  /** Tag prefix */
+  1378→  tagPrefix?: string;
+  1379→  /** Multi-value allowed */
+  1380→  multi: VariableMultiValue;
+  1381→  /** Include all option */
+  1382→  includeAll: VariableIncludeAll;
+  1383→  /** All value text */
+  1384→  allValue?: string;
+  1385→  /** Datasource */
+  1386→  datasource?: DataSourceRef | null;
+  1387→  /** Refresh trigger */
+  1388→  refresh: VariableRefresh;
+  1389→  /** Plugin ID */
+  1390→  pluginId?: string;
+  1391→  /** Plugin type */
+  1392→  pluginType?: string;
+  1393→  /** Skip URL sync */
+  1394→  skipUrlSync?: boolean;
+  1395→  /** Definition (for custom vars) */
+  1396→  definition?: string;
+  1397→  /** Current text value */
+  1398→  currentText?: string;
+  1399→  /** Root section */
+  1400→  root?: TemplateSection;
+  1401→}
+  1402→
+  1403→/** Variable option */
+  1404→export interface VariableOption {
+  1405→  /** Option text */
+  1406→  text: string;
+  1407→  /** Option value */
+  1408→  value: string;
+  1409→  /** Selected flag */
+  1410→  selected: boolean;
+  1411→}
+  1412→
+  1413→/** Variable value (can be string or number) */
+  1414→export type VariableValue = string | number;
+  1415→
+  1416→/** Template section */
+  1417→export interface TemplateSection {
+  1418→  /** Section type */
+  1419→  type: string;
+  1420→  /** Section title */
+  1421→  title: string;
+  1422→  /** Collapse option */
+  1423→  collapsed: boolean;
+  1424→  /** Grid position */
+  1425→  gridPos: GridPos;
+  1426→  /** Variables */
+  1427→  variables: TemplateVariable[];
+  1428→  /** Sub-sections */
+  1429→  sections?: TemplateSection[];
+  1430→}
+  1431→
+  1432→/** Complete templating configuration */
+  1433→export interface TemplatingConfig {
+  1434→  /** List of template variables */
+  1435→  list: TemplateVariable[];
+  1436→}
+  1437→
+  1438→// ============================================================
+  1439→// Time Range Types
+  1440→// ============================================================
+  1441→
+  1442→/** Time range configuration */
+  1443→export interface TimeRange {
+  1444→  /** From time (relative or absolute) */
+  1445→  from: string;
+  1446→  /** To time (relative or absolute) */
+  1447→  to: string;
+  1448→  /** Raw from */
+  1449→  raw?: TimeRangeRaw;
+  1450→  /** Raw to */
+  1451→  raw?: TimeRangeRaw;
+  1452→}
+  1453→
+  1454→/** Raw time range value */
+  1455→export interface TimeRangeRaw {
+  1456→  /** From value */
+  1457→  from: string;
+  1458→  /** To value */
+  1459→  to: string;
+  1460→}
+  1461→
+  1462→/** Time picker configuration */
+  1463→export interface TimePickerConfig {
+  1464→  /** Hidden flag */
+  1465→  hidden: boolean;
+  1466→  /** Refresh intervals available */
+  1467→  refresh_intervals: string[];
+  1468→  /** Time options */
+  1469→  time_options: string[];
+  1470→  /** Now delay */
+  1471→  nowDelay?: string;
+  1472→  /** Now button */
+  1473→  nowButton?: boolean;
+  1474→  /** Collapse */
+  1475→  collapse?: boolean;
+  1476→}
+  1477→
+  1478→/** Refresh interval options */
+  1479→export type RefreshInterval =
+  1480→  | ''
+  1481→  | '5s'
+  1482→  | '10s'
+  1483→  | '30s'
+  1484→  | '1m'
+  1485→  | '2m'
+  1486→  | '5m'
+  1487→  | '15m'
+  1488→  | '30m'
+  1489→  | '1h'
+  1490→  | '2h'
+  1491→  | '1d';
+  1492→
+  1493→/** Graph tooltip modes */
+  1494→export type GraphTooltipMode =
+  1495→  | 'single'
+  1496→  | 'multi'
+  1497→  | 'crosshairs'
+  1498→  | 'single_crosshair'
+  1499→  | 'multi_crosshair';
+  1500→
+  1501→// ============================================================
+  1502→// User & Organization Types
+  1503→// ============================================================
+  1504→
+  1505→/** Grafana user role */
+  1506→export type UserRole = 
+  1507→  | 'Viewer'
+  1508→  | 'Editor'
+  1509→  | 'Admin'
+  1510→  | 'SuperAdmin'
+  1511→  | 'None';
+  1512→
+  1513→/** Grafana user */
+  1514→export interface GrafanaUser {
+  1515→  /** User ID */
+  1516→  id: number;
+  1517→  /** User email */
+  1518→  email: string;
+  1519→  /** Login name */
+  1520→  login: string;
+  1521→  /** Display name */
+  1522→  name: string;
+  1523→  /** Avatar URL */
+  1524→  avatarUrl: string;
+  1525→  /** Is Grafana admin */
+  1526→  isGrafanaAdmin: boolean;
+  1527→  /** Is disabled */
+  1528→  isDisabled: boolean;
+  1529→  /** Is external user */
+  1530→  isExternal: boolean;
+  1531→  /** Auth module */
+  1532→  authModule: string;
+  1533→  /** Auth ID */
+  1534→  authId: string;
+  1535→  /** Organization ID */
+  1536→  orgId: number;
+  1537→  /** Organization role */
+  1538→  orgRole: UserRole;
+  1539→  /** Organizations */
+  1540→  organizations: UserOrganization[];
+  1541→  /** Last seen at */
+  1542→  lastSeenAt: string;
+  1543→  /** Last seen at age (human readable) */
+  1544→  lastSeenAtAge: string;
+  1545→  /** Created at */
+  1546→  createdAt: string;
+  1547→  /** Updated at */
+  1548→  updatedAt: string;
+  1549→  /** Theme */
+  1550→  theme: string;
+  1551→  /** Language */
+  1552→  language: string;
+  1553→  /** Help flags */
+  1554→  helpFlags1: number;
+  1555→  /** Timezone */
+  1556→  timezone: string;
+  1557→  /** Starred dashboards */
+  1558→  starredDashboards: DashboardSearchResult[];
+  1559→  /** Has edit permission in folders */
+  1560→  hasEditPermissionInFolders: boolean;
+  1561→}
+  1562→
+  1563→/** User's organization membership */
+  1564→export interface UserOrganization {
+  1565→  /** Organization ID */
+  1566→  orgId: number;
+  1567→  /** Organization name */
+  1568→  name: string;
+  1569→  /** Role in organization */
+  1570→  role: UserRole;
+  1571→  /** Is current organization */
+  1572→  current: boolean;
+  1573→}
+  1574→
+  1575→/** Grafana organization */
+  1576→export interface GrafanaOrganization {
+  1577→  /** Organization ID */
+  1578→  id: number;
+  1579→  /** Organization name */
+  1580→  name: string;
+  1581→  /** Address */
+  1582→  address?: {
+  1583→    address1?: string;
+  1584→    address2?: string;
+  1585→    city?: string;
+  1586→    zipCode?: string;
+  1587→    state?: string;
+  1588→    country?: string;
+  1589→  };
+  1590→  /** Created at */
+  1591→  createdAt: string;
+  1592→  /** Updated at */
+  1593→  updatedAt: string;
+  1594→}
+  1595→
+  1596→/** Team */
+  1597→export interface GrafanaTeam {
+  1598→  /** Team ID */
+  1599→  id: number;
+  1600→  /** Organization ID */
+  1601→  orgId: string;
+  1602→  /** Team name */
+  1603→  name: string;
+  1604→  /** Email */
+  1605→  email: string;
+  1606→  /** Avatar URL */
+  1607→  avatarUrl: string;
+  1608→  /** Member count */
+  1609→  memberCount: number;
+  1610→  /** Access control */
+  1611→  accessControl: {
+  1612→    /** Can add members */
+  1613→    addMember: boolean;
+  1614→    /** Can delete team */
+  1615→    deleteTeam: boolean;
+  1616→  };
+  1617→}
+  1618→
+  1619→/** Team member */
+  1620→export interface TeamMember {
+  1621→  /** Member ID */
+  1622→  memberId: number;
+  1623→  /** Auth ID */
+  1624→  authId: string;
+  1625→  /** User ID */
+  1626→  userId: number;
+  1627→  /** Email */
+  1628→  email: string;
+  1629→  /** Login */
+  1630→  login: string;
+  1631→  /** Avatar URL */
+  1632→  avatarUrl: string;
+  1633→  /** Labels */
+  1634→  labels: string[];
+  1635→  /** Role in team */
+  1636→  teamRole: 'Viewer' | 'Editor' | 'Admin';
+  1637→  /** Permission level */
+  1638→  permission: number;
+  1639→  /** External user */
+  1640→  isExternal: boolean;
+  1641→}
+  1642→
+  1643→// ============================================================
+  1644→// Plugin Types
+  1645→// ============================================================
+  1646→
+  1647→/** Plugin type */
+  1648→export type PluginType = 
+  1649→  | 'app'
+  1650→  | 'panel'
+  1651→  | 'datasource'
+  1652→  | 'app-internal'
+  1653→  | 'renderer'
+  1654→  | 'extension';
+  1655→
+  1656→/** Plugin state */
+  1657→export type PluginState = 
+  1658→  | 'installed'
+  1659→  | 'uninstalled'
+  1660→  | 'decommissioned'
+  1661→  | 'core';
+  1662→
+  1663→/** Grafana plugin */
+  1664→export interface GrafanaPlugin {
+  1665→  /** Plugin ID */
+  1666→  id: string;
+  1667→  /** Plugin type */
+  1668→  type: PluginType;
+  1669→  /** Plugin name */
+  1670→  name: string;
+  1671→  /** Plugin info */
+  1672→  info: PluginInfo;
+  1673→  /** Plugin dependencies */
+  1674→  dependencies: PluginDependency[];
+  1675→  /** Latest version */
+  1676→  latestVersion?: string;
+  1677→  /** Has update */
+  1678→  hasUpdate: boolean;
+  1679→  /** Is installed */
+  1680→  isInstalled: boolean;
+  1681→  /** Is core */
+  1682→  isCore: boolean;
+  1683→  /** Is deprecated */
+  1684→  isDeprecated: boolean;
+  1685→  /** Is enterprise */
+  1686→  isEnterprise: boolean;
+  1687→  /** Is managed */
+  1688→  isManaged: boolean;
+  1689→  /** Is enabled */
+  1690→  isEnabled: boolean;
+  1691→  /** Requires signing */
+  1692→  requiresSigning: boolean;
+  1693→  /** Signature */
+  1694→  signature?: PluginSignature;
+  1695→  /** Signature type */
+  1696→  signatureType?: string;
+  1697→  /** Has signature */
+  1698→  hasSignature: boolean;
+  1699→  /** Signature org */
+  1700→  signatureOrg?: string;
+  1701→  /** Grace period */
+  1702→  gracePeriod: boolean;
+  1703→  /** Update URL */
+  1704→  updateURL?: string;
+  1705→  /** JSON data */
+  1706→  jsonData: Record<string, unknown>;
+  1707→  /** Secure JSON fields */
+  1708→  secureJsonFields: Record<string, boolean>;
+  1709→  /** Module */
+  1710→  module: string;
+  1711→  /** State */
+  1712→  state: PluginState;
+  1713→  /** Created date */
+  1714→  created: string;
+  1715→  /** Updated date */
+  1716→  updated: string;
+  1717→}
+  1718→
+  1719→/** Plugin info */
+  1720→export interface PluginInfo {
+  1721→  /** Author */
+  1722→  author: {
+  1723→    name: string;
+  1724→    url?: string;
+  1725→  };
+  1726→  /** Description */
+  1727→  description: string;
+  1728→  /** Links */
+  1729→  links: Array<{ name: string; url: string }>;
+  1730→  /** Screenshots */
+  1731→  screenshots: Array<{ name: string; path: string }>;
+  1732→  /** Logo */
+  1733→  logos: Record<string, string>;
+  1734→  /** Build info */
+  1735→  build: {
+  1736→    time: string;
+  1737→    repo: string;
+  1738→    branch: string;
+  1739→    hash: string;
+  1740→    version: string;
+  1741→  };
+  1742→  /** License */
+  1743→  license: string;
+  1744→  /** Keywords */
+  1745→  keywords: string[];
+  1746→  /** Version */
+  1747→  version: string;
+  1748→  /** Grafana version requirement */
+  1749→  grafanaVersion: string;
+  1750→  /** Minimum Grafana version */
+  1751→  minGrafanaVersion?: string;
+  1752→  /** Subtitle */
+  1753→  subtitle?: string;
+  1754→}
+  1755→
+  1756→/** Plugin dependency */
+  1757→export interface PluginDependency {
+  1758→  /** Dependency ID */
+  1759→  id: string;
+  1760→  /** Dependency type */
+  1761→  type: PluginType;
+  1762→  /** Required version */
+  1763→  version: string;
+  1764→}
+  1765→
+  1766→/** Plugin signature */
+  1767→export interface PluginSignature {
+  1768→  /** Signed */
+  1769→  signed: boolean;
+  1770→  /** Signer */
+  1771→  signer: string;
+  1772→  /** Allowed to sign */
+  1773→  allowedToSign: boolean;
+  1774→  /** Grace period date */
+  1775→  gracePeriodDate?: string;
+  1776→}
+  1777→
+  1778→// ============================================================
+  1779→// Search & Filtering Types
+  1780→// ============================================================
+  1781→
+  1782→/** Dashboard search parameters */
+  1783→export interface DashboardSearchParams {
+  1784→  /** Search query string */
+  1785→  query?: string;
+  1786→  /** Tag filter */
+  1787→  tag?: string[];
+  1788→  /** Type filter */
+  1789→  type?: 'dash-db' | 'dash-folder' | 'dash-public';
+  1790→  /** Folder filter */
+  1791→  folderIds?: number[];
+  1792→  /** Limit results */
+  1793→  limit?: number;
+  1794→  /** Page number */
+  1795→  page?: number;
+  1796→  /** Sort field */
+  1797→  sort?: 'title' | 'sortAlphaAsc' | 'sortAlphaDesc' | 'sortNatAsc' | 'sortNatDesc' | 'sortSizeAsc' | 'sortSizeDesc' | 'sortChangedAsc' | 'sortChangedDesc';
+  1798→  /** Starred only */
+  1799→  starred?: boolean;
+  1800→}
+  1801→
+  1802→/** Alert search parameters */
+  1803→export interface AlertSearchParams {
+  1804→  /** Dashboard UID filter */
+  1805→  dashboardUID?: string;
+  1806→  /** Panel ID filter */
+  1807→  panelId?: number;
+  1808→  /** Folder ID filter */
+  1809→  folderId?: number;
+  1810→  /** Query filter */
+  1811→  query?: string;
+  1812→  /** State filter */
+  1813→  state?: AlertState;
+  1814→  /** Limit */
+  1815→  limit?: number;
+  1816→  /** Page */
+  1817→  page?: number;
+  1818→}
+  1819→
+  1820→/** Datasource search parameters */
+  1821→export interface DatasourceSearchParams {
+  1822→  /** Datasource type filter */
+  1823→  type?: string;
+  1824→  /** Name filter */
+  1825→  name?: string;
+  1826→  /** Access filter */
+  1827→  access?: 'proxy' | 'direct' | 'server';
+  1828→  /** Only show accessible */
+  1829→  accessibleOnly?: boolean;
+  1830→}
+  1831→
+  1832→// ============================================================
+  1833→// Provisioning Types
+  1834→// ============================================================
+  1835→
+  1836→/** Dashboard provisioning configuration */
+  1837→export interface DashboardProvisioning {
+  1838→  /** Provider name */
+  1839→  name: string;
+  1840→  /** Disable deletion */
+  1841→  disableDeletion: boolean;
+  1842→  /** Allow UI updates */
+  1843→  allowUiUpdates: boolean;
+  1844→  /** Folder */
+  1845→  folder: string;
+  1846→  /** Type */
+  1847→  type: string;
+  1848→  /** Options */
+  1849→  options: {
+  1850→    /** Path to dashboard files */
+  1851→    path: string;
+  1852→    /** Folders from files structure */
+  1853→    foldersFromFilesStructure: boolean;
+  1854→  };
+  1855→  /** Update interval seconds */
+  1856→  updateIntervalSeconds?: number;
+  1857→}
+  1858→
+  1859→/** Datasource provisioning configuration */
+  1860→export interface DatasourceProvisioning {
+  1861→  /** Provider name */
+  1862→  name: string;
+  1863→  /** Disable deletion */
+  1864→  disableDeletion: boolean;
+  1865→  /** Update interval seconds */
+  1866→  updateIntervalSeconds?: number;
+  1867→  /** Datasources */
+  1868→  datasources: DataSource[];
+  1869→}
+  1870→
+  1871→/** Alert rule provisioning configuration */
+  1872→export interface AlertProvisioning {
+  1873→  /** Provider name */
+  1874→  name: string;
+  1875→  /** Disable deletion */
+  1876→  disableDeletion: boolean;
+  1877→  /** Folder */
+  1878→  folder: string;
+  1879→  /** Rules file */
+  1880→  file: string;
+  1881→}
+  1882→
+  1883→// ============================================================
+  1884→// API Response Types
+  1885→// ============================================================
+  1886→
+  1887→/** Standard API response wrapper */
+  1888→export interface GrafanaAPIResponse<T> {
+  1889→  /** Success flag */
+  1890→  success: boolean;
+  1891→  /** Message */
+  1892→  message: string;
+  1893→  /** Response data */
+  1894→  data: T;
+  1895→  /** Pagination info */
+  1896→  pagination?: {
+  1897→    page: number;
+  1898→    pageSize: number;
+  1899→    totalItems: number;
+  1900→    totalPages: number;
+  1901→  };
+  1902→  /** Errors */
+  1903→  errors?: Array<{ field: string; message: string }>;
+  1904→}
+  1905→
+  1906→/** Dashboard save response */
+  1907→export interface DashboardSaveResponse {
+  1908→  /** Dashboard ID */
+  1909→  id: number;
+  1910→  /** Dashboard slug */
+  1911→  slug: string;
+  1912→  /** Status */
+  1913→  status: string;
+  1914→  /** Version */
+  1915→  version: number;
+  1916→  /** Message */
+  1917→  message: string;
+  1918→}
+  1919→
+  1920→/** Dashboard import response */
+  1921→export interface DashboardImportResponse {
+  1922→  /** Import result */
+  1923→  imported: boolean;
+  1924→  /** Import status */
+  1925→  importStatus: string;
+  1926→  /** Import message */
+  1927→  importMessage: string;
+  1928→  /** Imported URL */
+  1929→  importedUrl: string;
+  1930→  /** Imported slug */
+  1931→  importedSlug: string;
+  1932→  /** Existing revision */
+  1933→  existingRevision?: number;
+  1934→  /** New revision */
+  1935→  newRevision?: number;
+  1936→  /** Overwritten flag */
+  1937→  overwritten: boolean;
+  1938→}
+  1939→
+  1940→/** Bulk operation result */
+  1941→export interface BulkOperationResult {
+  1942→  /** Success count */
+  1943→  successCount: number;
+  1944→  /** Failed count */
+  1945→  failedCount: number;
+  1946→  /** Errors */
+  1947→  errors: Array<{ item: string; reason: string }>;
+  1948→}
+  1949→
+  1950→// ============================================================
+  1951→// SOC-Specific Types
+  1952→// ============================================================
+  1953→
+  1954→/** SOC KPI metric */
+  1955→export interface SOCKpiMetric {
+  1956→  /** Metric ID */
+  1957→  id: string;
+  1958→  /** Metric name */
+  1959→  name: string;
+  1960→  /** Description */
+  1961→  description: string;
+  1962→  /** Current value */
+  1963→  currentValue: number;
+  1964→  /** Previous value */
+  1965→  previousValue?: number;
+  1966→  /** Unit */
+  1967→  unit: string;
+  1968→  /** Trend direction */
+  1969→  trend: 'up' | 'down' | 'stable';
+  1970→  /** Trend percentage */
+  1971→  trendPercent?: number;
+  1972→  /** Status */
+  1973→  status: 'good' | 'warning' | 'critical';
+  1974→  /** Source system */
+  1975→  sourceSystem: SOCDashboardSource;
+  1976→  /** Last updated */
+  1977→  lastUpdated: string;
+  1978→}
+  1979→
+  1980→/** SOC dashboard source systems */
+  1981→export type SOCDashboardSource =
+  1982→  | 'wazuh'
+  1983→  | 'suricata'
+  1984→  | 'misp'
+  1985→  | 'thehive'
+  1986→  | 'elasticsearch'
+  1987→  | 'prometheus'
+  1988→  | 'grafana'
+  1989→  | 'combined';
+  1990→
+  1991→/** SOC overview statistics */
+  1992→export interface SOCOverviewStats {
+  1993→  /** Total security events today */
+  1994→  eventsToday: number;
+  1995→  /** Events compared to yesterday */
+  1996→  eventsChangePercent: number;
+  1997→  /** Active incidents */
+  1998→  activeIncidents: number;
+  1999→  /** Critical alerts */
+  2000→  criticalAlerts: number;
+
+[showing lines 1-2000 of 2107; use offset=2001 with limit to continue reading]

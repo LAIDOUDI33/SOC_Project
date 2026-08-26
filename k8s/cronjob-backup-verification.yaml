@@ -1,0 +1,294 @@
+# =============================================================================
+# Djezzy National SOC Platform - Backup Verification CronJob
+# =============================================================================
+# Schedules daily backup integrity verification at 2 AM UTC (3 AM Algiers)
+#
+# This CronJob runs the backup-verification.sh script which checks:
+# - PostgreSQL backup age, row counts, replication status
+# - Elasticsearch snapshot repository and cluster health
+# - Redis persistence configuration
+# - Kafka broker connectivity
+#
+# On failure, alerts are sent to:
+# 1. SOC Platform API (/api/system/backup-status)
+# 2. Slack/Teams webhook (if configured)
+#
+# @schedule: 0 2 * * *
+# @remediation: HIGH-006
+# =============================================================================
+
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: soc-backup-verification
+  namespace: soc-production
+  labels:
+    app: soc-platform
+    component: backup-verification
+    tier: operations
+  annotations:
+    description: "Daily verification of all SOC platform backup integrity"
+    schedule.timezone: "Africa/Algiers"
+spec:
+  # Run daily at 2 AM UTC (3 AM Algiers time) - low traffic period
+  schedule: "0 2 * * *"
+  suspend: false
+  successfulJobsHistoryLimit: 7   # Keep last week of success logs
+  failedJobsHistoryLimit: 14      # Keep 2 weeks of failure logs for debugging
+  
+  # Concurrency policy: don't run if previous job still running
+  concurrencyPolicy: Forbid
+  
+  # Timeout: job should complete within 30 minutes
+  startingDeadlineSeconds: 1800
+  
+  jobTemplate:
+    metadata:
+      labels:
+        app: soc-platform
+        component: backup-verification
+    spec:
+      backoffLimit: 3            # Retry up to 3 times on failure
+      activeDeadlineSeconds: 2700 # Kill if running >45 minutes
+      ttlSecondsAfterFinished: 86400 # Clean up after 24 hours
+      
+      template:
+        metadata:
+          labels:
+            app: soc-platform
+            component: backup-verification
+        spec:
+          restartPolicy: Never
+          
+          # Use standard priority (not critical, can be preempted)
+          priorityClassName: soc-platform-standard
+          
+          # Security context
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 1000
+            fsGroup: 1000
+            
+          # Service account with read-only access to backups
+          serviceAccountName: backup-verifier
+          
+          containers:
+          - name: backup-verification
+            image: djezzy/soc-ops-tools:11.1.0
+            imagePullPolicy: IfNotPresent
+            
+            command:
+              - /bin/bash
+              - /scripts/backup-verification.sh
+            
+            env:
+              # PostgreSQL connection
+              - name: POSTGRES_HOST
+                value: "postgresql"
+              - name: POSTGRES_PORT
+                value: "5432"
+              - name: POSTGRES_USER
+                valueFrom:
+                  secretKeyRef:
+                    name: postgresql-credentials
+                    key: username
+              - name: POSTGRES_PASSWORD
+                valueFrom:
+                  secretKeyRef:
+                    name: postgresql-credentials
+                    key: password
+              - name: POSTGRES_DB
+                value: "soc_production"
+              
+              # Elasticsearch connection
+              - name: ELASTICSEARCH_URL
+                value: "https://elasticsearch-node-1:9200"
+              - name: ELASTICSEARCH_USERNAME
+                valueFrom:
+                  secretKeyRef:
+                    name: elasticsearch-credentials
+                    key: username
+              - name: ELASTICSEARCH_PASSWORD
+                valueFrom:
+                  secretKeyRef:
+                    name: elasticsearch-credentials
+                    key: password
+              
+              # Redis connection
+              - name: REDIS_HOST
+                value: "redis-master"
+              - name: REDIS_PORT
+                value: "6379"
+              - name: REDIS_PASSWORD
+                valueFrom:
+                  secretKeyRef:
+                    name: redis-credentials
+                    key: password
+              
+              # Kafka brokers
+              - name: KAFKA_BROKERS
+                value: "kafka-0:9092,kafka-1:9092,kafka-2:9092"
+              
+              # SOC Platform notification
+              - name: SOC_PLATFORM_URL
+                value: "http://soc-platform:3000"
+              - name: HEALTH_API_KEY
+                valueFrom:
+                  secretKeyRef:
+                    name: health-api-keys
+                    key: api-key
+              
+              # Alert webhook (optional)
+              - name: ALERT_WEBHOOK_URL
+                valueFrom:
+                  configMapKeyRef:
+                    name: alert-config
+                    key: webhook-url
+                  optional: true
+            
+            resources:
+              requests:
+                cpu: "100m"
+                memory: "256Mi"
+              limits:
+                cpu: "500m"
+                memory: "512Mi"
+            
+            volumeMounts:
+              # Mount scripts directory
+              - name: scripts
+                mountPath: /scripts
+                readOnly: true
+              
+              # Mount backup directory for verification
+              - name: backups
+                mountPath: /var/backups/postgresql
+                readOnly: true
+              
+              # Mount log output
+              - name: logs
+                mountPath: /var/log/soc
+            
+            # Liveness probe (should complete quickly)
+            livenessProbe:
+              exec:
+                command:
+                  - pgrep
+                  - -f
+                  - backup-verification
+              initialDelaySeconds: 60
+              periodSeconds: 30
+              timeoutSeconds: 5
+              failureThreshold: 3
+          
+          volumes:
+            # Scripts from ConfigMap or shared volume
+            - name: scripts
+              configMap:
+                name: backup-verification-scripts
+                defaultMode: 0755
+            
+            # Backup storage (read-only for verification)
+            - name: backups
+              persistentVolumeClaim:
+                claimName: postgresql-backup-pvc
+                readOnly: true
+            
+            # Logs volume
+            - name: logs
+              emptyDir: {}
+          
+          # Node selector: prefer infrastructure nodes
+          nodeSelector:
+            node-type: infrastructure
+          
+          # Tolerations for infrastructure taints
+          tolerations:
+          - key: "node-role.kubernetes.io/infrastructure"
+            operator: "Exists"
+            effect: "NoSchedule"
+
+---
+# =============================================================================
+# Service Account for Backup Verifier
+# =============================================================================
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: backup-verifier
+  namespace: soc-production
+  labels:
+    app: soc-platform
+    component: backup-verification
+
+---
+# =============================================================================
+# Role: Read-only access to backup data
+# =============================================================================
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: backup-verifier-role
+  namespace: soc-production
+rules:
+  # Can read pod status (for checking component health)
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list"]
+  
+  # Can read PVCs (for checking backup volumes)
+  - apiGroups: [""]
+    resources: ["persistentvolumeclaims"]
+    verbs: ["get", "list"]
+
+---
+# =============================================================================
+# Role Binding
+# =============================================================================
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: backup-verifier-binding
+  namespace: soc-production
+subjects:
+  - kind: ServiceAccount
+    name: backup-verifier
+    namespace: soc-production
+roleRef:
+  kind: Role
+  name: backup-verifier-role
+  apiGroup: rbac.authorization.k8s.io
+
+---
+# =============================================================================
+# ConfigMap: Script content (alternative to mounting from volume)
+# =============================================================================
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: backup-verification-scripts
+  namespace: soc-production
+  labels:
+    app: soc-platform
+    component: backup-verification
+data:
+  # Script is typically mounted from a shared volume or image
+  # This placeholder documents expected structure
+  README.md: |
+    Backup Verification Scripts
+    ===========================
+    
+    The main script (backup-verification.sh) should be mounted at /scripts/
+    inside the container.
+    
+    Options:
+      --verify-only     Run verification only (default)
+      --test-restore    Include destructive restore test
+      --report          Generate JSON report only
+    
+    Environment variables required:
+      - POSTGRES_*       : PostgreSQL connection details
+      - ELASTICSEARCH_*  : Elasticsearch connection details  
+      - REDIS_*          : Redis connection details
+      - KAFKA_BROKERS    : Comma-separated broker list
+      - HEALTH_API_KEY   : API key for SOC platform notifications

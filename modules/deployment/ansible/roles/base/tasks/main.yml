@@ -1,0 +1,257 @@
+# =============================================================================
+# Base Role - Main Tasks
+# Handles: OS hardening, user setup, package installation, kernel tuning
+# =============================================================================
+---
+
+- name: "BASE | Display role start message"
+  debug:
+    msg: "═══ Starting Base System Configuration ═══"
+
+# ============================================================================
+# SECTION 1: User and Group Setup
+# ============================================================================
+- name: "BASE | Create SOC system group"
+  group:
+    name: "{{ soc_system_group }}"
+    state: present
+    system: yes
+  tags: [base-users]
+
+- name: "BASE | Create SOC system user"
+  user:
+    name: "{{ soc_system_user }}"
+    group: "{{ soc_system_group }}"
+    shell: "{{ soc_user_shell }}"
+    create_home: yes
+    system: yes
+    state: present
+  tags: [base-users]
+
+- name: "BASE | Configure sudoers for SOC admin"
+  copy:
+    content: |
+      # SOC Platform Admin Sudo Configuration
+      {{ soc_system_user }} ALL=(ALL) NOPASSWD: ALL
+      {{ soc_system_user }} ALL=(ALL) PASSWD: /usr/bin/passwd
+    dest: "/etc/sudoers.d/{{ soc_system_user }}"
+    mode: '0440'
+    validate: 'visudo -cf %s'
+  tags: [base-users]
+
+# ============================================================================
+# SECTION 2: Package Installation
+# ============================================================================
+- name: "BASE | Update apt cache (Debian/Ubuntu)"
+  apt:
+    update_cache: yes
+    cache_valid_time: 3600
+  when: ansible_os_family == "Debian"
+  tags: [base-packages]
+
+- name: "BASE | Install common packages (Debian/Ubuntu)"
+  apt:
+    name: "{{ common_packages + security_packages }}"
+    state: present
+  when: ansible_os_family == "Debian"
+  tags: [base-packages]
+
+- name: "BASE | Install common packages (RHEL/CentOS)"
+  yum:
+    name: "{{ common_packages_rhel | default(common_packages) }}"
+    state: present
+  when: ansible_os_family == "RedHat"
+  tags: [base-packages]
+
+- name: "BASE | Upgrade all packages"
+  package:
+    upgrade: dist
+    state: latest
+  when: soc_environment == "production"
+  tags: [base-upgrade]
+
+# ============================================================================
+# SECTION 3: Time Synchronization
+# ============================================================================
+- name: "BASE | Set system timezone"
+  timezone:
+    name: "{{ timezone }}"
+  tags: [base-time]
+
+- name: "BASE | Install and configure chrony for time sync"
+  package:
+    name: chrony
+    state: present
+  when: ntp_enabled | bool
+  tags: [base-time]
+
+- name: "BASE | Ensure chrony is running"
+  service:
+    name: chronyd
+    state: started
+    enabled: yes
+  when: 
+    - ntp_enabled | bool
+    - ansible_os_family == "RedHat"
+  tags: [base-time]
+
+- name: "BASE | Ensure timesyncd is running (systemd)"
+  service:
+    name: systemd-timesyncd
+    state: started
+    enabled: yes
+  when:
+    - ntp_enabled | bool
+    - ansible_os_family == "Debian"
+  tags: [base-time]
+
+# ============================================================================
+# SECTION 4: Kernel Parameters Tuning
+# ============================================================================
+- name: "BASE | Apply sysctl settings for security and performance"
+  sysctl:
+    name: "{{ item.name }}"
+    value: "{{ item.value }}"
+    state: present
+    reload: no
+    sysctl_set: yes
+  loop: "{{ sysctl_settings }}"
+  loop_control:
+    label: "{{ item.name }}"
+  notify: Reload sysctl
+  tags: [base-kernel]
+
+- name: "BASE | Apply sysctl changes immediately"
+  command: sysctl --system
+  changed_when: false
+  tags: [base-kernel]
+
+# ============================================================================
+# SECTION 5: File Limits Configuration
+# ============================================================================
+- name: "BASE | Configure file limits (security/limits.conf)"
+  lineinfile:
+    path: /etc/security/limits.conf
+    line: "{{ item.domain }}\t{{ item.type }}\t{{ item.item }}\t{{ item.value }}"
+    create: yes
+    state: present
+  loop: "{{ file_limits }}"
+  loop_control:
+    label: "{{ item.domain }} - {{ item.item }}"
+  tags: [base-limits]
+
+- name: "BASE | Configure systemd file limits"
+  lineinfile:
+    path: /etc/systemd/system.conf
+    regexp: "^DefaultLimitNOFILE="
+    line: "DefaultLimitNOFILE=1048576"
+    state: present
+  tags: [base-limits]
+
+- name: "BASE | Configure systemd process limits"
+  lineinfile:
+    path: /etc/systemd/system.conf
+    regexp: "^DefaultLimitNPROC="
+    line: "DefaultLimitNPROC=65535"
+    state: present
+  tags: [base-limits]
+
+# ============================================================================
+# SECTION 6: Hostname and Hosts File
+# ============================================================================
+- name: "BASE | Set hostname"
+  hostname:
+    name: "{{ inventory_hostname }}"
+  tags: [base-network]
+
+- name: "BASE | Update /etc/hosts file"
+  template:
+    src: hosts.j2
+    dest: /etc/hosts
+    mode: '0644'
+    backup: yes
+  tags: [base-network]
+
+# ============================================================================
+# SECTION 7: Directory Structure
+# ============================================================================
+- name: "BASE | Create required directories"
+  file:
+    path: "{{ item.path }}"
+    state: directory
+    mode: "{{ item.mode | default('0755') }}"
+    owner: "{{ item.owner | default('root') }}"
+    group: "{{ item.group | default('root') }}"
+  loop:
+    - { path: "{{ soc_base_dir }}" }
+    - { path: "{{ soc_config_dir }}" }
+    - { path: "{{ soc_data_dir }}" }
+    - { path: "{{ soc_log_dir }}" }
+    - { path: "{{ soc_backup_dir }}" }
+    - { path: "{{ soc_scripts_dir }}" }
+    - { path: "/var/log/soc/postgres", owner: "postgres", group: "postgres" }
+    - { path: "/var/log/soc/elasticsearch", owner: "elasticsearch", group: "elasticsearch" }
+    - { path: "/var/log/soc/wazuh", owner: "wazuh", group: "wazuh" }
+    - { path: "/opt/soc-platform/certs", mode: "0700" }
+    - { path: "/opt/soc-platform/secrets", mode: "0700" }
+  tags: [base-dirs]
+
+# ============================================================================
+# SECTION 8: Logging Configuration
+# ============================================================================
+- name: "BASE | Configure rsyslog for centralized logging"
+  template:
+    src: rsyslog-soc.conf.j2
+    dest: /etc/rsyslog.d/50-soc-platform.conf
+    mode: '0644'
+  notify: Restart rsyslog
+  tags: [base-logging]
+
+- name: "BASE | Ensure rsyslog is running"
+  service:
+    name: rsyslog
+    state: started
+    enabled: yes
+  tags: [base-logging]
+
+# ============================================================================
+# SECTION 9: Audit Daemon Configuration
+# ============================================================================
+- name: "BASE | Configure audit daemon rules"
+  template:
+    src: audit-rules.j2
+    dest: /etc/audit/rules.d/soc-platform.rules
+    mode: '0600'
+  notify: Restart auditd
+  tags: [base-audit]
+
+- name: "BASE | Ensure auditd is running"
+  service:
+    name: auditd
+    state: started
+    enabled: yes
+  tags: [base-audit]
+
+# ============================================================================
+# SECTION 10: MOTD Banner
+# ============================================================================
+- name: "BASE | Set custom MOTD banner"
+  copy:
+    content: |
+      ╔═══════════════════════════════════════════════════════════╗
+      ║     National SOC Platform - Algeria (2026-2030)            ║
+      ║     ⚠️  AUTHORIZED PERSONNEL ONLY  ⚠️                      ║
+      ║     All activities are monitored and logged.               ║
+      ╚═══════════════════════════════════════════════════════════╝
+      
+      Environment: {{ soc_environment }}
+      Hostname: {{ inventory_hostname }}
+      Last Updated: {{ ansible_date_time.iso8601 }}
+      
+    dest: /etc/motd
+    mode: '0644'
+  tags: [base-motd]
+
+- name: "BASE | Display role completion message"
+  debug:
+    msg: "═══ Base System Configuration Complete ═══"

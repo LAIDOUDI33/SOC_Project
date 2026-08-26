@@ -1,0 +1,853 @@
+# ============================================================
+# National SOC Platform - Production Alerting Rules
+# Djezzy Production Environment
+# ============================================================
+# Comprehensive Prometheus alerting rules for:
+# - High severity (P1): Immediate paging required
+# - Medium severity (P2): Ticket within 15 minutes
+# - Low severity (P3): Daily digest notification
+#
+# Integration: PagerDuty, Opsgenie, Slack, Email
+# ============================================================
+
+groups:
+  # ============================================================
+  # GROUP 1: HIGH SEVERITY ALERTS (P1 - Page Immediately)
+  # ============================================================
+  # These alerts require immediate attention and should trigger
+  # phone calls/SMS to on-call engineers.
+  # Response time: < 5 minutes
+  # Escalation: After 15 minutes if not acknowledged
+  # ============================================================
+  
+  - name: soc-platform-critical
+    interval: 15s
+    rules:
+      
+      # ----------------------------------------------------------
+      # Service Down Alerts
+      # ----------------------------------------------------------
+      - alert: SOCPlatformDown
+        expr: up{job="soc-platform"} == 0
+        for: 30s
+        labels:
+          severity: critical
+          priority: P1
+          team: soc-ops
+          runbook: "https://docs.internal.djezzy.dz/runbooks/service-down"
+          annotation_scope: incident
+        annotations:
+          summary: "SOC Platform service is DOWN"
+          description: >
+            The SOC Platform service {{ $labels.instance }} has been down 
+            for more than 30 seconds. Immediate action required!
+          impact: "All SOC operations are unavailable"
+          action: |
+            1. Check pod status: kubectl get pods -n soc-platform
+            2. Check logs: kubectl logs -f deployment/soc-platform -n soc-platform
+            3. If needed, restart: kubectl rollout restart deployment/soc-platform -n soc-platform
+            4. If issue persists, escalate to Platform Lead
+
+      - alert: AllPodsCrashing
+        expr: |
+          (
+            count(kube_pod_status_phase{namespace="soc-platform", phase="Running"}) == 0
+            and
+            count(kube_pod_info{namespace="soc-platform"}) > 0
+          )
+        for: 1m
+        labels:
+          severity: critical
+          priority: P1
+          team: soc-ops
+          runbook: "https://docs.internal.djezzy.dz/runbooks/all-pods-crash"
+        annotations:
+          summary: "ALL pods in soc-platform namespace are down!"
+          description: >
+            No running pods detected in the soc-platform namespace.
+            This indicates a complete service outage.
+          impact: "Complete system outage - zero availability"
+
+      - alert: PodCrashLooping
+        expr: |
+          rate(kube_pod_container_status_restarts_total{namespace="soc-platform", pod=~"soc-platform.*"}[5m]) > 0.1
+        for: 5m
+        labels:
+          severity: critical
+          priority: P1
+          team: soc-ops
+          runbook: "https://docs.internal.djezzy.dz/runbooks/pod-crashloop"
+        annotations:
+          summary: "Pod {{ $labels.pod }} is crash looping"
+          description: >
+            Pod {{ $labels.pod }} has restarted more than once per minute 
+            over the last 5 minutes. Application may be unhealthy or 
+            misconfigured.
+
+      # ----------------------------------------------------------
+      # Authentication Failure Alerts
+      # ----------------------------------------------------------
+      - alert: AuthenticationFailureSpike
+        expr: |
+          (
+            sum(rate(soc_auth_failures_total[5m])) 
+            / 
+            sum(rate(soc_auth_attempts_total[5m])) 
+            * 100
+          ) > 50
+        for: 2m
+        labels:
+          severity: critical
+          priority: P1
+          team: security
+          runbook: "https://docs.internal.djezzy.dz/runbooks/auth-failure-spike"
+          annotation_scope: security_incident
+        annotations:
+          summary: "Critical authentication failure rate detected"
+          description: >
+            Authentication failure rate is {{ $value | humanizePercentage }} 
+            of total attempts. This could indicate a brute force attack 
+            or credential stuffing attack in progress.
+          impact: "Potential unauthorized access attempt"
+          action: |
+            1. Check source IPs in access logs
+            2. Review failed login attempts in audit log
+            3. Consider blocking suspicious IP ranges at WAF/firewall
+            4. Notify Security Team immediately
+
+      - alert: AdminAccountBruteForce
+        expr: |
+          sum by (username)(increase(soc_auth_failures_total{username=~"admin|root|soc_admin|superuser"}[5m])) > 10
+        for: 1m
+        labels:
+          severity: critical
+          priority: P1
+          team: security
+          runbook: "https://docs.internal.djezzy.dz/runbooks/admin-bruteforce"
+          annotation_scope: security_incident
+        annotations:
+          summary: "Brute force attack detected against admin account: {{ $labels.username }}"
+          description: >
+            More than 10 failed authentication attempts against admin account 
+            '{{ $labels.username }}' in the last 5 minutes. This is a critical 
+            security event requiring immediate investigation.
+          impact: "Potential privilege escalation risk"
+
+      # ----------------------------------------------------------
+      # Database Critical Alerts
+      # ----------------------------------------------------------
+      - alert: PostgreSQLDown
+        expr: up{job="postgres-exporter"} == 0
+        for: 30s
+        labels:
+          severity: critical
+          priority: P1
+          team: database
+          runbook: "https://docs.internal.djezzy.dz/runbooks/postgresql-down"
+        annotations:
+          summary: "PostgreSQL database is unreachable"
+          description: >
+            PostgreSQL exporter cannot connect to the database server.
+            This indicates a potential database outage affecting all services.
+          impact: "All data-dependent operations will fail"
+
+      - alert: DatabaseConnectionExhausted
+        expr: |
+          pg_stat_activity_count / pg_settings_max_connections > 0.95
+        for: 2m
+        labels:
+          severity: critical
+          priority: P1
+          team: database
+          runbook: "https://docs.internal.djezzy.dz/runbooks/db-connections-exhausted"
+        annotations:
+          summary: "Database connection pool nearly exhausted ({{ $value | humanizePercentage }})"
+          description: >
+            PostgreSQL connection usage exceeds 95% of maximum connections.
+            New connections will be rejected, causing application failures.
+          impact: "Application errors and degraded performance"
+          action: |
+            1. Identify long-running queries: SELECT * FROM pg_stat_activity WHERE state = 'active';
+            2. Consider terminating idle transactions
+            3. Increase max_connections if this is a sustained pattern
+            4. Review connection pool settings in application
+
+      - alert: DatabaseReplicationLagCritical
+        expr: pg_replication_lag_seconds > 300
+        for: 3m
+        labels:
+          severity: critical
+          priority: P1
+          team: database
+          runbook: "https://docs.internal.djezzy.dz/runbooks/replication-lag"
+        annotations:
+          summary: "PostgreSQL replication lag exceeds 5 minutes"
+          description: >
+            Replication lag between primary and replica is {{ $value }} seconds.
+            Data loss may occur if primary fails before replication catches up.
+          impact: "Potential data loss in failover scenario"
+
+      # ----------------------------------------------------------
+      # Certificate Expiry Alerts
+      # ----------------------------------------------------------
+      - alert: TLSCertificateExpiringSoon
+        expr: |
+          (tls_cert_expiry_timestamp_seconds - time()) < 86400
+        for: 10m
+        labels:
+          severity: critical
+          priority: P1
+          team: devops
+          runbook: "https://docs.internal.djezzy.dz/runbooks/cert-expiry-critical"
+        annotations:
+          summary: "TLS certificate expiring in less than 24 hours!"
+          description: >
+            TLS certificate for {{ $labels.subject }} will expire in 
+            {{ $value | humanizeDuration }}. Service disruption imminent!
+          impact: "Browsers will reject connections; API calls will fail"
+          action: |
+            1. Renew certificate immediately via cert-manager or manual process
+            2. If using Let's Encrypt, check rate limits
+            3. Update Kubernetes secret after renewal
+            4. Restart ingress controller if needed
+
+      # ----------------------------------------------------------
+      # Anomaly Detection Critical Score
+      # ----------------------------------------------------------
+      - alert: AnomalyDetectionCriticalScore
+        expr: soc_anomaly_detection_score >= 90
+        for: 5m
+        labels:
+          severity: critical
+          priority: P1
+          team: security
+          runbook: "https://docs.internal.djezzy.dz/runbooks/anomaly-critical"
+          annotation_scope: security_incident
+        annotations:
+          summary: "CRITICAL anomaly score detected: {{ $value }}"
+          description: >
+            ML-based anomaly detection has identified behavior with a 
+            critical anomaly score of {{ $value }}/100. This requires 
+            immediate security investigation.
+          impact: "Potential security breach or abnormal system behavior"
+
+  # ============================================================
+  # GROUP 2: MEDIUM SEVERITY ALERTS (P2 - Ticket within 15 min)
+  # ============================================================
+  # These alerts require timely response but don't need immediate
+  # phone notification. Create ticket and notify via Slack/email.
+  # Response time: < 1 hour
+  # Escalation: After 4 hours if not resolved
+  # ============================================================
+  
+  - name: soc-platform-warning
+    interval: 30s
+    rules:
+
+      # ----------------------------------------------------------
+      # High Latency Alerts
+      # ----------------------------------------------------------
+      - alert: HighLatencyP95
+        expr: |
+          histogram_quantile(0.95, 
+            sum(rate(http_request_duration_seconds_bucket{namespace="soc-platform"}[5m])) by (le)
+          ) > 2
+        for: 10m
+        labels:
+          severity: warning
+          priority: P2
+          team: soc-ops
+          runbook: "https://docs.internal.djezzy.dz/runbooks/high-latency"
+        annotations:
+          summary: "High P95 latency detected: {{ $value | humanizeDuration }}"
+          description: >
+            The 95th percentile response time is above 2 seconds for 
+            the last 10 minutes. Users may be experiencing slow responses.
+          impact: "Degraded user experience"
+
+      - alert: HighLatencyP99
+        expr: |
+          histogram_quantile(0.99, 
+            sum(rate(http_request_duration_seconds_bucket{namespace="soc-platform"}[5m])) by (le)
+          ) > 5
+        for: 5m
+        labels:
+          severity: warning
+          priority: P2
+          team: soc-ops
+          runbook: "https://docs.internal.djezzy.dz/runbooks/high-latency-p99"
+        annotations:
+          summary: "Very high P99 latency: {{ $value | humanizeDuration }}"
+          description: >
+            The 99th percentile response time exceeds 5 seconds.
+            Some users are experiencing very slow responses.
+
+      # ----------------------------------------------------------
+      # Error Rate Alerts
+      # ----------------------------------------------------------
+      - alert: ErrorRateIncreasing
+        expr: |
+          (
+            sum(rate(http_requests_total{namespace="soc-platform", code=~"5.."}[15m])) /
+            sum(rate(http_requests_total{namespace="soc-platform"}[15m]))
+          ) > 0.05
+        for: 5m
+        labels:
+          severity: warning
+          priority: P2
+          team: soc-ops
+          runbook: "https://docs.internal.djezzy.dz/runbooks/error-rate-increase"
+        annotations:
+          summary: "Error rate is {{ $value | humanizePercentage }} (> 5%)"
+          description: >
+            HTTP 5xx error rate has exceeded 5% over the last 15 minutes.
+            Investigate root cause immediately.
+          impact: "Users encountering errors; partial service degradation"
+
+      - alert: ErrorRateSpike
+        expr: |
+          (
+            sum(rate(http_requests_total{namespace="soc-platform", code=~"5.."}[5m])) /
+            sum(rate(http_requests_total{namespace="soc-platform"}[5m]))
+          )
+          >
+          (
+            sum(rate(http_requests_total{namespace="soc-platform", code=~"5.."}[1h])) /
+            sum(rate(http_requests_total{namespace="soc-platform"}[1h]))
+          ) * 3
+        for: 5m
+        labels:
+          severity: warning
+          priority: P2
+          team: soc-ops
+          runbook: "https://docs.internal.djezzy.dz/runbooks/error-spike"
+        annotations:
+          summary: "Error rate spiked 3x compared to hourly average"
+          description: >
+            Current error rate is 3x higher than the average over the 
+            last hour. Something changed that needs investigation.
+
+      # ----------------------------------------------------------
+      # Resource Utilization Alerts
+      # ----------------------------------------------------------
+      - alert: HighMemoryUsage
+        expr: |
+          (1 - (node_memory_MemAvailable_bytes{job="node-exporter"} / node_memory_MemTotal_bytes{job="node-exporter"})) * 100 > 85
+        for: 10m
+        labels:
+          severity: warning
+          priority: P2
+          team: platform
+          runbook: "https://docs.internal.djezzy.dz/runbooks/high-memory"
+        annotations:
+          summary: "Node {{ $labels.instance }} memory usage above 85%"
+          description: >
+            Memory utilization on {{ $labels.instance }} is {{ $value | humanizePercentage }}.
+            Risk of OOM kills increases significantly above 85%.
+          impact: "Potential OOM kills and service instability"
+
+      - alert: HighCPUUsage
+        expr: |
+          100 - (avg by(instance) (irate(node_cpu_seconds_total{mode="idle", job="node-exporter"}[5m])) * 100) > 80
+        for: 15m
+        labels:
+          severity: warning
+          priority: P2
+          team: platform
+          runbook: "https://docs.internal.djezzy.dz/runbooks/high-cpu"
+        annotations:
+          summary: "Node {{ $labels.instance }} CPU usage above 80%"
+          description: >
+            CPU utilization on {{ $labels.instance }} is {{ $value | humanizePercentage }} 
+            for the last 15 minutes.
+          impact: "Increased latency; possible CPU saturation"
+
+      - alert: DiskSpaceWarning
+        expr: |
+          (node_filesystem_size_bytes{mountpoint="/", job="node-exporter"} - 
+           node_filesystem_free_bytes{mountpoint="/", job="node-exporter"})
+          / node_filesystem_size_bytes{mountpoint="/", job="node-exporter"}
+          * 100 > 80
+        for: 15m
+        labels:
+          severity: warning
+          priority: P2
+          team: platform
+          runbook: "https://docs.internal.djezzy.dz/runbooks/disk-space"
+        annotations:
+          summary: "Disk usage on {{ $labels.instance }} above 80%"
+          description: >
+            Root filesystem on {{ $labels.instance }} is {{ $value | humanizePercentage }} full.
+            Plan for capacity expansion or cleanup.
+          impact: "Risk of write failures; potential data corruption"
+
+      - alert: DiskSpaceCritical
+        expr: |
+          (node_filesystem_size_bytes{mountpoint="/", job="node-exporter"} - 
+           node_filesystem_free_bytes{mountpoint="/", job="node-exporter"})
+          / node_filesystem_size_bytes{mountpoint="/", job="node-exporter"}
+          * 100 > 90
+        for: 5m
+        labels:
+          severity: critical
+          priority: P1
+          team: platform
+          runbook: "https://docs.internal.djezzy.dz/runbooks/disk-space-critical"
+        annotations:
+          summary: "CRITICAL: Disk usage on {{ $labels.instance }} above 90%"
+          description: >
+            Root filesystem is critically full at {{ $value | humanizePercentage }}.
+            Immediate action required to prevent outage!
+
+      # ----------------------------------------------------------
+      # Pod Health Warnings
+      # ----------------------------------------------------------
+      - alert: PodNotReady
+        expr: |
+          kube_pod_status_ready{condition="true", namespace="soc-platform"} == 0
+        for: 5m
+        labels:
+          severity: warning
+          priority: P2
+          team: soc-ops
+          runbook: "https://docs.internal.djezzy.dz/runbooks/pod-not-ready"
+        annotations:
+          summary: "Pod {{ $labels.pod }} is not ready"
+          description: >
+            Pod {{ $labels.pod }} has been in NotReady state for 5 minutes.
+            Check pod events and container status.
+
+      - alert: ReplicaSetMismatch
+        expr: |
+          count(kube_pod_info{namespace="soc-platform"}) != 
+          kube_deployment_spec_replicas{namespace="soc-platform"}
+        for: 10m
+        labels:
+          severity: warning
+          priority: P2
+          team: soc-ops
+          runbook: "https://docs.internal.djezzy.dz/runbooks/replica-mismatch"
+        annotations:
+          summary: "Deployment replica count mismatch"
+          description: >
+            Desired replicas: {{ $value }}, Actual pods: {{ $value }}
+            Deployment may be scaling or having issues creating pods.
+
+      # ----------------------------------------------------------
+      # Redis Alerts
+      # ----------------------------------------------------------
+      - alert: RedisDown
+        expr: up{job="redis-exporter"} == 0
+        for: 1m
+        labels:
+          severity: warning
+          priority: P2
+          team: platform
+          runbook: "https://docs.internal.djezzy.dz/runbooks/redis-down"
+        annotations:
+          summary: "Redis instance is down"
+          description: >
+            Redis exporter reports instance as unreachable.
+            Caching and session management may be affected.
+
+      - alert: RedisMemoryHigh
+        expr: redis_memory_used_bytes / redis_memory_max_bytes * 100 > 85
+        for: 15m
+        labels:
+          severity: warning
+          priority: P2
+          team: platform
+          runbook: "https://docs.internal.djezzy.dz/runbooks/redis-memory"
+        annotations:
+          summary: "Redis memory usage above 85%"
+          description: >
+            Redis is using {{ $value | humanizePercentage }} of its configured 
+            memory limit. Consider eviction policy tuning or adding memory.
+
+  # ============================================================
+  # GROUP 3: LOW SEVERITY ALERTS (P3 - Daily Digest)
+  # ============================================================
+  # Informational alerts for daily review. No immediate action
+  # required but should be tracked for trends.
+  # Delivery: Daily digest email / Slack channel
+  # ============================================================
+  
+  - name: soc-platform-info
+    interval: 60s
+    rules:
+
+      # ----------------------------------------------------------
+      # Configuration Drift Detection
+      # ----------------------------------------------------------
+      - alert: ConfigMapDriftDetected
+        expr: |
+          kube_configmap_info{namespace="soc-platform"}
+          unless on (configmap, namespace)
+          kube_configmap_created{namespace="soc-platform"}
+        for: 1h
+        labels:
+          severity: info
+          priority: P3
+          team: devops
+          runbook: "https://docs.internal.djezzy.dz/runbooks/config-drift"
+        annotations:
+          summary: "ConfigMap drift detected for {{ $labels.configmap }}"
+          description: >
+            ConfigMap configuration appears to have drifted from expected state.
+            Review GitOps synchronization status.
+
+      # ----------------------------------------------------------
+      # Backup Warnings
+      # ----------------------------------------------------------
+      - alert: BackupFailed
+        expr: |
+          backup_last_success_timestamp_seconds - backup_last_run_timestamp_seconds < 0
+        for: 1h
+        labels:
+          severity: info
+          priority: P3
+          team: platform
+          runbook: "https://docs.internal.djezzy.dz/runbooks/backup-failed"
+        annotations:
+          summary: "Last backup operation failed"
+          description: >
+            The most recent backup did not complete successfully.
+            Check backup logs and storage availability.
+
+      - alert: BackupStale
+        expr: |
+          time() - backup_last_success_timestamp_seconds > 86400
+        for: 30m
+        labels:
+          severity: info
+          priority: P3
+          team: platform
+          runbook: "https://docs.internal.djezzy.dz/runbooks/backup-stale"
+        annotations:
+          summary: "No successful backup in the last 24 hours"
+          description: >
+            Last successful backup was more than 24 hours ago.
+            Verify backup schedule is running correctly.
+
+      # ----------------------------------------------------------
+      # Certificate Expiry (Long-term Warning)
+      # ----------------------------------------------------------
+      - alert: TLSCertificateExpiringSoonLow
+        expr: |
+          (tls_cert_expiry_timestamp_seconds - time()) < 2592000
+          and
+          (tls_cert_expiry_timestamp_seconds - time()) > 86400
+        for: 1h
+        labels:
+          severity: info
+          priority: P3
+          team: devops
+          runbook: "https://docs.internal.djezzy.dz/runbooks/cert-expiry-soon"
+        annotations:
+          summary: "TLS certificate expiring in less than 30 days"
+          description: >
+            Certificate for {{ $labels.subject }} expires in 
+            {{ $value | humanizeDuration }}. Plan for renewal.
+
+      # ----------------------------------------------------------
+      # Scaling Events
+      # ----------------------------------------------------------
+      - alert: HPAAtMaxReplicas
+        expr: |
+          kube_horizontalpodautoscaler_status_current_replicas{namespace="soc-platform"}
+          ==
+          kube_horizontalpodautoscaler_spec_max_replicas{namespace="soc-platform"}
+        for: 30m
+        labels:
+          severity: info
+          priority: P3
+          team: platform
+          runbook: "https://docs.internal.djezzy.dz/runbooks/hpa-max-replicas"
+        annotations:
+          summary: "HPA {{ $labels.horizontalpodautoscaler }} reached max replicas"
+          description: >
+            HPA has scaled to maximum ({{ $value }} replicas).
+            Consider increasing max_replicas if load is expected to grow.
+
+      # ----------------------------------------------------------
+      # Log Volume Anomalies
+      # ----------------------------------------------------------
+      - alert: UnusualLogVolume
+        expr: |
+          sum(rate(log_entries_total{namespace="soc-platform"}[1h]))
+          >
+          3 * sum(rate(log_entries_total{namespace="soc-platform"}[24h] offset 24h))
+        for: 1h
+        labels:
+          severity: info
+          priority: P3
+          team: soc-ops
+          runbook: "https://docs.internal.djezzy.dz/runbooks/log-volume-anomaly"
+        annotations:
+          summary: "Unusual log volume increase detected"
+          description: >
+            Current log volume is 3x higher than same period yesterday.
+            May indicate increased activity or issues generating excessive logs.
+
+      # ----------------------------------------------------------
+      # Version Drift Alert
+      # ----------------------------------------------------------
+      - alert: RunningOutdatedVersion
+        expr: |
+          soc_platform_version_info != "1.0.0"
+        for: 1h
+        labels:
+          severity: info
+          priority: P3
+          team: devops
+          runbook: "https://docs.internal.djezzy.dz/runbooks/version-drift"
+        annotations:
+          summary: "Running non-standard version: {{ $labels.version }}"
+          description: >
+            Expected version is 1.0.0 but running {{ $labels.version }}.
+            Verify this is intentional.
+
+  # ============================================================
+  # GROUP 4: SECURITY-SPECIFIC ALERTS
+  # ============================================================
+  # Dedicated alerts for security monitoring and threat detection.
+  # All security alerts should go to Security Team channel.
+  # ============================================================
+  
+  - name: soc-security-alerts
+    interval: 30s
+    rules:
+
+      - alert: SuspiciousUserAgent
+        expr: |
+          sum by (user_agent)(increase(soc_requests_by_user_agent_total{user_agent=~"(sqlmap|nikto|nmap|masscan|gobuster)"}[5m])) > 0
+        for: 5m
+        labels:
+          severity: warning
+          priority: P2
+          team: security
+          runbook: "https://docs.internal.djezzy.dz/runbooks/suspicious-useragent"
+          annotation_scope: security_event
+        annotations:
+          summary: "Security tool User-Agent detected: {{ $labels.user_agent }}"
+          description: >
+            Requests with known security scanning tool User-Agent 
+            '{{ $labels.user_agent }}' were detected. Possible reconnaissance.
+
+      - alert: RateLimitExceededFrequently
+        expr: |
+          sum(rate(soc_rate_limited_requests_total[5m])) > 100
+        for: 10m
+        labels:
+          severity: warning
+          priority: P2
+          team: security
+          runbook: "https://docs.internal.djezzy.dz/runbooks/rate-limit-abuse"
+          annotation_scope: security_event
+        annotations:
+          summary: "High volume of rate-limited requests"
+          description: >
+            More than 100 requests/second are being rate limited.
+            Could indicate abuse or DDoS attempt.
+
+      - alert: MultipleFailedLoginsFromSingleIP
+        expr: |
+          sum by (client_ip)(increase(soc_auth_failures_total[10m])) > 50
+        for: 5m
+        labels:
+          severity: warning
+          priority: P2
+          team: security
+          runbook: "https://docs.internal.djezzy.dz/runbooks/ip-login-failures"
+          annotation_scope: security_event
+        annotations:
+          summary: "Multiple failed logins from single IP: {{ $labels.client_ip }}"
+          description: >
+            IP address {{ $labels.client_ip }} has more than 50 failed 
+            authentication attempts in 10 minutes. Consider blocking.
+
+      - alert: PrivilegeEscalationAttempt
+        expr: increase(soc_privilege_escalation_events_total[1h]) > 0
+        for: 5m
+        labels:
+          severity: critical
+          priority: P1
+          team: security
+          runbook: "https://docs.internal.djezzy.dz/runbooks/privilege-escalation"
+          annotation_scope: security_incident
+        annotations:
+          summary: "Privilege escalation attempt detected!"
+          description: >
+            One or more privilege escalation events were detected.
+            This is a critical security event requiring immediate investigation.
+
+      - alert: SQLInjectionAttempt
+        expr: increase(soc_sql_injection_attempts_total[15m]) > 0
+        for: 5m
+        labels:
+          severity: warning
+          priority: P2
+          team: security
+          runbook: "https://docs.internal.djezzy.dz/runbooks/sql-injection-attempt"
+          annotation_scope: security_event
+        annotations:
+          summary: "SQL injection attempt detected"
+          description: >
+            SQL injection patterns were detected in incoming requests.
+            WAF should be blocking these; verify protection is active.
+
+      - alert: XSSAttemptDetected
+        expr: increase(soc_xss_attempts_total[15m]) > 0
+        for: 5m
+        labels:
+          severity: warning
+          priority: P2
+          team: security
+          runbook: "https://docs.internal.djezzy.dz/runbooks/xss-attempt"
+          annotation_scope: security_event
+        annotations:
+          summary: "XSS attempt detected"
+          description: >
+            Cross-site scripting patterns were detected in requests.
+            Verify CSP headers are effective and no successful exploitation occurred.
+
+      - alert: UnusualAccessPattern
+        expr: |
+          abs(
+            sum(rate(http_requests_total{namespace="soc-platform"}[1h]))
+            -
+            avg_over_time(sum(rate(http_requests_total{namespace="soc-platform"}[1h]))[7d:])
+          )
+          / 
+          avg_over_time(sum(rate(http_requests_total{namespace="soc-platform"}[1h]))[7d:])
+          > 2
+        for: 30m
+        labels:
+          severity: info
+          priority: P3
+          team: security
+          runbook: "https://docs.internal.djezzy.dz/runbooks/unusual-access-pattern"
+          annotation_scope: security_event
+        annotations:
+          summary: "Unusual traffic pattern detected"
+          description: >
+            Traffic volume differs significantly (>200%) from 7-day average.
+            Could indicate legitimate traffic spike or attack.
+
+  # ============================================================
+  # GROUP 5: BUSINESS METRICS & SLA ALERTS
+  # ============================================================
+  # Alerts related to SLA compliance and business KPIs.
+  # ============================================================
+  
+  - name: soc-business-metrics
+    interval: 5m
+    rules:
+
+      - alert: SLAUptimeBreached
+        expr: |
+          (
+            1 - (
+              sum(increase(http_requests_total{namespace="soc-platform", code=~"5.."}[30d]))
+              /
+              sum(increase(http_requests_total{namespace="soc-platform"}[30d]))
+            )
+          ) < 0.999
+        for: 6h
+        labels:
+          severity: critical
+          priority: P1
+          team: soc-ops
+          sla_impact: true
+          runbook: "https://docs.internal.djezzy.dz/runbooks/sla-breach"
+        annotations:
+          summary: "SLA uptime target breached (< 99.9%)"
+          description: >
+            30-day uptime has fallen below 99.9% SLA target.
+            Current value: {{ $value | humanizePercentage }}
+          business_impact: "SLA credit may apply; executive notification required"
+
+      - alert: SLALatencyBreached
+        expr: |
+          (
+            1 - (
+              sum(increase(http_request_duration_seconds_bucket{namespace="soc-platform", le="2.0"}[30d]))
+              /
+              sum(increase(http_request_duration_seconds_bucket{namespace="soc-platform", le="+Inf"}[30d]))
+            )
+          ) < 0.99
+        for: 12h
+        labels:
+          severity: warning
+          priority: P2
+          team: soc-ops
+          sla_impact: true
+          runbook: "https://docs.internal.djezzy.dz/runbooks/sla-latency-breach"
+        annotations:
+          summary: "SLA latency target breached (< 99% under 2s)"
+          description: >
+            Less than 99% of requests complete within 2 second SLA target.
+            Current value: {{ $value | humanizePercentage }}
+
+      - alert: ActiveUsersBelowBaseline
+        expr: |
+          soc_active_users < 50
+        for: 2h
+        labels:
+          severity: info
+          priority: P3
+          team: soc-ops
+          runbook: "https://docs.internal.djezzy.dz/runbooks/low-users"
+        annotations:
+          summary: "Active users below baseline: {{ $value }}"
+          description: >
+            Active user count ({{ $value }}) is below expected baseline (50+).
+            May indicate access issues or off-hours period.
+
+      - alert: IncidentBacklogGrowing
+        expr: |
+          soc_open_incidents > 20
+        for: 4h
+        labels:
+          severity: warning
+          priority: P2
+          team: soc-ops
+          runbook: "https://docs.internal.djezzy.dz/runbooks/incident-backlog"
+        annotations:
+          summary: "Incident backlog growing: {{ $value }} open incidents"
+          description: >
+            Number of open incidents ({{ $value }}) exceeds threshold (20).
+            Consider resource allocation or escalation.
+
+# ============================================================
+# DOCUMENTATION: ALERT SEVERITY MATRIX
+# ============================================================
+#
+# Severity Levels:
+#   critical (P1): Page immediately, respond < 5 min, escalate < 15 min
+#   warning   (P2): Ticket + Slack, respond < 1 hour, escalate < 4 hours
+#   info      (P3): Daily digest only, review during standup
+#
+# Alert Labels:
+#   severity:     critical | warning | info
+#   priority:     P1 | P2 | P3
+#   team:         soc-ops | security | platform | database | devops
+#   runbook:      URL to remediation documentation
+#   annotation_scope: incident | security_incident | security_event | sla_impact
+#
+# Routing Rules (example for Alertmanager):
+#   - P1 + critical → PagerDuty (phone call + SMS)
+#   - P2 + warning → Slack #soc-alerts + create Jira ticket
+#   - P3 + info    → Email digest to soc-team@djezzy.dz
+#   - security_*   → Additional copy to #security-alerts
+#   - sla_impact   → Copy to management channel
+#
+# Silence Examples:
+#   # Silence during maintenance window
+#   silence --author="on-call" --duration=2h 'alertname="SOCPlatformDown"'
+#
+# References:
+#   - Prometheus Alerting: https://prometheus.io/docs/alerting/latest/rules/
+#   - Alertmanager: https://prometheus.io/docs/alerting/latest/configuration/
+#   - Best Practices: https://grafana.com/docs/grafana-cloud/alerting/
+# ============================================================

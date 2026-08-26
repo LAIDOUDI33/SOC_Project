@@ -1,0 +1,414 @@
+# =============================================================================
+# Djezzy National SOC Platform - Phase 5: SIEM Integration
+# Metricbeat Configuration - Metrics Collection Agent
+# =============================================================================
+# Comprehensive metrics collection from:
+# - Kubernetes cluster components
+# - System resources (CPU, memory, disk, network)
+# - Applications (Elasticsearch, PostgreSQL, Redis, Kafka)
+# - Network infrastructure
+# =============================================================================
+
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: metricbeat-config
+  namespace: siem
+  labels:
+    app.kubernetes.io/name: metricbeat
+data:
+  metricbeat.yml: |
+    # Metricbeat Configuration for Djezzy SOC Platform
+    
+    # ========================================
+    # Main Settings
+    # ========================================
+    metricbeat.config.modules:
+      path: ${path.config}/modules.d/*.yml
+      reload.enabled: false
+      reload.period: 10s
+    
+    # ========================================
+    # Processors
+    # ========================================
+    processors:
+      - add_host_metadata: ~
+      - add_cloud_metadata: ~
+      - add_docker_metadata: ~
+      - add_kubernetes_metadata:
+          host: ${NODE_NAME}
+      - add_fields:
+          target: ''
+          fields:
+            observer.name: djezzy-soc-metricbeat
+            ecs.version: 8.11.0
+
+    # ========================================
+    # Output to Logstash (or direct to ES)
+    # ========================================
+    output.logstash:
+      hosts: ['logstash.siem:5044']
+      loadbalance: true
+      bulk_max_size: 1024
+      worker: 1
+      compression_level: 3
+      
+      ssl.enabled: true
+      ssl.certificate_authorities: ["/etc/metricbeat/certs/ca.crt"]
+      ssl.certificate: "/etc/metricbeat/certs/client.crt"
+      ssl.key: "/etc/metricbeat/client.key"
+      ssl.verification_mode: full
+
+    # ========================================
+    # Monitoring
+    # ========================================
+    monitoring.enabled: true
+    monitoring.elasticsearch:
+      hosts: ["https://elasticsearch-client:9200"]
+      username: "${ELASTICSEARCH_USER}"
+      password: "${ELASTICSEARCH_PASSWORD}"
+      ssl.enabled: true
+      ssl.certificate_authorities: ["/etc/metricbeat/certs/ca.crt"]
+      
+    logging.level: info
+    logging.to_files: true
+    logging.files:
+      path: /var/log/metricbeat
+      name: metricbeat
+      keepfiles: 7
+      
+    http.enabled: true
+    http.port: 5067
+
+    # ========================================
+    # Modules Configuration
+    # ========================================
+    # Note: Individual modules are configured below as separate ConfigMap entries
+    
+  # Module: System Metrics (CPU, Memory, Disk, Network, etc.)
+  system.yml: |
+    - module: system
+      period: 30s
+      metricsets:
+        - cpu             # CPU usage
+        - load            # CPU load averages
+        - memory          # Memory usage
+        - network         # Network IO
+        - process         # Per process metrics
+        - process_summary # Process summary
+        - uptime          # System uptime
+        - socket_summary  # Socket summary
+        - filesystem      # Filesystem usage
+        - fsstat          # Filesystem summary
+        - raid            # RAID status
+        - thermal         # Thermal readings
+      processes: ['.*']
+      cpu.metrics: ["percentages","normalized_percentages","ticks"]
+      core.metrics: ["percentages"]
+      
+  # Module: Kubernetes Metrics
+  kubernetes.yml: |
+    - module: kubernetes
+      metricsets:
+        - node            # Node metrics
+        - system          # System container metrics
+        - pod             # Pod metrics
+        - container       # Container metrics
+        - volume          # Volume metrics
+        - state_pod       # Pod state changes
+        - state_container # Container state changes
+        - state_node      # Node state changes
+        - state_volume    # Volume state changes
+        - resourcequotas  # Resource quota utilization
+      period: 30s
+      host: ${NODE_NAME:localhost}
+      hosts: ["https://${NODE_NAME}:10250"]
+      bearer_token_file: /var/run/secrets/kubernetes.io/serviceaccount/token
+      ssl.verification_mode: none
+      
+  # Module: Elasticsearch Metrics (Monitor ES cluster)
+  elasticsearch.yml: |
+    - module: elasticsearch
+      xpack.enabled: true
+      period: 30s
+      hosts: ["https://elasticsearch-client:9200"]
+      username: ${ELASTICSEARCH_USER}
+      password: ${ELASTICSEARCH_PASSWORD}
+      ssl.certificate_authorities: ["/etc/metricbeat/certs/ca.crt"]
+      metricsets:
+        - cluster_stats   # Cluster statistics
+        - node_stats     # Node statistics
+        - index_stats    # Index statistics
+        - shard          # Shard statistics
+        - enrich         # Enrich coordinator stats
+        - ccr            # Cross-cluster replication stats
+        - ml_job         # Machine learning job stats
+        - transform      # Transform job stats
+        
+  # Module: PostgreSQL Metrics
+  postgresql.yml: |
+    - module: postgresql
+      enabled: true
+      period: 30s
+      hosts: ["postgres-postgresql:5432"]
+      username: ${POSTGRES_METRICS_USER}
+      password: ${POSTGRES_METRICS_PASSWORD}
+      ssl.mode: disable
+      raw_data: true
+      metricsets:
+        - activity        # Current activity
+        - background_writer # Background writer stats
+        - database        # Database statistics
+        - locks           # Lock statistics
+        - statuser        # User statistics
+        - statements      # Query performance
+        - stale           # Stale statistics
+        - bgwriter        # Background writer detailed stats
+        - replication     # Replication stats
+        
+  # Module: Nginx Metrics
+  nginx.yml: |
+    - module: nginx
+      metricsets:
+        - stubstatus     # Nginx basic status
+      period: 30s
+      hosts: ["localhost:80"]
+      server_status.path: /nginx_status
+      
+  # Module: Docker Metrics
+  docker.yml: |
+    - module: docker
+      metricsets:
+        - container       # Container metrics
+        - cpu             # Container CPU metrics
+        - memory          # Container memory metrics
+        - disk            # Container disk metrics
+        - network         # Container network metrics
+        - healthcheck     # Container health check status
+        - event           # Container events
+        - image           # Image metrics
+      hosts: ["unix:///var/run/docker.sock"]
+      period: 30s
+      extra_metrics: true
+      
+  # Module: Kafka Metrics (if using Kafka for event streaming)
+  kafka.yml: |
+    - module: kafka
+      metricsets:
+        - partition       # Partition metrics
+        - consumergroup   # Consumer group metrics
+        - producer        # Producer metrics
+        - consumergroup_lag # Consumer lag
+      period: 30s
+      hosts: ["kafka-headless:9092"]
+      
+  # Module: Redis Metrics
+  redis.yml: |
+    - module: redis
+      metricsets:
+        - info            # Redis INFO command metrics
+        - keyspace         # Keyspace information
+        - db              # Database-specific metrics
+      period: 30s
+      hosts: ["redis-master:6379"]
+      
+  # Module: AWS CloudWatch (if running on AWS)
+  aws.yml: |
+    - module: aws
+      period: 300s
+      metricsets:
+        - ec2             # EC2 instance metrics
+        - ebs             # EBS volume metrics
+        - elb             # Elastic Load Balancer metrics
+        - rds             # RDS database metrics
+        - s3_request      # S3 request metrics
+      regions:
+        - eu-west-1
+      access_key_id: ${AWS_ACCESS_KEY_ID}
+      secret_access_key: ${AWS_SECRET_ACCESS_KEY}
+
+---
+# Metricbeat DaemonSet for Kubernetes nodes
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: metricbeat
+  namespace: siem
+  labels:
+    app.kubernetes.io/name: metricbeat
+    app.kubernetes.io/component: metrics-collector
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: metricbeat
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: metricbeat
+        app.kubernetes.io/component: metrics-collector
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "5067"
+        prometheus.io/path: "/metrics"
+    spec:
+      serviceAccountName: metricbeat
+      terminationGracePeriodSeconds: 30
+      containers:
+        - name: metricbeat
+          image: docker.elastic.co/beats/metricbeat:8.12.0
+          args: [
+            "-c", "/etc/metricbeat/metricbeat.yml",
+            "-e",
+            "-system.hostfs=/hostfs",
+            "-strict.perms=false"
+          ]
+          env:
+            - name: NODE_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+            - name: ELASTICSEARCH_USER
+              valueFrom:
+                secretKeyRef:
+                  name: elasticsearch-credentials
+                  key: username
+            - name: ELASTICSEARCH_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: elasticsearch-credentials
+                  key: password
+            - name: POSTGRES_METRICS_USER
+              valueFrom:
+                secretKeyRef:
+                  name: postgres-credentials
+                  key: username
+            - name: POSTGRES_METRICS_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: postgres-credentials
+                  key: password
+          securityContext:
+            runAsUser: 0
+            privileged: true
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "200Mi"
+            limits:
+              cpu: "500m"
+              memory: "500Mi"
+          volumeMounts:
+            - name: config
+              mountPath: /etc/metricbeat/metricbeat.yml
+              subPath: metricbeat.yml
+              readOnly: true
+            - name: modules
+              mountPath: /etc/metricbeat/modules.d
+              readOnly: true
+            - name: certs
+              mountPath: /etc/metricbeat/certs
+              readOnly: true
+            - name: data
+              mountPath: /usr/share/metricbeat/data
+            - name: proc
+              mountPath: /hostfs/proc
+              readOnly: true
+            - name: cgroup
+              mountPath: /hostfs/sys/fs/cgroup
+              readOnly: true
+            - name: varrundockersock
+              mountPath: /var/run/docker.sock
+              readOnly: true
+          livenessProbe:
+            exec:
+              command:
+                - curl
+                - -f
+                - http://localhost:5067/health
+            initialDelaySeconds: 30
+            periodSeconds: 30
+            failureThreshold: 5
+          readinessProbe:
+            exec:
+              command:
+                - curl
+                - -f
+                - http://localhost:5067/health
+            initialDelaySeconds: 15
+            periodSeconds: 15
+            failureThreshold: 3
+      volumes:
+        - name: config
+          configMap:
+            name: metricbeat-config
+        - name: modules
+          configMap:
+            name: metricbeat-config
+        - name: certs
+          secret:
+            secretName: elasticsearch-tls-certs
+            defaultMode: 0400
+        - name: data
+          hostPath:
+            path: /var/lib/metricbeat-data
+            type: DirectoryOrCreate
+        - name: proc
+          hostPath:
+            path: /proc
+        - name: cgroup
+          hostPath:
+            path: /sys/fs/cgroup
+        - name: varrundockersock
+          hostPath:
+            path: /var/run/docker.sock
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: metricbeat
+  namespace: siem
+  labels:
+    app.kubernetes.io/name: metricbeat
+---
+# RBAC for Metricbeat
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: metricbeat-cluster-role
+  labels:
+    app.kubernetes.io/name: metricbeat
+rules:
+  - apiGroups: [""]
+    resources:
+      - nodes
+      - namespaces
+      - events
+      - pods
+      - services
+      - endpoints
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["extensions", "apps"]
+    resources:
+      - replicasets
+      - deployments
+      - daemonsets
+      - statefulsets
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["batch"]
+    resources:
+      - jobs
+      - cronjobs
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: metricbeat-cluster-role-binding
+subjects:
+  - kind: ServiceAccount
+    name: metricbeat
+    namespace: siem
+roleRef:
+  kind: ClusterRole
+  name: metricbeat-cluster-role
+  apiGroup: rbac.authorization.k8s.io

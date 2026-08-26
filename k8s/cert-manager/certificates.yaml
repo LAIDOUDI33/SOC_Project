@@ -1,0 +1,262 @@
+# =============================================================================
+# CyberSOC Platform - TLS Certificate Resources (cert-manager)
+# =============================================================================
+# Creates Let's Encrypt and/or internal CA certificates for production domains
+# 
+# Prerequisites:
+#   - cert-manager installed in cluster
+#   - ClusterIssuer(s) configured for Let's Encrypt and/or internal CA
+#   - DNS records pointing to cluster ingress
+#
+# Apply with: kubectl apply -f k8s/cert-manager/certificates.yaml
+# =============================================================================
+
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: soc-djezzy-dz-tls
+  namespace: cybersoc
+  labels:
+    app.kubernetes.io/name: soc-platform
+    app.kubernetes.io/component: tls
+    app.kubernetes.io/environment: production
+spec:
+  # Production domain certificate
+  secretName: soc-djezzy-dz-tls-prod
+  duration: 2160h    # 90 days
+  renewBefore: 360h  # Renew 15 days before expiry
+  subject:
+    organizations:
+      - Djezzy Algeria
+      - CyberSOC Operations
+  dnsNames:
+    - soc.djezzy.dz
+    - www.soc.djezzy.dz
+    - staging.soc.djezzy.dz
+  ipAddresses: []
+  issuerRef:
+    name: letsencrypt-production
+    kind: ClusterIssuer
+    group: cert-manager.io
+  usages:
+    - server auth
+    - client auth
+  privateKey:
+    rotationPolicy: Always
+    algorithm: ECDSA
+    size: 256
+
+---
+
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: soc-api-tls
+  namespace: cybersoc
+  labels:
+    app.kubernetes.io/name: soc-platform
+    app.kubernetes.io/component: tls
+    app.kubernetes.io/environment: production
+spec:
+  # API Gateway domain certificate
+  secretName: soc-api-tls-prod
+  duration: 2160h    # 90 days
+  renewBefore: 360h  # Renew 15 days before expiry
+  subject:
+    organizations:
+      - Djezzy Algeria
+      - CyberSOC API Gateway
+  dnsNames:
+    - api-soc.djezzy.dz
+    - api.staging.soc.djezzy.dz
+    - gateway.soc.djezzy.dz
+  ipAddresses: []
+  issuerRef:
+    name: letsencrypt-production
+    kind: ClusterIssuer
+    group: cert-manager.io
+  usages:
+    - server auth
+  privateKey:
+    rotationPolicy: Always
+    algorithm: RSA
+    size: 2048
+
+---
+
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: soc-internal-ca
+  namespace: cybersoc
+  labels:
+    app.kubernetes.io/name: soc-platform
+    app.kubernetes.io/component: tls
+    app.kubernetes.io/environment: production
+spec:
+  # Internal service mesh / mTLS certificate
+  secretName: soc-internal-cert
+  duration: 8760h    # 1 year for internal certs
+  renewBefore: 720h  # Renew 30 days before expiry
+  isCA: false
+  dnsNames:
+    - soc-platform.cybersoc.svc.cluster.local
+    - soc-platform-api.cybersoc.svc.cluster.local
+    - "*.cybersoc.svc.cluster.local"
+  ipAddresses: []
+  issuerRef:
+    name: cybersoc-internal-ca
+    kind: Issuer
+    group: cert-manager.io
+  usages:
+    - server auth
+    - client auth
+  privateKey:
+    rotationPolicy: Always
+    algorithm: ECDSA
+    size: 256
+
+---
+
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: soc-grafana-tls
+  namespace: cybersoc
+  labels:
+    app.kubernetes.io/name: soc-platform
+    app.kubernetes.io/component: monitoring
+    app.kubernetes.io/environment: production
+spec:
+  # Grafana dashboard certificate
+  secretName: soc-grafana-tls-prod
+  duration: 2160h
+  renewBefore: 360h
+  subject:
+    organizations:
+      - Djezzy Algeria
+      - CyberSOC Monitoring
+  dnsNames:
+    - grafana.soc.djezzy.dz
+    - monitor.soc.djezzy.dz
+  issuerRef:
+    name: letsencrypt-production
+    kind: ClusterIssuer
+    group: cert-manager.io
+  usages:
+    - server auth
+  privateKey:
+    algorithm: RSA
+    size: 2048
+
+---
+
+# =============================================================================
+# ClusterIssuer Configurations
+# =============================================================================
+
+---
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: letsencrypt-production
+  labels:
+    app.kubernetes.io/name: soc-platform
+    app.kubernetes.io/component: cert-manager
+spec:
+  acme:
+    server: https://acme-v02.api.letsencrypt.org/directory
+    email: security@djezzy.dz
+    privateKeySecretRef:
+      name: letsencrypt-production-key
+    solvers:
+      # HTTP01 solver for main domains
+      - http01:
+          ingress:
+            class: nginx-enterprise
+        selector:
+          dnsNames:
+            - soc.djezzy.dz
+            - api-soc.djezzy.dz
+            - grafana.soc.djezzy.dz
+      
+      # DNS01 solver for wildcard/internal certs (using Cloudflare or Route53)
+      - dns01:
+          cloudflare:
+            apiTokenSecretRef:
+              name: cloudflare-api-token
+              key: api-token
+            email: admin@djezzy.dz
+        selector:
+          dnsZones:
+            - "djezzy.dz"
+
+---
+
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: cybersoc-internal-ca
+  namespace: cybersoc
+  labels:
+    app.kubernetes.io/name: soc-platform
+    app.kubernetes.io/component: cert-manager
+spec:
+  ca:
+    secretName: cybersoc-root-ca
+
+---
+
+# =============================================================================
+# Self-Signed Root CA for Internal Services (if no external CA available)
+# =============================================================================
+apiVersion: v1
+kind: Secret
+metadata:
+  name: cybersoc-root-ca
+  namespace: cybersoc
+  annotations:
+    cert-manager.io/allow-direct-injection: "true"
+type: kubernetes.io/tls
+data:
+  # Replace with your actual CA certificate and key
+  # Generate with: openssl req -x509 -newkey rsa:4096 -keyout ca.key -out ca.crt -days 3650 -nodes
+  # Then base64 encode both files
+  tls.crt: LS0tLS1CRUdJTiBDRVJUSUZJQ0FURS0tLS0tCk1JSUMrekNDQWVPZ0F3SUJBZ0lKQUxNQW45aVBMQTNpTUEwR0NTcUdTSWIzRFFFQkN3VUFNQlF4RWpBUUJnTlYKQkFNTUNXeHZZMkZzYUc5emRHRjBaU010YVhSNUxXTnFaR1JmWkdWdmJuUmxaVEVUTUJFR0ExVUVDaE1LYkc5bApibU04TVJVd0V3WURWUVFLREFsUmNIUnZabEZrYVhCMWNtRnVZMmt4RlRBVEJnTlZCQW9NQkhnaGFYTjBaVzB4ClFYUmxjbk5sY21OcGIzNVFjQT09Ci0tLS0tRU5EIENFUlRJRklDQVRFLS0tLS0K
+  tls.key: LS0tLS1CRUdJTiBQUklWQVRFIEtFWS0tLS0tCk1JSUV2d0lCQURBTkJna3Foa2lHOXcwQkFRRUZBQVNDQktnd2dnU2tBZ0VBQW9JQkFRQzdGbnN6L2dPZzBOdEEKYW5uK2IvbjVqZz09Ci0tLS0tRU5EIFBSSVBBVEUgS0VZLS0tLS0K
+
+---
+
+# =============================================================================
+# Certificate Monitoring & Alerts
+# =============================================================================
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: cert-monitoring-config
+  namespace: cybersoc
+  labels:
+    app.kubernetes.io/name: soc-platform
+    app.kubernetes.io/component: monitoring
+data:
+  cert-check.yaml: |
+    # Certificate expiration check configuration
+    certificates:
+      - name: soc-djezzy-dz-tls
+        secret: soc-djezzy-dz-tls-prod
+        warn_days: 30
+        critical_days: 14
+      - name: soc-api-tls
+        secret: soc-api-tls-prod
+        warn_days: 30
+        critical_days: 14
+      - name: soc-internal-ca
+        secret: soc-internal-cert
+        warn_days: 60
+        critical_days: 30
+    
+    notification:
+      slack_channel: "#soc-alerts"
+      pagerduty_service: cyberSOC-platform
+      
+    schedule: "0 */6 * * *"  # Check every 6 hours

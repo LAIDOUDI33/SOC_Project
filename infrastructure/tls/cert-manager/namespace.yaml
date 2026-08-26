@@ -1,0 +1,72 @@
+# ============================================================
+# National SOC Platform - cert-manager Namespace
+# TLS Certificate Management Infrastructure
+# Phase 3: TLS Automation
+# ============================================================
+
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: cert-manager
+  labels:
+    app.kubernetes.io/name: cert-manager
+    app.kubernetes.io/component: tls-management
+    app.kubernetes.io/part-of: national-soc
+    environment: production
+    managed-by: djezzy-ops
+    security.djezzy.dz/classification: internal
+  annotations:
+    description: "cert-manager - Automatic TLS certificate management for Djezzy SOC"
+    contact: "soc-ops@djezzy.dz"
+---
+# ============================================================
+# cert-manager Service Account
+# ============================================================
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: cert-manager
+  namespace: cert-manager
+  labels:
+    app: cert-manager
+    app.kubernetes.io/name: cert-manager
+    app.kubernetes.io/component: controller
+---
+# ============================================================
+# LimitRanges for cert-manager resources
+# ============================================================
+apiVersion: v1
+kind: LimitRange
+metadata:
+  name: cert-manager-limits
+  namespace: cert-manager
+spec:
+  limits:
+  - type: Container
+    default:
+      cpu: 100m
+      memory: 128Mi
+    defaultRequest:
+      cpu: 10m
+      memory: 64Mi
+    max:
+      cpu: "1"
+      memory: 512Mi
+---
+# ============================================================
+# Resource Quotas for cert-manager
+# ============================================================
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: cert-manager-quota
+  namespace: cert-manager
+spec:
+  hard:
+    requests.cpu: "2"
+    requests.memory: 512Mi
+    limits.cpu: "4"
+    limits.memory: 1Gi
+    persistentvolumeclaims: "2"
+    secrets: "50"
+    configmaps: "20"

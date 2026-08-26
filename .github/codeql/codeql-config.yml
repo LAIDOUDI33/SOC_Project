@@ -1,0 +1,49 @@
+# ============================================================
+# National SOC Platform - CodeQL Configuration
+# Custom security queries for Djezzy SOC Platform
+# ============================================================
+
+name: "Djezzy-SOC-CodeQL-Config"
+version: 1.0
+
+# Use the default security queries plus custom ones
+queries:
+  - uses: security-and-quality
+  # Add JavaScript/TypeScript specific security queries
+  - uses: javascript-2024-06
+    from: codeql/suite-helpers
+  # Custom path injection detection (critical for API endpoints)
+  - name: custom/path-injection
+    from: .github/codeql/custom-queries/
+  # SQL injection detection for Prisma usage
+  - name: custom/prisma-sqli
+    from: .github/codeql/custom-queries/
+
+# Paths to include in analysis
+paths-ignore:
+  - '**/node_modules/**'
+  - '**/.next/**'
+  - '**/coverage/**'
+  - '**/dist/**'
+  - '**/*.test.ts'
+  - '**/*.spec.ts'
+  - '**/__tests__/**'
+  - 'docs/**'
+
+# Language-specific configuration
+path-exclude:
+  - '**/migrations/**'  # Exclude migration files
+
+# Query filters to reduce noise
+query-filters:
+  # Exclude test files from certain checks
+  - exclude:
+      tags contain:
+        - false-positive
+        - test-file
+
+# Custom query suites for SOC-specific patterns
+paths:
+  - src/app/api/**     # API routes (high priority)
+  - src/lib/auth/**    # Authentication logic (critical)
+  - src/lib/db.ts      # Database connection (sensitive)

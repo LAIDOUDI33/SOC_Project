@@ -1,0 +1,862 @@
+# =============================================================================
+# Djezzy National SOC Platform - Phase 5: SIEM Integration
+# Logstash Pipeline Configuration
+# =============================================================================
+# Multi-pipeline architecture for SOC log processing:
+# 1. security-events - Main pipeline for all security logs
+# 2. telecom-events - Specialized telecom protocol parsing
+# 3. audit-logs - Compliance and audit trail processing
+# 4. threat-intel - External threat intelligence ingestion
+# =============================================================================
+
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: logstash-pipeline
+  namespace: siem
+  labels:
+    app.kubernetes.io/name: logstash
+    app.kubernetes.io/component: config
+data:
+  # Main Logstash configuration
+  logstash.yml: |
+    http.host: "0.0.0.0"
+    http.port: 9600-9700
+    path.config: /usr/share/logstash/pipeline
+    path.data: /usr/share/logstash/data
+    pipeline.workers: 4
+    pipeline.batch.size: 1250
+    pipeline.batch.delay: 50
+    pipeline.unsafe_shutdown: false
+    
+    # Monitoring
+    xpack.monitoring.enabled: true
+    xpack.monitoring.elasticsearch.hosts: ["https://elasticsearch-client:9200"]
+    
+    # Dead Letter Queue for failed events
+    dead_letter_queue.enable: true
+    dead_letter_queue.max_bytes: 1024mb
+    
+    # Persistent queues for reliability
+    queue.type: persisted
+    queue.page_capacity: 256mb
+    queue.max_events: 0
+    queue.max_bytes: 1gb
+    
+    # Java options
+    java_opts: "${LS_JAVA_OPTS:-Xms1g -Xmx1g}"
+
+  pipelines.yml: |
+    - pipeline.id: security-events
+      path.config: "/usr/share/logstash/pipeline/security-events.conf"
+      pipeline.workers: 4
+      pipeline.batch.size: 1000
+      pipeline.batch.delay: 50
+      
+    - pipeline.id: telecom-events
+      path.config: "/usr/share/logstash/pipeline/telecom-events.conf"
+      pipeline.workers: 2
+      pipeline.batch.size: 500
+      pipeline.batch.delay: 30
+      
+    - pipeline.id: audit-logs
+      path.config: "/usr/share/logstash/pipeline/audit-logs.conf"
+      pipeline.workers: 2
+      pipeline.batch.size: 250
+      pipeline.batch.delay: 50
+      
+    - pipeline.id: threat-intel
+      path.config: "/usr/share/logstash/pipeline/threat-intel.conf"
+      pipeline.workers: 1
+      pipeline.batch.size: 200
+      pipeline.batch.delay: 60
+
+  # ===========================================================================
+  # Pipeline 1: Security Events (Main)
+  # ===========================================================================
+  security-events.conf: |
+    input {
+      beats {
+        port => 5044
+        ssl => true
+        ssl_certificate => "/usr/share/logstash/certs/tls.crt"
+        ssl_key => "/usr/share/logstash/certs/tls.key"
+        ssl_ca_certificate => "/usr/share/logstash/certs/ca.crt"
+        ssl_verify_mode => "force_peer"
+        
+        # Performance tuning
+        client_inactivity_timeout => 3600
+        executor_threads => 4
+        
+        # Add metadata about source
+        add_field => { "[@metadata][input]" => "beats" }
+      }
+      
+      kafka {
+        bootstrap_servers => "${KAFKA_BROKERS:kafka-headless:9092}"
+        topics => ["security-events", "firewall-logs", "ids-alerts", "endpoint-telemetry"]
+        group_id => "logstash-soc-consumer"
+        consumer_threads => 4
+        auto_offset_reset => "latest"
+        security_protocol => "SSL"
+        ssl_truststore_location => "/usr/share/logstash/certs/truststore.jks"
+        ssl_keystore_location => "/usr/share/logstash/certs/keystore.jks"
+        schema => {
+          value_schema => '{"type":"record","name":"SecurityEvent","fields":[{"name":"timestamp","type":"long"},{"name":"source_ip","type":"string"},{"name":"event_type","type":"string"}]}'
+        }
+        
+        decorate_events => true
+        add_field => { "[@metadata][input]" => "kafka" }
+      }
+      
+      http {
+        port => 8080
+        additional_codecs => {"application/json"=>"json"}
+        ssl => true
+        ssl_certificate => "/usr/share/logstash/certs/tls.crt"
+        ssl_key => "/usr/share/logstash/certs/tls.key"
+        user => "${LOGSTASH_API_USER}"
+        password => "${LOGSTASH_API_PASSWORD}"
+        
+        # For webhook integrations (SOAR, cloud providers, etc.)
+        url => "/api/v1/events"
+        response_code => 202
+        threads => 4
+        
+        add_field => { "[@metadata][input]" => "http" }
+      }
+      
+      tcp {
+        port => 5514
+        mode => "server"
+        ssl_enable => true
+        ssl_cert => "/usr/share/logstash/certs/tls.crt"
+        ssl_key => "/usr/share/logstash/certs/tls.key"
+        ssl_ca => "/usr/share/logstash/certs/ca.crt"
+        ssl_verify => false
+        
+        # Syslog over TCP
+        proxy_protocol => false
+        
+        add_field => { "[@metadata][input]" => "syslog-tcp" }
+      }
+      
+      udp {
+        port => 5514
+        workers => 4
+        buffer_size => 65536
+        
+        # Syslog over UDP (for legacy systems)
+        add_field => { "[@metadata][input]" => "syslog-udp" }
+      }
+    }
+
+    filter {
+      # Parse based on input source
+      if [@metadata][input] == "beats" {
+        # Beats already provides structured data
+        mutate {
+          add_field => { "[observer][type]" => "%{[beat][name]}" }
+          add_field => { "[observer][hostname]" => "%{[host][name]}" }
+        }
+      }
+      
+      if [@metadata][input] == "kafka" {
+        # Kafka events need JSON parsing
+        json {
+          source => "message"
+          target => "parsed_event"
+          skip_on_invalid_json => true
+        }
+        
+        # Move parsed fields to root level
+        ruby {
+          code => "
+            if event.get('parsed_event')
+              event.get('parsed_event').each do |k, v|
+                event.set(k, v) unless event.get(k)
+              end
+            end
+          "
+        }
+      }
+      
+      if [@metadata][input] == "syslog-tcp" or [@metadata][input] == "syslog-udp" {
+        # Parse syslog format
+        grok {
+          match => { 
+            "message" => [
+              # RFC5424 format
+              "<%{POSINT:syslog_pri}>%{SYSLOGTIMESTAMP:syslog_timestamp} %{IPORHOST:syslog_hostname} %{PROG:syslog_program}(?:\[%{POSINT:syslog_pid}\])?: %{GREEDYDATA:syslog_message}",
+              # Legacy syslog
+              "%{SYSLOGBASE} %{GREEDYDATA:syslog_message}",
+              # Generic fallback
+              "%{GREEDYDATA:message}"
+            ]
+          }
+          overwrite => ["message"]
+        }
+        
+        # Convert syslog priority to severity
+        ruby {
+          code => "
+            pri = event.get('syslog_pri').to_i
+            severity = pri % 8
+            facility = pri / 8
+            
+            severity_map = {0=>'emergency', 1=>'alert', 2=>'critical', 3=>'error', 4=>'warning', 5=>'notice', 6=>'informational', 7=>'debug'}
+            
+            event.set('[log][level]', severity_map[severity] || 'unknown')
+            event.set('facility', facility)
+            event.set('severity_num', severity)
+          "
+        }
+      }
+
+      # ========================================
+      # Common Enrichment Pipeline
+      # ========================================
+      
+      # Ensure timestamp is properly set
+      date {
+        match => [
+          "@timestamp", "ISO8601",
+          "timestamp", "UNIX",
+          "syslog_timestamp", "MMM dd HH:mm:ss",
+          "@timestamp", "yyyy-MM-dd'T'HH:mm:ss.SSSZ"
+        ]
+        timezone => "Africa/Algiers"
+        target => "@timestamp"
+      }
+      
+      # GeoIP enrichment for IP addresses
+      geoip {
+        source => "[source][ip]"
+        target => "[source][geo]"
+        database => "/usr/share/logstash/GeoLite2-City.mmdb"
+        fields => ["city_name", "country_name", "location", "region_name"]
+      }
+      
+      geoip {
+        source => "[destination][ip]"
+        target => "[destination][geo]"
+        database => "/usr/share/logstash/GeoLite2-City.mmdb"
+        fields => ["city_name", "country_name", "location", "region_name"]
+      }
+      
+      # ASN enrichment
+      dns {
+        reverse => [ "[source][ip]", "[destination][ip]" ]
+        action => "replace"
+        hit_cache_size => 50000
+        hit_cache_ttl => 300
+        failed_cache_size => 50000
+        failed_cache_ttl => 60
+      }
+      
+      # User-Agent parsing (if present)
+      useragent {
+        source => "[http][user_agent]"
+        target => "[http][user_agent]"
+      }
+      
+      # Threat Intelligence Lookup
+      # Check IPs against known threat feeds
+      elasticsearch {
+        hosts => ["https://elasticsearch-client:9200"]
+        user => "${ELASTICSEARCH_USER}"
+        password => "${ELASTICSEARCH_PASSWORD}"
+        ssl => true
+        ca_file => "/usr/share/logstash/certs/ca.crt"
+        index => "soc-threat-intel-*"
+        query => "source.ip:%{[source][ip]} OR destination.ip:%{[destination][ip]}"
+        fields => {
+          "threat.name" => "threat.matched_threat"
+          "threat.indicator.ip" => "threat.indicator_ip"
+          "threat.confidence" => "threat.confidence_score"
+          "threat.feed" => "threat.source_feed"
+        }
+        result_size => 10
+      }
+      
+      # Calculate risk score
+      ruby {
+        code => "
+          score = 0
+          
+          # Base score from event severity
+          case event.get('[event][severity]')
+          when 'critical' then score += 40
+          when 'high' then score += 30
+          when 'medium' then score += 20
+          when 'low' then score += 10
+          when 'informational' then score += 5
+          else score += 15
+          end
+          
+          # Threat intel match bonus
+          if event.get('threat.matched_threat')
+            confidence = event.get('threat.confidence_score').to_i || 50
+            score += (confidence / 10) * 2
+          end
+          
+          # Country-based scoring (simplified)
+          high_risk_countries = ['CN', 'RU', 'KP', 'IR']
+          src_country = event.get('[source][geo][country_name]')
+          dst_country = event.get('[destination][geo][country_name]')
+          
+          if high_risk_countries.include?(src_country)
+            score += 15
+          end
+          
+          # Cap at 100
+          score = [score, 100].min
+          
+          event.set('[event][risk_score]', score)
+          
+          # Auto-set priority based on score
+          if score >= 75
+            event.set('[soc][priority]', 'P1')
+          elsif score >= 50
+            event.set('[soc][priority]', 'P2')
+          elsif score >= 25
+            event.set('[soc][priority]', 'P3')
+          else
+            event.set('[soc][priority]', 'P4')
+          end
+        "
+      }
+      
+      # Add SOC-specific metadata
+      mutate {
+        add_field => {
+          "[soc][source_system]" => "djezzy-soc-platform"
+          "[soc][processed_at]" => "%{@timestamp}"
+          "[ecs.version]" => "8.11.0"
+        }
+        
+        # Remove debug fields
+        remove_field => ["@version", "parsed_event", "syslog_pri"]
+      }
+      
+      # Drop low-value events to reduce noise (configurable)
+      if [event][risk_score] <= 5 and [event][type] == "info" {
+        drop {}
+      }
+    }
+
+    output {
+      # Primary output to Elasticsearch
+      elasticsearch {
+        hosts => ["https://elasticsearch-client:9200"]
+        user => "${ELASTICSEARCH_USER}"
+        password => "${ELASTICSEARCH_PASSWORD}"
+        ssl => true
+        cacert => "/usr/share/logstash/certs/ca.crt"
+        
+        # Index management with rollover
+        index => "soc-security-events-%{+YYYY.MM.dd}"
+        
+        # Document ID for deduplication (if available)
+        document_id => "%{[event][id]}"
+        
+        # Bulk request tuning
+        bulk_max_size => 1000
+        flush_size => 500
+        
+        # Retry on failure
+        retry_on_conflict => 3
+        max_retry_interval => 30
+        
+        # Template management
+        manage_template => false  # We use ILM policies instead
+        
+        # Performance
+        pool_max => 20
+        pool_max_per_route => 10
+      }
+      
+      # High-severity alerts to dedicated index for faster access
+      if [soc][priority] == "P1" or [soc][priority] == "P2" {
+        elasticsearch {
+          hosts => ["https://elasticsearch-client:9200"]
+          user => "${ELASTICSEARCH_USER}"
+          password => "${ELASTICSEARCH_PASSWORD}"
+          ssl => true
+          cacert => "/usr/share/logstash/certs/ca.crt"
+          index => "soc-critical-alerts-%{+YYYY.MM.dd}"
+        }
+      }
+      
+      # Send to SOAR for automated response (if enabled)
+      if [soc][priority] == "P1" and [soar][enabled] == "true" {
+        http {
+          url => "${SOAR_WEBHOOK_URL:http://soar-service.soc-platform:8080/api/v1/incidents}"
+          http_method => "post"
+          content_type => "application/json"
+          format => "json"
+          headers => {
+            "Authorization" => "Bearer ${SOAR_API_KEY}"
+            "X-SOC-Priority" => "%{[soc][priority]}"
+          }
+        }
+      }
+      
+      # Debug output (disable in production)
+      if [log][level] == "DEBUG" {
+        stdout {
+          codec => rubydebug
+        }
+      }
+    }
+
+  # ===========================================================================
+  # Pipeline 2: Telecom Events (Specialized)
+  # ===========================================================================
+  telecom-events.conf: |
+    input {
+      beats {
+        port => 5045
+        tags => ["telecom"]
+        ssl => true
+        ssl_certificate => "/usr/share/logstash/certs/tls.crt"
+        ssl_key => "/usr/share/logstash/certs/tls.key"
+        ssl_ca_certificate => "/usr/share/logstash/certs/ca.crt"
+      }
+      
+      # Dedicated Kafka topic for telecom signaling data
+      kafka {
+        bootstrap_servers => "${KAFKA_BROKERS:kafka-headless:9092}"
+        topics => ["ss7-signaling", "gtp-events", "sip-call-records", "diameter-messages", "fraud-detection"]
+        group_id => "logstash-telecom-consumer"
+        consumer_threads => 2
+        auto_offset_reset => "latest"
+        decorate_events => true
+        tags => ["telecom"]
+      }
+    }
+
+    filter {
+      # SS7 Protocol Parsing
+      if [tags][0] == "telecom" and [protocol] == "ss7" {
+        grok {
+          match => {
+            "message" => [
+              # MAP (Mobile Application Part)
+              "SS7\\|MAP\\|%{WORD:ss7_op_code}\\|%{DATA:imsi}\\|%{DATA:msisdn}\\|%{DATA:called_party}\\|%{IP:sgsn_ip}\\|%{IP:ggsn_ip}\\|%{DATA:cell_id}\\|%{DATA:lac}",
+              # ISUP (ISDN User Part)
+              "SS7\\|ISUP\\|%{WORD:isup_cic}\\|%{DATA:calling_party}\\|%{DATA:called_party}\\|%{WORD:isup_message_type}",
+              # TCAP (Transaction Capabilities Application Part)
+              "SS7\\|TCAP\\|%{WORD:tcap_otid}\\|%{WORD:tcap_dtid}\\|%{DATA:tcap_dialogue}",
+              # Generic SS7
+              "SS7\\|%{DATA:ss7_data}"
+            ]
+          }
+        }
+        
+        # Enrich with subscriber info from HLR lookup
+        elasticsearch {
+          hosts => ["https://elasticsearch-client:9200"]
+          user => "${ELASTICSEARCH_USER}"
+          password => "${ELASTICSEARCH_PASSWORD}"
+          ssl => true
+          index => "subscribers-current"
+          query => "imsi:%{imsi} OR msisdn:%{msisdn}"
+          fields => {
+            "subscriber_type" => "[telecom][subscriber_type]"
+            "account_status" => "[telecom][account_status]"
+            "credit_limit" => "[telecom][credit_limit]"
+          }
+        }
+      }
+      
+      # GTP (GPRS Tunneling Protocol) Parsing
+      if [tags][0] == "telecom" and [protocol] == "gtp" {
+        grok {
+          match => {
+            "message" => [
+              # GTP-C (Control Plane)
+              "GTP-C\\|%{WORD:gtp_version}\\|%{WORD:gtp_message_type}\\|%{DATA:imsi}\\|%{IP:ms_ip}\\|%{IP:serving_gsn}\\|%{DATA:apn_ni}\\|%{WORD:rat_type}\\|%{INT:charging_id}",
+              # GTP-U (User Plane)
+              "GTP-U\\|%{WORD:gtp_version}\\|%{IP:src_ip}\\|%{INT:src_port}\\|%{IP:dst_ip}\\|%{INT:dst_port}\\|%{LONG:bytes}\\|%{LONG:packets}",
+              # Generic GTP
+              "GTP\\|%{DATA:gtp_data}"
+            ]
+          }
+        }
+        
+        # Calculate bandwidth usage
+        ruby {
+          code => "
+            bytes = event.get('bytes').to_i
+            duration = 1  # Would calculate from timestamps
+            mbps = (bytes * 8) / (duration * 1000000)
+            event.set('[network][bandwidth_mbps]', mbps.round(2))
+          "
+        }
+      }
+      
+      # SIP (Session Initiation Protocol) Parsing
+      if [tags][0] == "telecom" and [protocol] == "sip" {
+        grok {
+          match => {
+            "message" => [
+              # SIP INVITE
+              "INVITE sip:%{SIPCALLID:called_sip}@%{IP:dst_ip} SIP/2.0.*Via: SIP/2.0/%{WORD:transport} %{IP:src_ip}:%{INT:src_port};branch=%{DATA:branch}.From: <%{DATA:calling_sip}>;tag=%{DATA:from_tag}.To: <%{DATA:called_to}>.*Call-ID: %{SIPCALLID:call_id}",
+              # SIP Response
+              "SIP/2.0 %{INT:sip_status_code} %{DATA:sip_status_text}",
+              # Generic SIP
+              "SIP\\|%{DATA:sip_method}\\|%{DATA:call_id}\\|%{DATA:caller}\\|%{DATA:callee}"
+            ]
+          }
+        }
+        
+        # Detect VoIP fraud patterns
+        ruby {
+          code => "
+            fraud_indicators = []
+            
+            # International premium rate detection
+            called = event.get('called_sip') || event.get('callee') || ''
+            if called =~ /\+(?:900|976|876)/
+              fraud_indicators << 'premium_rate_destination'
+            end
+            
+            # High call frequency would be detected via aggregation elsewhere
+            
+            # Unusual hour calling (midnight to 5 AM)
+            hour = Time.now.hour
+            if hour >= 0 and hour < 5
+              fraud_indicators << 'off_hours_calling'
+            end
+            
+            unless fraud_indicators.empty?
+              event.set('[telecom][fraud_indicators]', fraud_indicators)
+              event.set('[telecom][fraud_score]', fraud_indicators.length * 20 + rand(10..30))
+            end
+          "
+        }
+      }
+      
+      # Diameter Protocol Parsing
+      if [tags][0] == "telecom" and [protocol] == "diameter" {
+        kv {
+          field_split => "|"
+          value_split => "="
+          source => "message"
+          prefix => "diameter_"
+          trim_key => " "
+          trim_value => " "
+        }
+        
+        # CCR/CCA (Credit Control Request/Answer) for billing
+        if [diameter_command_code] == "272" {
+          ruby {
+            code => "
+              units = event.get('diameter_requested_service_unit_cc_time').to_i ||
+                      event.get('diameter_requested_service_unit_cc_total_octets').to_i || 0
+              
+              if units > 1000000  # Abnormally large request
+                event.set('[telecom][fraud_indicators]', ['excessive_usage_request'])
+                event.set('[telecom][fraud_score]', 70)
+              end
+            "
+          }
+        }
+      }
+      
+      # Common telecom enrichment
+      mutate {
+        add_field => {
+          "[telecom][processing_timestamp]" => "%{@timestamp}"
+          "[event][category]" => "telecom"
+          "[event][dataset]" => "djezzy.telecom.events"
+        }
+      }
+      
+      # Timestamp normalization
+      date {
+        match => ["timestamp", "ISO8601", "UNIX_MS"]
+        timezone => "Africa/Algiers"
+      }
+    }
+
+    output {
+      elasticsearch {
+        hosts => ["https://elasticsearch-client:9200"]
+        user => "${ELASTICSEARCH_USER}"
+        password => "${ELASTICSEARCH_PASSWORD}"
+        ssl => true
+        cacert => "/usr/share/logstash/certs/ca.crt"
+        index => "soc-telecom-events-%{+YYYY.MM.dd}"
+      }
+      
+      # High-fraud-score events to alerting
+      if [telecom][fraud_score] >= 50 {
+        elasticsearch {
+          hosts => ["https://elasticsearch-client:9200"]
+          user => "${ELASTICSEARCH_USER}"
+          password => "${ELASTICSEARCH_PASSWORD}"
+          ssl => true
+          cacert => "/usr/share/logstash/certs/ca.crt"
+          index => "soc-fraud-alerts-%{+YYYY.MM.dd}"
+        }
+      }
+    }
+
+  # ===========================================================================
+  # Pipeline 3: Audit Logs (Compliance)
+  # ===========================================================================
+  audit-logs.conf: |
+    input {
+      beats {
+        port => 5046
+        tags => ["audit"]
+        ssl => true
+        ssl_certificate => "/usr/share/logstash/certs/tls.crt"
+        ssl_key => "/usr/share/logstash/certs/tls.key"
+        ssl_ca_certificate => "/usr/share/logstash/certs/ca.crt"
+      }
+    }
+
+    filter {
+      # Parse audit log formats
+      grok {
+        match => {
+          "message" => [
+            # Linux Audit (auditd)
+            "type=%{WORD:audit_type} msg=audit\\(%{NUMBER:audit_timestamp}\\): %{GREEDYDATA:audit_msg}",
+            # Kubernetes Audit
+            "{\"level\":\"%{LOGLEVEL:level}\",\"timestamp\":\"%{TIMESTAMP_ISO8601:ts}\",\"verb\":\"%{WORD:verb}\",\"user\":\\{\"username\":\"%{DATA:user}\"\\},\"resource\":\\{\"%{DATA:resource_type}/%{DATA:resource_name}\"\\}%{GREEDYDATA:rest}",
+            # Database Audit
+            "AUDIT\\|%{TIMESTAMP_ISO8601:audit_ts}\\|%{DATA:user}\\|%{DATA:action}\\|%{DATA:object}\\|%{DATA:result}",
+            # Application Audit
+            "\\[%{TIMESTAMP_ISO8601:event_ts}\\]\\s*%{DATA:user}\\|%{DATA:action}\\|%{DATA:resource}\\|%{DATA:outcome}",
+            # Generic
+            "%{GREEDYDATA:message}"
+          ]
+        }
+      }
+      
+      # Enrich with compliance framework mapping
+      ruby {
+        code => "
+          action = event.get('action') || event.get('verb') || ''
+          resource = event.get('resource') || event.get('object') || ''
+          
+          controls = []
+          
+          # ARTP controls mapping
+          if action =~ /(delete|remove|destroy)/i
+            controls << 'ARTP-AC-001'  # Access control
+            controls << 'ARTP-DP-002'  # Data protection
+          end
+          
+          if resource =~ /(password|credential|secret|key)/i
+            controls << 'ARTP-IA-003'  # Identity authentication
+            controls << 'ANSSI-PKI-001'  # PKI management
+          end
+          
+          if action =~ /(login|authenticate|authn)/i
+            controls << 'ARTP-IA-001'  # Authentication
+            controls << 'ANSSI-AUTH-002'  # Strong auth
+          end
+          
+          if action =~ /(export|download|extract)/i
+            controls << 'ARTP-DP-001'  # Data export control
+          end
+          
+          unless controls.empty?
+            event.set('[compliance][controls]', controls.uniq)
+          end
+        "
+      }
+      
+      # Ensure required fields
+      mutate {
+        add_field => {
+          "[event][category]" => "audit"
+          "[event][dataset]" => "djezzy.audit.logs"
+          "[event][outcome]" => "%{[result]}"  # success/failure
+        }
+        gsub => ["message", "\\r\\n", " "]
+      }
+      
+      date {
+        match => ["audit_ts", "event_ts", "ts", "ISO8601"]
+        timezone => "Africa/Algiers"
+      }
+    }
+
+    output {
+      elasticsearch {
+        hosts => ["https://elasticsearch-client:9200"]
+        user => "${ELASTICSEARCH_USER}"
+        password => "${ELASTICSEARCH_PASSWORD}"
+        ssl => true
+        cacert => "/usr/share/logstash/certs/ca.crt"
+        index => "soc-audit-%{+YYYY.MM.dd}"
+      }
+      
+      # Compliance violations get special handling
+      if [compliance][controls] {
+        elasticsearch {
+          hosts => ["https://elasticsearch-client:9200"]
+          user => "${ELASTICSEARCH_USER}"
+          password => "${ELASTICSEARCH_PASSWORD}"
+          ssl => true
+          cacert => "/usr/share/logstash/certs/ca.crt"
+          index => "soc-compliance-events-%{+YYYY.MM.dd}"
+        }
+      }
+    }
+
+  # ===========================================================================
+  # Pipeline 4: Threat Intelligence Ingestion
+  # ===========================================================================
+  threat-intel.conf: |
+    input {
+      http {
+        port => 8081
+        additional_codecs => {"application/json"=>"json", "text/plain"=>"plain"}
+        ssl => true
+        ssl_certificate => "/usr/share/logstash/certs/tls.crt"
+        ssl_key => "/usr/share/logstash/certs/tls.key"
+        response_code => 202
+        threads => 2
+        tags => ["threat-intel"]
+      }
+      
+      # Scheduled polling of threat feeds
+      schedule {
+        every => "15m"
+        cron => "* * * * *"
+        code => "
+          require 'net/http'
+          require 'json'
+          require 'uri'
+          
+          feeds = ENV['THREAT_FEED_URLS'].split(',')
+          feeds.each do |feed_url|
+            begin
+              uri = URI.parse(feed_url.strip)
+              http = Net::HTTP.new(uri.host, uri.port)
+              http.use_ssl = uri.scheme == 'https'
+              request = Net::HTTP::Get.new(uri.request_uri)
+              request['Authorization'] = \"Bearer #{ENV['THREAT_FEED_API_KEY']}\"
+              response = http.request(request)
+              
+              if response.code == '200'
+                event = LogStash::Event.new(
+                  'message' => response.body,
+                  '@metadata' => { 'feed_source' => feed_url },
+                  'tags' => ['threat-intel', 'poll']
+                )
+                event_block.call(event)
+              end
+            rescue => e
+              logger.error(\"Failed to fetch threat feed #{feed_url}: #{e.message}\")
+            end
+          end
+        "
+      }
+    }
+
+    filter {
+      # Normalize different threat feed formats
+      if [tags][0] == "threat-intel" {
+        json {
+          source => "message"
+          target => "threat_raw"
+          skip_on_invalid_json => true
+        }
+        
+        # STIX/TAXII format handling
+        if [threat_raw][type_bundle] or [threat_raw][objects] {
+          ruby {
+            code => "
+              raw = event.get('threat_raw')
+              objects = raw['objects'] || []
+              
+              indicators = objects.select { |o| o['type'] == 'indicator' }
+              observables = objects.select { |o| o['type'] != 'indicator' && o['type'] != 'relationship' }
+              
+              indicators.each do |ind|
+                pattern = ind['pattern'] || ''
+                
+                # Extract IOC types from STIX pattern
+                ip_matches = pattern.scan(/ipv4_addr\\s*=\\s*'([^']+)'/).flatten
+                domain_matches = pattern.scan(/value\\s*=\\s*'([^']+)'\\s+AND\\s+type\\s*=\\s*'domain'/).flatten
+                hash_matches = pattern.scan(/hashes\\.MD5\\s*=\\s*'([^']+)'/).flatten
+                
+                event.set('threat.indicators.ip', ip_matches) unless ip_matches.empty?
+                event.set('threat.indicators.domain', domain_matches) unless domain_matches.empty?
+                event.set('threat.indicators.file.hash', hash_matches) unless hash_matches.empty?
+                
+                event.set('threat.framework', 'stix')
+                event.set('threat.stix_id', ind['id'])
+                event.set('threat.stix_labels', ind['labels'])
+              end
+            "
+          }
+        }
+        
+        # OpenIOC format
+        elsif [threat_raw][criteria] {
+          # Handle OpenIOC format
+          ruby {
+            code => "
+              raw = event.get('threat_raw')
+              criteria = raw['criteria']
+              
+              # Extract IOCs from OpenIOC XML structure
+              # Simplified extraction
+              event.set('threat.framework', 'openioc')
+            "
+          }
+        }
+        
+        # Simple CSV/JSON list format
+        else {
+          mutate {
+            rename => {
+              "[threat_raw][ip]" => "[threat][indicators][ip]"
+              "[threat_raw][domain]" => "[threat][indicators][domain]"
+              "[threat_raw][hash]" => "[threat][indicators][file][hash]"
+              "[threat_raw][url]" => "[threat][indicators][url]"
+              "[threat_raw][description]" => "[rule][description]"
+              "[threat_raw][confidence]" => "[threat][confidence]"
+              "[threat_raw][source]" => "[threat][source_feed]"
+            }
+          }
+        }
+        
+        # Add metadata
+        mutate {
+          add_field => {
+            "[event][category]" => "threat_intel"
+            "[event][dataset]" => "djezzy.threat.intel"
+            "[@metadata][beat]" => "threat-intel-ingestor"
+          }
+        }
+        
+        # Validate required fields
+        if ![threat][indicators] {
+          drop {}
+        }
+      }
+    }
+
+    output {
+      elasticsearch {
+        hosts => ["https://elasticsearch-client:9200"]
+        user => "${ELASTICSEARCH_USER}"
+        password => "${ELASTICSEARCH_PASSWORD}"
+        ssl => true
+        cacert => "/usr/share/logstash/certs/ca.crt"
+        index => "soc-threat-intel-%{+YYYY.MM.dd}"
+        action => "update"
+        doc_as_upsert => true
+        document_id => "%{[threat][stix_id]}_%{[threat][indicators][ip]}"
+      }
+    }

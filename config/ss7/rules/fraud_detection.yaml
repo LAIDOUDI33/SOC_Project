@@ -1,0 +1,311 @@
+# Djezzy SOC - SS7 Detection Rules
+# Fraud Detection Rules (IRSF, USSD Abuse, SMS Interception)
+# Version: 1.0.0
+
+# ============================================================
+# RULE 6: IRSF Pattern - High-Risk Destination Countries
+# Detects International Revenue Share Fraud signature:
+# Short calls to premium-rate numbers in high-risk countries
+# ============================================================
+- name: SS7_IRSF_PATTERN_DETECTED
+  description: "Detect International Revenue Share Fraud (IRSF) signature with short calls to high-risk destinations"
+  severity: CRITICAL
+  enabled: true
+  
+  condition:
+    op: and
+    conditions:
+      - field: message_type
+        operator: equals
+        value: initialAddressMessage
+      
+      - # Destination in high-risk country list
+        field: called_party_gt.address
+        operator: matches
+        value: "^(\\+|00)?(2[0-37]|4[1-35-9]|5[016-9]|6[0-9]|8[89]|9[0-9])"  # High-risk country codes
+      
+      - # Call pattern analysis (from CDR correlation)
+        field: _call_duration_seconds
+        operator: less_than
+        value: 15  # Very short calls (<15 seconds) typical of IRSF
+      
+      - # Volume threshold from same source
+        field: _irsi_call_count_per_source
+        operator: greater_than
+        value: 50  # >50 calls in 1 hour window
+  
+  action:
+    - create_thehive_case(priority: P1)
+    - notify_fraud_team_immediately
+    - trigger_blocking_rule
+    - generate_cdr_report
+    - calculate_revenue_at_risk
+  
+  tags:
+    - fraud
+    - irsf
+    - financial_loss
+    - critical
+    - regulatory
+  
+  mitre_technique: T1589
+  mitre_tactic: Resource Development
+
+# ============================================================
+# RULE 7: Wangiri / Callback Fraud Pattern
+# Detects one-ring or short-duration calls designed to 
+# prompt callback to premium-rate numbers
+# ============================================================
+- name: SS7_WANGIRI_FRAUD_PATTERN
+  description: "Detect Wangiri/callback fraud pattern with mass short calls from same source range"
+  severity: HIGH
+  enabled: true
+  
+  condition:
+    op: and
+    conditions:
+      - field: message_type
+        operator: equals
+        value: initialAddressMessage
+      
+      - # Call duration < 3 seconds (ring once then drop)
+        field: _call_duration_seconds
+        operator: less_than
+        value: 3
+      
+      - # Same calling prefix making many calls
+        field: _calling_prefix_concentration
+        operator: greater_than
+        value: 80  # 80%+ calls from same prefix
+      
+      - # Large number of unique called parties
+        field: _unique_called_count
+        operator: greater_than
+        value: 100  # Called >100 different numbers
+  
+  action:
+    - create_thehive_case
+    - block_calling_range
+    - notify_fraud_team
+    - alert_subscribers_via_sms
+  
+  tags:
+    - fraud
+    - wangiri
+    - callback_fraud
+    - subscriber_harm
+  
+  mitre_technique: T1418
+  mitre_tactic: Initial Access
+
+# ============================================================
+# RULE 8: USSD Brute Force Attack
+# Detects brute force attacks via USSD service codes,
+# including balance inquiry flooding and code guessing
+# ============================================================
+- name: SS7_USSD_BRUTE_FORCE
+  description: "Detect brute force attacks via excessive USSD requests indicating service abuse or credential guessing"
+  severity: MEDIUM
+  enabled: true
+  
+  condition:
+    op: and
+    conditions:
+      - field: message_type
+        operator: equals
+        value: processUnstructuredSSRequest
+      
+      - # Common service code patterns being targeted
+        field: payload.ussd_code
+        operator: in
+        value:
+          - "*100#"   # Balance check
+          - "*101#"   # Credit transfer
+          - "*123#"   # Customer service
+          - "*130#"   # Data bundle
+          - "*1#"     # Voicemail
+          - "*500#"   # Roaming activation
+      
+      - # Excessive rate per MSISDN
+        field: _ussd_rate_per_msisdn
+        operator: greater_than
+        value: 30  # >30 USSD requests per minute per MSISDN
+  
+  action:
+    - rate_limit_msisdn
+    - create_thehive_case(severity: low)
+    - log_for_forensics
+    - block_if_persistent(threshold: 100/hour)
+  
+  tags:
+    - ussd_attack
+    - brute_force
+    - service_abuse
+    - rate_anomaly
+  
+  mitre_technique: T1110
+  mitre_tactic: Credential Access
+
+# ============================================================
+# RULE 9: SMS Forwarding to Suspicious Destinations
+# Detects potential SMS interception via forwarding to
+# unauthorized destinations, international high-risk, or bulk aggregators
+# ============================================================
+- name: SS7_SMS_FORWARDING_SUSPICIOUS
+  description: "Detect suspicious SMS forwarding patterns indicating potential interception or spam relay"
+  severity: HIGH
+  enabled: true
+  
+  condition:
+    op: and
+    conditions:
+      - field: message_type
+        operator: equals
+        value: forwardShortMessage
+      
+      - # Multiple forwarding destinations
+        field: _sms_forward_destination_count
+        operator: greater_than
+        value: 5  # Forwarded to >5 different destinations in window
+      
+      - # At least one indicator present
+        op: or
+        conditions:
+          - field: _destination_is_international_high_risk
+            operator: equals
+            value: true
+          
+          - field: _destination_is_unknown_aggregator
+            operator: equals
+            value: true
+          
+          - field: _forwarding_timing_pattern
+            operator: equals
+            value: business_hours_only_suspicious
+          
+          - # Content matches sensitive patterns (OTP, banking)
+            field: payload.sms_content
+            operator: matches
+            value: "(?i)(otp|verification|code|banking|password|secure)"
+  
+  action:
+    - create_thehive_case
+    - flag_for_investigation
+    - correlate_with_app_logs
+    - check_for_sim_swap
+  
+  tags:
+    - sms_interception
+    - privacy_breach
+    - data_exfiltration
+    - otp_interception
+  
+  mitre_technique: T1421
+  mitre_tactic: Collection
+
+# ============================================================
+# RULE 10: Premium Rate Service Abuse
+# Detects unusual call patterns to premium rate numbers
+# indicating potential revenue share fraud or service abuse
+# ============================================================
+- name: SS7_PREMIUM_RATE_ABUSE
+  description: "Detect abnormal call patterns to premium-rate services indicating potential fraud or abuse"
+  severity: HIGH
+  enabled: true
+  
+  condition:
+    op: and
+    conditions:
+      - field: message_type
+        operator: in
+        value:
+          - initialAddressMessage
+          - forwardShortMessage
+      
+      - # Destination is premium rate number
+        field: _is_premium_rate_number
+        operator: equals
+        value: true
+      
+      - # Unusual volume from single subscriber or small group
+        op: or
+        conditions:
+          - field: _premium_calls_per_imsi
+            operator: greater_than
+            value: 50  # >50 premium calls/hour/subscriber
+          
+          - field: _premium_spend_rate
+            operator: greater_than
+            value: 100  # >100 DZD/minute spend rate
+  
+  action:
+    - create_thehive_case
+    - flag_premium_abuse
+    - notify_fraud_team
+    - consider_blocking
+    - alert_subscriber
+  
+  tags:
+    - fraud
+    - premium_rate
+    - revenue_abuse
+    - financial
+  
+  mitre_technique: T1589
+  mitre_tactic: Resource Development
+
+# ============================================================
+# RULE 11: SIM Box Detection
+# Detects patterns indicative of SIM box (SIM gateway) usage
+# for bulk SMS/call termination fraud
+# ============================================================
+- name: SS7_SIM_BOX_DETECTED
+  description: "Detect SIM box/gateway usage patterns for bulk SMS or call termination fraud"
+  severity: CRITICAL
+  enabled: true
+  
+  condition:
+    op: and
+    conditions:
+      - # High volume of calls/SMS from single IMSI
+        field: _total_events_per_imsi
+        operator: greater_than
+        value: 500  # >500 events/hour from same IMSI
+      
+      - # Many different called parties (bulk operation)
+        field: _unique_called_count
+        operator: greater_than
+        value: 200  # Called >200 different numbers
+      
+      - # Low average call duration (automated/bulk)
+        field: _avg_call_duration_seconds
+        operator: less_than
+        value: 10
+      
+      - # Possible IMEI mismatch or no IMEI
+        op: or
+        conditions:
+          - field: imei
+            operator: exists
+            value: false
+          
+          - field: _imei_changes_count
+            operator: greater_than
+            value: 0
+  
+  action:
+    - create_thehive_case(priority: P1)
+    - immediate_investigation_required
+    - recommend_imsi_blocking
+    - report_to_regulator(if_threshold_met)
+    - coordinate_with_law_enforcement
+  
+  tags:
+    - sim_box
+    - bulk_fraud
+    - termination_fraud
+    - critical
+    - legal
+  
+  mitre_technique: T1489
+  mitre_tactic: Persistence

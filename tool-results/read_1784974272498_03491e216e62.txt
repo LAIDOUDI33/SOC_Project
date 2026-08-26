@@ -1,0 +1,1026 @@
+     1→/**
+     2→ * Grafana React Hooks
+     3→ * Algeria National SOC Platform 2026-2030
+     4→ * 
+     5→ * Custom hooks for consuming Grafana monitoring data:
+     6→ * - Dashboard fetching and management
+     7→ * - Alert rule monitoring
+     8→ * - Data source management
+     9→ * - System statistics
+    10→ * - Embedded dashboard rendering
+    11→ */
+    12→
+    13→'use client';
+    14→
+    15→import { useState, useEffect, useCallback, useMemo } from 'react';
+    16→import type {
+    17→  GrafanaDashboard,
+    18→  DashboardSearchResult,
+    19→  AlertRule,
+    20→  AlertIncident,
+    21→  AlertHistoryEntry,
+    22→  AlertState,
+    23→  DataSource,
+    24→  SOCOverviewStats,
+    25→  SOCKpiMetric,
+    26→  TimelineEvent,
+    27→  EmbeddedDashboardConfig,
+    28→  PanelType,
+    29→  GrafanaAPIResponse,
+    30→} from '../types/grafana.types';
+    31→
+    32→// ============================================================
+    33→// Types for Hook Returns
+    34→// ============================================================
+    35→
+    36→/** Standard hook return type */
+    37→interface UseDataReturn<T> {
+    38→  data: T | null;
+    39→  loading: boolean;
+    40→  error: string | null;
+    41→  refetch: () => void;
+    42→}
+    43→
+    44→/** Dashboard hook return type */
+    45→interface UseDashboardsReturn extends UseDataReturn<DashboardSearchResult[]> {
+    46→  total: number;
+    47→  filters: {
+    48→    query?: string;
+    49→    tag?: string[];
+    50→    starred?: boolean;
+    51→    type?: string;
+    52→  };
+    53→  setFilters: (filters: Partial<UseDashboardsReturn['filters']>) => void;
+    54→}
+    55→
+    56→/** Alerts hook return type */
+    57→interface UseAlertRulesReturn extends UseDataReturn<AlertRule[]> {
+    58→  total: number;
+    59→  summary: {
+    60→    ok: number;
+    61→    alerting: number;
+    62→    paused: number;
+    63→    critical: number;
+    64→    high: number;
+    65→    warning: number;
+    66→  };
+    67→  pauseAlert: (uid: string) => Promise<void>;
+    68→  resumeAlert: (uid: string) => Promise<void>;
+    69→  togglePause: (uid: string) => Promise<void>;
+    70→}
+    71→
+    72→/** Datasources hook return type */
+    73→interface UseDataSourcesReturn extends UseDataReturn<DataSource[]> {
+    74→  healthyCount: number;
+    75→  unhealthyCount: number;
+    76→  testConnection: (id: number) => Promise<{ success: boolean; message: string }>;
+    77→}
+    78→
+    79→/** Stats hook return type */
+    80→interface UseGrafanaStatsReturn extends UseDataReturn<SOCOverviewStats> {
+    81→  kpis: SOCKpiMetric[];
+    82→  timelineEvents: TimelineEvent[];
+    83→  refreshInterval: number;
+    84→  setInterval: (ms: number) => void;
+    85→}
+    86→
+    87→/** Embedded dashboard hook return type */
+    88→interface UseDashboardViewReturn {
+    89→  config: EmbeddedDashboardConfig;
+    90→  embedUrl: string;
+    91→  iframeHtml: string;
+    92→  isLoading: boolean;
+    93→  error: string | null;
+    94→  updateConfig: (updates: Partial<EmbeddedDashboardConfig>) => void;
+    95→  refresh: () => void;
+    96→}
+    97→
+    98→// ============================================================
+    99→// API Helper Functions
+   100→// ============================================================
+   101→
+   102→/**
+   103→ * Fetch data from API with error handling
+   104→ */
+   105→async function fetchFromAPI<T>(endpoint: string, params?: Record<string, string>): Promise<T> {
+   106→  const searchParams = new URLSearchParams(params);
+   107→  const url = `/api/grafana${endpoint}${params ? `?${searchParams.toString()}` : ''}`;
+   108→
+   109→  const response = await fetch(url);
+   110→  
+   111→  if (!response.ok) {
+   112→    const errorData = await response.json().catch(() => ({}));
+   113→    throw new Error(errorData.message || `API error: ${response.status}`);
+   114→  }
+   115→
+   116→  const result = await response.json();
+   117→  return result.data as T;
+   118→}
+   119→
+   120→/**
+   121→ * Post data to API with error handling
+   122→ */
+   123→async function postToAPI<T>(endpoint: string, body: Record<string, unknown>): Promise<T> {
+   124→  const response = await fetch(`/api/grafana${endpoint}`, {
+   125→    method: 'POST',
+   126→    headers: { 'Content-Type': 'application/json' },
+   127→    body: JSON.stringify(body),
+   128→  });
+   129→
+   130→  if (!response.ok) {
+   131→    const errorData = await response.json().catch(() => ({}));
+   132→    throw new Error(errorData.message || `API error: ${response.status}`);
+   133→  }
+   134→
+   135→  const result = await response.json();
+   136→  return result.data as T;
+   137→}
+   138→
+   139→// ============================================================
+   140→// Dashboard Hooks
+   141→// ============================================================
+   142→
+   143→/**
+   144→ * Hook for fetching and managing Grafana dashboards
+   145→ * @param initialLimit Initial page size
+   146→ * @returns Dashboard list with filtering capabilities
+   147→ * 
+   148→ * @example
+   149→ * ```tsx
+   150→ * const { data, loading, filters, setFilters, refetch } = useDashboards(20);
+   151→ * ```
+   152→ */
+   153→export function useDashboards(initialLimit: number = 50): UseDashboardsReturn {
+   154→  const [data, setData] = useState<DashboardSearchResult[] | null>(null);
+   155→  const [loading, setLoading] = useState<boolean>(true);
+   156→  const [error, setError] = useState<string | null>(null);
+   157→  const [total, setTotal] = useState<number>(0);
+   158→  const [filters, setFiltersState] = useState<UseDashboardsReturn['filters']>({});
+   159→
+   160→  const fetchData = useCallback(async () => {
+   161→    setLoading(true);
+   162→    setError(null);
+   163→
+   164→    try {
+   165→      const params: Record<string, string> = {
+   166→        limit: initialLimit.toString(),
+   167→      };
+   168→
+   169→      if (filters.query) params.query = filters.query;
+   170→      if (filters.tag?.length) params.tag = filters.tag.join(',');
+   171→      if (filters.starred !== undefined) params.starred = filters.starred.toString();
+   172→      if (filters.type) params.type = filters.type;
+   173→
+   174→      const result = await fetchFromAPI<{
+   175→        items: DashboardSearchResult[];
+   176→        total: number;
+   177→        page: number;
+   178→        pageSize: number;
+   179→        totalPages: number;
+   180→      }>('/dashboards', params);
+   181→
+   182→      setData(result.items);
+   183→      setTotal(result.total);
+   184→    } catch (err) {
+   185→      setError(err instanceof Error ? err.message : 'Failed to fetch dashboards');
+   186→      setData(null);
+   187→    } finally {
+   188→      setLoading(false);
+   189→    }
+   190→  }, [initialLimit, filters]);
+   191→
+   192→  useEffect(() => {
+   193→    fetchData();
+   194→  }, [fetchData]);
+   195→
+   196→  const setFilters = useCallback((newFilters: Partial<typeof filters>) => {
+   197→    setFiltersState(prev => ({ ...prev, ...newFilters }));
+   198→  }, []);
+   199→
+   200→  return {
+   201→    data,
+   202→    loading,
+   203→    error,
+   204→    total,
+   205→    filters,
+   206→    setFilters,
+   207→    refetch: fetchData,
+   208→  };
+   209→}
+   210→
+   211→/**
+   212→ * Hook for getting a single dashboard by UID
+   213→ * @param uid Dashboard UID to fetch
+   214→ * @returns Full dashboard object
+   215→ */
+   216→export function useDashboard(uid: string | null): UseDataReturn<GrafanaDashboard> {
+   217→  const [data, setData] = useState<GrafanaDashboard | null>(null);
+   218→  const [loading, setLoading] = useState<boolean>(!!uid);
+   219→  const [error, setError] = useState<string | null>(null);
+   220→
+   221→  const fetchData = useCallback(async () => {
+   222→    if (!uid) {
+   223→      setData(null);
+   224→      setLoading(false);
+   225→      return;
+   226→    }
+   227→
+   228→    setLoading(true);
+   229→    setError(null);
+   230→
+   231→    try {
+   232→      const dashboard = await fetchFromAPI<GrafanaDashboard>(`/dashboards/${uid}`);
+   233→      setData(dashboard);
+   234→    } catch (err) {
+   235→      setError(err instanceof Error ? err.message : 'Failed to fetch dashboard');
+   236→      setData(null);
+   237→    } finally {
+   238→      setLoading(false);
+   239→    }
+   240→  }, [uid]);
+   241→
+   242→  useEffect(() => {
+   243→    fetchData();
+   244→  }, [fetchData]);
+   245→
+   246→  return {
+   247→    data,
+   248→    loading,
+   249→    error,
+   250→    refetch: fetchData,
+   251→  };
+   252→}
+   253→
+   254→// ============================================================
+   255→// Alert Rule Hooks
+   256→// ============================================================
+   257→
+   258→/**
+   259→ * Hook for monitoring alert rules
+   260→ * @returns Alert rules with management functions
+   261→ * 
+   262→ * @example
+   263→ * ```tsx
+   264→ * const { data, summary, pauseAlert, resumeAlert, togglePause } = useAlertRules();
+   265→ * ```
+   266→ */
+   267→export function useAlertRules(): UseAlertRulesReturn {
+   268→  const [data, setData] = useState<AlertRule[] | null>(null);
+   269→  const [loading, setLoading] = useState<boolean>(true);
+   270→  const [error, setError] = useState<string | null>(null);
+   271→  const [total, setTotal] = useState<number>(0);
+   272→
+   273→  const fetchData = useCallback(async () => {
+   274→    setLoading(true);
+   275→    setError(null);
+   276→
+   277→    try {
+   278→      const result = await fetchFromAPI<{
+   279→        items: AlertRule[];
+   280→        total: number;
+   281→        summary: {
+   282→          byState: Record<string, number>;
+   283→          bySeverity: Record<string, number>;
+   284→        };
+   285→      }>('/alerts');
+   286→
+   287→      setData(result.items);
+   288→      setTotal(result.total);
+   289→    } catch (err) {
+   290→      setError(err instanceof Error ? err.message : 'Failed to fetch alerts');
+   291→      setData(null);
+   292→    } finally {
+   293→      setLoading(false);
+   294→    }
+   295→  }, []);
+   296→
+   297→  useEffect(() => {
+   298→    fetchData();
+   299→
+   300→    // Auto-refresh every 30 seconds for real-time alert status
+   301→    const interval = setInterval(fetchData, 30000);
+   302→    return () => clearInterval(interval);
+   303→  }, [fetchData]);
+   304→
+   305→  // Calculate summary from data
+   306→  const summary = useMemo(() => {
+   307→    if (!data) {
+   308→      return { ok: 0, alerting: 0, paused: 0, critical: 0, high: 0, warning: 0 };
+   309→    }
+   310→
+   311→    return {
+   312→      ok: data.filter(a => a.currentState === 'ok').length,
+   313→      alerting: data.filter(a => a.currentState === 'alerting').length,
+   314→      paused: data.filter(a => a.isPaused).length,
+   315→      critical: data.filter(a => a.labels.severity === 'critical').length,
+   316→      high: data.filter(a => a.labels.severity === 'high').length,
+   317→      warning: data.filter(a => a.labels.severity === 'warning').length,
+   318→    };
+   319→  }, [data]);
+   320→
+   321→  /**
+   322→   * Pause an alert rule
+   323→   */
+   324→  const pauseAlert = useCallback(async (uid: string): Promise<void> => {
+   325→    try {
+   326→      await postToAPI('/alerts', { action: 'pause', uid, paused: true });
+   327→      await fetchData(); // Refresh data
+   328→    } catch (err) {
+   329→      console.error('Failed to pause alert:', err);
+   330→      throw err;
+   331→    }
+   332→  }, [fetchData]);
+   333→
+   334→  /**
+   335→   * Resume a paused alert rule
+   336→   */
+   337→  const resumeAlert = useCallback(async (uid: string): Promise<void> => {
+   338→    try {
+   339→      await postToAPI('/alerts', { action: 'pause', uid, paused: false });
+   340→      await fetchData(); // Refresh data
+   341→    } catch (err) {
+   342→      console.error('Failed to resume alert:', err);
+   343→      throw err;
+   344→    }
+   345→  }, [fetchData]);
+   346→
+   347→  /**
+   348→   * Toggle pause state of an alert rule
+   349→   */
+   350→  const togglePause = useCallback(async (uid: string): Promise<void> => {
+   351→    const alert = data?.find(a => a.uid === uid);
+   352→    if (alert?.isPaused) {
+   353→      await resumeAlert(uid);
+   354→    } else {
+   355→      await pauseAlert(uid);
+   356→    }
+   357→  }, [data, pauseAlert, resumeAlert]);
+   358→
+   359→  return {
+   360→    data,
+   361→    loading,
+   362→    error,
+   363→    total,
+   364→    summary,
+   365→    pauseAlert,
+   366→    resumeAlert,
+   367→    togglePause,
+   368→    refetch: fetchData,
+   369→  };
+   370→}
+   371→
+   372→/**
+   373→ * Hook for getting active alert incidents
+   374→ * @returns Active incidents list
+   375→ */
+   376→export function useAlertIncidents(state?: AlertState): UseDataReturn<AlertIncident[]> {
+   377→  const [data, setData] = useState<AlertIncident[] | null>(null);
+   378→  const [loading, setLoading] = useState<boolean>(true);
+   379→  const [error, setError] = useState<string | null>(null);
+   380→
+   381→  const fetchData = useCallback(async () => {
+   382→    setLoading(true);
+   383→    setError(null);
+   384→
+   385→    try {
+   386→      const params: Record<string, string> = { action: 'incidents' };
+   387→      if (state) params.state = state;
+   388→
+   389→      const result = await fetchFromAPI<{ items: AlertIncident[]; total: number }>('/alerts', params);
+   390→      setData(result.items);
+   391→    } catch (err) {
+   392→      setError(err instanceof Error ? err.message : 'Failed to fetch incidents');
+   393→      setData(null);
+   394→    } finally {
+   395→      setLoading(false);
+   396→    }
+   397→  }, [state]);
+   398→
+   399→  useEffect(() => {
+   400→    fetchData();
+   401→
+   402→    // Auto-refresh every minute
+   403→    const interval = setInterval(fetchData, 60000);
+   404→    return () => clearInterval(interval);
+   405→  }, [fetchData]);
+   406→
+   407→  return {
+   408→    data,
+   409→    loading,
+   410→    error,
+   411→    refetch: fetchData,
+   412→  };
+   413→}
+   414→
+   415→/**
+   416→ * Hook for alert history
+   417→ * @param limit Number of history entries to fetch
+   418→ * @returns Alert history entries
+   419→ */
+   420→export function useAlertHistory(limit: number = 50): UseDataReturn<AlertHistoryEntry[]> {
+   421→  const [data, setData] = useState<AlertHistoryEntry[] | null>(null);
+   422→  const [loading, setLoading] = useState<boolean>(true);
+   423→  const [error, setError] = useState<string | null>(null);
+   424→
+   425→  const fetchData = useCallback(async () => {
+   426→    setLoading(true);
+   427→    setError(null);
+   428→
+   429→    try {
+   430→      const result = await fetchFromAPI<{ items: AlertHistoryEntry[]; total: number }>('/alerts', {
+   431→        action: 'history',
+   432→        limit: limit.toString(),
+   433→      });
+   434→      setData(result.items);
+   435→    } catch (err) {
+   436→      setError(err instanceof Error ? err.message : 'Failed to fetch alert history');
+   437→      setData(null);
+   438→    } finally {
+   439→      setLoading(false);
+   440→    }
+   441→  }, [limit]);
+   442→
+   443→  useEffect(() => {
+   444→    fetchData();
+   445→  }, [fetchData]);
+   446→
+   447→  return {
+   448→    data,
+   449→    loading,
+   450→    error,
+   451→    refetch: fetchData,
+   452→  };
+   453→}
+   454→
+   455→// ============================================================
+   456→// Data Source Hooks
+   457→// ============================================================
+   458→
+   459→/**
+   460→ * Hook for managing datasources
+   461→ * @returns Datasources with connection testing
+   462→ * 
+   463→ * @example
+   464→ * ```tsx
+   465→ * const { data, healthyCount, testConnection } = useDataSources();
+   466→ * ```
+   467→ */
+   468→export function useDataSources(): UseDataSourcesReturn {
+   469→  const [data, setData] = useState<DataSource[] | null>(null);
+   470→  const [loading, setLoading] = useState<boolean>(true);
+   471→  const [error, setError] = useState<string | null>(null);
+   472→
+   473→  const fetchData = useCallback(async () => {
+   474→    setLoading(true);
+   475→    setError(null);
+   476→
+   477→    try {
+   478→      const result = await fetchFromAPI<{
+   479→        items: DataSource[];
+   480→        total: number;
+   481→        summary: {
+   482→          healthy: number;
+   483→          unhealthy: number;
+   484→        };
+   485→      }>('/datasources');
+   486→
+   487→      setData(result.items);
+   488→    } catch (err) {
+   489→      setError(err instanceof Error ? err.message : 'Failed to fetch datasources');
+   490→      setData(null);
+   491→    } finally {
+   492→      setLoading(false);
+   493→    }
+   494→  }, []);
+   495→
+   496→  useEffect(() => {
+   497→    fetchData();
+   498→
+   499→    // Auto-refresh every 2 minutes
+   500→    const interval = setInterval(fetchData, 120000);
+   501→    return () => clearInterval(interval);
+   502→  }, [fetchData]);
+   503→
+   504→  const healthyCount = useMemo(
+   505→    () => data?.filter(ds => ds.apiHealthStatus === 'OK').length || 0,
+   506→    [data]
+   507→  );
+   508→
+   509→  const unhealthyCount = useMemo(
+   510→    () => data?.filter(ds => ds.apiHealthStatus !== 'OK').length || 0,
+   511→    [data]
+   512→  );
+   513→
+   514→  /**
+   515→   * Test connection to a datasource
+   516→   */
+   517→  const testConnection = useCallback(async (id: number): Promise<{ success: boolean; message: string }> => {
+   518→    try {
+   519→      const result = await postToAPI<{ success: boolean; message: string; datasourceName: string }>(
+   520→        '/datasources',
+   521→        { action: 'test', id }
+   522→      );
+   523→      
+   524→      // Refresh datasource list after test
+   525→      await fetchData();
+   526→      
+   527→      return {
+   528→        success: result.success,
+   529→        message: result.message || (result.success ? 'Connection successful' : 'Connection failed'),
+   530→      };
+   531→    } catch (err) {
+   532→      return {
+   533→        success: false,
+   534→        message: err instanceof Error ? err.message : 'Connection test failed',
+   535→      };
+   536→    }
+   537→  }, [fetchData]);
+   538→
+   539→  return {
+   540→    data,
+   541→    loading,
+   542→    error,
+   543→    healthyCount,
+   544→    unhealthyCount,
+   545→    testConnection,
+   546→    refetch: fetchData,
+   547→  };
+   548→}
+   549→
+   550→// ============================================================
+   551→// Statistics & Overview Hooks
+   552→// ============================================================
+   553→
+   554→/**
+   555→ * Hook for comprehensive SOC statistics from Grafana
+   556→ * @returns System overview stats with KPIs and timeline
+   557→ * 
+   558→ * @example
+   559→ * ```tsx
+   560→ * const { data, kpis, timelineEvents, refreshInterval, setInterval } = useGrafanaStats();
+   561→ * ```
+   562→ */
+   563→export function useGrafanaStats(initialRefreshInterval: number = 60000): UseGrafanaStatsReturn {
+   564→  const [data, setData] = useState<SOCOverviewStats | null>(null);
+   565→  const [loading, setLoading] = useState<boolean>(true);
+   566→  const [error, setError] = useState<string | null>(null);
+   567→  const [refreshInterval, setRefreshIntervalState] = useState<number>(initialRefreshInterval);
+   568→
+   569→  // Mock KPIs that would come from actual dashboards
+   570→  const mockKpis: SOCKpiMetric[] = [
+   571→    {
+   572→      id: 'events-today',
+   573→      name: 'Security Events Today',
+   574→      description: 'Total security events detected in the last 24 hours',
+   575→      currentValue: 45892,
+   576→      previousValue: 42341,
+   577→      unit: 'events',
+   578→      trend: 'up',
+   579→      trendPercent: 8.4,
+   580→      status: 'warning',
+   581→      sourceSystem: 'wazuh',
+   582→      lastUpdated: new Date().toISOString(),
+   583→    },
+   584→    {
+   585→      id: 'active-incidents',
+   586→      name: 'Active Incidents',
+   587→      description: 'Currently open incident cases in TheHive',
+   588→      currentValue: 23,
+   589→      previousValue: 18,
+   590→      unit: 'cases',
+   591→      trend: 'up',
+   592→      trendPercent: 27.8,
+   593→      status: 'warning',
+   594→      sourceSystem: 'thehive',
+   595→      lastUpdated: new Date().toISOString(),
+   596→    },
+   597→    {
+   598→      id: 'critical-alerts',
+   599→      name: 'Critical Alerts',
+   600→      description: 'Currently firing critical severity alerts',
+   601→      currentValue: 3,
+   602→      previousValue: 1,
+   603→      unit: 'alerts',
+   604→      trend: 'up',
+   605→      trendPercent: 200,
+   606→      status: 'critical',
+   607→      sourceSystem: 'grafana',
+   608→      lastUpdated: new Date().toISOString(),
+   609→    },
+   610→    {
+   611→      id: 'ioc-count',
+   612→      name: 'Threat IOCs',
+   613→      description: 'Indicators of compromise in MISP database',
+   614→      currentValue: 128456,
+   615→      previousValue: 125890,
+   616→      unit: 'IOCs',
+   617→      trend: 'up',
+   618→      trendPercent: 2.0,
+   619→      status: 'good',
+   620→      sourceSystem: 'misp',
+   621→      lastUpdated: new Date().toISOString(),
+   622→    },
+   623→    {
+   624→      id: 'endpoints-monitored',
+   625→      name: 'Monitored Endpoints',
+   626→      description: 'Wazuh agents reporting in',
+   627→      currentValue: 1847,
+   628→      previousValue: 1839,
+   629→      unit: 'agents',
+   630→      trend: 'up',
+   631→      trendPercent: 0.4,
+   632→      status: 'good',
+   633→      sourceSystem: 'wazuh',
+   634→      lastUpdated: new Date().toISOString(),
+   635→    },
+   636→    {
+   637→      id: 'network-sensors',
+   638→      name: 'Network Sensors Online',
+   639→      description: 'Suricata IDS sensors active',
+   640→      currentValue: 24,
+   641→      previousValue: 24,
+   642→      unit: 'sensors',
+   643→      trend: 'stable',
+   644→      trendPercent: 0,
+   645→      status: 'good',
+   646→      sourceSystem: 'suricata',
+   647→      lastUpdated: new Date().toISOString(),
+   648→    },
+   649→    {
+   650→      id: 'health-score',
+   651→      name: 'SOC Health Score',
+   652→      description: 'Overall system health assessment',
+   653→      currentValue: 87,
+   654→      previousValue: 91,
+   655→      unit: '%',
+   656→      trend: 'down',
+   657→      trendPercent: -4.4,
+   658→      status: 'warning',
+   659→      sourceSystem: 'combined',
+   660→      lastUpdated: new Date().toISOString(),
+   661→    },
+   662→    {
+   663→      id: 'avg-response-time',
+   664→      name: 'Avg Response Time',
+   665→      description: 'Average time to first response on incidents',
+   666→      currentValue: 23,
+   667→      previousValue: 28,
+   668→      unit: 'min',
+   669→      trend: 'down',
+   670→      trendPercent: -17.9,
+   671→      status: 'good',
+   672→      sourceSystem: 'thehive',
+   673→      lastUpdated: new Date().toISOString(),
+   674→    },
+   675→  ];
+   676→
+   677→  // Mock timeline events
+   678→  const mockTimelineEvents: TimelineEvent[] = [
+   679→    {
+   680→      timestamp: new Date(Date.now() - 5 * 60 * 1000).toISOString(),
+   681→      type: 'alert',
+   682→      title: 'Critical Wazuh Alert Detected',
+   683→      description: 'Multiple critical level alerts from endpoint SRV-PROD-12',
+   684→      severity: 'critical',
+   685→      source: 'wazuh',
+   686→      sourceId: 'alert-48291',
+   687→      url: '/wazuh/alert/48291',
+   688→    },
+   689→    {
+   690→      timestamp: new Date(Date.now() - 15 * 60 * 1000).toISOString(),
+   691→      type: 'incident',
+   692→      title: 'New Incident Case Created',
+   693→      description: 'Case #2026-02-14-001 created for phishing campaign analysis',
+   694→      severity: 'high',
+   695→      source: 'thehive',
+   696→      sourceId: 'case-2026-02-14-001',
+   697→      url: '/thehive/case/2026-02-14-001',
+   698→    },
+   699→    {
+   700→      timestamp: new Date(Date.now() - 30 * 60 * 1000).toISOString(),
+   701→      type: 'threat',
+   702→      title: 'MISP IOC Match Found',
+   703→      description: 'Matched malicious IP 185.220.101.34 in network logs',
+   704→      severity: 'critical',
+   705→      source: 'misp',
+   706→      sourceId: 'event-89234',
+   707→      url: '/misp/event/89234',
+   708→    },
+   709→    {
+   710→      timestamp: new Date(Date.now() - 45 * 60 * 1000).toISOString(),
+   711→      type: 'alert',
+   712→      title: 'Suricata Blocked Intrusion Attempt',
+   713→      description: 'SQL injection attempt blocked at perimeter firewall',
+   714→      severity: 'high',
+   715→      source: 'suricata',
+   716→      sourceId: 'eve-1234567',
+   717→      url: '/suricata/alert/1234567',
+   718→    },
+   719→    {
+   720→      timestamp: new Date(Date.now() - 60 * 60 * 1000).toISOString(),
+   721→      type: 'system',
+   722→      title: 'Automated Report Generated',
+   723→      description: 'Daily security posture report generated successfully',
+   724→      severity: 'info',
+   725→      source: 'grafana',
+   726→      sourceId: 'report-daily-2026-02-14',
+   727→    },
+   728→  ];
+   729→
+   730→  const fetchData = useCallback(async () => {
+   731→    setLoading(true);
+   732→    setError(null);
+   733→
+   734→    try {
+   735→      // In production, this would aggregate data from multiple endpoints
+   736→      // For now, we'll simulate with combined mock data
+   737→      const [alertsResult, dashboardsResult] = await Promise.all([
+   738→        fetchFromAPI<{ currentlyAlerting: number; activeRules: number; pausedRules: number }>(
+   739→          '/alerts?action=summary'
+   740→        ).catch(() => null),
+   741→        fetchFromAPI<{ total: number }>(
+   742→          '/dashboards?limit=1'
+   743→        ).catch(() => null),
+   744→      ]);
+   745→
+   746→      const stats: SOCOverviewStats = {
+   747→        eventsToday: mockKpis[0].currentValue as number,
+   748→        eventsChangePercent: mockKpis[0].trendPercent as number,
+   749→        activeIncidents: mockKpis[1].currentValue as number,
+   750→        criticalAlerts: alertsResult?.currentlyAlerting ?? mockKpis[2].currentValue as number,
+   751→        iocCount: mockKpis[3].currentValue as number,
+   752→        monitoredEndpoints: mockKpis[4].currentValue as number,
+   753→        onlineSensors: mockKpis[5].currentValue as number,
+   754→        healthScore: mockKpis[6].currentValue as number,
+   755→        avgResponseTime: mockKpis[7].currentValue as number,
+   756→        uptime: 99.97,
+   757→        dataProcessed: 245.8,
+   758→        alertsBySeverity: {
+   759→          critical: 3,
+   760→          high: 12,
+   761→          warning: 47,
+   762→          info: 156,
+   763→        },
+   764→        eventsByCategory: {
+   765→          malware: 12453,
+   766→          intrusion: 3892,
+   767→          policy: 18934,
+   768→          anomaly: 10513,
+   769→        },
+   770→        topThreatActors: [
+   771→          { name: 'APT29', count: 234 },
+   772→          { name: 'Lazarus Group', count: 156 },
+   773→          { name: 'FIN7', count: 98 },
+   774→          { name: 'Unknown', count: 1245 },
+   775→        ],
+   776→        recentActivity: mockTimelineEvents,
+   777→      };
+   778→
+   779→      setData(stats);
+   780→    } catch (err) {
+   781→      setError(err instanceof Error ? err.message : 'Failed to fetch statistics');
+   782→      setData(null);
+   783→    } finally {
+   784→      setLoading(false);
+   785→    }
+   786→  }, []);
+   787→
+   788→  useEffect(() => {
+   789→    fetchData();
+   790→
+   791→    // Set up auto-refresh based on configured interval
+   792→    const interval = setInterval(fetchData, refreshInterval);
+   793→    return () => clearInterval(interval);
+   794→  }, [fetchData, refreshInterval]);
+   795→
+   796→  const setInterval = useCallback((ms: number) => {
+   797→    setRefreshIntervalState(ms);
+   798→  }, []);
+   799→
+   800→  return {
+   801→    data,
+   802→    loading,
+   803→    error,
+   804→    kpis: mockKpis,
+   805→    timelineEvents: mockTimelineEvents,
+   806→    refreshInterval,
+   807→    setInterval,
+   808→    refetch: fetchData,
+   809→  };
+   810→}
+   811→
+   812→// ============================================================
+   813→// Embedded Dashboard Hook
+   814→// ============================================================
+   815→
+   816→/**
+   817→ * Hook for rendering embedded Grafana dashboards
+   818→ * @param config Initial embedding configuration
+   819→ * @returns Embedding utilities
+   820→ * 
+   821→ * @example
+   822→ * ```tsx
+   823→ * const { embedUrl, iframeHtml, updateConfig } = useDashboardView({
+   824→ *   dashboardUid: 'soc-overview',
+   825→ *   theme: 'dark',
+   826→ * });
+   827→ * 
+   828→ * <div dangerouslySetInnerHTML={{ __html: iframeHtml }} />
+   829→ * ```
+   830→ */
+   831→export function useDashboardView(config: EmbeddedDashboardConfig): UseDashboardViewReturn {
+   832→  const [currentConfig, setCurrentConfig] = useState<EmbeddedDashboardConfig>(config);
+   833→  const [isLoading, setIsLoading] = useState<boolean>(true);
+   834→  const [error, setError] = useState<string | null>(null);
+   835→
+   836→  // Get Grafana base URL from environment or default
+   837→  const grafanaUrl = process.env.NEXT_PUBLIC_GRAFANA_URL || 'http://localhost:3000';
+   838→
+   839→  /**
+   840→   * Generate embedded URL based on configuration
+   841→   */
+   842→  const generateEmbedUrl = useCallback((cfg: EmbeddedDashboardConfig): string => {
+   843→    const params = new URLSearchParams();
+   844→
+   845→    // Theme
+   846→    if (cfg.theme && cfg.theme !== 'current') {
+   847→      params.set('theme', cfg.theme);
+   848→    }
+   849→
+   850→    // Panel selection
+   851→    if (cfg.panelId) {
+   852→      params.set('viewPanel', cfg.panelId.toString());
+   853→    }
+   854→
+   855→    // Time range
+   856→    if (cfg.initialTime) {
+   857→      params.set('from', cfg.initialTime.from);
+   858→      params.set('to', cfg.initialTime.to);
+   859→    }
+   860→
+   861→    // Variables
+   862→    if (cfg.initialVariables) {
+   863→      Object.entries(cfg.initialVariables).forEach(([key, value]) => {
+   864→        params.set(`var-${key}`, value);
+   865→      });
+   866→    }
+   867→
+   868→    // Display options
+   869→    if (cfg.autoRefresh) {
+   870→      params.set('refresh', cfg.autoRefresh);
+   871→    }
+   872→
+   873→    // Kiosk mode (hide unnecessary UI)
+   874→    if (!cfg.showToolbar) {
+   875→      params.set('kiosk', 'tv');
+   876→    }
+   877→    if (cfg.showTimePicker !== undefined) {
+   878→      params.set('showTimePicker', String(cfg.showTimePicker));
+   879→    }
+   880→    if (cfg.showHeader !== undefined) {
+   881→      params.set('showHeader', String(cfg.showHeader));
+   882→    }
+   883→
+   884→    const queryString = params.toString();
+   885→    return `${grafanaUrl}/d/${cfg.dashboardUid}${queryString ? `?${queryString}` : ''}`;
+   886→  }, [grafanaUrl]);
+   887→
+   888→  /**
+   889→   * Generate iframe HTML
+   890→   */
+   891→  const generateIframeHtml = useCallback((url: string, width?: number, height?: number): string => {
+   892→    const style = [
+   893→      'border: none',
+   894→      'border-radius: 8px',
+   895→      width: width ? `${width}px` : '100%',
+   896→      height: height ? `${height}px` : '700px',
+   897→      'box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1)',
+   898→    ].join('; ');
+   899→
+   900→    return `<iframe src="${url}" style="${style}" allow="fullscreen" loading="lazy"></iframe>`;
+   901→  }, []);
+   902→
+   903→  const embedUrl = useMemo(() => generateEmbedUrl(currentConfig), [currentConfig, generateEmbedUrl]);
+   904→  
+   905→  const iframeHtml = useMemo(
+   906→    () => generateIframeHtml(embedUrl, currentConfig.width, currentConfig.height),
+   907→    [embedUrl, currentConfig.width, currentConfig.height, generateIframeHtml]
+   908→  );
+   909→
+   910→  /**
+   911→   * Update embedding configuration
+   912→   */
+   913→  const updateConfig = useCallback((updates: Partial<EmbeddedDashboardConfig>) => {
+   914→    setCurrentConfig(prev => ({ ...prev, ...updates }));
+   915→    setIsLoading(true); // Trigger reload animation
+   916→    
+   917→    // Simulate loading
+   918→    setTimeout(() => setIsLoading(false), 500);
+   919→  }, []);
+   920→
+   921→  /**
+   922→   * Force refresh of embedded content
+   923→   */
+   924→  const refresh = useCallback(() => {
+   925→    setIsLoading(true);
+   926→    setTimeout(() => setIsLoading(false), 500);
+   927→  }, []);
+   928→
+   929→  // Initialize
+   930→  useEffect(() => {
+   931→    setIsLoading(true);
+   932→    
+   933→    // Simulate iframe load check
+   934→    const timer = setTimeout(() => {
+   935→      setIsLoading(false);
+   936→    }, 1000);
+   937→
+   938→    return () => clearTimeout(timer);
+   939→  }, [currentConfig.dashboardUid]);
+   940→
+   941→  return {
+   942→    config: currentConfig,
+   943→    embedUrl,
+   944→    iframeHtml,
+   945→    isLoading,
+   946→    error,
+   947→    updateConfig,
+   948→    refresh,
+   949→  };
+   950→}
+   951→
+   952→// ============================================================
+   953→// Combined Monitoring Hook
+   954→// ============================================================
+   955→
+   956→/**
+   957→ * Comprehensive hook combining all Grafana monitoring features
+   958→ * Ideal for main SOC dashboard view
+   959→ * @returns Complete monitoring state
+   960→ * 
+   961→ * @example
+   962→ * ```tsx
+   963→ * const { stats, dashboards, alerts, datasources, isReady, refreshAll } = useGrafanaDashboard();
+   964→ * 
+   965→ * if (!isReady) return <LoadingSpinner />;
+   966→ * 
+   967→ * return (
+   968→ *   <Dashboard>
+   969→ *     <KPICards kpis={stats.kpis} />
+   970→ *     <AlertSummary {...alerts} />
+   971→ *     <DashboardGrid dashboards={dashboards} />
+   972→ *   </Dashboard>
+   973→ * );
+   974→ * ```
+   975→ */
+   976→export function useGrafanaDashboard() {
+   977→  const stats = useGrafanaStats();
+   978→  const dashboards = useDashboards(10);
+   979→  const alerts = useAlertRules();
+   980→  const datasources = useDataSources();
+   981→  const incidents = useAlertIncidents('alerting');
+   982→
+   983→  /** Check if all data is loaded */
+   984→  const isReady = useMemo(
+   985→    () => !stats.loading && !dashboards.loading && !alerts.loading && !datasources.loading,
+   986→    [stats.loading, dashboards.loading, alerts.loading, datasources.loading]
+   987→  );
+   988→
+   989→  /** Has any errors */
+   990→  const hasErrors = useMemo(
+   991→    () => !!(stats.error || dashboards.error || alerts.error || datasources.error),
+   992→    [stats.error, dashboards.error, alerts.error, datasources.error]
+   993→  );
+   994→
+   995→  /** Refresh all data sources */
+   996→  const refreshAll = useCallback(() => {
+   997→    stats.refetch();
+   998→    dashboards.refetch();
+   999→    alerts.refetch();
+  1000→    datasources.refetch();
+  1001→    incidents.refetch();
+  1002→  }, [stats, dashboards, alerts, datasources, incidents]);
+  1003→
+  1004→  /** Overall system health status */
+  1005→  const systemStatus = useMemo<'healthy' | 'degraded' | 'critical'>(() => {
+  1006→    if (alerts.summary.alerting > 5 || alerts.summary.critical > 2) return 'critical';
+  1007→    if (alerts.summary.alerting > 0 || datasources.unhealthyCount > 0) return 'degraded';
+  1008→    return 'healthy';
+  1009→  }, [alerts.summary, datasources.unhealthyCount]);
+  1010→
+  1011→  return {
+  1012→    // Individual hooks
+  1013→    stats,
+  1014→    dashboards,
+  1015→    alerts,
+  1016→    datasources,
+  1017→    incidents,
+  1018→
+  1019→    // Computed values
+  1020→    isReady,
+  1021→    hasErrors,
+  1022→    systemStatus,
+  1023→    refreshAll,
+  1024→  };
+  1025→}
+  1026→

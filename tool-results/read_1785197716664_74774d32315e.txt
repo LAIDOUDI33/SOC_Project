@@ -1,0 +1,1237 @@
+     1→// ============================================================
+     2→// National SOC Platform - Database Schema (PostgreSQL Version)
+     3→// Version: 3.0.0-PRODUCTION
+     4→// 
+     5→// This schema is optimized for PostgreSQL in production.
+     6→// To use this schema:
+     7→// 1. Copy this file to schema.prisma
+     8→// 2. Update your .env with: DATABASE_URL="postgresql://..."
+     9→// 3. Run: npx prisma migrate dev --name init_postgresql
+    10→//
+    11→// NOTE: Some SQLite-specific features have been removed/modified.
+    12→// ============================================================
+    13→
+    14→generator client {
+    15→  provider = "prisma-client-js"
+    16→}
+    17→
+    18→datasource db {
+    19→  provider = "postgresql"
+    20→  url      = env("DATABASE_URL")
+    21→}
+    22→
+    23→// ============================================================
+    24→// DOMAIN 1: AUTHENTICATION & AUTHORIZATION
+    25→// ============================================================
+    26→
+    27→model User {
+    28→  id                String           @id @default(cuid())
+    29→  email             String           @unique
+    30→  username          String           @unique
+    31→  passwordHash      String
+    32→  name              String
+    33→  avatarUrl         String?
+    34→  isActive          Boolean          @default(true)
+    35→  isMfaEnabled      Boolean          @default(false)
+    36→  mfaSecret         String?
+    37→  lastLoginAt       DateTime?
+    38→  passwordChangedAt DateTime         @default(now())
+    39→  roleId            String
+    40→  createdAt         DateTime         @default(now())
+    41→  updatedAt         DateTime         @updatedAt
+    42→
+    43→  // LDAP/Active Directory Integration
+    44→  ldapDN            String?          @map("ldap_dn")
+    45→  ldapGUID          String?          @map("ldap_guid")
+    46→  ldapSID           String?          @map("ldap_sid")
+    47→  employeeId        String?          @map("employee_id")
+    48→  department        String?
+    49→  
+    50→  // Relations
+    51→  role              Role            @relation(fields: [roleId], references: [id])
+    52→  sessions          Session[]
+    53→  incidents        Incident[]       @relation("IncidentOwner")
+    54→  threatHunts      ThreatHuntSession[] @relation("HuntOwner")
+    55→  auditLogs         AuditLog[]       @relation("AuditUser")
+    56→  mfaDevices        MFADevice[]
+    57→
+    58→  @@index([email])
+    59→  @@index([username])
+    60→  @@index([isActive])
+    61→  @@map("users")
+    62→}
+    63→
+    64→model Role {
+    65→  id                  String         @id @default(cuid())
+    66→  name                String         @unique
+    67→  description         String?
+    68→  permissions        Json           @default("[]") // Array of permission strings
+    69→  isSystemRole        Boolean        @default(false)
+    70→  createdAt           DateTime       @default(now())
+    71→  updatedAt           DateTime       @updatedAt
+    72→
+    73→  users               User[]
+    74→
+    75→  @@map("roles")
+    76→}
+    77→
+    78→model Session {
+    79→  id                  String         @id @default(cuid())
+    80→  userId              String
+    81→  token               String         @unique
+    82→  refreshToken        String?        @unique
+    83→  userAgent           String?
+    84→  ipAddress           String?
+    85→  expiresAt           DateTime
+    86→  revokedAt           DateTime?
+    87→  lastActivityAt      DateTime       @default(now())
+    88→  createdAt           DateTime       @default(now())
+    89→
+    90→  user                User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+    91→
+    92→  @@index([userId])
+    93→  @@index([token])
+    94→  @@index([expiresAt])
+    95→  @@map("sessions")
+    96→}
+    97→
+    98→model MFADevice {
+    99→  id                  String         @id @default(cuid())
+   100→  userId              String
+   101→  deviceType          String         // 'totp', 'sms', 'email', 'fido2'
+   102→  secret              String?
+   103→  publicKey           String?        // For FIDO2/WebAuthn
+   104→  credentialId        String?        // For FIDO2/WebAuthn
+   105→  isBackup            Boolean        @default(false)
+   106→  isVerified          Boolean        @default(false)
+   107→  lastUsedAt          DateTime?
+   108→  createdAt           DateTime       @default(now())
+   109→
+   110→  user                User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+   111→
+   112→  @@index([userId])
+   113→  @@map("mfa_devices")
+   114→}
+   115→
+   116→// ============================================================
+   117→// DOMAIN 2: CORE SOC - ALERTS & INCIDENTS
+   118→// ============================================================
+   119→
+   120→model Alert {
+   121→  id                  String         @id @default(cuid())
+   122→  ruleId              String?
+   123→  title               String
+   124→  description         String?        @db.Text
+   125→  severity            Severity       @default(MEDIUM)
+   126→  status              AlertStatus     @default(ACTIVE)
+   127→  source              String         // 'SIEM', 'EDR', 'NDR', 'TELECOM', 'COMPLIANCE'
+   128→  category            String?
+   129→  rawEvent            Json?
+   130→  assignedTo          String?
+   131→  assignedTeam        String?
+   132→  firstSeen           DateTime       @default(now())
+   133→  lastSeen            DateTime       @default(now())
+   134→  count               Int            @default(1)
+   135→  tags                String[]       @default([])
+   136→  iocIds              String[]
+   137→  incidentId          String?
+   138→  falsePositive       Boolean        @default(false)
+   139→  suppressionRule     String?
+   140→  context             Json?
+   141→  mitreTechnique       String?
+   142→  mitreTactic          String?
+   143→  playbookTriggered    Boolean        @default(false)
+   144→
+   145→  // Relations
+   146→  assignee            User?          @relation("AlertAssignee", fields: [assignedTo], references: [id])
+   147→  incident            Incident?      @relation("AlertIncident", fields: [incidentId], references: [id])
+   148→
+   149→  @@index([severity, status])
+   150→  @@index([source])
+   151→  @@index([firstSeen])
+   152→  @@index([incidentId])
+   153→  @@index([status])
+   154→  @@fulltext([title, description])
+   155→  @@map("alerts")
+   156→}
+   157→
+   158→model Incident {
+   159→  id                  String         @id @default(cuid())
+   160→  incidentNumber      String         @unique
+   161→  title               String
+   162→  description         String?        @db.Text
+   163→  severity            Severity       @default(HIGH)
+   164→  status              IncidentStatus @default(OPEN)
+   165→  phase               IncidentPhase  @default(DETECTION)
+   166→  type                IncidentType   @default SECURITY
+   167→  priority            Priority       @default(MEDIUM)
+   168→  confidence          Int            @default(50) // 0-100
+   169→  assignedTo          String?
+   170→  commander           String?
+   171→  reporter            String?
+   172→  detectedAt          DateTime       @default(now())
+   173→  acknowledgedAt      DateTime?
+   174→  resolvedAt          DateTime?
+   175→  closedAt            DateTime?
+   176→  slaDeadline         DateTime?
+   177→  slaBreach           Boolean        @default(false)
+   178→  artpReportable      Boolean        @default(false)
+   179→  artpSubmissionId   String?
+   180→  rootCause           String?        @db.Text
+   181→  impact              String?        @db.Text
+   182→  containmentActions  Json?
+   183→  remediationSteps    Json?
+   184→  lessonsLearned      String?        @db.Text
+   185→  costEstimateDZD      Decimal?       @db.Decimal(15, 2) // Estimated financial impact in DZD
+   186→  affectedAssets       Int            @default(0)
+   187→  affectedSubscribers  Int            @default(0)
+   188→  tags                String[]       @default([])
+   189→
+   190→  // Relations
+   191→  owner               User           @relation("IncidentOwner", fields: [reporter], references: [id])
+   192→  assignee            User?          @relation("IncidentAssignee", fields: [assignedTo], references: [id])
+   193→  alerts              Alert[]        @relation("AlertIncident")
+   194→  tasks               Task[]
+   195→  evidence            Evidence[]
+   196→  timeline            TimelineEvent[]
+   197→
+   198→  @@index([status, severity])
+   199→  @@index([type])
+   200→  @@index([detectedAt])
+   201→  @@index([artpReportable])
+   202→  @@fulltext([title, description])
+   203→  @@map("incidents")
+   204→}
+   205→
+   206→enum Severity {
+   207→  INFO
+   208→  LOW
+   209→  MEDIUM
+   210→  HIGH
+   211→  CRITICAL
+   212→}
+   213→
+   214→enum AlertStatus {
+   215→  ACTIVE
+   216→  SUPPRESSED
+   217→  ACKNOWLEDGED
+   218→  ESCALATED
+   219→  CLOSED
+   220→  FALSE_POSITIVE
+   221→}
+   222→
+   223→enum IncidentStatus {
+   224→  OPEN
+   225→  IN_PROGRESS
+   226→  RESOLVED
+   227→  CLOSED
+   228→  ESCALATED
+   229→}
+   230→
+   231→enum IncidentPhase {
+   232→  DETECTION
+   233→  ANALYSIS
+   234→  CONTAINMENT
+   235→  ERADICATION
+   236→  RECOVERY
+   237→  LESSONS_LEARNED
+   238→  CLOSED
+   239→}
+   240→
+   241→enum IncidentType {
+   242→  SECURITY
+   243→  FRAUD
+   244→  COMPLIANCE
+   245→  OPERATIONAL
+   246→  THIRD_PARTY
+   247→}
+   248→
+   249→enum Priority {
+   250→  CRITICAL
+   251→  HIGH
+   252→  MEDIUM
+   253→  LOW
+   254→  INFO
+   255→}
+   256→
+   257→// ============================================================
+   258→// DOMAIN 3: THREAT INTELLIGENCE
+   259→// ============================================================
+   260→
+   261→model ThreatIntel {
+   262→  id                  String         @id @default(cuid())
+   263→  type                ThreatType
+   264→  value               String         @unique
+   265→  source              String         // 'MISP', 'OpenCTI', 'Internal', 'OSINT'
+   266→  confidence          Int            @default(50) // 0-100
+   267→  severity            ThreatSeverity @default(MEDIUM)
+   268→  tlp                 TLP           @default(WHITE)
+   269→  status              IOCStatus      @default(ACTIVE)
+   270→  firstSeen           DateTime       @default(now())
+   271→  lastSeen            DateTime       @default(now?)
+   272→  expirationDate      DateTime?
+   273→  description         String?        @db.Text
+   274→  tags                String[]       @default([])
+   275→  context             Json?
+   276→  reports             String[]       @default([]) // Related incident IDs
+   277→  enrichmentData      Json?
+   278→
+   279→  @@index([type, value])
+   280→  @@index([source])
+   281→  @@index([status])
+   282→  @@index([firstSeen])
+   283→  @@map("threat_intel")
+   284→}
+   285→
+   286→enum ThreatType {
+   287→  IP_DOMAIN
+   288→  URL
+   289→  HASH_MD5
+   290→  HASH_SHA1
+   291→ _HASH_SHA256
+   292→  EMAIL
+   293→  IMEI
+   294→  IMSI
+   295→  MSISDN
+   296→  SS7_GT
+   297→  INDICATOR_COMPROMISE
+   298→  MALWARE_SAMPLE
+   299→  VULNERABILITY
+   300→  CUSTOM
+   301→}
+   302→
+   303→enum ThreatSeverity {
+   304→  UNKNOWN
+   305→  LOW
+   306→  MEDIUM
+   307→  HIGH
+   308→  CRITICAL
+   309→}
+   310→
+   311→enum TLP {
+   312→  WHITE
+   313→  GREEN
+   314→  AMBER
+   315→  RED
+   316→}
+   317→
+   318→enum IOCStatus {
+   319→  ACTIVE
+   320→  EXPIRED
+   321→  RETIATED
+   322→  OBSOLETE
+   323→}
+   324→
+   325→// ============================================================
+   326→// DOMAIN 4: TELECOM-SPECIFIC MODELS
+   327→// ============================================================
+   328→
+   329→model NetworkElement {
+   330→  id                  String         @id @default(cuid())
+   331→  name                String
+   332→  elementType         String         // 'SS7_FIREWALL', 'GTP_PROBE', 'HLR', 'MSC', 'SGSN', etc.
+   333→  vendor              String?
+   334→  softwareVersion     String?
+   335→  ipAddress           String?
+   336→  location            String?
+   337→  region              String?
+   338→  status              ElementStatus  @default(OPERATIONAL)
+   339→  lastSeen            DateTime?
+   340→  metadata            Json?
+   341→  createdAt           DateTime       @default(now())
+   342→  updatedAt           DateTime       @updatedAt
+   343→
+   344→  @@index([elementType])
+   345→  @@index([status])
+   346→  @@index([region])
+   347→  @@map("network_elements")
+   348→}
+   349→
+   350→enum ElementStatus {
+   351→  OPERATIONAL
+   352→  DEGRADED
+   353→  MAINTENANCE
+   354→  OFFLINE
+   355→  UNKNOWN
+   356→}
+   357→
+   358→model Subscriber {
+   359→  id                  String         @id @default(cuid())
+   360→  msisdn              String         @unique
+   361→  imsi                String         @unique?
+   362→  riskScore           Int            @default(0) // 0-100
+   363→  subscriberStatus     SubscriberStatus @default(ACTIVE)
+   364→  isRoaming           Boolean        @default(false)
+   365→  roamingCountry      String?
+   366→  homeOperator        String?
+   367→  currentLocation     String?
+   368→  lastSeen            DateTime?
+   369→  firstSeen           DateTime       @default(now())
+   370→  fraudFlags          Json           @default("{}") // { simSwapRisk: true, irsfFlag: false }
+   371→  notes               String?        @db.Text
+   372→
+   373→  @@index([msisdn])
+   374→  @@index([riskScore])
+   375→  @@index([subscriberStatus])
+   376→  @@map("subscribers")
+   377→}
+   378→
+   379→enum SubscriberStatus {
+   380→  ACTIVE
+   381→  SUSPENDED
+   382→  TERMINATED
+   383→  ROAMING_ONLY
+   384→  PREPAID
+   385→  POSTPAID
+   386→}
+   387→
+   388→model SS7Message {
+   389→  id                  String         @id @default(cuid())
+   390→  messageType         String         // SRI, ISAT, USSD, etc.
+   391→  callingParty        String?
+   392→  calledParty         String?
+   393→  globalTitle         String?
+   394→  sccpCalling        String?
+   395→  sccpCalled         String?
+   396→  imsi                String?
+   397→  msisdn              String?
+   398→  isBlocked           Boolean        @default(false)
+   399→  riskScore           Int            @default(0)
+   400→  timestamp           DateTime       @default(now())
+   401→  rawMessage          Bytes?
+   402→  parsedData          Json?
+   403→  probeId             String?
+   404→
+   405→  @@index([messageType])
+   406→  @@index([timestamp])
+   407→  @@index([isBlocked])
+   408→  @@index([riskScore])
+   409→  @@map("ss7_messages")
+   410→}
+   411→
+   412→model GTPSession {
+   413→  id                  String         @id @default(cuid())
+   414→  sessionType         String         // 'GTP-C', 'GTP-U', 'GTPv2'
+   415→  imsi                String?
+   416→  msisdn              String?
+   417→  apn                 String?
+   418→  localTeid           String?
+   419→  remoteTeid          String?
+   420→  sessionStatus       SessionStatus @default(ACTIVE)
+   421→  startedAt           DateTime       @default(now())
+   422→  endedAt             DateTime?
+   423→  dataVolumeUp        BigInt         @default(0)
+   424→  dataVolumeDown      BigInt         @default(0)
+   425→  durationSeconds     Int            @default(0)
+   426→  anomalyScore        Int            @default(0) // 0-100
+   427→  flags               Json?
+   428→
+   429→  @@index([imsi])
+   430→  @@index([sessionStatus])
+   431→  @@index([anomalyScore])
+   432→  @@map("gtp_sessions")
+   433→}
+   434→
+   435→enum SessionStatus {
+   436→  ACTIVE
+   437→  IDLE
+   438→  TERMINATED
+   439→  SUSPENDED
+   440→}
+   441→
+   442→model SIPSession {
+   443→  id                  String         @id @default(cuid())
+   444→  callType            String         // 'VOICE', 'VIDEO', 'SMS', 'USSD'
+   445→  callingParty        String?
+   446→  calledParty         String?
+   447→  inviteTimestamp    DateTime?
+   448→  acceptTimestamp    DateTime?
+   449→  byeTimestamp       DateTime?
+   450→  durationSeconds     Int?
+   451→  isFraudSuspected   Boolean        @default(false)
+   452→  fraudType           String?
+   453→  sipStatusCode      Int?
+   454→  reasonPhrase        String?
+   455→  mediaServer        String?
+   456→  trunkGroup         String?
+   457→  roamingOrigin      Boolean        @default(false)
+   458→
+   459→  @@index([callType])
+   460→  @@index([inviteTimestamp])
+   461→  @@index([isFraudSuspected])
+   462→  @@map("sip_sessions")
+   463→}
+   464→
+   465→model DiameterSession {
+   466→  id                  String         @id @default(cuid())
+   467→  commandCode         Int
+   468→  applicationId       Int
+   469→  originHost          String?
+   470→  originRealm         String?
+   471→  destinationHost     String?
+   472→  destinationRealm    String?
+   473→  sessionId           String?
+   474→  sessionStatus       SessionStatus @default(ACTIVE)
+   475→  startedAt           DateTime       @default(now())
+   476→  endedAt             DateTime?
+   477→  resultCode          Int?
+   478→
+   479→  @@index([commandCode])
+   480→  @@index([applicationId])
+   481→  @@map("diameter_sessions")
+   482→}
+   483→
+   484→// ============================================================
+   485→// DOMAIN 5: COMPLIANCE (ARTP/ANSSI)
+   486→// ============================================================
+   487→
+   488→model Control {
+   489→  id                  String         @id @default(cuid())
+   490→  frameworkId         String
+   491→  controlId           String         @unique
+   492→  controlName         String
+   493→  category            String
+   494→  description         String?        @db.Text
+   495→  implementationStatus ImplementationStatus @default(NOT_IMPLEMENTED
+   496→  evidenceNotes       String?        @db.Text
+   497→  riskRating          RiskRating     @default(MEDIUM)
+   498→  artpReference       String?        // ARTP control reference
+   499→  anssiMapping        String?        // ANSSI PSSI mapping
+   500→  lastAssessedAt      DateTime?
+   501→  nextReviewDate      DateTime?
+   502→  owner               String?
+   503→  automatedEvidence   Boolean        @default(false)
+   504→  complianceScore     Int            @default(0) // 0-100
+   505→
+   506→  assessments         Assessment[]
+   507→
+   508→  @@index([frameworkId])
+   509→  @@index([category])
+   510→  @@index([implementationStatus])
+   511→  @@map("controls")
+   512→}
+   513→
+   514→enum ImplementationStatus {
+   515→  NOT_IMPLEMENTED
+   516→  PARTIALLY_IMPLEMENTED
+   517→  IMPLEMENTED
+   518→  TESTED
+   519→  VERIFIED
+   520→}
+   521→
+   522→enum RiskRating {
+   523→  CRITICAL
+   524→  HIGH
+   525→  MEDIUM
+   526→  LOW
+   527→  NEGLIGIBLE
+   528→}
+   529→
+   530→model Framework {
+   531→  id                  String         @id @default(cuid())
+   532→  name                String         @unique
+   533→  version             String
+   534→  type                FrameworkType
+   535→  description         String?        @db.Text
+   536→  issuer              String         // 'ARTP', 'ANSSI', 'ISO', 'NIST'
+   537→  totalControls       Int            @default(0)
+   538→  implementedControls Int            @default(0)
+   539→  complianceScore    Float          @default(0.0) // 0-100
+   540→  lastAssessmentDate DateTime?
+   541→  nextReviewDate      DateTime?
+   542→  isActive            Boolean        @default(true)
+   543→
+   544→  controls            Control[]
+   545→  assessments         Assessment[]
+   546→
+   547→  @@map("frameworks")
+   548→}
+   549→
+   550→enum FrameworkType {
+   551→  ARTP_TELECOM
+   552→  ANSSI_PSSI
+   553→  ISO_27001
+   554→  NIST_CSF
+   555→  GDPR
+   556→  SOC2
+   557→  CUSTOM
+   558→}
+   559→
+   560→model Assessment {
+   561→  id                  String         @id @default(cuid())
+   562→  frameworkId         String
+   563→  framework           Framework      @relation(fields: [frameworkId], references: [id])
+   564→  assessorId          String?
+   565→  assessmentType      AssessmentType @default(REGULAR)
+   566→  status              AssessmentStatus @default(IN_PROGRESS)
+   567→  score               Int            @default(0) // 0-100
+   568→  findingsCount       Int            @default(0)
+   569→  gapsIdentified      Int            @default(0)
+   570→  startedAt           DateTime       @default(now())
+   571→  completedAt         DateTime?
+   572→  reportUrl           String?
+   573→  submittedToArtp     Boolean        @default(false)
+   574→  submissionRef       String?
+   575→  notes               String?        @db.Text
+   576→
+   577→  assessor            User?          @relation("Assessor", fields: [assessorId], references: [id])
+   578→  controlAssessments ControlAssessment[]
+   579→
+   580→  @@index([frameworkId])
+   581→  @@index([status])
+   582→  @@index([submittedToArtp])
+   583→  @@map("assessments")
+   584→}
+   585→
+   586→enum AssessmentType {
+   587→  INITIAL
+   588→  REGULAR
+   589→  FOLLOW_UP
+   590→  SPECIAL
+   591→  POST_INCIDENT
+   592→}
+   593→
+   594→enum AssessmentStatus {
+   595→  PLANNING
+   596→  IN_PROGRESS
+   597→  REVIEW
+   598→  COMPLETED
+   599→  APPROVED
+   600→  REJECTED
+   601→  ARCHIVED
+   602→}
+   603→
+   604→model ControlAssessment {
+   605→  id                  String         @id @default(cuid())
+   606→  assessmentId        String
+   607→  controlId           String
+   608→  control             Control        @relation(fields: [controlId], references: [id])
+   609→  assessment          Assessment      @relation(fields: [assessmentId], references: [id], onDelete: Cascade)
+   610→  status              ControlStatus @default(NOT_ASSESSED
+   611→  evidence            String?        @db.Text
+   612→  gapDescription      String?        @db.Text
+   613→  remediationPlan     String?        @db.Text
+   614→  testerNotes         String?        @db.Text
+   615→  testedAt            DateTime?
+   616→
+   617→  @@index([assessmentId])
+   618→  @@index([controlId])
+   619→  @@map("control_assessments")
+   620→}
+   621→
+   622→enum ControlStatus {
+   623→  NOT_ASSESSED
+   624→  PASS
+   625→  FAIL
+   626→  PARTIAL_PASS
+   627→  NOT_APPLICABLE
+   628→  NOT_TESTED
+   629→}
+   630→
+   631→model Evidence {
+   632→  id                  String         @id @default(cuid())
+   633→  controlId           String
+   634→  assessmentId        String?
+   635→  type                EvidenceType
+   636→  title               String
+   637→  description         String?        @db.Text
+   638→  filePath            String?
+   639→  fileHash            String?
+   640→  collectedAt         DateTime       @default(now())
+   641→  collectedBy         String?
+   642→  isValidated         Boolean        @default(false)
+   643→  validatedBy         String?
+   644→  validatedAt         DateTime?
+   645→  artpAccepted        Boolean        @default(false)
+   646→
+   647→  @@index([controlId])
+   648→  @@index([assessmentId])
+   649→  @@index([type])
+   650→  @@map("evidence")
+   651→}
+   652→
+   653→enum EvidenceType {
+   654→  SCREENSHOT
+   655→  LOG_FILE
+   656→  CONFIGURATION
+   657→  POLICY_DOCUMENT
+   658→  INTERVIEW_NOTES
+   659→  SCAN_REPORT
+   660→  MANUAL_CHECKLIST
+   661→  OTHER
+   662→}
+   663→
+   664→// ============================================================
+   665→// DOMAIN 6: SOAR / AUTOMATION
+   666→// ============================================================
+   667→
+   668→model Playbook {
+   669→  id                  String         @id @default(cuid())
+   670→  name                String
+   671→  description         String?        @db.Text
+   672→  version             String         @default("1.0")
+   673→  category            PlaybookCategory
+   674→  severity            Severity       @default(HIGH)
+   675→  status              PlaybookStatus @default(DRAFT)
+   676→  triggers            Json           @default("[]") // Array of trigger conditions
+   677→  steps               PlaybookStep[]  @relation(sort: [{ order: 'asc' }])
+   678→  approvalRequired   Boolean        @default(false)
+   679→  estimatedRuntime    Int            @default(300) // seconds
+   680→  successRate         Float          @default(0.0) // percentage
+   681→  totalRuns           Int            @default(0)
+   682→  timeSaved          String         @default("0h") // estimated time saved
+   683→  createdBy           String
+   684→  createdAt           DateTime       @default(now())
+   685→  updatedAt           DateTime       @updatedAt
+   686→
+   687→  executions          PlaybookExecution[]
+   688→
+   689→  @@index([category])
+   690→  @@index([status])
+   691→  @@index([severity])
+   692→  @@map("playbooks")
+   693→}
+   694→
+   695→enum PlaybookCategory {
+   696→  CONTAINMENT
+   697→  REMEDIATION
+   698→  DETECTION
+   699→  ENRICHMENT
+   700→  NOTIFICATION
+   701→  REPORTING
+   702→  INVESTIGATION
+   703→  CUSTOM
+   704→}
+   705→
+   706→enum PlaybookStatus {
+   707→  DRAFT
+   708→  TESTING
+   709→  ACTIVE
+   710→  DEPRECATED
+   711→  ARCHIVED
+   712→}
+   713→
+   714→model PlaybookStep {
+   715→  id                  String         @id @default(cuid())
+   716→  playbookId          String
+   717→  order               Int
+   718→  name                String
+   719→  actionType          ActionType
+   720→  config              Json?
+   721→  timeout             Int            @default(60) // seconds
+   722→  status              StepStatus     @default(PENDING)
+   723→  condition           String?        // Condition to execute this step
+   724→  onFailure           StepOnFailure   @default(SKIP)
+   725→  approvalRequired    Boolean        @default(false)
+   726→  playbook            Playbook       @relation(fields: [playbookId], references: [id], onDelete: Cascade)
+   727→
+   728→  @@index([playbookId])
+   729→  @@index([order])
+   730→  @@map("playbook_steps")
+   731→}
+   732→
+   733→enum ActionType {
+   734→  BLOCK_IP
+   735→  ISOLATE_ENDPOINT
+   736→  DISABLE_ACCOUNT
+   737→  SEND_NOTIFICATION
+   738→  CREATE_CASE
+   739→  COLLECT_EVIDENCE
+   740→  ENRICH_INDICATOR
+   741→  API_CALL
+   742→  RUN_QUERY
+   743→  EXECUTE_SCRIPT
+   744→  UPDATE_TICKET
+   745→  QUARANTINE_FILE
+   746→  RESET_PASSWORD
+   747→  CUSTOM
+   748→}
+   749→
+   750→enum StepStatus {
+   751→  PENDING
+   752→  RUNNING
+   753→  COMPLETED
+   754→  FAILED
+   755→  SKIPPED
+   756→  APPROVAL_PENDING
+   757→}
+   758→
+   759→enum StepOnFailure {
+   760→  SKIP
+   761→  RETRY
+   762→  ABORT
+   763→  PAUSE
+   764→}
+   765→
+   766→model PlaybookExecution {
+   767→  id                  String         @id @default(cuid())
+   768→  playbookId          String
+   769→  playbook            Playbook       @relation(fields: [playbookId], references: [id])
+   770→  triggeredBy          String         // Alert ID or User ID
+   771→  triggeredByType      ExecutionTrigger
+   772→  status              ExecutionStatus @default(RUNNING)
+   773→  progress            Int            @default(0) // percentage
+   774→  currentStep         Int            @default(1)
+   775→  startedAt           DateTime       @default(now())
+   776→  completedAt         DateTime?
+   777→  durationSeconds     Int?
+   778→  result              ExecutionResult?
+   779→  error               String?        @db.Text
+   780→  executionLog        Json           @default("[]")
+   781→  approvedBy          String?
+   782→  approvedAt          DateTime?
+   783→
+   784→  stepExecutions      StepExecution[]
+   785→
+   786→  @@index([playbookId])
+   787→  @@index([status])
+   788→  @@index([startedAt])
+   789→  @@map("playbook_executions")
+   790→}
+   791→
+   792→enum ExecutionTrigger {
+   793→  ALERT
+   794→  MANUAL
+   795→  SCHEDULED
+   796→  WEBHOOK
+   797→  API
+   798→}
+   799→
+   800→enum ExecutionStatus {
+   801→  PENDING
+   802→  RUNNING
+   803→  COMPLETED
+   804→  FAILED
+   805→  CANCELLED
+   806→  TIMEOUT
+   807→  WAITING_APPROVAL
+   808→}
+   809→
+   810→enum ExecutionResult {
+   811→  SUCCESS
+   812→  PARTIAL
+   813→  FAILURE
+   814→  TIMEOUT
+   815→  CANCELLED
+   816→}
+   817→
+   818→model StepExecution {
+   819→  id                  String         @id @default(cuid())
+   820→  executionId         String
+   821→  execution           PlaybookExecution @relation(fields: [executionId], references: [id], onDelete: Cascade)
+   822→  stepId              String
+   823→  step                PlaybookStep?
+   824→  status              StepStatus     @default(PENDING)
+   825→  startedAt           DateTime?
+   826→  completedAt         DateTime?
+   827→  result              Json?
+   828→  error               String?
+   829→  output              Json?          // Data produced by this step
+   830→  durationMs          Int?
+   831→
+   832→  @@index([executionId])
+   833→  @@index([status])
+   834→  @@map("step_executions")
+   835→}
+   836→
+   837→// ============================================================
+   838→// DOMAIN 7: THREAT HUNTING
+   839→// ============================================================
+   840→
+   841→model ThreatHuntSession {
+   842→  id                  String         @id @default(cuid())
+   843→  name                String
+   844→  description         String?        @db.Text
+   845→  hypothesis          String?        @db.Text
+   846→  status              HuntStatus     @default(ACTIVE)
+   847→  hunterId            String
+   848→  hunterName          String
+   849→  findingsCount       Int            @default(0)
+   850→  iocsExtracted       Int            @default(0)
+   851→  queries             Json           @default("[]") // Array of queries executed
+   852→  filters             Json           @default("{}")
+   853→  createdAt           DateTime       @default(now())
+   854→  updatedAt           DateTime       @default(now())
+   855→  lastActivityAt      DateTime?
+   856→  completedAt         DateTime?
+   857→
+   858→  hunter              User           @relation("HuntOwner", fields: [hunterId], references: [id])
+   859→  findings            HuntingFinding[]
+   860→
+   861→  @@index([hunterId])
+   862→  @@index([status])
+   863→  @@index([createdAt])
+   864→  @@map("threat_hunt_sessions")
+   865→}
+   866→
+   867→enum HuntStatus {
+   868→  ACTIVE
+   869→  PAUSED
+   870→  COMPLETED
+   871→  CANCELLED
+   872→  EXPIRED
+   873→}
+   874→
+   875→model HuntingFinding {
+   876→  id                  String         @id @default(cuid())
+   877→  sessionId           String
+   878→  session             ThreatHuntSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+   879→  title               String
+   880→  description         String?        @db.Text
+   881→  severity            Severity       @default(MEDIUM)
+   882→  confidence          Int            @default(50) // 0-100
+   883→  type                FindingType
+   884→  status              FindingStatus @default(NEW)
+   885→  iocs                Json           @default("[]") // IOCs extracted from this finding
+   886→  relatedAlerts        String[]       @default([]) // Alert IDs
+   887→  assignedTo          String?
+   888→  investigationStatus InvestigationStatus @default(OPEN)
+   889→  createdAt           DateTime       @default(now())
+   890→
+   891→  @@index([sessionId])
+   892→  @@index([severity])
+   893→  @@index([type])
+   894→  @@map("hunting_findings")
+   895→}
+   896→
+   897→enum FindingType {
+   898→  ANOMALY_PATTERN
+   899→  COMPROMISED_INDICATOR
+   900→  LATERAL_MOVEMENT
+   901→  DATA_EXFILTRATION
+   902→  POLICY_VIOLATION
+   903→  UNKNOWN_THREAT
+   904→  CUSTOM
+   905→}
+   906→
+   907→enum FindingStatus {
+   908→  NEW
+   909→  INVESTIGATING
+   910→  CONFIRMED
+   911→  FALSE_POSITIVE
+   912→  BENIGN
+   913→  ESCALATED
+   914→  CLOSED
+   915→}
+   916→
+   917→enum InvestigationStatus {
+   918→  OPEN
+   919→  IN_PROGRESS
+   920→  ESCALATED
+   921→  RESOLVED
+   922→  CLOSED
+   923→  DISMISSED
+   924→}
+   925→
+   926→// ============================================================
+   927→// DOMAIN 8: CASE MANAGEMENT
+   928→// ============================================================
+   929→
+   930→model Case {
+   931→  id                  String         @id @default(cuid())
+   932→  caseNumber          String         @unique
+   933→  title               String
+   934→  description         String?        @db.Text
+   935→  caseType            CaseType
+   936→  priority            Priority       @default(MEDIUM)
+   937→  severity            Severity       @default(HIGH)
+   938→  status              CaseStatus     @default(OPEN)
+   939→  phase               CasePhase       @default(TRIAGE
+   940→  assignedTo          String?
+   941→  assignedTeam        String?
+   942→  reporter            String?
+   943→  detectedAt          DateTime       @default(now())
+   944→  resolvedAt          DateTime?
+   945→  slaDeadline         DateTime?
+   946→  slaBreach           Boolean        @default(false)
+   947→  artpReportable      Boolean        @default(false)
+   948→  relatedIncidentId   String?
+   949→  relatedThreats      String[]       @default([])
+   950→  evidenceIds         String[]       @default([])
+   951→  tasks               Task[]
+   952→  timeline            TimelineEvent[]
+   953→  notes               CaseNote[]
+   954→
+   955→  assignee            User?          @relation("CaseAssignee", fields: [assignedTo], references: [id])
+   956→
+   957→  @@index([caseType])
+   958→  @@index([status])
+   959→  @@index([priority])
+   960→  @@index([detectedAt])
+   961→  @@map("cases")
+   962→}
+   963→
+   964→enum CaseType {
+   965→  SECURITY_INCIDENT
+   966→  FRAUD_INVESTIGATION
+   967→  COMPLIANCE_VIOLATION
+   968→  VULNERABILITY_ASSESSMENT
+   969→  THREAT_HUNT_RESULT
+   970→  PENETRATION_TEST
+   971→  AUDIT_FINDING
+   972→  THIRD_PARTY
+   973→  CUSTOM
+   974→}
+   975→
+   976→enum CaseStatus {
+   977→  OPEN
+   978→  IN_PROGRESS
+   979→  UNDER_REVIEW
+   980→  RESOLVED
+   981→  CLOSED
+   982→  ESCALATED
+   983→  ARCHIVED
+   984→}
+   985→
+   986→enum CasePhase {
+   987→  TRIAGE
+   988→  INVESTIGATION
+   989→  ANALYSIS
+   990→  CONTAINMENT
+   991→  ERADICATION
+   992→  RECOVERY
+   993→  REPORTING
+   994→  CLOSED
+   995→}
+   996→
+   997→model Task {
+   998→  id                  String         @id @default(cuid())
+   999→  caseId              String
+  1000→  incidentId          String?
+  1001→  title               String
+  1002→  description         String?        @db.Text
+  1003→  assigneeId          String?
+  1004→  status              TaskStatus     @default(TODO)
+  1005→  priority            Priority       @default(MEDIUM)
+  1006→  dueDate             DateTime?
+  1007→  completedAt         DateTime?
+  1008→  createdAt           DateTime       @default(now())
+  1009→  updatedAt           DateTime       @updatedAt
+  1010→
+  1011→  case_               Case?          @relation(fields: [caseId], references: [id], onDelete: Cascade)
+  1012→  incident            Incident?      @relation(fields: [incidentId], references: [id], onDelete: Cascade)
+  1013→  assignee            User?          @relation("TaskAssignee", fields: [assigneeId], references: [id])
+  1014→
+  1015→  @@index([caseId])
+  1016→  @@index([incidentId])
+  1017→  @@index([status])
+  1018→  @@index([dueDate])
+  1019→  @@map("tasks")
+  1020→}
+  1021→
+  1022→enum TaskStatus {
+  1023→  TODO
+  1024→  IN_PROGRESS
+  1025→  BLOCKED
+  1026→  IN_REVIEW
+  1027→  DONE
+  1028→  CANCELLED
+  1029→}
+  1030→
+  1031→model TimelineEvent {
+  1032→  id                  String         @id @default(cuid())
+  1033→  caseId              String?
+  1034→  incidentId          String?
+  1035→  eventType           TimelineEventType
+  1036→  title               String
+  1037→  description         String?        @db.Text
+  1038→  timestamp           DateTime       @default(now())
+  1039→  createdBy           String
+  1040→  metadata            Json?
+  1041→
+  1042→  case_               Case?          @relation(fields: [caseId], references: [id], onDelete: Cascade)
+  1043→  incident            Incident?      @relation(fields: [incidentId], references: [id], onDelete: Cascade)
+  1044→
+  1045→  @@index([caseId])
+  1046→  @@index([incidentId])
+  1047→  @@index([eventType])
+  1048→  @@index([timestamp])
+  1049→  @@map("timeline_events")
+  1050→}
+  1051→
+  1052→enum TimelineEventType {
+  1053→  DETECTION
+  1054→  ACKNOWLEDGMENT
+  1055→  ASSIGNMENT
+  1056→  STATUS_CHANGE
+  1057→  EVIDENCE_COLLECTED
+  1058→  TASK_COMPLETED
+  1059→  NOTE_ADDED
+  1060→  PHASE_CHANGE
+  1061→  ESCALATION
+  1062→  RESOLUTION
+  1063→  closure
+  1064→}
+  1065→
+  1066→model CaseNote {
+  1067→  id                  String         @id @default(cuid())
+  1068→  caseId              String
+  1069→  authorId            String
+  1070→  content             String         @db.Text
+  1071→  isInternal          Boolean        @default(false)
+  1072→  createdAt           DateTime       @default(now())
+  1073→
+  1074→  case_               Case           @relation(fields: [caseId], references: [id], onDelete: Cascade)
+  1075→
+  1076→  @@index([caseId])
+  1077→  @@index([createdAt])
+  1078→  @@map("case_notes")
+  1079→}
+  1080→
+  1081→model Evidence {
+  1082→  id                  String         @id @default(cuid())
+  1083→  caseId              String?
+  1084→  incidentId          String?
+  1085→  type                EvidenceType
+  1086→  title               String
+  1087→  description         String?        @db.Text
+  1088→  filePath            String?
+  1089→  fileHash            String?
+  1090→  fileSize            BigInt?
+  1091→  mimeType            String?
+  1092→  collectedAt         DateTime       @default(now())
+  1093→  collectedBy         String?
+  1094→  chainOfCustody      Json?
+  1095→  isValidated         Boolean        @default(false)
+  1096→  artpAccepted        Boolean        @default(false)
+  1097→
+  1098→  @@index([caseId])
+  1099→  @@index([incidentId])
+  1100→  @@index([type])
+  1101→  @@map("evidence_items")
+  1102→}
+  1103→
+  1104→// ============================================================
+  1105→// DOMAIN 9: SYSTEM & MONITORING
+  1106→// ============================================================
+  1107→
+  1108→model AuditLog {
+  1109→  id                  String         @id @default(cuid())
+  1110→  userId              String
+  1111→  action              AuditAction
+  1112→  resourceType        ResourceType
+  1113→  resourceId          String
+  1114→  details             Json?
+  1115→  ipAddress           String?
+  1116→  userAgent           String?
+  1117→  timestamp           DateTime       @default(now())
+  1118→  severity            AuditSeverity @default(INFO)
+  1119→
+  1120→  user                User           @relation("AuditUser", fields: [userId], references: [id])
+  1121→
+  1122→  @@index([userId])
+  1123→  @@index([action])
+  1124→  @@index([resourceType])
+  1125→  @@index([timestamp])
+  1126→  @@index([ipAddress])
+  1127→  @@map("audit_logs")
+  1128→}
+  1129→
+  1130→enum AuditAction {
+  1131→  LOGIN
+  1132→  LOGOUT
+  1133→  CREATE
+  1134→  READ
+  1135→  UPDATE
+  1136→  DELETE
+  1137→  EXPORT
+  1138→  IMPORT
+  1139→  CONFIG_CHANGE
+  1140→  ROLE_CHANGE
+  1141→  PERMISSION_CHANGE
+  1142→  ALERT_ACKNOWLEDGE
+  1143→  INCIDENT_CREATE
+  1144→  INCIDENT_UPDATE
+  1145→  INCIDENT_RESOLVE
+  1146→  PLAYBOOK_EXECUTE
+  1147→  PLAYBOOK_APPROVE
+  1148→  CASE_CREATE
+  1149→  CASE_UPDATE
+  1150→  EVIDENCE_ADD
+  1151→  COMPLIANCE_SUBMIT
+  1152→  ADMIN_ACTION
+  1153→  CUSTOM
+  1154→}
+  1155→
+  1156→enum ResourceType {
+  1157→  USER
+  1158→  ROLE
+  1159→  ALERT
+  1160→  INCIDENT
+  1161→  THREAT_INTEL
+  1162→  PLAYBOOK
+  1163→  CASE
+  1164→  EVIDENCE
+  1165→  CONTROL
+  1166→  ASSESSMENT
+  1167→  FRAMEWORK
+  1168→  SYSTEM_CONFIG
+  1169→  NETWORK_ELEMENT
+  1170→  SUBSCRIBER
+  1171→  SESSION
+  1172→  API_KEY
+  1173→  WEBHOOK
+  1174→  REPORT
+  1175→  DASHBOARD
+  1176→  CUSTOM
+  1177→}
+  1178→
+  1179→enum AuditSeverity {
+  1180→  DEBUG
+  1181→  INFO
+  1182→  WARNING
+  1183→  ERROR
+  1184→  CRITICAL
+  1185→}
+  1186→
+  1187→model SystemHealth {
+  1188→  id                  String         @id @default(cuid())
+  1189→  overall             HealthStatus   @default(HEALTHY)
+  1190→  database            HealthCheck
+  1191→  redis               HealthCheck
+  1192→  memory              SystemMetrics
+  1193→  cpu                 SystemMetrics
+  1194→  disk                DiskMetrics
+  1195→  apiLatency          Json           @default("{}")
+  1196→  activeConnections   Int            @default(0)
+  1197→  alertsLastHour       Int            @default(0)
+  1198→  incidentsActive     Int            @default(0)
+  1199→  uptimeSeconds       BigInt         @default(0)
+  1200→  version             String         @default("1.0.0")
+  1201→  environment         String         @default("unknown")
+  1202→  timestamp           DateTime       @default(now())
+  1203→
+  1204→  @@index([overall])
+  1205→  @@index([timestamp])
+  1206→  @@map("system_health")
+  1207→}
+  1208→
+  1209→interface HealthCheck {
+  1210→  status: HealthStatus
+  1211→  latency?: number
+  1212→  message?: string
+  1213→  details?: Record<string, unknown>
+  1214→}
+  1215→
+  1216→enum HealthStatus {
+  1217→  HEALTHY
+  1218→  DEGRADED
+  1219→  UNHEALTHY
+  1220→  UNKNOWN
+  1221→}
+  1222→
+  1223→interface SystemMetrics {
+  1224→  used: number
+  1225→  total: number
+  1226→  percentage: number
+  1227→  unit: string
+  1228→}
+  1229→
+  1230→interface DiskMetrics {
+  1231→  used: number
+  1232→  total: number
+  1233→  percentage: number
+  1234→  unit: string
+  1235→  path: string
+  1236→}
+  1237→

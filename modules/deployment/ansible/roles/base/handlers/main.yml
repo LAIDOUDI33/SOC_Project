@@ -1,0 +1,28 @@
+# =============================================================================
+# Base Role - Handlers
+# =============================================================================
+---
+
+- name: Reload sysctl
+  command: sysctl --system
+  changed_when: false
+
+- name: Restart rsyslog
+  service:
+    name: rsyslog
+    state: restarted
+
+- name: Restart auditd
+  command: service auditd restart
+  changed_when: false
+  ignore_errors: yes
+
+- name: Restart sshd
+  service:
+    name: sshd
+    state: restarted
+
+- name: Update grub
+  command: update-grub
+  changed_when: false
+  when: ansible_os_family == "Debian"

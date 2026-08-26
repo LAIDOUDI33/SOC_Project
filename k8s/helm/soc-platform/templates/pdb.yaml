@@ -1,0 +1,25 @@
+{{/*
+=============================================================================
+CyberSOC Platform - Pod Disruption Budget (PDB)
+High Availability Guarantee During Node Maintenance
+=============================================================================
+*/}}
+{{- if .Values.socPlatform.podDisruptionBudget.enabled }}
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "soc-platform.fullname" . }}-pdb
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "soc-platform.labels" . | nindent 4 }}
+spec:
+  {{- if .Values.socPlatform.podDisruptionBudget.minAvailable }}
+  minAvailable: {{ .Values.socPlatform.podDisruptionBudget.minAvailable }}
+  {{- end }}
+  {{- if .Values.socPlatform.podDisruptionBudget.maxUnavailable }}
+  maxUnavailable: {{ .Values.socPlatform.podDisruptionBudget.maxUnavailable }}
+  {{- end }}
+  selector:
+    matchLabels:
+      {{- include "soc-platform.selectorLabels" . | nindent 6 }}
+{{- end }}

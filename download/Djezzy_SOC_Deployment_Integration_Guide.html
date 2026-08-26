@@ -1,0 +1,733 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Djezzy SOC Platform - Deployment & Integration Guide</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;900&family=Noto+Sans+SC:wght@300;400;500;700;900&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+    <style>
+        @page { size: A4; margin: 0; }
+        :root {
+            --c-bg: #0f172a; --c-surface: #1e293b; --c-card: #334155;
+            --c-text: #e2e8f0; --c-text-muted: #94a3b8; --c-accent: #3b82f6;
+            --c-accent-secondary: #8b5cf6; --c-success: #10b981; --c-warning: #f59e0b;
+            --c-danger: #ef4444; --c-border: #475569;
+        }
+        * { box-sizing: border-box; }
+        html, body {
+            margin: 0; padding: 0; width: 210mm; height: auto;
+            background: var(--c-bg); color: var(--c-text);
+            font-family: 'Inter', 'Noto Sans SC', sans-serif;
+            font-size: 10.5pt; line-height: 1.6;
+        }
+        @media screen {
+            html { display: flex; justify-content: center; background: #1a1a2e; }
+            body { transform-origin: top center; box-shadow: 0 25px 50px -12px rgba(0,0,0,0.5); margin: 20px auto; }
+        }
+        .cover {
+            width: 210mm; height: 297mm; padding: 60px 70px;
+            display: flex; flex-direction: column; justify-content: center;
+            background: linear-gradient(135deg, #0f172a 0%, #1e293b 50%, #0f172a 100%);
+            position: relative; overflow: hidden; break-after: page;
+        }
+        .cover::before {
+            content: ''; position: absolute; top: -150px; right: -150px;
+            width: 400px; height: 400px;
+            background: radial-gradient(circle, rgba(59,130,246,0.15) 0%, transparent 70%);
+            border-radius: 50%;
+        }
+        .cover::after {
+            content: ''; position: absolute; bottom: -100px; left: -100px;
+            width: 300px; height: 300px;
+            background: radial-gradient(circle, rgba(139,92,246,0.12) 0%, transparent 70%);
+            border-radius: 50%;
+        }
+        .cover-tag { font-size: 11pt; font-weight: 600; letter-spacing: 3px; text-transform: uppercase; color: var(--c-accent); margin-bottom: 24px; }
+        .cover-title { font-size: 34pt; font-weight: 900; line-height: 1.15; color: white; margin-bottom: 20px; max-width: 90%; }
+        .cover-subtitle { font-size: 15pt; color: var(--c-text-muted); margin-bottom: 40px; max-width: 85%; line-height: 1.5; }
+        .cover-meta { display: flex; gap: 30px; margin-top: auto; padding-top: 30px; border-top: 1px solid var(--c-border); }
+        .cover-meta-item { display: flex; flex-direction: column; gap: 4px; }
+        .cover-meta-label { font-size: 9pt; text-transform: uppercase; letter-spacing: 1px; color: var(--c-text-muted); }
+        .cover-meta-value { font-size: 13pt; font-weight: 600; color: var(--c-text); }
+        .main-content { padding: 45px 60px 55px 60px; }
+        .chapter-header { break-after: avoid; break-inside: avoid; margin-top: 32px; margin-bottom: 20px; }
+        .section-tag { font-size: 10pt; font-weight: 700; letter-spacing: 2px; text-transform: uppercase; color: var(--c-accent); margin-bottom: 8px; }
+        .section-title { font-size: 20pt; font-weight: 800; color: white; margin-bottom: 10px; line-height: 1.25; }
+        .divider { width: 70px; height: 3px; background: linear-gradient(90deg, var(--c-accent), var(--c-accent-secondary)); border-radius: 2px; margin-bottom: 18px; }
+        .body-text { margin-bottom: 14px; text-align: justify; color: var(--c-text); }
+        .body-text strong { color: white; font-weight: 600; }
+        .card { background: var(--c-surface); border: 1px solid var(--c-border); border-radius: 10px; padding: 18px 22px; margin-bottom: 14px; break-inside: avoid; }
+        .card-title { font-size: 13pt; font-weight: 700; color: white; margin-bottom: 10px; display: flex; align-items: center; gap: 10px; }
+        .card-title .icon { width: 26px; height: 26px; background: linear-gradient(135deg, var(--c-accent), var(--c-accent-secondary)); border-radius: 6px; display: flex; align-items: center; justify-content: center; font-size: 13pt; }
+        .card-content { color: var(--c-text-muted); font-size: 10pt; }
+        .table-wrapper { overflow-x: auto; margin: 18px 0; break-inside: avoid; }
+        table { width: 100%; border-collapse: collapse; font-size: 9.5pt; background: var(--c-surface); border-radius: 8px; overflow: hidden; }
+        th { background: var(--c-card); color: white; font-weight: 600; text-align: left; padding: 11px 14px; border-bottom: 2px solid var(--c-accent); }
+        td { padding: 11px 14px; border-bottom: 1px solid var(--c-border); color: var(--c-text); }
+        tr:last-child td { border-bottom: none; }
+        .code-block { background: #0d1117; border: 1px solid var(--c-border); border-radius: 8px; padding: 16px 20px; margin: 14px 0; font-family: 'JetBrains Mono', monospace; font-size: 9pt; line-height: 1.5; color: #c9d1d9; overflow-x: auto; break-inside: avoid; }
+        ul, ol { padding-left: 22px; margin-bottom: 14px; }
+        li { margin-bottom: 7px; color: var(--c-text); }
+        li strong { color: white; }
+        .badge { display: inline-block; padding: 3px 9px; border-radius: 20px; font-size: 8.5pt; font-weight: 600; }
+        .badge-success { background: rgba(16,185,129,0.15); color: var(--c-success); }
+        .badge-warning { background: rgba(245,158,11,0.15); color: var(--c-warning); }
+        .badge-danger { background: rgba(239,68,68,0.15); color: var(--c-danger); }
+        .badge-info { background: rgba(59,130,246,0.15); color: var(--c-accent); }
+        .integration-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 14px; margin: 18px 0; }
+        .integration-item { background: var(--c-surface); border: 1px solid var(--c-border); border-radius: 10px; padding: 16px; break-inside: avoid; }
+        .integration-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; }
+        .integration-name { font-weight: 700; color: white; font-size: 11.5pt; }
+        .integration-port { font-family: 'JetBrains Mono', monospace; font-size: 8.5pt; color: var(--c-accent); background: rgba(59,130,246,0.1); padding: 3px 7px; border-radius: 4px; }
+        .integration-desc { font-size: 9.5pt; color: var(--c-text-muted); margin-bottom: 10px; }
+        .callout { border-left: 4px solid var(--c-accent); background: rgba(59,130,246,0.08); padding: 14px 18px; margin: 18px 0; border-radius: 0 8px 8px 0; break-inside: avoid; }
+        .callout-warning { border-left-color: var(--c-warning); background: rgba(245,158,11,0.08); }
+        .callout-success { border-left-color: var(--c-success); background: rgba(16,185,129,0.08); }
+        .callout-title { font-weight: 700; margin-bottom: 7px; display: flex; align-items: center; gap: 8px; }
+        .step-list { counter-reset: step-counter; list-style: none; padding-left: 0; }
+        .step-list li { counter-increment: step-counter; position: relative; padding-left: 44px; margin-bottom: 22px; }
+        .step-list li::before { content: counter(step-counter); position: absolute; left: 0; top: 0; width: 30px; height: 30px; background: linear-gradient(135deg, var(--c-accent), var(--c-accent-secondary)); border-radius: 50%; display: flex; align-items: center; justify-content: center; font-weight: 700; color: white; font-size: 12pt; }
+        .ending { width: 210mm; height: 297mm; padding: 60px 70px; display: flex; flex-direction: column; justify-content: center; align-items: center; text-align: center; background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%); break-before: page; }
+        .ending-title { font-size: 26pt; font-weight: 800; color: white; margin-bottom: 18px; }
+        .ending-text { color: var(--c-text-muted); font-size: 12pt; max-width: 380px; line-height: 1.6; }
+        .ending-version { margin-top: 36px; padding-top: 18px; border-top: 1px solid var(--c-border); font-size: 9.5pt; color: var(--c-text-muted); }
+    </style>
+</head>
+<body>
+
+<!-- COVER PAGE -->
+<div class="cover">
+    <div class="cover-tag">Enterprise Documentation</div>
+    <h1 class="cover-title">Djezzy National SOC Platform<br>Deployment & Integration Guide</h1>
+    <p class="cover-subtitle">Complete procedures for deploying and integrating 15+ open-source security tools in a containerized microservices architecture for telecommunications security operations.</p>
+    <div class="cover-meta">
+        <div class="cover-meta-item"><span class="cover-meta-label">Version</span><span class="cover-meta-value">11.1.0 (Phase 11)</span></div>
+        <div class="cover-meta-item"><span class="cover-meta-label">Classification</span><span class="cover-meta-value">Internal Use Only</span></div>
+        <div class="cover-meta-item"><span class="cover-meta-label">Date</span><span class="cover-meta-value">January 2026</span></div>
+    </div>
+</div>
+
+<div class="main-content">
+
+<!-- CHAPTER 1 -->
+<div class="chapter-header">
+    <div class="section-tag">Chapter 1</div>
+    <h2 class="section-title">Executive Overview & Architecture</h2>
+    <div class="divider"></div>
+</div>
+
+<p class="body-text">The Djezzy National Security Operations Center (SOC) Platform represents a comprehensive, enterprise-grade solution designed specifically for telecommunications security operations. Built entirely on open-source technologies and deployed as a 100% on-premises solution, this platform integrates <strong>39 microservices</strong> across <strong>15 specialized security tools</strong> to provide complete visibility, detection, and response capabilities for one of Algeria's largest mobile network operators.</p>
+
+<p class="body-text">The architecture follows a modern <strong>containerized microservices pattern</strong>, utilizing Docker for service isolation and Kubernetes for orchestration at scale. Each security tool operates as an independent container with well-defined API interfaces, communicating through a centralized Apache Kafka event streaming backbone. This design ensures high availability, horizontal scalability, and the flexibility to upgrade or replace individual components without disrupting the entire system.</p>
+
+<div class="card">
+    <div class="card-title"><span class="icon">&#9888;</span>Platform Scale Targets</div>
+    <div class="card-content">
+        <table style="margin:0;"><tr><td><strong>Event Ingestion Rate</strong></td><td>50,000+ events per second (EPS)</td></tr><tr><td><strong>Network Monitoring</strong></td><td>100Gbps throughput capability</td></tr><tr><td><strong>Annual Event Retention</strong></td><td>50 billion+ events per year</td></tr><tr><td><strong>Subscriber Capacity</strong></td><td>15 million+ active subscribers</td></tr><tr><td><strong>Security Tools Integrated</strong></td><td>15+ enterprise-grade open-source tools</td></tr><tr><td><strong>Microservices Count</strong></td><td>39 containerized services</td></tr></table>
+    </div>
+</div>
+
+<div class="callout callout-success">
+    <div class="callout-title">&#10004; Architecture Principle</div>
+    The platform is designed for <strong>zero cloud dependencies</strong>, making it fully air-gap capable for environments requiring complete network isolation. All components can operate independently of external internet access once initial deployment is complete.
+</div>
+
+<h3 style="color:white;font-size:15pt;margin-top:24px;margin-bottom:14px;">Core Technology Stack</h3>
+<div class="integration-grid">
+    <div class="integration-item">
+        <div class="integration-header"><span class="integration-name">Frontend Layer</span><span class="badge badge-success">Next.js 16</span></div>
+        <div class="integration-desc">React 19 based dashboard with TypeScript, real-time SSE updates, and responsive UI using shadcn/ui library.</div>
+    </div>
+    <div class="integration-item">
+        <div class="integration-header"><span class="integration-name">Backend Runtime</span><span class="badge badge-success">Node.js 20</span></div>
+        <div class="integration-desc">High-performance server-side rendering with Prisma ORM for database operations and Redis caching layer.</div>
+    </div>
+    <div class="integration-item">
+        <div class="integration-header"><span class="integration-name">Database Cluster</span><span class="badge badge-info">PostgreSQL 16</span></div>
+        <div class="integration-desc">Primary data store with PostGIS extension for geospatial queries, PgBouncer connection pooling.</div>
+    </div>
+    <div class="integration-item">
+        <div class="integration-header"><span class="integration-name">Event Streaming</span><span class="badge badge-info">Kafka 3.x</span></div>
+        <div class="integration-desc">3-broker Apache Kafka cluster with Zookeeper for distributed event processing and message queuing.</div>
+    </div>
+</div>
+
+<!-- CHAPTER 2 -->
+<div class="chapter-header">
+    <div class="section-tag">Chapter 2</div>
+    <h2 class="section-title">Hardware Requirements & Infrastructure</h2>
+    <div class="divider"></div>
+</div>
+
+<p class="body-text">The Djezzy SOC Platform requires a robust hardware infrastructure to meet the demanding performance requirements of a national-scale telecommunications security operation. This section details the minimum and recommended specifications for both the primary production site and disaster recovery location.</p>
+
+<h3 style="color:white;font-size:15pt;margin-top:24px;margin-bottom:14px;">Primary Site Infrastructure (14 Servers)</h3>
+<div class="table-wrapper">
+<table>
+<thead><tr><th>Server Role</th><th>Specification</th><th>vCPUs</th><th>RAM</th><th>Storage</th></tr></thead>
+<tbody>
+<tr><td><strong>SOC Platform Nodes (x3)</strong></td><td>Dell PowerEdge R750xa</td><td>64 vCPU</td><td>256 GB</td><td>2x 960GB NVMe</td></tr>
+<tr><td><strong>Elasticsearch Cluster (x3)</strong></td><td>Dell PowerEdge R740</td><td>32 vCPU</td><td>128 GB</td><td>4x 1.92TB NVMe</td></tr>
+<tr><td><strong>Kafka/Zookeeper (x3)</strong></td><td>Dell PowerEdge R640</td><td>24 vCPU</td><td>64 GB</td><td>2x 960GB NVMe</td></tr>
+<tr><td><strong>PostgreSQL Primary + Replica (x2)</strong></td><td>Dell PowerEdge R740</td><td>32 vCPU</td><td>128 GB</td><td>2x 1.92TB + 10TB HDD</td></tr>
+<tr><td><strong>Security Tools Pool (x2)</strong></td><td>Dell PowerEdge R750</td><td>48 vCPU</td><td>192 GB</td><td>4x 1.92TB NVMe</td></tr>
+<tr><td><strong>NSM/Suricata (x1)</strong></td><td>Dell PowerEdge R750xa</td><td>64 vCPU</td><td>128 GB</td><td>4x 3.84TB NVMe</td></tr>
+</tbody>
+</table>
+</div>
+
+<h3 style="color:white;font-size:15pt;margin-top:24px;margin-bottom:14px;">Disaster Recovery Site (8 Servers)</h3>
+<p class="body-text">The DR site maintains a scaled-down but fully functional copy of the primary infrastructure, designed to take over operations within a defined RTO (Recovery Time Objective) of 4 hours and RPO (Recovery Point Objective) of 1 hour for critical data. The DR site operates in active-passive mode with continuous replication from the primary site via PostgreSQL logical replication and Kafka mirror maker.</p>
+
+<div class="callout callout-warning">
+    <div class="callout-title">&#9888; Network Requirements</div>
+    Minimum <strong>10Gbps dedicated link</strong> required between primary and DR sites for replication traffic. For optimal performance during failover scenarios, a <strong>40Gbps or 100Gbps dark fiber connection</strong> is strongly recommended.
+</div>
+
+<!-- CHAPTER 3 -->
+<div class="chapter-header">
+    <div class="section-tag">Chapter 3</div>
+    <h2 class="section-title">Software Prerequisites & Environment Setup</h2>
+    <div class="divider"></div>
+</div>
+
+<p class="body-text">Before initiating the deployment process, ensure that all prerequisite software is installed and properly configured on the target servers. This section outlines the exact versions and configurations that have been validated for production use.</p>
+
+<h3 style="color:white;font-size:15pt;margin-top:24px;margin-bottom:14px;">Operating System Requirements</h3>
+<div class="card">
+    <div class="card-title"><span class="icon">&#128187;</span>Base OS Configuration</div>
+    <div class="card-content">
+        <ul style="margin:0;padding-left:18px;">
+            <li><strong>Operating System:</strong> Rocky Linux 9.3 / RHEL 9.3 (Long Term Support)</li>
+            <li><strong>Kernel Version:</strong> 5.14.0-362 or later with realtime patches for NSM nodes</li>
+            <li><strong>Filesystem:</strong> XFS with reflink enabled for efficient snapshots</li>
+            <li><strong>Time Synchronization:</strong> Chrony configured with Africa/Algiers timezone (UTC+1)</li>
+            <li><strong>SELinux:</strong> Enforcing mode with custom SOC policies</li>
+        </ul>
+    </div>
+</div>
+
+<h3 style="color:white;font-size:15pt;margin-top:24px;margin-bottom:14px;">Container Runtime & Orchestration</h3>
+<div class="table-wrapper">
+<table>
+<thead><tr><th>Component</th><th>Version</th><th>Purpose</th></tr></thead>
+<tbody>
+<tr><td><strong>Docker CE</strong></td><td>24.0.6+</td><td>Container runtime for all services</td></tr>
+<tr><td><strong>Docker Compose</strong></td><td>v2.24.0+</td><td>Multi-container orchestration</td></tr>
+<tr><td><strong>Kubernetes</strong></td><td>1.28+</td><td>Production orchestration (optional)</td></tr>
+<tr><td><strong>Helm</strong></td><td>3.13+</td><td>Kubernetes package manager</td></tr>
+</tbody>
+</table>
+</div>
+
+<div class="code-block"># Install Docker CE on Rocky Linux/RHEL 9
+<span class="comment"># Remove any existing Docker installations</span>
+dnf remove docker docker-client docker-client-latest docker-common \
+    docker-latest docker-latest-logrotate docker-logrotate docker-engine
+
+<span class="comment"># Add Docker repository</span>
+dnf config-manager --add-repo https://download.docker.com/linux/centos/docker-ce.repo
+
+<span class="comment"># Install Docker packages</span>
+dnf install -y docker-ce docker-ce-cli containerd.io docker-compose-plugin \
+    docker-buildx-plugin
+
+<span class="comment"># Enable and start Docker</span>
+systemctl enable --now docker
+
+<span class="comment"># Verify installation</span>
+docker --version
+docker compose version</div>
+
+<!-- CHAPTER 4 -->
+<div class="chapter-header">
+    <div class="section-tag">Chapter 4</div>
+    <h2 class="section-title">Step-by-Step Deployment Procedure</h2>
+    <div class="divider"></div>
+</div>
+
+<p class="body-text">This chapter provides the complete step-by-step procedure for deploying the Djezzy SOC Platform from scratch. Follow these instructions in sequence to ensure a successful production deployment. Each step includes verification commands to confirm successful completion before proceeding to the next phase.</p>
+
+<ol class="step-list">
+<li>
+    <strong style="font-size:12pt;color:white;">Generate Secure Credentials</strong>
+    <p class="body-text" style="margin-top:8px;">Begin by generating all necessary API keys, passwords, and certificates required by the platform components. The included script creates cryptographically secure credentials and stores them in environment files.</p>
+    <div class="code-block"><span class="comment"># Navigate to project directory</span>
+cd /opt/djezzy-soc-platform
+
+<span class="comment"># Generate secure credentials</span>
+node scripts/generate-secure-credentials.js
+
+<span class="comment"># Review generated credentials file</span>
+cat .env.production.filled | head -30</div>
+</li>
+
+<li>
+    <strong style="font-size:12pt;color:white;">Deploy Infrastructure Layer</strong>
+    <p class="body-text" style="margin-top:8px;">Start the foundational services that all other components depend upon: PostgreSQL database, Redis cache, and PgBouncer connection pooler. These services must be fully operational before deploying security tools.</p>
+    <div class="code-block"><span class="comment"># Start infrastructure services in order</span>
+docker compose -f docker-compose.prod.yml up -d \
+    postgresql \
+    pgbouncer \
+    redis-master \
+    redis-replica-1 \
+    redis-replica-2 \
+    redis-sentinel-1 \
+    redis-sentinel-2 \
+    redis-sentinel-3
+
+<span class="comment"># Wait for PostgreSQL to be ready (health check)</span>
+docker compose -f docker-compose.prod.yml logs -f postgresql | grep -q "database system is ready"
+
+<span class="comment"># Initialize database schema</span>
+docker compose -f docker-compose.prod.yml exec postgresql psql -U soc_user \
+    -d soc_production -f /docker-entrypoint-initdb.d/01-init-schema.sql</div>
+</li>
+
+<li>
+    <strong style="font-size:12pt;color:white;">Deploy Event Streaming Layer</strong>
+    <p class="body-text" style="margin-top:8px;">Initialize the Apache Kafka cluster with Zookeeper ensemble. Kafka serves as the central nervous system for event distribution between all security tools. A 3-broker configuration provides fault tolerance and horizontal scalability.</p>
+    <div class="code-block"><span class="comment"># Start Zookeeper ensemble first (required by Kafka)</span>
+docker compose -f docker-compose.prod.yml up -d \
+    zookeeper-0 zookeeper-1 zookeeper-2
+
+<span class="comment"># Verify Zookeeper is running</span>
+for i in 0 1 2; do
+    echo "Checking zookeeper-$i..."
+    docker compose -f docker-compose.prod.yml exec zookeeper-$i \
+        zkServer.sh status | grep "Mode:"
+done
+
+<span class="comment"># Start Kafka brokers</span>
+docker compose -f docker-compose.prod.yml up -d kafka-0 kafka-1 kafka-2
+
+<span class="comment"># Create required topics</span>
+docker compose -f docker-compose.prod.yml exec kafka-0 \
+    kafka-topics.sh --create --if-not-exists \
+    --topic soc.alerts --partitions 12 --replication-factor 3 \
+    --bootstrap-server localhost:9092
+
+docker compose -f docker-compose.prod.yml exec kafka-0 \
+    kafka-topics.sh --create --if-not-exists \
+    --topic soc.events --partitions 24 --replication-factor 3 \
+    --bootstrap-server localhost:9092</div>
+</li>
+
+<li>
+    <strong style="font-size:12pt;color:white;">Deploy SIEM Stack (Wazuh + Elasticsearch)</strong>
+    <p class="body-text" style="margin-top:8px;">Deploy the Security Information and Event Management stack consisting of Wazuh Manager for correlation/alerting and Elasticsearch cluster for log storage and search. This forms the backbone of the platform's detection capabilities.</p>
+    <div class="code-block"><span class="comment"># Deploy Elasticsearch cluster (3 nodes for HA)</span>
+docker compose -f docker-compose.prod.yml up -d \
+    elasticsearch-node-1 elasticsearch-node-2 elasticsearch-node-3
+
+<span class="comment"># Wait for Elasticsearch cluster to form (green status)</span>
+sleep 30
+curl -k https://localhost:9200/_cluster/health?pretty
+
+<span class="comment"># Deploy Wazuh components</span>
+docker compose -f docker-compose.prod.yml up -d \
+    wazuh-indexer wazuh-manager wazuh-dashboard
+
+<span class="comment"># Verify Wazuh API is accessible</span>
+curl -k https://localhost:55000 -u admin:${WAZUH_PASSWORD}</div>
+</li>
+
+<li>
+    <strong style="font-size:12pt;color:white;">Deploy EDR Stack (GRR + Osquery Fleet)</strong>
+    <p class="body-text" style="margin-top:8px;">Deploy the Endpoint Detection and Response infrastructure including GRR Rapid Response for remote live forensics and Osquery Fleet for distributed endpoint querying. These tools enable deep visibility into endpoint activity across the organization.</p>
+    <div class="code-block"><span class="comment"># Deploy GRR server</span>
+docker compose -f docker-compose.prod.yml up -d grr-server
+
+<span class="comment"># Deploy Osquery Fleet management console</span>
+docker compose -f docker-compose.prod.yml up -d osquery-fleet
+
+<span class="comment"># Initialize GRR administrative account</span>
+docker compose -f docker-compose.prod.yml exec grr-server \
+    grr_config_updater initialize --external_hostname=grr.djezzy.local
+
+<span class="comment"># Generate Osquery enrollment secret</span>
+docker compose -f docker-compose.prod.yml exec osquery-fleet \
+    fleetctl setup --env-file /etc/fleet.env</div>
+</li>
+
+<li>
+    <strong style="font-size:12pt;color:white;">Deploy NSM Stack (Suricata + Zeek + Arkime)</strong>
+    <p class="body-text" style="margin-top:8px;">Deploy the Network Security Monitoring stack for real-time intrusion detection, protocol analysis, and full packet capture. Suricata provides IDS/IPS capabilities, Zeek performs deep protocol analysis, and Arkime enables PCAP visualization and search.</p>
+    <div class="code-block"><span class="comment"># Deploy Suricata IDS/IPS (requires host networking)</span>
+docker compose -f docker-compose.prod.yml up -d suricata
+
+<span class="comment"># Deploy Zeek controller for protocol analysis</span>
+docker compose -f docker-compose.prod.yml up -d zeek-controller zeek-worker-1 zeek-worker-2
+
+<span class="comment"># Deploy Arkime for PCAP visualization</span>
+docker compose -f docker-compose.prod.yml up -d arkime
+
+<span class="comment"># Configure Suricata to monitor production interfaces</span>
+docker compose -f docker-compose.prod.yml exec suricata \
+    suricata-update update-rulesources
+docker compose -f docker-compose.prod.yml restart suricata</div>
+</li>
+
+<li>
+    <strong style="font-size:12pt;color:white;">Deploy SOAR Stack (TheHive + Cortex)</strong>
+    <p class="body-text" style="margin-top:8px;">Deploy the Security Orchestration, Automation and Response platform. TheHive provides case management and incident tracking while Cortex offers automated analysis through integrated analyzers for threat intelligence enrichment.</p>
+    <div class="code-block"><span class="comment"># Deploy TheHive case management</span>
+docker compose -f docker-compose.prod.yml up -d thehive cassandra elasticsearch-thehive
+
+<span class="comment"># Deploy Cortex analysis engine</span>
+docker compose -f docker-compose.prod.yml up -d cortex
+
+<span class="comment"># Configure Cortex analyzers (VirusTotal, MISP, etc.)</span>
+docker compose -f docker-compose.prod.yml exec cortex \
+    /opt/cortex/tools/add-analyzer.py VirusTotal_3 --auto-start true
+docker compose -f docker-compose.prod.yml exec cortex \
+    /opt/cortex/tools/add-analyzer.py MISP_3_1 --url http://misp:80 --key ${MISP_API_KEY}</div>
+</li>
+
+<li>
+    <strong style="font-size:12pt;color:white;">Deploy Threat Intelligence (MISP + OpenCTI)</strong>
+    <p class="body-text" style="margin-top:8px;">Deploy the threat intelligence platforms for IOC management and STIX-based threat analysis. MISP serves as the primary IoC sharing platform while OpenCTI provides advanced MITRE ATT&CK mapping and threat actor profiling.</p>
+    <div class="code-block"><span class="comment"># Deploy MISP threat intelligence platform</span>
+docker compose -f docker-compose.prod.yml up -d misp mysql-misp redis-misp
+
+<span class="comment"># Initialize MISP administration</span>
+docker compose -f docker-compose.prod.yml exec misp \
+    ./server/initMISP.sh
+
+<span class="comment"># Deploy OpenCTI for advanced TI analytics</span>
+docker compose -f docker-compose.prod.yml up -d opencti redis-opencti opencti-connector-worker
+
+<span class="comment"># Configure OpenCTI data connectors</span>
+docker compose -f docker-compose.prod.yml exec opencti-connector-worker \
+    python connectors/misp-feed.py --start</div>
+</li>
+
+<li>
+    <strong style="font-size:12pt;color:white;">Deploy Vulnerability Management (OpenVAS + DefectDojo)</strong>
+    <p class="body-text" style="margin-top:8px;">Deploy the vulnerability scanning and management infrastructure. OpenVAS/GVM provides automated vulnerability scanning while DefectDojo offers vulnerability lifecycle management, risk scoring, and compliance reporting.</p>
+    <div class="code-block"><span class="comment"># Deploy OpenVAS vulnerability scanner</span>
+docker compose -f docker-compose.prod.yml up -d openvas ospd-openvas gvmd gsad
+
+<span class="comment"># Initialize OpenVAS (this takes ~15 minutes on first run)</span>
+docker compose -f docker-compose.prod.yml exec openvas gvm-setup
+
+<span class="comment"># Create initial scanning target</span>
+curl -sSk -u "${OPENVAS_USERNAME}:${OPENVAS_PASSWORD}" \
+    -X POST https://openvas:9392/gmp -d '<create_target>\
+    <name>Djezzy Network Infrastructure</name>\
+    <hosts>10.0.0.0/8</hosts>\
+    </create_target>'</div>
+</li>
+
+<li>
+    <strong style="font-size:12pt;color:white;">Deploy Main SOC Platform Application</strong>
+    <p class="body-text" style="margin-top:8px;">Finally, deploy the main Next.js application that serves as the unified dashboard and API gateway connecting all security tools. This application should be started last as it depends on all other services being operational.</p>
+    <div class="code-block"><span class="comment"># Build the SOC platform image</span>
+docker compose -f docker-compose.prod.yml build soc-platform
+
+<span class="comment"># Deploy the main application</span>
+docker compose -f docker-compose.prod.yml up -d soc-platform
+
+<span class="comment"># Wait for health check to pass</span>
+sleep 60
+curl -s http://localhost:3000/api/health | jq .
+
+<span class="comment"># Verify all integrations are connected</span>
+curl -s http://localhost:3000/api/system | jq '.integrations'</div>
+</li>
+</ol>
+
+<!-- CHAPTER 5 -->
+<div class="chapter-header">
+    <div class="section-tag">Chapter 5</div>
+    <h2 class="section-title">Integration Procedures & API Configuration</h2>
+    <div class="divider"></div>
+</div>
+
+<p class="body-text">This chapter details the specific integration procedures for each security tool, including API endpoint configuration, authentication setup, and data flow validation. Each integration follows a standardized pattern ensuring consistency and maintainability across the platform.</p>
+
+<h3 style="color:white;font-size:15pt;margin-top:24px;margin-bottom:14px;">SIEM Integration (Wazuh + Elasticsearch)</h3>
+<div class="card">
+    <div class="card-title"><span class="icon">&#128187;</span>Wazuh API Configuration</div>
+    <div class="card-content">
+        <p style="margin-bottom:10px;">The Wazuh integration provides real-time alert ingestion, rule management, and compliance monitoring. Configure the following endpoints in your environment variables:</p>
+        <div class="table-wrapper" style="margin:10px 0;">
+        <table>
+            <thead><tr><th>Endpoint</th><th>Method</th><th>Purpose</th></tr></thead>
+            <tbody>
+                <tr><td>/security/user/authenticate</td><td>POST</td><td>User authentication</td></tr>
+                <tr><td>/security/config</td><td>GET</td><td>Manager configuration</td></tr>
+                <tr><td>/security/events</td><td>GET</td><td>Security events query</td></tr>
+                <tr><td>/groups</td><td>GET/POST</td><td>Agent group management</td></tr>
+                <tr><td>/manager/info</td><td>GET</td><td>System information</td></tr>
+            </tbody>
+        </table>
+        </div>
+    </div>
+</div>
+
+<div class="code-block"><span class="comment">// src/lib/integrations/siem/wazuh-elasticsearch-client.ts</span>
+<span class="keyword">export interface</span> WazuhConfig {
+  apiUrl: <span class="string">'http://wazuh-manager:55000'</span>;
+  username: <span class="string">process.env.WAZUH_USERNAME</span>;
+  password: <span class="string">process.env.WAZUH_PASSWORD</span>;
+  insecure: <span class="keyword">true</span>; <span class="comment">// Internal network only</span>
+}
+
+<span class="keyword">export interface</span> ElasticsearchConfig {
+  nodes: process.env.WAZUH_ES_NODES.<span class="function">split</span>(<span class="string">','</span>);
+  username: <span class="string">process.env.WAZUH_ES_USERNAME</span>;
+  password: <span class="string">process.env.WAZUH_ES_PASSWORD</span>;
+  tls: { rejectUnauthorized: <span class="keyword">false</span> };
+}</div>
+
+<h3 style="color:white;font-size:15pt;margin-top:24px;margin-bottom:14px;">EDR Integration (GRR + Osquery)</h3>
+<div class="integration-grid">
+    <div class="integration-item">
+        <div class="integration-header"><span class="integration-name">GRR Rapid Response</span><span class="integration-port">:8000</span></div>
+        <div class="integration-desc">Remote live forensics capability supporting memory acquisition, filesystem analysis, and registry examination across 15M+ endpoints.</div>
+        <div style="display:flex;flex-wrap:wrap;gap:5px;margin-top:10px;">
+            <span style="font-family:'JetBrains Mono',monospace;font-size:8px;background:var(--c-card);color:var(--c-text-muted);padding:3px 7px;border-radius:4px;">POST /clients</span>
+            <span style="font-family:'JetBrains Mono',monospace;font-size:8px;background:var(--c-card);color:var(--c-text-muted);padding:3px 7px;border-radius:4px;">GET /hunts</span>
+            <span style="font-family:'JetBrains Mono',monospace;font-size:8px;background:var(--c-card);color:var(--c-text-muted);padding:3px 7px;border-radius:4px;">POST /flows</span>
+        </div>
+    </div>
+    <div class="integration-item">
+        <div class="integration-header"><span class="integration-name">Osquery Fleet</span><span class="integration-port">:8080</span></div>
+        <div class="integration-desc">Distributed SQL-based endpoint interrogation providing real-time process monitoring, file integrity, and configuration auditing.</div>
+        <div style="display:flex;flex-wrap:wrap;gap:5px;margin-top:10px;">
+            <span style="font-family:'JetBrains Mono',monospace;font-size:8px;background:var(--c-card);color:var(--c-text-muted);padding:3px 7px;border-radius:4px;">GET /api/v1/osquery/distributed</span>
+            <span style="font-family:'JetBrains Mono',monospace;font-size:8px;background:var(--c-card);color:var(--c-text-muted);padding:3px 7px;border-radius:4px;">POST /api/v1/osquery/differential</span>
+        </div>
+    </div>
+</div>
+
+<h3 style="color:white;font-size:15pt;margin-top:24px;margin-bottom:14px;">SOAR Integration (TheHive + Cortex)</h3>
+<div class="code-block"><span class="comment">// SOAR Integration Configuration</span>
+<span class="keyword">const</span> soarConfig = {
+  thehive: {
+    apiUrl: <span class="string">'http://thehive:9000'</span>,
+    apiKey: process.env.THEHIVE_API_KEY,
+    orgName: <span class="string">'Djezzy-SOC'</span>,
+    severityMapping: { critical: <span class="number">4</span>, high: <span class="number">3</span>, medium: <span class="number">2</span>, low: <span class="number">1</span> }
+  },
+  cortex: {
+    apiUrl: <span class="string">'http://cortex:9001'</span>,
+    apiKey: process.env.CORTEX_API_KEY,
+    enabledAnalyzers: [
+      <span class="string">'VirusTotal_3'</span>, <span class="string">'MISP_3_1'</span>, <span class="string">'OpenCTI_2'</span>,
+      <span class="string">'AbuseIPDB_2'</span>, <span class="string">'DNSResolver_2_1'</span>
+    ]
+  }
+};</div>
+
+<h3 style="color:white;font-size:15pt;margin-top:24px;margin-bottom:14px;">Threat Intelligence Integration</h3>
+<div class="callout callout-success">
+    <div class="callout-title">&#128274; Threat Intelligence Feed Configuration</div>
+    Both MISP and OpenCTI are configured with automatic feed synchronization. The platform subscribes to commercial feeds (Recorded Future, Intel 471) and community sources (AlienVault OTX, Abuse.ch). Feeds synchronize every 15 minutes with automatic IOC extraction and scoring.
+</div>
+
+<div class="table-wrapper">
+<table>
+<thead><tr><th>Tool</th><th>Feed Sources</th><th>Sync Interval</th><th>IOC Types</th></tr></thead>
+<tbody>
+<tr><td><strong>MISP</strong></td><td>200+ configured feeds</td><td>15 minutes</td><td>IP, Domain, Hash, URL, Email</td></tr>
+<tr><td><strong>OpenCTI</strong></td><td>STIX/TAXII servers</td><td>30 minutes</td><td>STIX 2.1 indicators, TTPs, Campaigns</td></tr>
+</tbody>
+</table>
+</div>
+
+<!-- CHAPTER 6 -->
+<div class="chapter-header">
+    <div class="section-tag">Chapter 6</div>
+    <h2 class="section-title">Post-Deployment Verification</h2>
+    <div class="divider"></div>
+</div>
+
+<p class="body-text">After completing the deployment procedure, execute the following verification steps to ensure all components are properly integrated and functioning correctly. This systematic approach identifies potential issues early before they impact production operations.</p>
+
+<h3 style="color:white;font-size:15pt;margin-top:24px;margin-bottom:14px;">Health Check Verification</h3>
+<div class="code-block"><span class="comment"># Execute comprehensive health check</span>
+curl -s http://localhost:3000/api/health | jq .
+
+<span class="comment"># Expected response structure</span>
+{
+  <span class="string">"status"</span>: <span class="string">"healthy"</span>,
+  <span class="string">"version"</span>: <span class="string">"11.1.0"</span>,
+  <span class="string">"uptime"</span>: <span class="number">3600.5</span>,
+  <span class="string">"components"</span>: {
+    <span class="string">"database"</span>: { <span class="string">"status"</span>: <span class="string">"connected"</span>, <span class="string">"latency"</span>: <span class="number">2.3</span> },
+    <span class="string">"redis"</span>: { <span class="string">"status"</span>: <span class="string">"connected"</span>, <span class="string">"latency"</span>: <span class="number">0.5</span> },
+    <span class="string">"kafka"</span>: { <span class="string">"status"</span>: <span class="string">"connected"</span>, <span class="string">"brokers"</span>: <span class="number">3</span> },
+    <span class="string">"integrations"</span>: {
+      <span class="string">"siem"</span>: <span class="string">"connected"</span>,
+      <span class="string">"edr"</span>: <span class="string">"connected"</span>,
+      <span class="string">"nsm"</span>: <span class="string">"connected"</span>,
+      <span class="string">"soar"</span>: <span class="string">"connected"</span>,
+      <span class="string">"threatIntel"</span>: <span class="string">"connected"</span>,
+      <span class="string">"vulnerability"</span>: <span class="string">"connected"</span>
+    }
+  }
+}</div>
+
+<h3 style="color:white;font-size:15pt;margin-top:24px;margin-bottom:14px;">Integration Connectivity Test</h3>
+<div class="code-block"><span class="comment"># Test each integration endpoint individually</span>
+
+<span class="comment"># SIEM Integration Test</span>
+curl -s http://localhost:3000/api/metrics/siem | jq '.eventsLastHour'
+
+<span class="comment"># EDR Integration Test</span>
+curl -s http://localhost:3000/api/telecom/probes | jq '.activeEndpoints'
+
+<span class="comment"># SOAR Integration Test</span>
+curl -s http://localhost:3000/api/cases | jq '.openCases'
+
+<span class="comment"># Threat Intel Sync Test</span>
+curl -s http://localhost:3000/api/threats | jq '.iocCount'
+
+<span class="comment"># Vulnerability Scan Test</span>
+curl -s http://localhost:3000/api/compliance | jq '.vulnerabilities.critical'</div>
+
+<h3 style="color:white;font-size:15pt;margin-top:24px;margin-bottom:14px;">Integration Connectivity Test</h3>
+<div class="code-block"><span class="comment"># Test each integration endpoint individually</span>
+
+<span class="comment"># SIEM Integration Test</span>
+curl -s http://localhost:3000/api/metrics/siem | jq '.eventsLastHour'
+
+<span class="comment"># EDR Integration Test</span>
+curl -s http://localhost:3000/api/telecom/probes | jq '.activeEndpoints'
+
+<span class="comment"># SOAR Integration Test</span>
+curl -s http://localhost:3000/api/cases | jq '.openCases'
+
+<span class="comment"># Threat Intel Sync Test</span>
+curl -s http://localhost:3000/api/threats | jq '.iocCount'
+
+<span class="comment"># Vulnerability Scan Test</span>
+curl -s http://localhost:3000/api/compliance | jq '.vulnerabilities.critical'</div>
+
+<h3 style="color:white;font-size:15pt;margin-top:24px;margin-bottom:14px;">Event Flow Validation</h3>
+<div class="callout callout-success">
+    <div class="callout-title">&#9989; Event Pipeline Verification</div>
+    Verify that events flow correctly through the entire pipeline from ingestion to alerting. Use the Kafka consumer to monitor topic activity and confirm events are being processed by all downstream consumers.
+</div>
+
+<div class="code-block"><span class="comment"># Monitor Kafka event consumption</span>
+docker compose -f docker-compose.prod.yml exec kafka-0 \
+    kafka-console-consumer --bootstrap-server localhost:9092 \
+    --topic soc.alerts --from-beginning --timeout-ms 5000
+
+<span class="comment"># Check consumer group lag</span>
+docker compose -f docker-compose.prod.yml exec kafka-0 \
+    kafka-consumer-groups --bootstrap-server localhost:9092 \
+    --describe --group soc-platform-consumers</div>
+
+<!-- CHAPTER 7 -->
+<div class="chapter-header">
+    <div class="section-tag">Chapter 7</div>
+    <h2 class="section-title">Troubleshooting & Common Issues</h2>
+    <div class="divider"></div>
+</div>
+
+<p class="body-text">This chapter addresses common deployment issues and their resolutions. Each problem includes symptoms, root cause analysis, and step-by-step remediation procedures based on real-world deployment experience.</p>
+
+<div class="card">
+    <div class="card-title"><span class="icon">&#9888;</span>Issue: Container Startup Failures</div>
+    <div class="card-content">
+        <p style="margin-bottom:8px;"><strong>Symptoms:</strong> Containers repeatedly restarting with exit code 137 or "OOMKilled" status.</p>
+        <p style="margin-bottom:8px;"><strong>Root Cause:</strong> Insufficient memory allocation or resource limits not configured for production workload.</p>
+        <p><strong>Resolution:</strong></p>
+        <ul style="margin:5px 0;padding-left:18px;">
+            <li>Check container logs: docker compose logs [service]</li>
+            <li>Verify memory limits in docker-compose.prod.yml match server capacity</li>
+            <li>Increase memory reservation for Elasticsearch (minimum 8GB per node)</li>
+            <li>Enable swap on host system for burst scenarios</li>
+        </ul>
+    </div>
+</div>
+
+<div class="card">
+    <div class="card-title"><span class="icon">&#9888;</span>Issue: Kafka Connection Timeouts</div>
+    <div class="card-content">
+        <p style="margin-bottom:8px;"><strong>Symptoms:</strong> SOC Platform unable to connect to Kafka brokers, timeout errors in application logs.</p>
+        <p style="margin-bottom:8px;"><strong>Root Cause:</strong> Network segmentation between services or Zookeeper ensemble not fully initialized.</p>
+        <p><strong>Resolution:</strong></p>
+        <ul style="margin:5px 0;padding-left:18px;">
+            <li>Verify all Zookeeper nodes are in "leader/follower" mode</li>
+            <li>Check Kafka broker advertised listeners configuration matches internal DNS</li>
+            <li>Validate network connectivity: nc -zv kafka-0 9092</li>
+            <li>Review firewall rules allow inter-container communication on port 9092</li>
+        </ul>
+    </div>
+</div>
+
+<div class="card">
+    <div class="card-title"><span class="icon">&#9888;</span>Issue: Wazuh Agent Connection Refused</div>
+    <div class="card-content">
+        <p style="margin-bottom:8px;"><strong>Symptoms:</strong> Agents showing as "never connected" in Wazuh dashboard, registration failures.</p>
+        <p style="margin-bottom:8px;"><strong>Root Cause:</strong> Incorrect agent configuration pointing to wrong manager IP/port or certificate validation failure.</p>
+        <p><strong>Resolution:</strong></p>
+        <ul style="margin:5px 0;padding-left:18px;">
+            <li>Verify WAZUH_MANAGER environment variable in ossec.conf</li>
+            <li>Check agent SSL certificate is signed by correct CA</li>
+            <li>Confirm port 1514/1515 is accessible from agent network segment</li>
+            <li>Restart agents with debug logging enabled for detailed error information</li>
+        </ul>
+    </div>
+</div>
+
+<!-- CHAPTER 8 -->
+<div class="chapter-header">
+    <div class="section-tag">Chapter 8</div>
+    <h2 class="section-title">Maintenance & Operational Procedures</h2>
+    <div class="divider"></div>
+</div>
+
+<p class="body-text">Regular maintenance is essential for ensuring continued platform performance and security. This section outlines standard operational procedures including backup strategies, update procedures, and monitoring configurations.</p>
+
+<h3 style="color:white;font-size:15pt;margin-top:24px;margin-bottom:14px;">Backup Procedures</h3>
+
+<div class="table-wrapper">
+<table>
+<thead><tr><th>Component</th><th>Backup Method</th><th>Frequency</th><th>RPO Target</th></tr></thead>
+<tbody>
+<tr><td><strong>PostgreSQL</strong></td><td>PgBaseBackup + WAL archiving</td><td>Every 15 min</td><td>15 minutes</td></tr>
+<tr><td><strong>Elasticsearch</strong></td><td>Snapshot to S3/NFS mount</td><td>Hourly</td><td>1 hour</td></tr>
+<tr><td><strong>Kafka Topics</strong></td><td>MirrorMaker to DR cluster</td><td>Real-time</td><td>Near-zero</td></tr>
+<tr><td><strong>TheHive/Cortex</strong></td><td>Cassandra backup + ES snapshot</td><td>Daily</td><td>24 hours</td></tr>
+<tr><td><strong>MISP</strong></td><td>MySQL dump + filesystem backup</td><td>Daily</td><td>24 hours</td></tr>
+<tr><td><strong>GRR Artifacts</strong></td><td>Filesystem snapshot to NFS</td><td>Daily</td><td>24 hours</td></tr>
+</tbody>
+</table>
+</div>
+
+<h3 style="color:white;font-size:15pt;margin-top:24px;margin-bottom:14px;">Update & Upgrade Procedure</h3>
+<ol class="step-list">
+<li>
+    <strong style="font-size:11pt;color:white;">Pre-Upgrade Backup</strong>
+    <p class="body-text" style="margin-top:6px;">Create full backups of all databases and configurations before initiating any upgrade procedure. Verify backup integrity by performing a test restore to a staging environment.</p>
+</li>
+<li>
+    <strong style="font-size:11pt;color:white;">Rolling Update Strategy</strong>
+    <p class="body-text" style="margin-top:6px;">For stateless services (SOC Platform, API Gateway), use Docker Compose's rolling update feature to deploy new versions with zero downtime. For stateful services (PostgreSQL, Kafka), perform sequential node updates with replication verification between each node.</p>
+</li>
+<li>
+    <strong style="font-size:11pt;color:white;">Post-Upgrade Verification</strong>
+    <p class="body-text" style="margin-top:6px;">After completing updates, execute the full verification suite from Chapter 6 to confirm all integrations are functioning correctly. Monitor system metrics for at least 24 hours after major version upgrades.</p>
+</li>
+</ol>
+
+<!-- ENDING PAGE -->
+</div>
+
+<div class="ending">
+    <h1 class="ending-title">Ready for Deployment</h1>
+    <p class="ending-text">Your Djezzy National SOC Platform is now ready for production deployment. Follow this guide systematically to ensure a successful implementation of your enterprise-grade security operations center.</p>
+    <div class="ending-version">
+        Document Version: 11.1.0 | Phase 11 Production Build<br>
+        Generated: January 2026 | Classification: Internal Use Only
+    </div>
+</div>
+
+</body>
+</html>

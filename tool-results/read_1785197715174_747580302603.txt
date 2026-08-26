@@ -1,0 +1,1210 @@
+     1→/**
+     2→ * National SOC Platform - Telecom Probe Integration
+     3→ * 
+     4→ * Connects to Djezzy network probes for real-time data:
+     5→ * - SS7 Firewall/SIGTRAN Gateway (SS7 messages)
+     6→ * - GTP Probe (Gn/Gp interface monitoring)
+     7→ * - SIP Probe (IMS/VoLTE call monitoring)
+     8→ * - Diameter Probe (Cx/Dx/Rx interfaces)
+     9→ * 
+    10→ * Supported protocols: SS7/MAP/CAP, GTPv1/v2, SIP, Diameter
+    11→ */
+    12→
+    13→import { db } from '@/lib/db';
+    14→
+    15→// ============================================================
+    16→// Types & Interfaces
+    17→// ============================================================
+    18→
+    19→export interface ProbeConfig {
+    20→  id: string;
+    21→  name: string;
+    22→  type: 'ss7' | 'gtp' | 'sip' | 'diameter';
+    23→  host: string;
+    24→  port: number;
+    25→  protocol: 'tcp' | 'udp' | 'tls' | 'dtls';
+    26→  enabled: boolean;
+    27→  credentials?: {
+    28→    username?: string;
+    29→    password?: string;
+    30→    apiKey?: string;
+    31→  };
+    32→  filters?: {
+    33→    messageTypes?: string[];
+    34→    callingParties?: string[];
+    35→    calledParties?: string[];
+    36→    imsis?: string[];
+    37→  };
+    38→  rateLimit?: number; // Messages per second
+    39→}
+    40→
+    41→export interface ParsedMessage {
+    42→  id: string;
+    43→  probeId: string;
+    44→  timestamp: Date;
+    45→  rawMessage: Buffer | string;
+    46→  parsedData: Record<string, any>;
+    47→  riskScore: number;
+    48→  alerts: string[];
+    49→  metadata: {
+    50→    sourceIP: string;
+    51→    destinationIP: string;
+    52→    protocol: string;
+    53→    processingTime: number;
+    54→  };
+    55→}
+    56→
+    57→export interface FraudIndicator {
+    58→  id: string;
+    59→  type: string;
+    60→  severity: 'low' | 'medium' | 'high' | 'critical';
+    61→  confidence: number;
+    62→  description: string;
+    63→  evidence: Record<string, any>;
+    64→  recommendedAction: string;
+    65→  artpReportable: boolean; // Must report to ARTP within 24h
+    66→}
+    67→
+    68→export interface TelecomMetrics {
+    69→  ss7: {
+    70→    messagesPerSecond: number;
+    71→    blockedMessages: number;
+    72→    topAttackTypes: Array<{ type: string; count: number }>;
+    73→    subscriberRiskScores: { high: number; medium: number; low: number };
+    74→  };
+    75→  gtp: {
+    76→    activeSessions: number;
+    77→    dataVolumeGB: number;
+    78→    roamingSessions: number;
+    79→    anomalyCount: number;
+    80→  };
+    81→  sip: {
+    82→    activeCalls: number;
+    83→    fraudSuspectedCalls: number;
+    84→    averageCallDuration: number;
+    85→    topFraudTypes: Array<{ type: string; count: number }>;
+    86→  };
+    87→  diameter: {
+    88→    activeSessions: number;
+    89→    authenticationFailures: number;
+    90→    locationUpdates: number;
+    91→  };
+    92→}
+    93→
+    94→// ============================================================
+    95→// Probe Connection Manager
+    96→// ============================================================
+    97→
+    98→class ProbeConnectionManager {
+    99→  private connections: Map<string, ProbeConnection> = new Map();
+   100→  private messageBuffer: ParsedMessage[] = [];
+   101→  private bufferFlushInterval: NodeJS.Timer;
+   102→  private isProcessing = false;
+   103→
+   104→  constructor() {
+   105→    // Flush buffer every 5 seconds or when it reaches 1000 messages
+   106→    this.bufferFlushInterval = setInterval(() => this.flushMessageBuffer(), 5000);
+   107→  }
+   108→
+   109→  /**
+   110→   * Connect to a probe and start receiving messages
+   111→   */
+   112→  async connect(config: ProbeConfig): Promise<void> {
+   113→    if (!config.enabled) {
+   114→      console.log(`Probe ${config.id} (${config.type}) is disabled`);
+   115→      return;
+   116→    }
+   117→
+   118→    console.log(`Connecting to ${config.type} probe: ${config.host}:${config.port}`);
+   119→
+   120→    let connection: ProbeConnection;
+   121→
+   122→    switch (config.type) {
+   123→      case 'ss7':
+   124→        connection = new SS7ProbeConnection(config);
+   125→        break;
+   126→      case 'gtp':
+   127→        connection = new GTPProbeConnection(config);
+   128→        break;
+   129→      case 'sip':
+   130→        connection = new SIPProbeConnection(config);
+   131→        break;
+   132→      case 'diameter':
+   133→        connection = new DiameterProbeConnection(config);
+   134→        break;
+   135→      default:
+   136→        throw new Error(`Unknown probe type: ${config.type}`);
+   137→    }
+   138→
+   139→    await connection.connect();
+   140→    
+   141→    // Set up message handler
+   142→    connection.onMessage(async (message) => {
+   143→      await this.handleMessage(message);
+   144→    });
+   145→
+   146→    this.connections.set(config.id, connection);
+   147→    console.log(`Connected to probe: ${config.name}`);
+   148→  }
+   149→
+   150→  /**
+   151→   * Disconnect from a probe
+   152→   */
+   153→  async disconnect(probeId: string): Promise<void> {
+   154→    const connection = this.connections.get(probeId);
+   155→    if (connection) {
+   156→      await connection.disconnect();
+   157→      this.connections.delete(probeId);
+   158→      console.log(`Disconnected from probe: ${probeId}`);
+   159→    }
+   160→  }
+   161→
+   162→  /**
+   163→   * Handle incoming message from any probe
+   164→   */
+   165→  private async handleMessage(message: ParsedMessage): Promise<void> {
+   166→    try {
+   167→      // Parse and enrich the message
+   168→      const enrichedMessage = await this.enrichMessage(message);
+   169→      
+   170→      // Check for fraud indicators
+   171→      const fraudIndicators = await this.detectFraud(enrichedMessage);
+   172→      
+   173→      if (fraudIndicators.length > 0) {
+   174→        enrichedMessage.alerts = fraudIndicators.map(f => f.type);
+   175→        
+   176→        // Create alerts for high-severity fraud
+   177→        for (const indicator of fraudIndicators) {
+   178→          if (indicator.severity === 'high' || indicator.severity === 'critical') {
+   179→            await this.createFraudAlert(indicator, enrichedMessage);
+   180→          }
+   181→        }
+   182→      }
+   183→
+   184→      // Add to buffer for batch processing
+   185→      this.messageBuffer.push(enrichedMessage);
+   186→
+   187→      // Flush if buffer is full
+   188→      if (this.messageBuffer.length >= 1000) {
+   189→        await this.flushMessageBuffer();
+   190→      }
+   191→
+   192→    } catch (error) {
+   193→      console.error('Error handling message:', error);
+   194→    }
+   195→  }
+   196→
+   197→  /**
+   198→   * Enrich message with additional context
+   199→   */
+   200→  private async enrichMessage(message: ParsedMessage): Promise<ParsedMessage> {
+   201→    const { parsedData } = message;
+   202→
+   203→    // Look up subscriber info if IMSI/MSISDN present
+   204→    if (parsedData.imsi || parsedData.msisdn) {
+   205→      const subscriber = await db.subscriber.findFirst({
+   206→        where: {
+   207→          OR: [
+   208→            { imsi: parsedData.imsi },
+   209→            { msisdn: parsedData.msisdn }
+   210→          ]
+   211→        }
+   212→      });
+   213→
+   214→      if (subscriber) {
+   215→        parsedData.subscriberInfo = {
+   216→          riskScore: subscriber.riskScore,
+   217→          status: subscriber.subscriberStatus,
+   218→          isRoaming: subscriber.isRoaming,
+   219→          homeRegion: subscriber.region,
+   220→        };
+   221→
+   222→        // Update risk score based on this activity
+   223→        await this.updateSubscriberRisk(subscriber.id, message);
+   224→      }
+   225→    }
+   226→
+   227→    return message;
+   228→  }
+   229→
+   230→  /**
+   231→   * Detect fraud patterns in message
+   232→   */
+   233→  private async detectFraud(message: ParsedMessage): Promise<FraudIndicator[]> {
+   234→    const indicators: FraudIndicator[] = [];
+   235→    const { parsedData, probeId } = message;
+   236→
+   237→    switch (probeId.split('-')[0]) {
+   238→      case 'ss7':
+   239→        indicators.push(...await this.detectSS7Fraud(parsedData));
+   240→        break;
+   241→      case 'gtp':
+   242→        indicators.push(...await this.detectGTPFraud(parsedData));
+   243→        break;
+   244→      case 'sip':
+   245→        indicators.push(...await this.detectSIPFraud(parsedData));
+   246→        break;
+   247→      case 'diameter':
+   248→        indicators.push(...await this.detectDiameterFraud(parsedData));
+   249→        break;
+   250→    }
+   251→
+   252→    return indicators;
+   253→  }
+   254→
+   255→  /**
+   256→   * SS7-specific fraud detection
+   257→   */
+   258→  private async detectSS7Fraud(data: Record<string, any>): Promise<FraudIndicator[]> {
+   259→    const indicators: FraudIndicator[] = [];
+   260→
+   261→    // SIM Swap Detection
+   262→    if (data.operationCode === 'UpdateLocation' && data.imsi) {
+   263→      const recentUpdates = await this.countRecentOperations(data.imsi, 'UpdateLocation', 3600000); // 1 hour
+   264→      if (recentUpdates > 3) {
+   265→        indicators.push({
+   266→          id: `sim-swap-${Date.now()}`,
+   267→          type: 'SIM_SWAP_SUSPECTED',
+   268→          severity: 'critical',
+   269→          confidence: Math.min(recentUpdates * 20, 100),
+   270→          description: `Multiple location updates for IMSI ${data.imsi} in last hour`,
+   271→          evidence: { imsi: data.imsi, updateCount: recentUpdates },
+   272→          recommendedAction: 'BLOCK_SIM_AND_INVESTIGATE',
+   273→          artpReportable: true
+   274→        });
+   275→      }
+   276→    }
+   277→
+   278→    // IRSF (International Revenue Share Fraud) Detection
+   279→    if (data.calledParty?.startsWith('+') && !data.calledParty?.startsWith('+213')) {
+   280→      // International call from potentially compromised subscriber
+   281→      const subscriber = await this.getSubscriberByIMSI(data.imsi);
+   282→      if (subscriber && subscriber.riskScore > 60) {
+   283→        indicators.push({
+   284→          id: `irsf-${Date.now()}`,
+   285→          type: 'IRSF_SUSPECTED',
+   286→          severity: 'high',
+   287→          confidence: subscriber.riskScore,
+   288→          description: `High-risk subscriber making international calls`,
+   289→          evidence: {
+   290→            imsi: data.imsi,
+   291→            calledParty: data.calledParty,
+   292→            callerRiskScore: subscriber.riskScore
+   293→          },
+   294→          recommendedAction: 'MONITOR_AND_LIMIT',
+   295→          artpReportable: true
+   296→        });
+   297→      }
+   298→    }
+   299→
+   300→    // Wangiri Detection (short repeated calls)
+   301→    if (data.callDuration < 3 && data.calledParty) {
+   302→      const recentShortCalls = await this.countShortCalls(data.callingParty, data.calledParty, 3600000);
+   303→      if (recentShortCalls > 20) {
+   304→        indicators.push({
+   305→          id: `wangiri-${Date.now()}`,
+   306→          type: 'WANGIRI_PATTERN',
+   307→          severity: 'medium',
+   308→          confidence: Math.min(recentShortCalls * 4, 100),
+   309→          description: `Wangiri pattern detected: ${recentShortCalls} short calls to same number`,
+   310→          evidence: {
+   311→            callingParty: data.callingParty,
+   312→            calledParty: data.calledParty,
+   313→            shortCallCount: recentShortCalls
+   314→          },
+   315→          recommendedAction: 'INVESTIGATE_AND_BLOCK',
+   316→          artpReportable: false
+   317→        });
+   318→      }
+   319→    }
+   320→
+   321→    return indicators;
+   322→  }
+   323→
+   324→  /**
+   325→   * GTP-specific fraud detection
+   326→   */
+   327→  private async detectGTPFraud(data: Record<string, any>): Promise<FraudIndicator[]> {
+   328→    const indicators: FraudIndicator[] = [];
+   329→
+   330→    // Data Tunneling Detection (unusual APN usage)
+   331→    if (data.apn && !data.apn.includes('djezzy') && !data.apn.includes('internet')) {
+   332→      indicators.push({
+   333→        id: `tunnel-${Date.now()}`,
+   334→        type: 'DATA_TUNNELING_SUSPECTED',
+   335→        severity: 'high',
+   336→        confidence: 75,
+   337→        description: `Suspicious APN usage: ${data.apn}`,
+   338→        evidence: {
+   339→          imsi: data.imsi,
+   340→          apn: data.apn,
+   341→          ipAddress: data.ipAddress
+   342→        },
+   343→        recommendedAction: 'INVESTIGATE_APN_ACCESS',
+   344→        artpReportable: false
+   345→      });
+   346→    }
+   347→
+   348→    // Roaming Abuse Detection
+   349→    if (data.isRoaming && data.bytesUp > 1073741824) { // > 1GB while roaming
+   350→      indicators.push({
+   351→        id: `roaming-abuse-${Date.now()}`,
+   352→        type: 'ROAMING_DATA_ABUSE',
+   353→        severity: 'medium',
+   354→        confidence: 80,
+   355→        description: `High data volume while roaming: ${(data.bytesUp / 1073741824).toFixed(2)} GB`,
+   356→        evidence: {
+   357→          imsi: data.imsi,
+   358→          bytesUp: data.bytesUp,
+   359→          visitedNetwork: data.visitedPLMN
+   360→        },
+   361→        recommendedAction: 'NOTIFY_SUBSCRIBER_AND_MONITOR',
+   362→        artpReportable: false
+   363→      });
+   364→    }
+   365→
+   366→    // IMEI Cloning Detection
+   367→    if (data.imei) {
+   368→      const sessionsWithIMEI = await this.countActiveSessionsByIMEI(data.imei);
+   369→      if (sessionsWithIMEI > 1) {
+   370→        indicators.push({
+   371→          id: `imei-clone-${Date.now()}`,
+   372→          type: 'IMEI_CLONING_DETECTED',
+   373→          severity: 'critical',
+   374→          confidence: 95,
+   375→          description: `Same IMEI active on multiple sessions: ${data.imei}`,
+   376→          evidence: {
+   377→            imei: data.imei,
+   378→            sessionCount: sessionsWithIMEI,
+   379→            imsi: data.imsi
+   380→          },
+   381→          recommendedAction: 'IMMEDIATE_BLOCK_AND_INVESTIGATE',
+   382→          artpReportable: true
+   383→        });
+   384→      }
+   385→    }
+   386→
+   387→    return indicators;
+   388→  }
+   389→
+   390→  /**
+   391→   * SIP-specific fraud detection
+   392→   */
+   393→  private async detectSIPFraud(data: Record<string, any>): Promise<FraudIndicator[]> {
+   394→    const indicators: FraudIndicator[] = [];
+   395→
+   396→    // PBX Hijacking Detection
+   397→    if (data.userAgent?.toLowerCase().includes('asterisk') || 
+   398→        data.userAgent?.toLowerCase().includes('freepbx')) {
+   399→      // Check if this is expected behavior for the subscriber
+   400→      const subscriber = await this.getSubscriberByMSISDN(data.callingParty);
+   401→      if (subscriber && !subscriber.metadata?.pbxAllowed) {
+   402→        indicators.push({
+   403→          id: `pbx-hijack-${Date.now()}`,
+   404→          type: 'PBX_HIJACKING_SUSPECTED',
+   405→          severity: 'high',
+   406→          confidence: 70,
+   407→          description: `PBX software detected from unexpected source`,
+   408→          evidence: {
+   409→            callingParty: data.callingParty,
+   410→            userAgent: data.userAgent,
+   411→            subscriberType: subscriber.profileData?.type
+   412→          },
+   413→          recommendedAction: 'VERIFY_WITH_SUBSCRIBER',
+   414→          artpReportable: false
+   415→        });
+   416→      }
+   417→    }
+   418→
+   419→    // Call Duration Anomaly (very long calls - potential premium rate abuse)
+   420→    if (data.duration > 7200) { // > 2 hours
+   421→      indicators.push({
+   422→        id: `long-call-${Date.now()}`,
+   423→        type: 'PREMIUM_RATE_ABUSE_SUSPECTED',
+   424→        severity: 'medium',
+   425→        confidence: 60,
+   426→        description: `Unusually long call duration: ${Math.floor(data.duration / 3600)}h ${Math.floor((data.duration % 3600) / 60)}m`,
+   427→        evidence: {
+   428→          callingParty: data.callingParty,
+   429→          calledParty: data.calledParty,
+   430→          duration: data.duration
+   431→        },
+   432→        recommendedAction: 'REVIEW_CALL_RECORDING',
+   433→        artpReportable: false
+   434→      });
+   435→    }
+   436→
+   437→    // Call Spam Detection (high call volume in short time)
+   438→    const recentCalls = await this.countRecentCallsFromNumber(data.callingParty, 300000); // 5 minutes
+   439→    if (recentCalls > 50) {
+   440→      indicators.push({
+   441→        id: `call-spam-${Date.now()}`,
+   442→        type: 'CALL_SPAM_DETECTED',
+   443→        severity: 'high',
+   444→        confidence: Math.min(recentCalls, 100),
+   445→        description: `Abnormally high call volume: ${recentCalls} calls in 5 minutes`,
+   446→        evidence: {
+   447→          callingParty: data.callingParty,
+   448→          callCount: recentCalls
+   449→        },
+   450→        recommendedAction: 'RATE_LIMIT_OR_BLOCK',
+   451→        artpReportable: true
+   452→      });
+   453→    }
+   454→
+   455→    return indicators;
+   456→  }
+   457→
+   458→  /**
+   459→   * Diameter-specific fraud detection
+   460→   */
+   461→  private async detectDiameterFraud(data: Record<string, any>): Promise<FraudIndicator[]> {
+   462→    const indicators: FraudIndicator[] = [];
+   463→
+   464→    // Authentication Storm Detection
+   465→    if (data.commandCode === 'Authentication-Information') {
+   466→      const authAttempts = await this.countRecentAuthAttempts(data.imsi, 60000); // 1 minute
+   467→      if (authAttempts > 10) {
+   468→        indicators.push({
+   469→          id: `auth-storm-${Date.now()}`,
+   470→          type: 'AUTHENTICATION_STORM',
+   471→          severity: 'critical',
+   472→          confidence: Math.min(authAttempts * 8, 100),
+   473→          description: `Excessive authentication attempts for IMSI: ${authAttempts} in 1 minute`,
+   474→          evidence: {
+   475→            imsi: data.imsi,
+   476→            attemptCount: authAttempts
+   477→          },
+   478→          recommendedAction: 'BLOCK_IMSI_TEMPORARILY',
+   479→          artpReportable: true
+   480→        });
+   481→      }
+   482→    }
+   483→
+   484→    // Location Update Storm (possible tracking avoidance)
+   485→    if (data.commandCode === 'Update-Location') {
+   486→      const locationUpdates = await this.countLocationUpdates(data.imsi, 600000); // 10 minutes
+   487→      if (locationUpdates > 20) {
+   488→        indicators.push({
+   489→          id: `location-storm-${Date.now()}`,
+   490→          type: 'LOCATION_UPDATE_ABUSE',
+   491→          severity: 'medium',
+   492→          confidence: Math.min(locationUpdates * 4, 100),
+   493→          description: `Excessive location updates: ${locationUpdates} in 10 minutes`,
+   494→          evidence: {
+   495→            imsi: data.imsi,
+   496→            updateCount: locationUpdates
+   497→          },
+   498→          recommendedAction: 'MONITOR_FOR_TRACKING_AVOIDANCE',
+   499→          artpReportable: false
+   500→        });
+   501→      }
+   502→    }
+   503→
+   504→    return indicators;
+   505→  }
+   506→
+   507→  /**
+   508→   * Create security alert from fraud indicator
+   509→   */
+   510→  private async createFraudAlert(indicator: FraudIndicator, message: ParsedMessage): Promise<void> {
+   511→    try {
+   512→      await db.alert.create({
+   513→        data: {
+   514→          title: `[FRAUD] ${indicator.type.replace(/_/g, ' ')}`,
+   515→          description: indicator.description,
+   516→          severity: indicator.severity.toUpperCase() as any,
+   517→          status: 'NEW',
+   518→          source: `TELECOM_${message.probeId.split('-')[0].toUpperCase()}_PROBE`,
+   519→          category: 'FRAUD_DETECTION',
+   520→          rawEvent: {
+   521→            ...indicator.evidence,
+   522→            messageId: message.id,
+   523→            probeId: message.probeId,
+   524→            timestamp: message.timestamp,
+   525→            confidence: indicator.confidence
+   526→          },
+   527→          mitreTechniques: ['T1589'], // Steal or Forge Authentication Information
+   528→          tags: ['fraud', 'telecom', indicator.type.toLowerCase(), indicator.severity],
+   529→          context: {
+   530→            recommendedAction: indicator.recommendedAction,
+   531→            artpReportable: indicator.artpReportable,
+   532→            confidence: indicator.confidence
+   533→          }
+   534→        }
+   535→      });
+   536→
+   537→      // If ARTP reportable, create incident
+   538→      if (indicator.artpReportable) {
+   539→        await this.createARTPIncident(indicator, message);
+   540→      }
+   541→
+   542→    } catch (error) {
+   543→      console.error('Failed to create fraud alert:', error);
+   544→    }
+   545→  }
+   546→
+   547→  /**
+   548→   * Create ARTP-reportable incident
+   549→   */
+   550→  private async createARTPIncident(indicator: FraudIndicator, message: ParsedMessage): Promise<void> {
+   551→    // Check if similar incident already exists
+   552→    const existingIncident = await db.incident.findFirst({
+   553→      where: {
+   554→        title: { contains: indicator.type },
+   555→        status: { notIn: ['RESOLVED', 'CLOSED'] }
+   556→      }
+   557→    });
+   558→
+   559→    if (!existingIncident) {
+   560→      await db.incident.create({
+   561→        data: {
+   562→          tatcCode: `TATC-${Date.now().toString(36).toUpperCase()}`,
+   563→          title: `[ARTP] ${indicator.type.replace(/_/g, ' ')}`,
+   564→          description: indicator.description,
+   565→          severity: indicator.severity.toUpperCase() as any,
+   566→          phase: 'DETECTION',
+   567→          source: 'AUTOMATED_FRAUD_DETECTION',
+   568→          impactAssessment: `Potential financial loss and regulatory non-compliance. Confidence: ${indicator.confidence}%`,
+   569→          affectedAssets: [message.probeId],
+   570→          artifacts: {
+   571→            fraudIndicator: indicator,
+   572→            sourceMessage: message.parsedData,
+   573→            evidence: indicator.evidence
+   574→          },
+   575→          tags: ['artp', 'fraud', 'telecom', 'regulatory']
+   576→        }
+   577→      });
+   578→    }
+   579→  }
+   580→
+   581→  /**
+   582→   * Flush message buffer to database
+   583→   */
+   584→  private async flushMessageBuffer(): Promise<void> {
+   585→    if (this.isProcessing || this.messageBuffer.length === 0) return;
+   586→
+   587→    this.isProcessing = true;
+   588→    const messagesToProcess = [...this.messageBuffer];
+   589→    this.messageBuffer = [];
+   590→
+   591→    try {
+   592→      // Batch insert into appropriate tables based on probe type
+   593→      for (const message of messagesToProcess) {
+   594→        const probeType = message.probeId.split('-')[0];
+   595→
+   596→        switch (probeType) {
+   597→          case 'ss7':
+   598→            await this.insertSS7Message(message);
+   599→            break;
+   600→          case 'gtp':
+   601→            await this.insertGTPSession(message);
+   602→            break;
+   603→          case 'sip':
+   604→            await this.insertSIPSession(message);
+   605→            break;
+   606→          case 'diameter':
+   607→            await this.insertDiameterSession(message);
+   608→            break;
+   609→        }
+   610→      }
+   611→
+   612→      console.log(`Processed ${messagesToProcess.length} messages`);
+   613→
+   614→    } catch (error) {
+   615→      console.error('Error flushing message buffer:', error);
+   616→      // Re-add failed messages back to buffer
+   617→      this.messageBuffer.unshift(...messagesToProcess);
+   618→    } finally {
+   619→      this.isProcessing = false;
+   620→    }
+   621→  }
+   622→
+   623→  /**
+   624→   * Insert SS7 message into database
+   625→   */
+   626→  private async insertSS7Message(message: ParsedMessage): Promise<void> {
+   627→    const { parsedData, metadata } = message;
+   628→    
+   629→    await db.sS7Message.create({
+   630→      data: {
+   631→        messageType: parsedData.messageType || 'UNKNOWN',
+   632→        callingParty: parsedData.callingParty,
+   633→        calledParty: parsedData.calledParty,
+   634→        gttAddress: parsedData.gttAddress,
+   635→        imsi: parsedData.imsi,
+   636→        msisdn: parsedData.msisdn,
+   637→        isBlocked: message.alerts.length > 0,
+   638→        blockReason: message.alerts.join(', ') || null,
+   639→        anomalyScore: message.riskScore,
+   640→        rawMessage: Buffer.isBuffer(message.rawMessage) ? message.rawMessage : Buffer.from(message.rawMessage),
+   641→        parsedFields: parsedData,
+   642→        sourceNe: metadata.sourceIP,
+   643→        destinationNe: metadata.destinationIP,
+   644→        timestamp: message.timestamp
+   645→      }
+   646→    });
+   647→  }
+   648→
+   649→  /**
+   650→   * Insert/update GTP session
+   651→   */
+   652→  private async insertGTPSession(message: ParsedMessage): Promise<void> {
+   653→    const { parsedData } = message;
+   654→    
+   655→    // Update existing session or create new one
+   656→    await db.gTPSession.upsert({
+   657→      where: { sessionId: parsedData.sessionId },
+   658→      update: {
+   659→        bytesUp: parsedData.bytesUp || 0,
+   660→        bytesDown: parsedData.bytesDown || 0,
+   661→        durationSeconds: parsedData.duration || 0,
+   662→        anomalyScore: message.riskScore,
+   663→        updatedAt: new Date()
+   664→      },
+   665→      create: {
+   666→        sessionId: parsedData.sessionId,
+   667→        imsi: parsedData.imsi,
+   668→        msisdn: parsedData.msisdn,
+   669→        imei: parsedData.imei,
+   670→        apn: parsedData.apn,
+   671→        sgsnAddress: parsedData.sgsnAddress,
+   672→        ggsnAddress: parsedData.ggsnAddress,
+   673→        ip_address: parsedData.ipAddress,
+   674→        sessionStatus: parsedData.sessionStatus || 'ACTIVE',
+   675→        bytes_up: parsedData.bytesUp || 0,
+   676→        bytes_down: parsedData.bytesDown || 0,
+   677→        duration_seconds: parsedData.duration || 0,
+   678→        anomaly_score: message.riskScore,
+   679→        rat_type: parsedData.ratType,
+   680→        location_info: parsedData.locationInfo,
+   681→        started_at: message.timestamp
+   682→      }
+   683→    });
+   684→  }
+   685→
+   686→  /**
+   687→   * Insert SIP session
+   688→   */
+   689→  private async insertSIPSession(message: ParsedMessage): Promise<void> {
+   690→    const { parsedData } = message;
+   691→    
+   692→    await db.sIPSession.create({
+   693→      data: {
+   694→        callId: parsedData.callId,
+   695→        callingParty: parsedData.callingParty,
+   696→        calledParty: parsedData.calledParty,
+   697→        sipMethod: parsedData.sipMethod,
+   698→        sipStatus: parsedData.sipStatus,
+   699→        inviteTimestamp: parsedData.inviteTimestamp || message.timestamp,
+   700→        connectTimestamp: parsedData.connectTimestamp,
+   701→        disconnectTimestamp: parsedData.disconnectTimestamp,
+   702→        durationSeconds: parsedData.duration || 0,
+   703→        sipServer: metadata.sourceIP,
+   704→        userAgent: parsedData.userAgent,
+   705→        isFraudSuspected: message.alerts.length > 0,
+   706→        fraudType: message.alerts[0] || null,
+   707→        rawSip: typeof message.rawMessage === 'string' ? message.rawMessage : message.rawMessage.toString(),
+   708→        signalingData: parsedData,
+   709→        mediaData: parsedData.mediaData
+   710→      }
+   711→    });
+   712→  }
+   713→
+   714→  /**
+   715→   * Insert Diameter session
+   716→   */
+   717→  private async insertDiameterSession(message: ParsedMessage): Promise<void> {
+   718→    const { parsedData } = message;
+   719→    
+   720→    await db.diameterSession.create({
+   721→      data: {
+   722→        sessionId: parsedData.sessionId,
+   723→        commandCode: parsedData.commandCode,
+   724→        applicationId: parsedData.applicationId,
+   725→        originHost: parsedData.originHost,
+   726→        originRealm: parsedData.originRealm,
+   727→        destinationHost: parsedData.destinationHost,
+   728→        destinationRealm: parsedData.destinationRealm,
+   729→        imsi: parsedData.imsi,
+   730→        msisdn: parsedData.msisdn,
+   731→        sessionStatus: parsedData.sessionStatus || 'ACTIVE',
+   732→        resultCode: parsedData.resultCode,
+   733→        avps: parsedData.avps,
+   734→        started_at: message.timestamp,
+   735→        ended_at: parsedData.endTime
+   736→      }
+   737→    });
+   738→  }
+   739→
+   740→  // Helper methods for fraud detection queries
+   741→  private async countRecentOperations(imsi: string, operation: string, windowMs: number): Promise<number> {
+   742→    const since = new Date(Date.now() - windowMs);
+   743→    const result = await db.sS7Message.count({
+   744→      where: {
+   745→        imsi,
+   746→        messageType: operation,
+   747→        timestamp: { gte: since }
+   748→      }
+   749→    });
+   750→    return result;
+   751→  }
+   752→
+   753→  private async countShortCalls(calling: string, called: string, windowMs: number): Promise<number> {
+   754→    const since = new Date(Date.now() - windowMs);
+   755→    return await db.sIPSession.count({
+   756→      where: {
+   757→        callingParty: calling,
+   758→        calledParty: called,
+   759→        durationSeconds: { lt: 3 },
+   760→        inviteTimestamp: { gte: since }
+   761→      }
+   762→    });
+   763→  }
+   764→
+   765→  private async countActiveSessionsByIMEI(imei: string): Promise<number> {
+   766→    return await db.gTPSession.count({
+   767→      where: {
+   768→        imei,
+   769→        sessionStatus: 'ACTIVE'
+   770→      }
+   771→    });
+   772→  }
+   773→
+   774→  private async countRecentAuthAttempts(imsi: string, windowMs: number): Promise<number> {
+   775→    const since = new Date(Date.now() - windowMs);
+   776→    return await db.diameterSession.count({
+   777→      where: {
+   778→        imsi,
+   779→        commandCode: 'Authentication-Information',
+   780→        started_at: { gte: since }
+   781→      }
+   782→    });
+   783→  }
+   784→
+   785→  private async countLocationUpdates(imsi: string, windowMs: number): Promise<number> {
+   786→    const since = new Date(Date.now() - windowMs);
+   787→    return await db.diameterSession.count({
+   788→      where: {
+   789→        imsi,
+   790→        commandCode: 'Update-Location',
+   791→        started_at: { gte: since }
+   792→      }
+   793→    });
+   794→  }
+   795→
+   796→  private async countRecentCallsFromNumber(caller: string, windowMs: number): Promise<number> {
+   797→    const since = new Date(Date.now() - windowMs);
+   798→    return await db.sIPSession.count({
+   799→      where: {
+   800→        callingParty: caller,
+   801→        inviteTimestamp: { gte: since }
+   802→      }
+   803→    });
+   804→  }
+   805→
+   806→  private async getSubscriberByIMSI(imsi: string) {
+   807→    return await db.subscriber.findUnique({ where: { imsi } });
+   808→  }
+   809→
+   810→  private async getSubscriberByMSISDN(msisdn: string) {
+   811→    return await db.subscriber.findUnique({ where: { msisdn } });
+   812→  }
+   813→
+   814→  private async updateSubscriberRisk(subscriberId: string, message: ParsedMessage): Promise<void> {
+   815→    // Simple risk calculation - can be enhanced with ML model
+   816→    const riskIncrease = message.riskScore > 70 ? 5 : message.riskScore > 50 ? 2 : 0;
+   817→    
+   818→    if (riskIncrease > 0) {
+   819→      await db.subscriber.update({
+   820→        where: { id: subscriberId },
+   821→        data: {
+   822→          riskScore: { increment: riskIncrease },
+   823→          lastSeen: new Date()
+   824→        }
+   825→      });
+   826→    }
+   827→  }
+   828→
+   829→  /**
+   830→   * Get aggregated telecom metrics
+   831→   */
+   832→  async getMetrics(): Promise<TelecomMetrics> {
+   833→    const now = new Date();
+   834→    const oneHourAgo = new Date(now.getTime() - 3600000);
+   835→
+   836→    const [
+   837→      ss7Metrics,
+   838→      gtpMetrics,
+   839→      sipMetrics,
+   840→      diameterMetrics
+   841→    ] = await Promise.all([
+   842→      // SS7 metrics
+   843→      Promise.all([
+   844→        db.sS7Message.count({ where: { timestamp: { gte: oneHourAgo } } }),
+   845→        db.sS7Message.count({ where: { timestamp: { gte: oneHourAgo }, isBlocked: true } }),
+   846→        db.subscriber.count({ where: { riskScore: { gt: 70 }, subscriberStatus: 'ACTIVE' } }),
+   847→        db.subscriber.count({ where: { riskScore: { gte: 40, lte: 70 }, subscriberStatus: 'ACTIVE' } })
+   848→      ]),
+   849→      
+   850→      // GTP metrics
+   851→      Promise.all([
+   852→        db.gTPSession.count({ where: { sessionStatus: 'ACTIVE' } }),
+   853→        db.gTPSession.aggregate({ _sum: { bytesUp: true, bytesDown: true } }),
+   854→        db.gTPSession.count({ where: { sessionStatus: 'ACTIVE', isRoaming: true } }),
+   855→        db.gTPSession.count({ where: { anomalyScore: { gt: 70 }, sessionStatus: 'ACTIVE' } })
+   856→      ]),
+   857→      
+   858→      // SIP metrics
+   859→      Promise.all([
+   860→        db.sIPSession.count({ where: { disconnectTimestamp: null } }),
+   861→        db.sIPSession.count({ where: { isFraudSuspected: true, disconnectTimestamp: { gte: oneHourAgo } } }),
+   862→        db.sIPSession.aggregate({ _avg: { durationSeconds: true } })
+   863→      ]),
+   864→      
+   865→      // Diameter metrics
+   866→      Promise.all([
+   867→        db.diameterSession.count({ where: { sessionStatus: 'ACTIVE' } }),
+   868→        db.diameterSession.count({ where: { resultCode: { ne: '2001' }, started_at: { gte: oneHourAgo } } }),
+   869→        db.diameterSession.count({ where: { commandCode: 'Update-Location', started_at: { gte: oneHourAgo } } })
+   870→      ])
+   871→    ]);
+   872→
+   873→    return {
+   874→      ss7: {
+   875→        messagesPerSecond: Math.round(ss7Metrics[0] / 3600),
+   876→        blockedMessages: ss7Metrics[1],
+   877→        topAttackTypes: [], // Would need aggregation query
+   878→        subscriberRiskScores: {
+   879→          high: ss7Metrics[2],
+   880→          medium: ss7Metrics[3],
+   881→          low: 0 // Calculate
+   882→        }
+   883→      },
+   884→      gtp: {
+   885→        activeSessions: gtpMetrics[0],
+   886→        dataVolumeGB: Number(((gtpMetrics[1]._sum.bytesUp || 0) + (gtpMetrics[1]._sum.bytesDown || 0)) / 1073741824).toFixed(2),
+   887→        roamingSessions: gtpMetrics[2],
+   888→        anomalyCount: gtpMetrics[3]
+   889→      },
+   890→      sip: {
+   891→        activeCalls: sipMetrics[0],
+   892→        fraudSuspectedCalls: sipMetrics[1],
+   893→        averageCallDuration: Math.round(sipMetrics[2]._avg.durationSeconds || 0),
+   894→        topFraudTypes: []
+   895→      },
+   896→      diameter: {
+   897→        activeSessions: diameterMetrics[0],
+   898→        authenticationFailures: diameterMetrics[1],
+   899→        locationUpdates: diameterMetrics[2]
+   900→      }
+   901→    };
+   902→  }
+   903→
+   904→  /**
+   905→   * Get all connected probes status
+   906→   */
+   907→  getConnectionStatus(): Array<{ id: string; name: string; type: string; status: string; messagesProcessed: number }> {
+   908→    return Array.from(this.connections.entries()).map(([id, conn]) => ({
+   909→      id,
+   910→      name: conn.config.name,
+   911→      type: conn.config.type,
+   912→      status: conn.isConnected ? 'connected' : 'disconnected',
+   913→      messagesProcessed: conn.messagesProcessed
+   914→    }));
+   915→  }
+   916→
+   917→  /**
+   918→   * Shutdown all connections
+   919→   */
+   920→  async shutdown(): Promise<void> {
+   921→    clearInterval(this.bufferFlushInterval);
+   922→    
+   923→    // Flush remaining messages
+   924→    await this.flushMessageBuffer();
+   925→    
+   926→    // Disconnect all probes
+   927→    for (const [id] of this.connections) {
+   928→      await this.disconnect(id);
+   929→    }
+   930→  }
+   931→}
+   932→
+   933→// ============================================================
+   934→// Base Probe Connection Class
+   935→// ============================================================
+   936→
+   937→abstract class ProbeConnection {
+   938→  config: ProbeConfig;
+   939→  isConnected = false;
+   940→  messagesProcessed = 0;
+   941→  private messageHandlers: ((message: ParsedMessage) => void)[] = [];
+   942→
+   943→  constructor(config: ProbeConfig) {
+   944→    this.config = config;
+   945→  }
+   946→
+   947→  abstract connect(): Promise<void>;
+   948→  abstract disconnect(): Promise<void>;
+   949→
+   950→  onMessage(handler: (message: ParsedMessage) => void): void {
+   951→    this.messageHandlers.push(handler);
+   952→  }
+   953→
+   954→  protected emitMessage(message: ParsedMessage): void {
+   955→    this.messagesProcessed++;
+   956→    this.messageHandlers.forEach(handler => handler(message));
+   957→  }
+   958→}
+   959→
+   960→// ============================================================
+   961→// SS7 Probe Connection Implementation
+   962→// ============================================================
+   963→
+   964→class SS7ProbeConnection extends ProbeConnection {
+   965→  private socket?: any;
+   966→  private parser?: any;
+   967→
+   968→  async connect(): Promise<void> {
+   969→    // In production, this would connect to actual SS7 firewall/SIGTRAN gateway
+   970→    // For now, we simulate the connection
+   971→    console.log(`SS7 Probe connecting to ${this.config.host}:${this.config.port}`);
+   972→    this.isConnected = true;
+   973→    
+   974→    // Start message listener (would be real socket connection in production)
+   975→    this.startListening();
+   976→  }
+   977→
+   978→  async disconnect(): Promise<void> {
+   979→    this.isConnected = false;
+   980→    if (this.socket) {
+   981→      this.socket.close();
+   982→    }
+   983→  }
+   984→
+   985→  private startListening(): void {
+   986→    // Simulate receiving SS7 messages
+   987→    // In production, this would parse ASN.1 encoded MTP3/SCCP/TCAP/MAP messages
+   988→    
+   989→    setInterval(async () => {
+   990→      if (!this.isConnected) return;
+   991→
+   992→      // Generate simulated SS7 message for testing
+   993→      const simulatedMessage: ParsedMessage = {
+   994→        id: `ss7-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+   995→        probeId: this.config.id,
+   996→        timestamp: new Date(),
+   997→        rawMessage: Buffer.alloc(0), // Would be actual raw SS7 message
+   998→        parsedData: {
+   999→          messageType: ['SendRoutingInfoForSM', 'UpdateLocation', 'ProvideRoamingNumber'][Math.floor(Math.random() * 3)],
+  1000→          callingParty: `+213${Math.floor(Math.random() * 900000000 + 500000000)}`,
+  1001→          calledParty: `+213${Math.floor(Math.random() * 900000000 + 500000000)}`,
+  1002→          imsi: `21301${Math.floor(Math.random() * 90000000000 + 10000000000)}`,
+  1003→          globalTitle: 'DJEZZY-SS7-GT',
+  1004→          sccpCalling: 'HLR-DJEZZY',
+  1005→          sccpCalled: 'MSC-DJEZZY'
+  1006→        },
+  1007→        riskScore: Math.floor(Math.random() * 100),
+  1008→        alerts: [],
+  1009→        metadata: {
+  1010→          sourceIP: this.config.host,
+  1011→          destinationIP: 'soc-platform',
+  1012→          protocol: 'M3UA/SCTP',
+  1013→          processingTime: Math.floor(Math.random() * 10) + 1
+  1014→        }
+  1015→      };
+  1016→
+  1017→      this.emitMessage(simulatedMessage);
+  1018→    }, 5000); // Every 5 seconds for demo
+  1019→  }
+  1020→}
+  1021→
+  1022→// ============================================================
+  1023→// GTP Probe Connection Implementation
+  1024→// ============================================================
+  1025→
+  1026→class GTPProbeConnection extends ProbeConnection {
+  1027→  private socket?: any;
+  1028→
+  1029→  async connect(): Promise<void> {
+  1030→    console.log(`GTP Probe connecting to ${this.config.host}:${this.config.port}`);
+  1031→    this.isConnected = true;
+  1032→    this.startListening();
+  1033→  }
+  1034→
+  1035→  async disconnect(): Promise<void> {
+  1036→    this.isConnected = false;
+  1037→  }
+  1038→
+  1039→  private startListening(): void {
+  1040→    setInterval(async () => {
+  1041→      if (!this.isConnected) return;
+  1042→
+  1043→      const simulatedMessage: ParsedMessage = {
+  1044→        id: `gtp-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+  1045→        probeId: this.config.id,
+  1046→        timestamp: new Date(),
+  1047→        rawMessage: '',
+  1048→        parsedData: {
+  1049→          sessionId: `gtp-session-${Date.now()}`,
+  1050→          imsi: `21301${Math.floor(Math.random() * 90000000000 + 10000000000)}`,
+  1051→          msisdn: `+213${Math.floor(Math.random() * 900000000 + 500000000)}`,
+  1052→          imei: `35${Math.floor(Math.random() * 90000000000000 + 10000000000000)}`,
+  1053→          apn: ['internet.djezzy.dz', 'mms.djezzy.dz', 'iot.djezzy.dz'][Math.floor(Math.random() * 3)],
+  1054→          sgsnAddress: `10.${Math.floor(Math.random() * 255)}.1.1`,
+  1055→          ggsnAddress: `10.200.${Math.floor(Math.random() * 255)}.1`,
+  1056→          ipAddress: `10.${Math.floor(Math.random() * 255)}.${Math.floor(Math.random() * 255)}.${Math.floor(Math.random() * 255)}`,
+  1057→          sessionStatus: 'ACTIVE',
+  1058→          bytesUp: Math.floor(Math.random() * 1073741824), // Up to 1GB
+  1059→          bytesDown: Math.floor(Math.random() * 5368709120), // Up to 5GB
+  1060→          ratType: ['UTRAN', 'EUTRAN', 'NR'][Math.floor(Math.random() * 3)],
+  1061→          isRoaming: Math.random() > 0.8,
+  1062→          visitedPLMN: Math.random() > 0.8 ? '60302' : undefined // Algeria Mobile roaming
+  1063→        },
+  1064→        riskScore: Math.floor(Math.random() * 30), // Lower baseline for GTP
+  1065→        alerts: [],
+  1066→        metadata: {
+  1067→          sourceIP: this.config.host,
+  1068→          destinationIP: 'soc-platform',
+  1069→          protocol: 'GTPv2-C',
+  1070→          processingTime: Math.floor(Math.random() * 5) + 1
+  1071→        }
+  1072→      };
+  1073→
+  1074→      this.emitMessage(simulatedMessage);
+  1075→    }, 8000);
+  1076→  }
+  1077→}
+  1078→
+  1079→// ============================================================
+  1080→// SIP Probe Connection Implementation
+  1081→// ============================================================
+  1082→
+  1083→class SIPProbeConnection extends ProbeConnection {
+  1084→  private socket?: any;
+  1085→
+  1086→  async connect(): Promise<void> {
+  1087→    console.log(`SIP Probe connecting to ${this.config.host}:${this.config.port}`);
+  1088→    this.isConnected = true;
+  1089→    this.startListening();
+  1090→  }
+  1091→
+  1092→  async disconnect(): Promise<void> {
+  1093→    this.isConnected = false;
+  1094→  }
+  1095→
+  1096→  private startListening(): void {
+  1097→    setInterval(async () => {
+  1098→      if (!this.isConnected) return;
+  1099→
+  1100→      const callDuration = Math.floor(Math.random() * 7200); // 0-2 hours
+  1101→      const simulatedMessage: ParsedMessage = {
+  1102→        id: `sip-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+  1103→        probeId: this.config.id,
+  1104→        timestamp: new Date(),
+  1105→        rawMessage: '',
+  1106→        parsedData: {
+  1107→          callId: `${Date.now()}@djezzy.dz`,
+  1108→          callingParty: `+213${Math.floor(Math.random() * 900000000 + 500000000)}`,
+  1109→          calledParty: `+213${Math.floor(Math.random() * 900000000 + 500000000)}`,
+  1110→          sipMethod: ['INVITE', 'BYE', 'REGISTER', 'OPTIONS'][Math.floor(Math.random() * 4)],
+  1111→          sipStatus: Math.random() > 0.1 ? '200 OK' : '404 Not Found',
+  1112→          inviteTimestamp: new Date(Date.now() - callDuration * 1000),
+  1113→          connectTimestamp: new Date(Date.now() - callDuration * 1000 + 5000),
+  1114→          disconnectTimestamp: callDuration > 10 ? new Date() : null,
+  1115→          duration: callDuration,
+  1116→          sipServer: `ims-core-${Math.floor(Math.random() * 3) + 1}.djezzy.dz`,
+  1117→          userAgent: ['Zoiper', 'Linphone', 'MicroSIP', 'Asterisk PBX'][Math.floor(Math.random() * 4)]
+  1118→        },
+  1119→        riskScore: Math.floor(Math.random() * 50),
+  1120→        alerts: [],
+  1121→        metadata: {
+  1122→          sourceIP: this.config.host,
+  1123→          destinationIP: 'soc-platform',
+  1124→          protocol: 'SIP/2.0/TLS',
+  1125→          processingTime: Math.floor(Math.random() * 3) + 1
+  1126→        }
+  1127→      };
+  1128→
+  1129→      this.emitMessage(simulatedMessage);
+  1130→    }, 12000);
+  1131→  }
+  1132→}
+  1133→
+  1134→// ============================================================
+  1135→// Diameter Probe Connection Implementation
+  1136→// ============================================================
+  1137→
+  1138→class DiameterProbeConnection extends ProbeConnection {
+  1139→  private socket?: any;
+  1140→
+  1141→  async connect(): Promise<void> {
+  1142→    console.log(`Diameter Probe connecting to ${this.config.host}:${this.config.port}`);
+  1143→    this.isConnected = true;
+  1144→    this.startListening();
+  1145→  }
+  1146→
+  1147→  async disconnect(): Promise<void> {
+  1148→    this.isConnected = false;
+  1149→  }
+  1150→
+  1151→  private startListening(): void {
+  1152→    setInterval(async () => {
+  1153→      if (!this.isConnected) return;
+  1154→
+  1155→      const commands = [
+  1156→        'Authentication-Information',
+  1157→        'Update-Location',
+  1158→        'Cancel-Location',
+  1159→        'Insert-Subscriber-Data',
+  1160→        'Delete-Subscriber-Data',
+  1161→        'Purge-UE',
+  1162→        'Reset',
+  1163→        'Notify'
+  1164→      ];
+  1165→
+  1166→      const simulatedMessage: ParsedMessage = {
+  1167→        id: `diameter-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+  1168→        probeId: this.config.id,
+  1169→        timestamp: new Date(),
+  1170→        rawMessage: '',
+  1171→        parsedData: {
+  1172→          sessionId: `diameter-sess-${Date.now()}`,
+  1173→          commandCode: commands[Math.floor(Math.random() * commands.length)],
+  1174→          applicationId: [16777216, 16777250, 16777251][Math.floor(Math.random() * 3)], // Cx/Dx/Sh
+  1175→          originHost: `hss-${Math.floor(Math.random() * 3) + 1}.djezzy.dz`,
+  1176→          originRealm: 'djezzy.dz',
+  1177→          destinationHost: `mme-${Math.floor(Math.random() * 5) + 1}.djezzy.dz`,
+  1178→          destinationRealm: 'djezzy.dz',
+  1179→          imsi: `21301${Math.floor(Math.random() * 90000000000 + 10000000000)}`,
+  1180→          msisdn: `+213${Math.floor(Math.random() * 900000000 + 500000000)}`,
+  1181→          sessionStatus: 'ACTIVE',
+  1182→          resultCode: Math.random() > 0.05 ? '2001' : '5001', // DIAMETER_SUCCESS or DIAMETER_UNABLE_TO_COMPLY
+  1183→          avps: {
+  1184→            'User-Name': `21301${Math.floor(Math.random() * 90000000000 + 10000000000)}`,
+  1185→            'Public-Identity': `sip:+213${Math.floor(Math.random() * 900000000 + 500000000)}@djezzy.dz`,
+  1186→            'Visited-PLMN-Id': Math.random() > 0.7 ? '60302' : '60301',
+  1187→            'RAT-Type': Math.floor(Math.random() * 6)
+  1188→          }
+  1189→        },
+  1190→        riskScore: Math.floor(Math.random() * 25),
+  1191→        alerts: [],
+  1192→        metadata: {
+  1193→          sourceIP: this.config.host,
+  1194→          destinationIP: 'soc-platform',
+  1195→          protocol: 'Diameter/TCP',
+  1196→          processingTime: Math.floor(Math.random() * 4) + 1
+  1197→        }
+  1198→      };
+  1199→
+  1200→      this.emitMessage(simulatedMessage);
+  1201→    }, 15000);
+  1202→  }
+  1203→}
+  1204→
+  1205→// Export singleton instance
+  1206→export const probeManager = new ProbeConnectionManager();
+  1207→
+  1208→// Export types
+  1209→export type { ProbeConfig, ParsedMessage, FraudIndicator, TelecomMetrics };
+  1210→

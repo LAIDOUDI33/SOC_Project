@@ -1,0 +1,383 @@
+# =============================================================================
+# SOC Apps Role - Main Tasks
+# Handles: Wazuh, Suricata, MISP, TheHive deployment
+# =============================================================================
+---
+
+- name: "SOC-APPS | Display role start message"
+  debug:
+    msg: "═══ Starting SOC Applications Deployment ═══"
+
+# ============================================================================
+# SECTION 1: Wazuh Configuration
+# ============================================================================
+- name: "SOC-APPS | Create Wazuh data directories"
+  file:
+    path: "{{ item }}"
+    state: directory
+    mode: '0755'
+  loop:
+    - /var/lib/soc/wazuh
+    - /opt/soc-platform/configs/wazuh
+    - /opt/soc-platform/configs/wazuh/rules
+  tags: [soc-wazuh]
+
+- name: "SOC-APPS | Create custom Wazuh rules"
+  copy:
+    content: |
+      <!-- National SOC Platform Custom Rules -->
+      <group name="soc_platform,algeria">
+        <!-- Critical Security Events -->
+        <rule id="100001" level="12">
+          <if_sid>5501</if_sid>
+          <field name="data.win.eventdata.targetUser">.*admin.*</field>
+          <description>Privileged account authentication failure</description>
+          <group>authentication_failed,privilege_escalation,</group>
+        </rule>
+        
+        <!-- Web Application Attacks -->
+        <rule id="100002" level="10">
+          <if_sid>31101</if_sid>
+          <url>.*(union|select|insert|delete|drop|update|exec|script).*</url>
+          <description>Potential SQL injection attempt detected</description>
+          <group>web_attack,sqli,</group>
+        </rule>
+        
+        <rule id="100003" level="10">
+          <if_sid>31101</if_sid>
+          <url>.*(\<script|javascript\:|onerror|onload).*</url>
+          <description>Potential XSS attempt detected</description>
+          <group>web_attack,xss,</group>
+        </rule>
+        
+        <!-- SOC Platform Specific -->
+        <rule id="100004" level="8">
+          <match>Multiple failed login attempts from same IP</match>
+          <description>Brute force attack pattern detected</description>
+          <group>brute_force,authentication,</group>
+        </rule>
+        
+        <rule id="100005" level="10">
+          <match>Unauthorized access to sensitive endpoint</match>
+          <description>Sensitive resource access without authorization</description>
+          <group>access_denied,policy_violation,</group>
+        </rule>
+        
+        <!-- Algeria-specific Threat Intelligence -->
+        <rule id="100100" level="8">
+          <match>Known malicious IP from Algerian threat feed</match>
+          <description>Connection from known malicious IP address</description>
+          <group>threat_intelligence,malicious_ip,</group>
+        </rule>
+      </group>
+    dest: /opt/soc-platform/configs/wazuh/rules/soc_custom_rules.xml
+    mode: '0644'
+  tags: [soc-wazuh]
+
+- name: "SOC-APPS | Configure Wazuh manager settings"
+  template:
+    src: wazuh-manager.conf.j2
+    dest: /opt/soc-platform/configs/wazuh/ossec.conf
+    mode: '0644'
+  tags: [soc-wazuh]
+
+- name: "SOC-APPS | Create Wazuh API configuration"
+  template:
+    src: wazuh-api-config.j2
+    dest: /opt/soc-platform/configs/wazuh/api.yaml
+    mode: '0600'
+  tags: [soc-wazuh]
+
+# ============================================================================
+# SECTION 2: Suricata Configuration
+# ============================================================================
+- name: "SOC-APPS | Create Suricata data directories"
+  file:
+    path: "{{ item }}"
+    state: directory
+    mode: '0755'
+  loop:
+    - /var/lib/soc/suricata
+    - /opt/soc-platform/configs/suricata
+    - /opt/soc-platform/configs/suricata/rules
+    - /var/log/suricata
+  tags: [soc-suricata]
+
+- name: "SOC-APPS | Generate Suricata configuration"
+  template:
+    src: suricata.yaml.j2
+    dest: /opt/soc-platform/configs/suricata/suricata.yaml
+    mode: '0644'
+  vars:
+    suricata_interface: "{{ lookup('env', 'SURICATA_INTERFACE') | default('eth0', true) }}"
+  tags: [soc-suricata]
+
+- name: "SOC-APPS | Download Emerging Threats rules (optional)"
+  get_url:
+    url: https://rules.emergingthreats.net/open/suricata-6.0.3/emerging.rules.tar.gz
+    dest: /tmp/emerging.rules.tar.gz
+    timeout: 300
+  when: download_et_rules | default(false) | bool
+  register: et_rules_download
+  ignore_errors: yes
+  tags: [soc-suricata-rules]
+
+- name: "SOC-APPS | Create local Suricata rules for SOC platform"
+  copy:
+    content: |
+      # National SOC Platform - Local Suricata Rules
+      
+      # Block known C2 communication ports
+      drop ip any any -> any (msg:"Potential C2 Communication - Suspicious Port"; flow:to_server; classtype:trojan-activity; sid:2000001; rev:1;)
+      
+      # Detect DNS tunneling attempts
+      alert dns any any -> any any (msg:"DNS Tunneling Detected - Long Query"; dns.query; length:>50; classtype:suspicious-filename-detect; sid:2000002; rev:1;)
+      
+      # Block Tor exit nodes (requires external list)
+      # alert ip $TOR_EXIT_NODES any -> $HOME_NET any (msg:"Tor Exit Node Connection"; sid:2000003; rev:1;)
+      
+      # Detect potential data exfiltration
+      alert tcp $HOME_NET any -> any $HTTP_PORTS (msg:"Large Outbound HTTP Transfer"; flow:to_server; content:"POST"; http_method; content:"Content-Type|3A|"; http_header; clas:data-exfiltration; threshold:type both, track by_src, count 10, seconds 60; sid:2000004; rev:1;)
+      
+      # ICMP-based detection
+      alert icmp any any -> any any (msg:"ICMP Tunneling - Large Payload"; itype:8; icode:0; dsize:>500; classtype:suspicious-packet; sid:2000005; rev:1;)
+      
+      # Web shell detection patterns
+      alert http $EXTERNAL_NET any -> $HOME_NET $HTTP_PORTS (msg:"Potential Web Shell Access"; flow:to_server; uricontent:"/shell.php"; nocase; http_uri; classtyle:web-application-attack; sid:2000006; rev:1;)
+      alert http $EXTERNAL_NET any -> $HOME_NET $HTTP_PORTS (msg:"Potential Web Shell Access - cmd parameter"; flow:to_server; http_uri; content:"cmd="; nocase; http_uri; classtyle:web-application-attack; sid:2000007; rev:1;)
+    dest: /opt/soc-platform/configs/suricata/rules/soc-local.rules
+    mode: '0644'
+  tags: [soc-suricata-rules]
+
+- name: "SOC-APPS | Configure Suricata thresholds"
+  copy:
+    content: |
+      # Threshold Configuration for National SOC Platform
+      
+      # Suppress noisy alerts
+      suppress gen_id 1, sig_id 2013028  # SSLv3
+      suppress gen_id 1, sig_id 2221005  # TLS certificate validation
+      
+      # Rate limit certain rule types
+      threshold gen_id 1, sig_id type both, track by_src, count 20, seconds 60
+      threshold gen_id 1, sig_id type limit, track by_src, count 5, seconds 60
+      
+      # Event filter for specific signatures
+      event_filter gen_id 1, sig_id 2020032 type threshold, track by_dst, count 50, seconds 120
+    dest: /opt/soc-platform/configs/suricata/threshold.config
+    mode: '0644'
+  tags: [soc-suricata]
+
+# ============================================================================
+# SECTION 3: MISP Configuration
+# ============================================================================
+- name: "SOC-APPS | Create MISP data directories"
+  file:
+    path: "{{ item }}"
+    state: directory
+    mode: '0755'
+  loop:
+    - /var/lib/soc/misp
+    - /opt/soc-platform/configs/misp
+  tags: [soc-misp]
+
+- name: "SOC-APPS | Configure MISP settings"
+  template:
+    src: misp-config.php.j2
+    dest: /opt/soc-platform/configs/misp/config.php
+    mode: '0644'
+  tags: [soc-misp]
+
+- name: "SOC-APPS | Create MISP initialization script"
+  template:
+    src: misp-init.sh.j2
+    dest: /opt/soc-platform/scripts/init-misp.sh
+    mode: '0755'
+  tags: [soc-misp]
+
+# ============================================================================
+# SECTION 4: TheHive Configuration
+# ============================================================================
+- name: "SOC-APPS | Create TheHive data directories"
+  file:
+    path: "{{ item }}"
+    state: directory
+    mode: '0755'
+  loop:
+    - /var/lib/soc/thehive
+    - /opt/soc-platform/configs/thehive
+  tags: [soc-thehive]
+
+- name: "SOC-APPS | Configure TheHive application settings"
+  template:
+    src: thehive-application.conf.j2
+    dest: /opt/soc-platform/configs/thehive/application.conf
+    mode: '0644'
+  vars:
+    thehive_secret: "{{ lookup('env', 'THEHIVE_SECRET') | default('changeme', true) }}"
+  tags: [soc-thehive]
+
+- name: "SOC-APPS | Define TheHive case templates"
+  copy:
+    content: |
+      {
+        "templates": [
+          {
+            "id": "malware-analysis",
+            "name": "Malware Analysis",
+            "description": "Template for malware analysis cases",
+            "severity": 2,
+            "tags": ["malware", "analysis"],
+            "customFields": {
+              "hash": {
+                "value": "",
+                "mandatory": true
+              },
+              "fileType": {
+                "value": "",
+                "mandatory": false
+              },
+              "source": {
+                "value": "",
+                "mandatory": false
+              }
+            }
+          },
+          {
+            "id": "phishing",
+            "name": "Phishing Investigation",
+            "description": "Template for phishing incident investigation",
+            "severity": 2,
+            "tags": ["phishing", "social-engineering"],
+            "customFields": {
+              "targetUrl": {
+                "value": "",
+                "mandatory": true
+              },
+              "targetEmail": {
+                "value": "",
+                "mandatory": false
+              },
+              "targetedDepartment": {
+                "value": "",
+                "mandatory": false
+              }
+            }
+          },
+          {
+            "id": "intrusion",
+            "name": "Network Intrusion",
+            "Description": "Template for network intrusion investigations",
+            "severity": 3,
+            "tags": ["intrusion", "network"],
+            "customFields": {
+              "attackerIp": {
+                "value": "",
+                "mandatory": true
+              },
+              "compromisedHosts": {
+                "value": [],
+                "mandatory": false
+              },
+              "initialAccessVector": {
+                "value": "",
+                "mandatory": false
+              }
+            }
+          }
+        ]
+      }
+    dest: /opt/soc-platform/configs/thehive/case-templates.json
+    mode: '0644'
+  tags: [soc-thehive]
+
+# ============================================================================
+# SECTION 5: Cortex Configuration
+# ============================================================================
+- name: "SOC-APPS | Create Cortex data directories"
+  file:
+    path: "{{ item }}"
+    state: directory
+    mode: '0755'
+  loop:
+    - /var/lib/soc/cortex
+    - /opt/soc-platform/configs/cortex
+  tags: [soc-cortex]
+
+- name: "SOC-APPS | Configure Cortex application settings"
+  template:
+    src: cortex-application.conf.j2
+    dest: /opt/soc-platform/configs/cortex/application.conf
+    mode: '0644'
+  vars:
+    cortex_secret: "{{ lookup('env', 'CORTEX_SECRET') | default('changeme', true) }}"
+  tags: [soc-cortex]
+
+- name: "SOC-APPS | Define Cortex analyzers configuration"
+  copy:
+    content: |
+      # Cortex Analyzers Configuration for National SOC Platform
+      
+      # VirusTotal
+      - name: VirusTotal_GetReport
+        configuration:
+          key: ${VIRUSTOTAL_API_KEY}
+    
+      # AbuseIPDB
+      - name: AbuseIPDB_Query
+        configuration:
+          key: ${ABUSEIPDB_API_KEY}
+    
+      # IPInfo
+      - name: IPInfo_GetIpInfo
+        configuration:
+          token: ${IPINFO_TOKEN}
+    
+      # DomainTools
+      - name: DomainTools_IpWhois
+        configuration:
+          username: ${DOMAINTOOLS_USERNAME}
+          key: ${DOMAINTOOLS_KEY}
+    
+      # Shodan
+      - name: Shodan_HostInfo
+        configuration:
+          api_key: ${SHODAN_API_KEY}
+    
+      # HybridAnalysis
+      - name: HybridAnalysis_Search
+        configuration:
+          api_key: ${HYBRIDANALYSIS_API_KEY}
+    
+      # MISP Search
+      - name: MISP_Search
+        configuration:
+          url: http://misp
+          key: ${MISP_API_KEY}
+    
+      # JoeSandbox
+      - name: JoeSandbox_Analyze
+        configuration:
+          apikey: ${JOESANDBOX_API_KEY}
+          apipassword: ${JOESANDBOX_PASSWORD}
+    
+      # URLhaus
+      - name: Urlhaus_Query
+        configuration: {}
+    dest: /opt/soc-platform/configs/cortex/analyzers.yml
+    mode: '0644'
+  tags: [soc-cortex]
+
+# ============================================================================
+# SECTION 6: Service Integration Configuration
+# ============================================================================
+- name: "SOC-APPS | Create service integration mapping"
+  template:
+    src: service-integration.yml.j2
+    dest: /opt/soc-platform/configs/service-integration.yml
+    mode: '0644'
+  tags: [soc-integration]
+
+- name: "SOC-APPS | Display role completion message"
+  debug:
+    msg: "═══ SOC Applications Deployment Complete ═══"

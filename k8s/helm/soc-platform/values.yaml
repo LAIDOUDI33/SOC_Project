@@ -1,0 +1,439 @@
+# =============================================================================
+# CyberSOC Platform - Default Values (Development/Staging)
+# =============================================================================
+# AI-Native SOC Operating System | 41 Modules | Production Ready
+# =============================================================================
+
+# -- Global Configuration --
+global:
+  environment: staging
+  imageRegistry: ghcr.io
+  imagePullSecrets: []
+  storageClass: standard
+
+  # Security Context Defaults
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 1000
+    runAsGroup: 1000
+    fsGroup: 1000
+  
+  # Compliance Labels (ANRT/Telecom)
+  complianceLabels:
+    anrt.djezzy.soc/compliance: telecom-regulation
+    security.djezzy.dz/classification: confidential
+
+# -- Main Application Configuration --
+socPlatform:
+  enabled: true
+  replicaCount: 2
+
+  image:
+    repository: laidoudi33/soc-platform
+    tag: "2.0.0-stable"
+    pullPolicy: IfNotPresent
+
+  # Container Resources (Development defaults)
+  resources:
+    requests:
+      cpu: 500m
+      memory: 512Mi
+    limits:
+      cpu: 2000m
+      memory: 2Gi
+
+  # Application Configuration
+  config:
+    # Next.js Configuration
+    nodeEnv: production
+    port: 3000
+    grpcPort: 50051
+    
+    # Database Connections
+    databaseUrl: "postgresql://soc:soc@postgresql:5432/cybersoc?schema=public"
+    redisUrl: "redis://redis-master:6379"
+    
+    # External Services
+    elasticsearchUrl: "http://elasticsearch-coordinating-only:9200"
+    kafkaBrokers: "kafka-controller-0.kafka-headless:9092"
+    
+    # Feature Flags
+    features:
+      ss7Monitoring: true
+      threatHunting: true
+      aiCopilot: true
+      msspMode: false
+      geomarketing: true
+    
+    # Rate Limiting
+    rateLimiting:
+      windowMs: 900000
+      maxRequests: 1000
+    
+    # Logging
+    logging:
+      level: info
+      format: json
+      redactSensitive: true
+
+  # Service Configuration
+  service:
+    type: ClusterIP
+    port: 80
+    targetPort: 3000
+    annotations: {}
+
+  # Ingress Configuration
+  ingress:
+    enabled: true
+    className: nginx
+    annotations:
+      nginx.ingress.kubernetes.io/ssl-redirect: "true"
+      nginx.ingress.kubernetes.io/proxy-body-size: "50m"
+      cert-manager.io/cluster-issuer: letsencrypt-prod
+    hosts:
+      - host: soc-staging.djezzy.dz
+        paths:
+          - path: /
+            pathType: Prefix
+    tls:
+      - secretName: soc-platform-tls
+        hosts:
+          - soc-staging.djezzy.dz
+
+  # Auto-scaling
+  autoscaling:
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 10
+    targetCPUUtilizationPercentage: 70
+    targetMemoryUtilizationPercentage: 80
+
+  # Pod Disruption Budget
+  podDisruptionBudget:
+    enabled: true
+    minAvailable: 1
+
+  # Node Affinity (default: any node)
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+
+# -- SIEM Module Configuration --
+siem:
+  enabled: true
+  replicaCount: 2
+  
+  image:
+    repository: laidoudi33/soc-siem
+    tag: "2.0.0"
+  
+  resources:
+    requests:
+      cpu: 1000m
+      memory: 1Gi
+    limits:
+      cpu: 4000m
+      memory: 4Gi
+  
+  config:
+    epsTarget: 10000
+    retentionDays: 90
+    indexStrategy: hot-warm-cold
+    
+  persistence:
+    enabled: true
+    size: 100Gi
+    storageClass: premium
+
+# -- SOAR Module Configuration --
+soar:
+  enabled: true
+  replicaCount: 2
+  
+  image:
+    repository: laidoudi33/soc-soar
+    tag: "2.0.0"
+  
+  resources:
+    requests:
+      cpu: 500m
+      memory: 512Mi
+    limits:
+      cpu: 2000m
+      memory: 2Gi
+  
+  config:
+    playbookConcurrency: 10
+    integrationTimeout: 300
+    approvalRequired: true
+
+# -- Threat Intelligence Module --
+threatIntel:
+  enabled: true
+  
+  config:
+    feeds:
+      - name: MISP
+        enabled: true
+        url: "http://misp:8080"
+      - name: OpenCTI
+        enabled: true
+        url: "http://opencti:8080"
+      - name: TAXII
+        enabled: true
+        servers:
+          - "https://cti-taxii.mitre.org/taxii"
+    
+    updateInterval: 3600
+    cacheTTL: 86400
+
+# -- SS7/Telco Monitoring Module --
+ss7Monitoring:
+  enabled: true
+  
+  config:
+    probes:
+      - name: algiers-probe-1
+        network: 2G/3G
+        signalingPoint: "0x01"
+      - name: oran-probe-2
+        network: 4G/LTE
+        interface: S6a
+    
+    fraudDetection:
+      enabled: true
+      rulesFile: /config/ss7/fraud-rules.yaml
+      alertThreshold: high
+
+# -- AI/ML Engine Configuration --
+aiEngine:
+  enabled: true
+  
+  config:
+    models:
+      nlp:
+        enabled: true
+        model: "cybersoc-nlp-v2"
+        endpoint: "http://ai-nlp:8000"
+      vision:
+        enabled: true
+        model: "cybersoc-vision-v1"
+        endpoint: "http://ai-vision:8001"
+      prediction:
+        enabled: true
+        model: "cybersoc-predictor-v3"
+        endpoint: "http://ai-prediction:8002"
+    
+    fineTuning:
+      enabled: false
+      dataRetentionDays: 365
+
+# -- EDR Integration --
+edr:
+  enabled: true
+  
+  integrations:
+    grr:
+      enabled: true
+      server: "grr-server:8000"
+    osquery:
+      enabled: true
+      fleetServer: "osquery-fleet:8830"
+
+# -- MSSP Mode (Multi-Tenant) --
+mssp:
+  enabled: false
+  
+  config:
+    maxTenants: 50
+    isolationLevel: namespace
+    sharedResources: false
+
+# -- Database Layer --
+postgresql:
+  enabled: true
+  auth:
+    username: soc
+    password: soc
+    database: cybersoc
+  primary:
+    persistence:
+      enabled: true
+      size: 100Gi
+    resources:
+      requests:
+        cpu: 1000m
+        memory: 2Gi
+      limits:
+        cpu: 4000m
+        memory: 8Gi
+  # Production tuning
+  primary.initdb.scriptsInitConfigMap:
+    init-script: |
+      shared_preload_extensions = 'pg_stat_statements'
+      max_connections = 500
+      shared_buffers = '2GB'
+      effective_cache_size = '6GB'
+      maintenance_work_mem = '512MB'
+      work_mem = '16MB'
+      random_page_cost = 1.1'
+      effective_io_concurrency = 200
+      wal_buffers = '64MB'
+      default_statistics_target = 200
+
+redis:
+  enabled: true
+  auth:
+    enabled: true
+    password: soc123
+  master:
+    persistence:
+      enabled: true
+      size: 25Gi
+    resources:
+      requests:
+        cpu: 250m
+        memory: 256Mi
+      limits:
+        cpu: 1000m
+        memory: 1Gi
+  architecture: replication
+
+# -- Message Queue --
+kafka:
+  enabled: true
+  listeners:
+    controller:
+      containerPort: 9093
+    plain:
+      containerPort: 9092
+    tls:
+      containerPort: 9093
+      auth:
+        type: scram-sha-512
+  controller:
+    replicaCount: 3
+  broker:
+    replicaCount: 3
+    persistence:
+      size: 100Gi
+  zookeeper:
+    enabled: false
+    puppeteer:
+      enabled: true
+      replicaCount: 3
+
+# -- Search & Analytics --
+elasticsearch:
+  enabled: true
+  replicas: 3
+  minimumMasterNodes: 2
+  clusterName: cybersoc-logs
+  
+  # Master nodes
+  master:
+    replicaCount: 3
+    persistence:
+      enabled: true
+      size: 50Gi
+  
+  # Data nodes
+  data:
+    replicaCount: 3
+    persistence:
+      enabled: true
+      size: 500Gi
+    resources:
+      requests:
+        cpu: 2000m
+        memory: 4Gi
+      limits:
+        cpu: 8000m
+        memory: 16Gi
+  
+  # Coordinating only nodes
+  coordinating:
+    replicaCount: 2
+  
+  # Hot-Warm-Cold Architecture
+  config:
+    node.roles: ["data_hot", "data_content"]
+    cluster.routing.allocation.balance.threshold: 0.6
+
+# -- Monitoring Stack --
+monitoring:
+  prometheus:
+    enabled: true
+    retention: 30d
+    resources:
+      requests:
+        cpu: 500m
+        memory: 512Mi
+    alertmanager:
+      enabled: true
+      
+  grafana:
+    enabled: true
+    adminPassword: admin
+    persistence:
+      enabled: true
+      size: 10Gi
+    dashboards:
+      enabled: true
+    plugins:
+      - grafana-piechart-panel
+      - vonage-status-panel
+
+# -- Security Configuration --
+security:
+  # Network Policies
+  networkPolicy:
+    enabled: true
+    defaultDenyIngress: true
+    defaultDenyEgress: true
+  
+  # Pod Security Standards
+  podSecurity:
+    standards: restricted
+    privileged: false
+    capabilities:
+      drop:
+        - ALL
+      add: []
+  
+  # RBAC
+  rbac:
+    create: true
+  
+  # Service Accounts
+  serviceAccount:
+    create: true
+    automountServiceAccountToken: false
+  
+  # Secrets Management
+  secrets:
+    externalSecrets: false
+    vaultEnabled: false
+
+# -- Backup & Recovery --
+backup:
+  enabled: true
+  schedule: "0 2 * * *"  # Daily at 2 AM
+  retention: 30d
+  s3:
+    bucket: cybersoc-backups
+    region: eu-west-1
+
+# -- Compliance & Audit --
+compliance:
+  auditLog:
+    enabled: true
+    retention: 365d
+    destination: elasticsearch
+  
+  anrtReporting:
+    enabled: true
+    schedule: monthly
+    endpoints:
+      - https://reporting.anrt.dz/api/v1/submit

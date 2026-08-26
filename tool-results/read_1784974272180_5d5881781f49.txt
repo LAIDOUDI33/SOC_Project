@@ -1,0 +1,1440 @@
+     1→/**
+     2→ * Grafana Monitoring Dashboard Component
+     3→ * Algeria National SOC Platform 2026-2030
+     4→ * 
+     5→ * Comprehensive dashboard with:
+     6→ * - Overview: System health, active alerts count, datasource status
+     7→ * - Dashboards: Grid/list view of available dashboards with search
+     8→ * - Alerts: Alert rules table with pause/toggle actions
+     9→ * - Data Sources: Status overview with connection testing
+    10→ * - Embedded View: Iframe-based dashboard embedding
+    11→ * - SOC Pre-built: Showcase pre-configured SOC dashboards
+    12→ */
+    13→
+    14→'use client';
+    15→
+    16→import React, { useState, useMemo } from 'react';
+    17→import {
+    18→  useGrafanaDashboard,
+    19→  useDashboards,
+    20→  useAlertRules,
+    21→  useDataSources,
+    22→  useDashboardView,
+    23→} from '../hooks/use-grafana';
+    24→import type {
+    25→  DashboardSearchResult,
+    26→  AlertRule,
+    27→  DataSource,
+    28→  SOCKpiMetric,
+    29→  TimelineEvent,
+    30→  PanelType,
+    31→  AlertState,
+    32→} from '../types/grafana.types';
+    33→
+    34→// ============================================================
+    35→// Sub-Components
+    36→// ============================================================
+    37→
+    38→/** Loading spinner component */
+    39→const LoadingSpinner: React.FC<{ size?: 'sm' | 'md' | 'lg'; message?: string }> = ({ 
+    40→  size = 'md', 
+    41→  message = 'Loading...' 
+    42→}) => {
+    43→  const sizeClasses = { sm: 'w-4 h-4', md: 'w-8 h-8', lg: 'w-12 h-12' };
+    44→  
+    45→  return (
+    46→    <div className="flex flex-col items-center justify-center p-8">
+    47→      <div className={`${sizeClasses[size]} animate-spin rounded-full border-4 border-blue-200 border-t-blue-600`}></div>
+    48→      {message && <p className="mt-3 text-sm text-gray-500">{message}</p>}
+    49→    </div>
+    50→  );
+    51→};
+    52→
+    53→/** Error state component */
+    54→const ErrorState: React.FC<{ message: string; onRetry?: () => void }> = ({ message, onRetry }) => (
+    55→  <div className="flex flex-col items-center justify-center p-8 text-red-500">
+    56→    <svg className="w-12 h-12 mb-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+    57→      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+    58→    </svg>
+    59→    <p className="font-medium">{message}</p>
+    60→    {onRetry && (
+    61→      <button
+    62→        onClick={onRetry}
+    63→        className="mt-3 px-4 py-2 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700"
+    64→      >
+    65→        Retry
+    66→      </button>
+    67→    )}
+    68→  </div>
+    69→);
+    70→
+    71→/** Status badge component */
+    72→const StatusBadge: React.FC<{ status: string; variant?: 'default' | 'dot' }> = ({ status, variant = 'default' }) => {
+    73→  const getStatusColor = (s: string) => {
+    74→    switch (s.toLowerCase()) {
+    75→      case 'ok':
+    76→      case 'healthy':
+    77→      case 'good':
+    78→        return 'bg-green-100 text-green-800';
+    79→      case 'alerting':
+    80→      case 'critical':
+    81→      case 'error':
+    82→        return 'bg-red-100 text-red-800';
+    83→      case 'warning':
+    84→      case 'degraded':
+    85→        return 'bg-yellow-100 text-yellow-800';
+    86→      case 'paused':
+    87→      case 'unknown':
+    88→        return 'bg-gray-100 text-gray-800';
+    89→      default:
+    90→        return 'bg-blue-100 text-blue-800';
+    91→    }
+    92→  };
+    93→
+    94→  const getDotColor = (s: string) => {
+    95→    switch (s.toLowerCase()) {
+    96→      case 'ok':
+    97→      case 'healthy':
+    98→      case 'good':
+    99→        return 'bg-green-500';
+   100→      case 'alerting':
+   101→      case 'critical':
+   102→      case 'error':
+   103→        return 'bg-red-500';
+   104→      case 'warning':
+   105→      case 'degraded':
+   106→        return 'bg-yellow-500';
+   107→      case 'paused':
+   108→      case 'unknown':
+   109→        return 'bg-gray-400';
+   110→      default:
+   111→        return 'bg-blue-500';
+   112→    }
+   113→  };
+   114→
+   115→  if (variant === 'dot') {
+   116→    return (
+   117→      <span className={`inline-flex items-center gap-1.5`}>
+   118→        <span className={`w-2 h-2 rounded-full ${getDotColor(status)}`}></span>
+   119→        <span className={`px-2 py-0.5 text-xs font-medium rounded-full ${getStatusColor(status)}`}>
+   120→          {status}
+   121→        </span>
+   122→      </span>
+   123→    );
+   124→  }
+   125→
+   126→  return (
+   127→    <span className={`inline-flex px-2 py-0.5 text-xs font-medium rounded-full ${getStatusColor(status)}`}>
+   128→      {status}
+   129→    </span>
+   130→  );
+   131→};
+   132→
+   133→/** Severity badge */
+   134→const SeverityBadge: React.FC<{ severity: string }> = ({ severity }) => {
+   135→  const colors: Record<string, string> = {
+   136→    critical: 'bg-red-600 text-white',
+   137→    high: 'bg-orange-500 text-white',
+   138→    warning: 'bg-yellow-500 text-black',
+   139→    info: 'bg-blue-500 text-white',
+   140→    none: 'bg-gray-300 text-gray-700',
+   141→  };
+   142→
+   143→  return (
+   144→    <span className={`inline-flex px-2 py-0.5 text-xs font-medium rounded ${colors[severity] || colors.none}`}>
+   145→      {severity}
+   146→    </span>
+   147→  );
+   148→};
+   149→
+   150→/** KPI Card Component */
+   151→const KPICard: React.FC<{
+   152→  metric: SOCKpiMetric;
+   153→  onClick?: () => void;
+   154→}> = ({ metric, onClick }) => {
+   155→  const getTrendIcon = () => {
+   156→    if (metric.trend === 'up') {
+   157→      return metric.status === 'good' ? (
+   158→        <svg className="w-4 h-4 text-green-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+   159→          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 10l7-7m0 0l7 7m-7-7v18" />
+   160→        </svg>
+   161→      ) : (
+   162→        <svg className="w-4 h-4 text-red-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+   163→          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 10l7-7m0 0l7 7m-7-7v18" />
+   164→        </svg>
+   165→      );
+   166→    }
+   167→    if (metric.trend === 'down') {
+   168→      return metric.status === 'good' ? (
+   169→        <svg className="w-4 h-4 text-green-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+   170→          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 14l-7 7m0 0l-7-7m7 7V3" />
+   171→        </svg>
+   172→      ) : (
+   173→        <svg className="w-4 h-4 text-red-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+   174→          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 14l-7 7m0 0l-7-7m7 7V3" />
+   175→        </svg>
+   176→      );
+   177→    }
+   178→    return (
+   179→      <svg className="w-4 h-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+   180→        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M20 12H4" />
+   181→      </svg>
+   182→    );
+   183→  };
+   184→
+   185→  const getCardBorder = () => {
+   186→    switch (metric.status) {
+   187→      case 'critical': return 'border-l-4 border-l-red-500';
+   188→      case 'warning': return 'border-l-4 border-l-yellow-500';
+   189→      case 'good': return 'border-l-4 border-l-green-500';
+   190→      default: return 'border-l-4 border-l-blue-500';
+   191→    }
+   192→  };
+   193→
+   194→  return (
+   195→    <div
+   196→      onClick={onClick}
+   197→      className={`bg-white rounded-lg shadow p-4 hover:shadow-md transition-shadow cursor-pointer ${getCardBorder()}`}
+   198→    >
+   199→      <div className="flex items-start justify-between mb-2">
+   200→        <p className="text-sm font-medium text-gray-600">{metric.name}</p>
+   201→        {getTrendIcon()}
+   202→      </div>
+   203→      
+   204→      <div className="flex items-baseline gap-2">
+   205→        <span className="text-2xl font-bold text-gray-900">{metric.currentValue.toLocaleString()}</span>
+   206→        <span className="text-sm text-gray-500">{metric.unit}</span>
+   207→      </div>
+   208→
+   209→      {metric.trendPercent !== undefined && (
+   210→        <p className={`text-xs mt-1 ${
+   211→          (metric.trend === 'up' && metric.status !== 'good') || (metric.trend === 'down' && metric.status === 'good')
+   212→            ? 'text-green-600'
+   213→            : 'text-red-600'
+   214→        }`}>
+   215→          {metric.trend === 'stable' ? 'No change' : `${metric.trend > 0 ? '+' : ''}${metric.trendPercent}%`}
+   216→        </p>
+   217→      )}
+   218→
+   219→      <p className="text-xs text-gray-400 mt-2">Source: {metric.sourceSystem}</p>
+   220→    </div>
+   221→  );
+   222→};
+   223→
+   224→// ============================================================
+   225→// Tab Content Components
+   226→// ============================================================
+   227→
+   228→/** Overview Tab Content */
+   229→const OverviewTabContent: React.FC<{
+   230→  kpis: SOCKpiMetric[];
+   231→  timelineEvents: TimelineEvent[];
+   232→  systemStatus: 'healthy' | 'degraded' | 'critical';
+   233→}> = ({ kpis, timelineEvents, systemStatus }) => {
+   234→  const [showAllKpis, setShowAllKpis] = useState(false);
+   235→  const displayedKpis = showAllKpis ? kpis : kpis.slice(0, 6);
+   236→
+   237→  const getStatusBanner = () => {
+   238→    switch (systemStatus) {
+   239→      case 'critical':
+   240→        return (
+   241→          <div className="mb-6 bg-red-50 border border-red-200 rounded-lg p-4 flex items-center gap-3">
+   242→            <div className="w-10 h-10 bg-red-100 rounded-full flex items-center justify-center">
+   243→              <svg className="w-6 h-6 text-red-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+   244→                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+   245→              </svg>
+   246→            </div>
+   247→            <div>
+   248→              <h3 className="font-semibold text-red-800">System Status: Critical</h3>
+   249→              <p className="text-sm text-red-600">Multiple critical alerts are firing. Immediate attention required.</p>
+   250→            </div>
+   251→          </div>
+   252→        );
+   253→      case 'degraded':
+   254→        return (
+   255→          <div className="mb-6 bg-yellow-50 border border-yellow-200 rounded-lg p-4 flex items-center gap-3">
+   256→            <div className="w-10 h-10 bg-yellow-100 rounded-full flex items-center justify-center">
+   257→              <svg className="w-6 h-6 text-yellow-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+   258→                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+   259→              </svg>
+   260→            </div>
+   261→            <div>
+   262→              <h3 className="font-semibold text-yellow-800">System Status: Degraded</h3>
+   263→              <p className="text-sm text-yellow-600">Some components require attention. Monitor closely.</p>
+   264→            </div>
+   265→          </div>
+   266→        );
+   267→      default:
+   268→        return (
+   269→          <div className="mb-6 bg-green-50 border border-green-200 rounded-lg p-4 flex items-center gap-3">
+   270→            <div className="w-10 h-10 bg-green-100 rounded-full flex items-center justify-center">
+   271→              <svg className="w-6 h-6 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+   272→                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+   273→              </svg>
+   274→            </div>
+   275→            <div>
+   276→              <h3 className="font-semibold text-green-800">System Status: Healthy</h3>
+   277→              <p className="text-sm text-green-600">All systems operating normally.</p>
+   278→            </div>
+   279→          </div>
+   280→        );
+   281→    }
+   282→  };
+   283→
+   284→  return (
+   285→    <div className="space-y-6">
+   286→      {/* Status Banner */}
+   287→      {getStatusBanner()}
+   288→
+   289→      {/* KPI Grid */}
+   290→      <section>
+   291→        <div className="flex items-center justify-between mb-4">
+   292→          <h2 className="text-lg font-semibold text-gray-900">Key Performance Indicators</h2>
+   293→          <button
+   294→            onClick={() => setShowAllKpis(!showAllKpis)}
+   295→            className="text-sm text-blue-600 hover:text-blue-800"
+   296→          >
+   297→            {showAllKpis ? 'Show Less' : `Show All (${kpis.length})`}
+   298→          </button>
+   299→        </div>
+   300→        
+   301→        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+   302→          {displayedKpis.map(kpi => (
+   303→            <KPICard key={kpi.id} metric={kpi} />
+   304→          ))}
+   305→        </div>
+   306→      </section>
+   307→
+   308→      {/* Recent Activity Timeline */}
+   309→      <section>
+   310→        <h2 className="text-lg font-semibold text-gray-900 mb-4">Recent Activity</h2>
+   311→        <div className="bg-white rounded-lg shadow overflow-hidden">
+   312→          <ul className="divide-y divide-gray-200">
+   313→            {timelineEvents.map((event, index) => (
+   314→              <li key={index} className="p-4 hover:bg-gray-50 transition-colors">
+   315→                <div className="flex items-start gap-3">
+   316→                  <div className={`mt-0.5 w-2 h-2 rounded-full flex-shrink-0 ${
+   317→                    event.severity === 'critical' ? 'bg-red-500' :
+   318→                    event.severity === 'high' ? 'bg-orange-500' :
+   319→                    event.severity === 'warning' ? 'bg-yellow-500' :
+   320→                    'bg-blue-500'
+   321→                  }`} />
+   322→                  
+   323→                  <div className="flex-1 min-w-0">
+   324→                    <div className="flex items-center justify-between gap-2">
+   325→                      <p className="text-sm font-medium text-gray-900 truncate">{event.title}</p>
+   326→                      <SeverityBadge severity={event.severity} />
+   327→                    </div>
+   328→                    <p className="text-sm text-gray-500 mt-0.5">{event.description}</p>
+   329→                    <div className="flex items-center gap-3 mt-2 text-xs text-gray-400">
+   330→                      <span>{new Date(event.timestamp).toLocaleString()}</span>
+   331→                      <span className="uppercase px-1.5 py-0.5 bg-gray-100 rounded">{event.source}</span>
+   332→                      <span className="uppercase px-1.5 py-0.5 bg-gray-100 rounded">{event.type}</span>
+   333→                    </div>
+   334→                  </div>
+   335→
+   336→                  {event.url && (
+   337→                    <a
+   338→                      href={event.url}
+   339→                      className="text-blue-600 hover:text-blue-800 flex-shrink-0"
+   340→                      title="View details"
+   341→                    >
+   342→                      <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+   343→                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
+   344→                      </svg>
+   345→                    </a>
+   346→                  )}
+   347→                </div>
+   348→              </li>
+   349→            ))}
+   350→          </ul>
+   351→        </div>
+   352→      </section>
+   353→    </div>
+   354→  );
+   355→};
+   356→
+   357→/** Dashboards Tab Content */
+   358→const DashboardsTabContent: React.FC<{
+   359→  dashboards: DashboardSearchResult[] | null;
+   360→  loading: boolean;
+   361→  error: string | null;
+   362→  total: number;
+   363→  onOpenDashboard?: (uid: string) => void;
+   364→}> = ({ dashboards, loading, error, total, onOpenDashboard }) => {
+   365→  const [searchQuery, setSearchQuery] = useState('');
+   366→  const [viewMode, setViewMode] = useState<'grid' | 'list'>('grid');
+   367→  const [selectedTag, setSelectedTag] = useState<string | null>(null);
+   368→
+   369→  // Get all unique tags
+   370→  const allTags = useMemo(() => {
+   371→    if (!dashboards) return [];
+   372→    const tags = new Set<string>();
+   373→    dashboards.forEach(d => d.tags.forEach(t => tags.add(t)));
+   374→    return Array.from(tags).sort();
+   375→  }, [dashboards]);
+   376→
+   377→  // Filter dashboards
+   378→  const filteredDashboards = useMemo(() => {
+   379→    if (!dashboards) return [];
+   380→    
+   381→    return dashboards.filter(d => {
+   382→      const matchesSearch = !searchQuery ||
+   383→        d.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
+   384→        d.tags.some(t => t.toLowerCase().includes(searchQuery.toLowerCase()));
+   385→      
+   386→      const matchesTag = !selectedTag || d.tags.includes(selectedTag);
+   387→      
+   388→      return matchesSearch && matchesTag;
+   389→    });
+   390→  }, [dashboards, searchQuery, selectedTag]);
+   391→
+   392→  if (loading) return <LoadingSpinner message="Loading dashboards..." />;
+   393→  if (error) return <ErrorState message={error} />;
+   394→
+   395→  return (
+   396→    <div className="space-y-4">
+   397→      {/* Controls */}
+   398→      <div className="flex flex-col sm:flex-row gap-4 items-start sm:items-center justify-between">
+   399→        <div className="relative flex-1 max-w-md">
+   400→          <input
+   401→            type="text"
+   402→            placeholder="Search dashboards..."
+   403→            value={searchQuery}
+   404→            onChange={(e) => setSearchQuery(e.target.value)}
+   405→            className="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+   406→          />
+   407→          <svg className="absolute left-3 top-2.5 w-5 h-5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+   408→            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+   409→          </svg>
+   410→        </div>
+   411→
+   412→        <div className="flex items-center gap-2">
+   413→          {/* View Mode Toggle */}
+   414→          <div className="flex bg-gray-100 rounded-lg p-1">
+   415→            <button
+   416→              onClick={() => setViewMode('grid')}
+   417→              className={`p-2 rounded ${viewMode === 'grid' ? 'bg-white shadow' : ''}`}
+   418→              title="Grid view"
+   419→            >
+   420→              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+   421→                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2V6zM14 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2V6zM4 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2v-2zM14 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2v-2z" />
+   422→              </svg>
+   423→            </button>
+   424→            <button
+   425→              onClick={() => setViewMode('list')}
+   426→              className={`p-2 rounded ${viewMode === 'list' ? 'bg-white shadow' : ''}`}
+   427→              title="List view"
+   428→            >
+   429→              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+   430→                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 10h16M4 14h16M4 18h16" />
+   431→              </svg>
+   432→            </button>
+   433→          </div>
+   434→
+   435→          <span className="text-sm text-gray-500">{filteredDashboards.length} of {total} dashboards</span>
+   436→        </div>
+   437→      </div>
+   438→
+   439→      {/* Tag Filters */}
+   440→      {allTags.length > 0 && (
+   441→        <div className="flex flex-wrap gap-2">
+   442→          <button
+   443→            onClick={() => setSelectedTag(null)}
+   444→            className={`px-3 py-1 text-sm rounded-full transition-colors ${
+   445→              !selectedTag ? 'bg-blue-600 text-white' : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+   446→            }`}
+   447→          >
+   448→            All Tags
+   449→          </button>
+   450→          {allTags.map(tag => (
+   451→            <button
+   452→              key={tag}
+   453→              onClick={() => setSelectedTag(selectedTag === tag ? null : tag)}
+   454→              className={`px-3 py-1 text-sm rounded-full transition-colors ${
+   455→                selectedTag === tag ? 'bg-blue-600 text-white' : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+   456→              }`}
+   457→            >
+   458→              {tag}
+   459→            </button>
+   460→          ))}
+   461→        </div>
+   462→      )}
+   463→
+   464→      {/* Dashboard Grid/List */}
+   465→      {filteredDashboards.length === 0 ? (
+   466→        <div className="text-center py-12 text-gray-500">
+   467→          <svg className="w-16 h-16 mx-auto mb-4 text-gray-300" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+   468→            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 17v-2m3 2v-4m3 4v-6m2 10H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+   469→          </svg>
+   470→          <p>No dashboards found matching your criteria</p>
+   471→        </div>
+   472→      ) : viewMode === 'grid' ? (
+   473→        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+   474→          {filteredDashboards.map(dashboard => (
+   475→            <div
+   476→              key={dashboard.uid}
+   477→              onClick={() => onOpenDashboard?.(dashboard.uid)}
+   478→              className="bg-white rounded-lg shadow hover:shadow-md transition-all cursor-pointer p-4 group"
+   479→            >
+   480→              <div className="flex items-start justify-between mb-3">
+   481→                <div className="flex items-center gap-2">
+   482→                  <div className="w-10 h-10 bg-gradient-to-br from-blue-500 to-purple-600 rounded-lg flex items-center justify-center text-white font-semibold">
+   483→                    {dashboard.title.charAt(0).toUpperCase()}
+   484→                  </div>
+   485→                  <div>
+   486→                    <h3 className="font-medium text-gray-900 group-hover:text-blue-600 transition-colors line-clamp-1">
+   487→                      {dashboard.title}
+   488→                    </h3>
+   489→                    <p className="text-xs text-gray-500">{dashboard.folderTitle}</p>
+   490→                  </div>
+   491→                </div>
+   492→                
+   493→                {dashboard.isStarred && (
+   494→                  <svg className="w-5 h-5 text-yellow-400 fill-current" viewBox="0 0 24 24">
+   495→                    <path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z" />
+   496→                  </svg>
+   497→                )}
+   498→              </div>
+   499→
+   500→              <div className="flex flex-wrap gap-1 mt-3">
+   501→                {dashboard.tags.slice(0, 3).map(tag => (
+   502→                  <span key={tag} className="px-2 py-0.5 text-xs bg-gray-100 text-gray-600 rounded">
+   503→                    {tag}
+   504→                  </span>
+   505→                ))}
+   506→                {dashboard.tags.length > 3 && (
+   507→                  <span className="px-2 py-0.5 text-xs bg-gray-100 text-gray-600 rounded">
+   508→                    +{dashboard.tags.length - 3}
+   509→                  </span>
+   510→                )}
+   511→              </div>
+   512→            </div>
+   513→          ))}
+   514→        </div>
+   515→      ) : (
+   516→        <div className="bg-white rounded-lg shadow overflow-hidden">
+   517→          <table className="min-w-full divide-y divide-gray-200">
+   518→            <thead className="bg-gray-50">
+   519→              <tr>
+   520→                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Name</th>
+   521→                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Folder</th>
+   522→                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Tags</th>
+   523→                <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Actions</th>
+   524→              </tr>
+   525→            </thead>
+   526→            <tbody className="bg-white divide-y divide-gray-200">
+   527→              {filteredDashboards.map(dashboard => (
+   528→                <tr key={dashboard.uid} className="hover:bg-gray-50">
+   529→                  <td className="px-6 py-4 whitespace-nowrap">
+   530→                    <div className="flex items-center">
+   531→                      <span className="font-medium text-gray-900">{dashboard.title}</span>
+   532→                      {dashboard.isStarred && (
+   533→                        <svg className="w-4 h-4 ml-2 text-yellow-400 fill-current" viewBox="0 0 24 24">
+   534→                          <path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z" />
+   535→                        </svg>
+   536→                      )}
+   537→                    </div>
+   538→                  </td>
+   539→                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{dashboard.folderTitle}</td>
+   540→                  <td className="px-6 py-4">
+   541→                    <div className="flex flex-wrap gap-1">
+   542→                      {dashboard.tags.map(tag => (
+   543→                        <span key={tag} className="px-2 py-0.5 text-xs bg-gray-100 text-gray-600 rounded">{tag}</span>
+   544→                      ))}
+   545→                    </div>
+   546→                  </td>
+   547→                  <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
+   548→                    <button
+   549→                      onClick={() => onOpenDashboard?.(dashboard.uid)}
+   550→                      className="text-blue-600 hover:text-blue-900 mr-3"
+   551→                    >
+   552→                      Open
+   553→                    </button>
+   554→                  </td>
+   555→                </tr>
+   556→              ))}
+   557→            </tbody>
+   558→          </table>
+   559→        </div>
+   560→      )}
+   561→    </div>
+   562→  );
+   563→};
+   564→
+   565→/** Alerts Tab Content */
+   566→const AlertsTabContent: React.FC<{
+   567→  alerts: AlertRule[] | null;
+   568→  loading: boolean;
+   569→  error: string | null;
+   570→  summary: UseAlertRulesReturn['summary'];
+   571→  onPause: (uid: string) => Promise<void>;
+   572→  onResume: (uid: string) => Promise<void>;
+   573→  onTogglePause: (uid: string) => Promise<void>;
+   574→}> = ({ alerts, loading, error, summary, onPause, onResume, onTogglePause }) => {
+   575→  const [searchQuery, setSearchQuery] = useState('');
+   576→  const [stateFilter, setStateFilter] = useState<AlertState | 'all'>('all');
+   577→  const [severityFilter, setSeverityFilter] = useState<string>('all');
+   578→  const [actionInProgress, setActionInProgress] = useState<string | null>(null);
+   579→
+   580→  // Filter alerts
+   581→  const filteredAlerts = useMemo(() => {
+   582→    if (!alerts) return [];
+   583→    
+   584→    return alerts.filter(a => {
+   585→      const matchesSearch = !searchQuery ||
+   586→        a.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
+   587→        a.ruleGroup.toLowerCase().includes(searchQuery.toLowerCase());
+   588→      
+   589→      const matchesState = stateFilter === 'all' || a.currentState === stateFilter || (stateFilter === 'paused' && a.isPaused);
+   590→      const matchesSeverity = severityFilter === 'all' || a.labels.severity === severityFilter;
+   591→      
+   592→      return matchesSearch && matchesState && matchesSeverity;
+   593→    });
+   594→  }, [alerts, searchQuery, stateFilter, severityFilter]);
+   595→
+   596→  /** Handle toggle action */
+   597→  const handleToggle = async (uid: string) => {
+   598→    setActionInProgress(uid);
+   599→    try {
+   600→      await onTogglePause(uid);
+   601→    } catch (err) {
+   602→      console.error('Failed to toggle alert:', err);
+   603→    } finally {
+   604→      setActionInProgress(null);
+   605→    }
+   606→  };
+   607→
+   608→  if (loading) return <LoadingSpinner message="Loading alert rules..." />;
+   609→  if (error) return <ErrorState message={error} />;
+   610→
+   611→  return (
+   612→    <div className="space-y-4">
+   613→      {/* Summary Cards */}
+   614→      <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-4">
+   615→        <div className="bg-white rounded-lg shadow p-4 text-center">
+   616→          <p className="text-2xl font-bold text-gray-900">{summary.ok}</p>
+   617→          <p className="text-sm text-gray-500">OK</p>
+   618→        </div>
+   619→        <div className="bg-white rounded-lg shadow p-4 text-center">
+   620→          <p className="text-2xl font-bold text-red-600">{summary.alerting}</p>
+   621→          <p className="text-sm text-gray-500">Alerting</p>
+   622→        </div>
+   623→        <div className="bg-white rounded-lg shadow p-4 text-center">
+   624→          <p className="text-2xl font-bold text-gray-400">{summary.paused}</p>
+   625→          <p className="text-sm text-gray-500">Paused</p>
+   626→        </div>
+   627→        <div className="bg-white rounded-lg shadow p-4 text-center">
+   628→          <p className="text-2xl font-bold text-red-600">{summary.critical}</p>
+   629→          <p className="text-sm text-gray-500">Critical</p>
+   630→        </div>
+   631→        <div className="bg-white rounded-lg shadow p-4 text-center">
+   632→          <p className="text-2xl font-bold text-orange-500">{summary.high}</p>
+   633→          <p className="text-sm text-gray-500">High</p>
+   634→        </div>
+   635→        <div className="bg-white rounded-lg shadow p-4 text-center">
+   636→          <p className="text-2xl font-bold text-yellow-500">{summary.warning}</p>
+   637→          <p className="text-sm text-gray-500">Warning</p>
+   638→        </div>
+   639→      </div>
+   640→
+   641→      {/* Filters */}
+   642→      <div className="flex flex-col sm:flex-row gap-4 items-start sm:items-center">
+   643→        <div className="relative flex-1 max-w-md">
+   644→          <input
+   645→            type="text"
+   646→            placeholder="Search alerts..."
+   647→            value={searchQuery}
+   648→            onChange={(e) => setSearchQuery(e.target.value)}
+   649→            className="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+   650→          />
+   651→          <svg className="absolute left-3 top-2.5 w-5 h-5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+   652→            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+   653→          </svg>
+   654→        </div>
+   655→
+   656→        <select
+   657→          value={stateFilter}
+   658→          onChange={(e) => setStateFilter(e.target.value as AlertState | 'all')}
+   659→          className="px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
+   660→        >
+   661→          <option value="all">All States</option>
+   662→          <option value="ok">OK</option>
+   663→          <option value="alerting">Alerting</option>
+   664→          <option value="paused">Paused</option>
+   665→        </select>
+   666→
+   667→        <select
+   668→          value={severityFilter}
+   669→          onChange={(e) => setSeverityFilter(e.target.value)}
+   670→          className="px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
+   671→        >
+   672→          <option value="all">All Severities</option>
+   673→          <option value="critical">Critical</option>
+   674→          <option value="high">High</option>
+   675→          <option value="warning">Warning</option>
+   676→          <option value="info">Info</option>
+   677→        </select>
+   678→      </div>
+   679→
+   680→      {/* Alerts Table */}
+   681→      <div className="bg-white rounded-lg shadow overflow-hidden">
+   682→        <table className="min-w-full divide-y divide-gray-200">
+   683→          <thead className="bg-gray-50">
+   684→            <tr>
+   685→              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Status</th>
+   686→              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Alert Name</th>
+   687→              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Severity</th>
+   688→              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Group</th>
+   689→              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">State Since</th>
+   690→              <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase">Actions</th>
+   691→            </tr>
+   692→          </thead>
+   693→          <tbody className="bg-white divide-y divide-gray-200">
+   694→            {filteredAlerts.map(alert => (
+   695→              <tr key={alert.uid} className="hover:bg-gray-50">
+   696→                <td className="px-6 py-4 whitespace-nowrap">
+   697→                  <StatusBadge status={alert.isPaused ? 'Paused' : alert.currentState} variant="dot" />
+   698→                </td>
+   699→                <td className="px-6 py-4">
+   700→                  <div>
+   701→                    <p className="font-medium text-gray-900">{alert.title}</p>
+   702→                    <p className="text-xs text-gray-500 truncate max-w-xs">{alert.annotations.summary?.substring(0, 80)}...</p>
+   703→                  </div>
+   704→                </td>
+   705→                <td className="px-6 py-4 whitespace-nowrap">
+   706→                  <SeverityBadge severity={alert.labels.severity || 'none'} />
+   707→                </td>
+   708→                <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{alert.ruleGroup}</td>
+   709→                <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+   710→                  {new Date(alert.stateSince).toLocaleString()}
+   711→                </td>
+   712→                <td className="px-6 py-4 whitespace-nowrap text-right">
+   713→                  <button
+   714→                    onClick={() => handleToggle(alert.uid)}
+   715→                    disabled={actionInProgress === alert.uid}
+   716→                    className={`px-3 py-1 text-sm rounded transition-colors ${
+   717→                      alert.isPaused
+   718→                        ? 'bg-green-100 text-green-700 hover:bg-green-200'
+   719→                        : 'bg-yellow-100 text-yellow-700 hover:bg-yellow-200'
+   720→                    } disabled:opacity-50`}
+   721→                  >
+   722→                    {actionInProgress === alert.uid ? '...' : alert.isPaused ? 'Resume' : 'Pause'}
+   723→                  </button>
+   724→                </td>
+   725→              </tr>
+   726→            ))}
+   727→          </tbody>
+   728→        </table>
+   729→        
+   730→        {filteredAlerts.length === 0 && (
+   731→          <div className="text-center py-8 text-gray-500">
+   732→            No alerts match your filters
+   733→          </div>
+   734→        )}
+   735→      </div>
+   736→    </div>
+   737→  );
+   738→};
+   739→
+   740→/** Data Sources Tab Content */
+   741→const DataSourcesTabContent: React.FC<{
+   742→  datasources: DataSource[] | null;
+   743→  loading: boolean;
+   744→  error: string | null;
+   745→  healthyCount: number;
+   746→  unhealthyCount: number;
+   747→  onTestConnection: (id: number) => Promise<{ success: boolean; message: string }>;
+   748→}> = ({ datasources, loading, error, healthyCount, unhealthyCount, onTestConnection }) => {
+   749→  const [testingId, setTestingId] = useState<number | null>(null);
+   750→  const [testResults, setTestResults] = useState<Record<number, { success: boolean; message: string }>>({});
+   751→
+   752→  /** Handle test connection */
+   753→  const handleTest = async (id: number) => {
+   754→    setTestingId(id);
+   755→    try {
+   756→      const result = await onTestConnection(id);
+   757→      setTestResults(prev => ({ ...prev, [id]: result }));
+   758→    } catch (err) {
+   759→      setTestResults(prev => ({
+   760→        ...prev,
+   761→        [id]: { success: false, message: err instanceof Error ? err.message : 'Test failed' },
+   762→      }));
+   763→    } finally {
+   764→      setTestingId(null);
+   765→    }
+   766→  };
+   767→
+   768→  if (loading) return <LoadingSpinner message="Loading data sources..." />;
+   769→  if (error) return <ErrorState message={error} />;
+   770→
+   771→  return (
+   772→    <div className="space-y-4">
+   773→      {/* Summary */}
+   774→      <div className="flex gap-4">
+   775→        <div className="bg-white rounded-lg shadow p-4 flex items-center gap-3">
+   776→          <div className="w-10 h-10 bg-green-100 rounded-full flex items-center justify-center">
+   777→            <span className="text-green-600 font-bold">{healthyCount}</span>
+   778→          </div>
+   779→          <div>
+   780→            <p className="text-sm font-medium text-gray-900">Healthy</p>
+   781→            <p className="text-xs text-gray-500">Connections OK</p>
+   782→          </div>
+   783→        </div>
+   784→        
+   785→        <div className="bg-white rounded-lg shadow p-4 flex items-center gap-3">
+   786→          <div className="w-10 h-10 bg-red-100 rounded-full flex items-center justify-center">
+   787→            <span className="text-red-600 font-bold">{unhealthyCount}</span>
+   788→          </div>
+   789→          <div>
+   790→            <p className="text-sm font-medium text-gray-900">Issues</p>
+   791→            <p className="text-xs text-gray-500">Needs attention</p>
+   792→          </div>
+   793→        </div>
+   794→      </div>
+   795→
+   796→      {/* Datasource Cards */}
+   797→      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+   798→        {datasources?.map(ds => (
+   799→          <div key={ds.id} className="bg-white rounded-lg shadow p-4">
+   800→            <div className="flex items-start justify-between">
+   801→              <div className="flex items-center gap-3">
+   802→                <div className={`w-10 h-10 rounded-lg flex items-center justify-center text-white font-bold ${
+   803→                  ds.type === 'prometheus' ? 'bg-orange-500' :
+   804→                  ds.type === 'elasticsearch' ? 'bg-yellow-600' :
+   805→                  ds.type === 'loki' ? 'bg-orange-600' :
+   806→                  ds.type === 'mysql' ? 'bg-blue-500' :
+   807→                  'bg-gray-500'
+   808→                }`}>
+   809→                  {ds.type.charAt(0).toUpperCase()}
+   810→                </div>
+   811→                <div>
+   812→                  <h3 className="font-medium text-gray-900">{ds.name}</h3>
+   813→                  <p className="text-sm text-gray-500">{ds.type} • {ds.access}</p>
+   814→                </div>
+   815→              </div>
+   816→              
+   817→              <StatusBadge status={ds.apiHealthStatus || 'UNKNOWN'} variant="dot" />
+   818→            </div>
+   819→
+   820→            <div className="mt-3 pt-3 border-t border-gray-100">
+   821→              <p className="text-xs text-gray-500 truncate">{ds.url}</p>
+   822→              {ds.lastTestResult && (
+   823→                <p className={`text-xs mt-1 ${ds.lastTestResult.success ? 'text-green-600' : 'text-red-600'}`}>
+   824→                  {ds.lastTestResult.message}
+   825→                </p>
+   826→              )}
+   827→              {testResults[ds.id] && (
+   828→                <p className={`text-xs mt-1 ${testResults[ds.id].success ? 'text-green-600' : 'text-red-600'}`}>
+   829→                  Test: {testResults[ds.id].message}
+   830→                </p>
+   831→              )}
+   832→            </div>
+   833→
+   834→            <div className="mt-3 flex items-center justify-between">
+   835→              <span className="text-xs text-gray-400">Updated: {new Date(ds.updated).toLocaleString()}</span>
+   836→              <button
+   837→                onClick={() => handleTest(ds.id)}
+   838→                disabled={testingId === ds.id}
+   839→                className="px-3 py-1 text-sm bg-blue-50 text-blue-600 rounded hover:bg-blue-100 disabled:opacity-50"
+   840→              >
+   841→                {testingId === ds.id ? 'Testing...' : 'Test Connection'}
+   842→              </button>
+   843→            </div>
+   844→
+   845→            {ds.isDefault && (
+   846→              <span className="inline-block mt-2 px-2 py-0.5 text-xs bg-blue-100 text-blue-700 rounded">Default</span>
+   847→            )}
+   848→          </div>
+   849→        ))}
+   850→      </div>
+   851→    </div>
+   852→  );
+   853→};
+   854→
+   855→/** Embedded View Tab Content */
+   856→const EmbeddedViewTabContent: React.FC<{
+   857→  dashboardUid: string;
+   858→  onDashboardChange: (uid: string) => void;
+   859→}> = ({ dashboardUid, onDashboardChange }) => {
+   860→  const { embedUrl, isLoading, updateConfig, refresh } = useDashboardView({
+   861→    dashboardUid,
+   862→    theme: 'dark',
+   863→    showToolbar: true,
+   864→    showTimePicker: true,
+   865→    showHeader: false,
+   866→  });
+   867→
+   868→  const availableDashboards = [
+   869→    { uid: 'soc-overview', name: 'SOC Overview' },
+   870→    { uid: 'wazuh-events', name: 'Wazuh Security Events' },
+   871→    { uid: 'suricata-ids', name: 'Suricata IDS/IPS' },
+   872→    { uid: 'misp-threat-intel', name: 'MISP Threat Intel' },
+   873→    { uid: 'thehive-incidents', name: 'TheHive Incidents' },
+   874→    { uid: 'network-traffic', name: 'Network Traffic' },
+   875→    { uid: 'system-health', name: 'Infrastructure Health' },
+   876→  ];
+   877→
+   878→  return (
+   879→    <div className="space-y-4">
+   880→      {/* Controls */}
+   881→      <div className="flex flex-col sm:flex-row gap-4 items-start sm:items-center justify-between bg-white rounded-lg shadow p-4">
+   882→        <div className="flex items-center gap-4">
+   883→          <label className="text-sm font-medium text-gray-700">Dashboard:</label>
+   884→          <select
+   885→            value={dashboardUid}
+   886→            onChange={(e) => onDashboardChange(e.target.value)}
+   887→            className="px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
+   888→          >
+   889→            {availableDashboards.map(d => (
+   890→              <option key={d.uid} value={d.uid}>{d.name}</option>
+   891→            ))}
+   892→          </select>
+   893→        </div>
+   894→
+   895→        <div className="flex items-center gap-2">
+   896→          <button
+   897→            onClick={() => updateConfig({ theme: 'dark' })}
+   898→            className="px-3 py-1.5 text-sm bg-gray-800 text-white rounded hover:bg-gray-700"
+   899→          >
+   900→            Dark
+   901→          </button>
+   902→          <button
+   903→            onClick={() => updateConfig({ theme: 'light' })}
+   904→            className="px-3 py-1.5 text-sm bg-white border border-gray-300 rounded hover:bg-gray-50"
+   905→          >
+   906→            Light
+   907→          </button>
+   908→          <button
+   909→            onClick={refresh}
+   910→            className="px-3 py-1.5 text-sm bg-blue-600 text-white rounded hover:bg-blue-700"
+   911→          >
+   912→            Refresh
+   913→          </button>
+   914→          
+   915→          <a
+   916→            href={embedUrl}
+   917→            target="_blank"
+   918→            rel="noopener noreferrer"
+   919→            className="px-3 py-1.5 text-sm bg-gray-100 text-gray-700 rounded hover:bg-gray-200 ml-2"
+   920→          >
+   921→            Open in New Tab
+   922→          </a>
+   923→        </div>
+   924→      </div>
+   925→
+   926→      {/* Embedded iframe container */}
+   927→      <div className="bg-white rounded-lg shadow overflow-hidden relative" style={{ minHeight: '700px' }}>
+   928→        {isLoading && (
+   929→          <div className="absolute inset-0 bg-white/80 z-10 flex items-center justify-center">
+   930→            <LoadingSpinner size="lg" message="Loading dashboard..." />
+   931→          </div>
+   932→        )}
+   933→        
+   934→        <iframe
+   935→          src={embedUrl}
+   936→          className="w-full border-0"
+   937→          style={{ height: '700px' }}
+   938→          title="Embedded Grafana Dashboard"
+   939→          allow="fullscreen"
+   940→          loading="lazy"
+   941→        />
+   942→      </div>
+   943→    </div>
+   944→  );
+   945→};
+   946→
+   947→// ============================================================
+   948→// Pre-built SOC Dashboards Showcase
+   949→// ============================================================
+   950→
+   951→interface SOCDashboardConfig {
+   952→  uid: string;
+   953→  name: string;
+   954→  description: string;
+   955→  icon: string;
+   956→  category: string;
+   957→  tags: string[];
+   958→  panels: number;
+   959→  variables: string[];
+   960→  previewImage?: string;
+   961→}
+   962→
+   963→const PREBUILT_DASHBOARDS: SOCDashboardConfig[] = [
+   964→  {
+   965→    uid: 'soc-overview',
+   966→    name: 'SOC Overview',
+   967→    description: 'Comprehensive security operations center overview with KPIs from all integrated systems including Wazuh, Suricata, MISP, and TheHive.',
+   968→    icon: '📊',
+   969→    category: 'Overview',
+   970→    tags: ['soc', 'overview', 'kpi'],
+   971→    panels: 12,
+   972→    variables: ['timeRange', 'severity'],
+   973→  },
+   974→  {
+   975→    uid: 'security-events',
+   976→    name: 'Security Events Analysis',
+   977→    description: 'Detailed analysis of security events from Wazuh SIEM with trends, severity breakdown, and top sources/targets.',
+   978→    icon: '🔔',
+   979→    category: 'SIEM',
+   980→    tags: ['wazuh', 'events', 'siem'],
+   981→    panels: 16,
+   982→    variables: ['timeRange', 'level', 'ruleGroup'],
+   983→  },
+   984→  {
+   985→    uid: 'network-traffic',
+   986→    name: 'Network Traffic Monitor',
+   987→    description: 'Real-time network traffic analysis from Suricata IDS/IPS with protocol distribution, threat detection, and bandwidth metrics.',
+   988→    icon: '🌐',
+   989→    category: 'Network',
+   990→    tags: ['suricata', 'network', 'ids'],
+   991→    panels: 14,
+   992→    variables: ['timeRange', 'protocol', 'action'],
+   993→  },
+   994→  {
+   995→    uid: 'threat-intelligence',
+   996→    name: 'Threat Intelligence Center',
+   997→    description: 'MISP IOC statistics, threat actor tracking, and correlation analysis for proactive threat hunting.',
+   998→    icon: '🎯',
+   999→    category: 'Threat Intel',
+  1000→    tags: ['misp', 'ioc', 'threat'],
+  1001→    panels: 10,
+  1002→    variables: ['timeRange', 'threatLevel', 'eventType'],
+  1003→  },
+  1004→  {
+  1005→    uid: 'incident-response',
+  1006→    name: 'Incident Response Metrics',
+  1007→    description: 'TheHive case management metrics including MTTR, case severity distribution, and analyst workload.',
+  1008→    icon: '🚨',
+  1009→    category: 'SOAR',
+  1010→    tags: ['thehive', 'incidents', 'soar'],
+  1011→    panels: 12,
+  1012→    variables: ['timeRange', 'status', 'severity'],
+  1013→  },
+  1014→  {
+  1015→    uid: 'infrastructure-health',
+  1016→    name: 'Infrastructure Health',
+  1017→    description: 'System infrastructure monitoring covering CPU, memory, disk, network, and service health across all SOC servers.',
+  1018→    icon: '💻',
+  1019→    category: 'Infrastructure',
+  1020→    tags: ['health', 'monitoring', 'infra'],
+  1021→    panels: 18,
+  1022→    variables: ['timeRange', 'host', 'service'],
+  1023→  },
+  1024→  {
+  1025→    uid: 'compliance-dashboard',
+  1026→    name: 'Compliance & Audit',
+  1027→    description: 'Security compliance monitoring aligned with ISO 27001, NIST, and Algerian cybersecurity regulations.',
+  1028→    icon: '✅',
+  1029→    category: 'Compliance',
+  1030→    tags: ['compliance', 'audit', 'regulation'],
+  1031→    panels: 8,
+  1032→    variables: ['timeRange', 'framework', 'control'],
+  1033→  },
+  1034→  {
+  1035→    uid: 'threat-hunting',
+  1036→    name: 'Threat Hunting Workspace',
+  1037→    description: 'Interactive workspace for threat hunters with query builder, IOC lookup, and timeline analysis tools.',
+  1038→    icon: '🔍',
+  1039→    category: 'Analysis',
+  1040→    tags: ['hunting', 'analysis', 'forensics'],
+  1041→    panels: 6,
+  1042→    variables: ['timeRange', 'query', 'scope'],
+  1043→  },
+  1044→];
+  1045→
+  1046→/** Pre-built Dashboards Tab Content */
+  1047→const PrebuiltDashboardsTabContent: React.FC<{
+  1048→  onSelectDashboard: (uid: string) => void;
+  1049→}> = ({ onSelectDashboard }) => {
+  1050→  const [selectedCategory, setSelectedCategory] = useState<string>('all');
+  1051→
+  1052→  const categories = ['all', ...Array.from(new Set(PREBUILT_DASHBOARDS.map(d => d.category)))];
+  1053→
+  1054→  const filteredDashboards = selectedCategory === 'all'
+  1055→    ? PREBUILT_DASHBOARDS
+  1056→    : PREBUILT_DASHBOARDS.filter(d => d.category === selectedCategory);
+  1057→
+  1058→  return (
+  1059→    <div className="space-y-6">
+  1060→      <div className="bg-gradient-to-r from-blue-600 to-purple-600 rounded-xl p-6 text-white">
+  1061→        <h2 className="text-2xl font-bold mb-2">Pre-built SOC Dashboards</h2>
+  1062→        <p className="opacity-90">
+  1063→          Ready-to-use dashboard configurations designed specifically for Security Operations Centers.
+  1064→          Each dashboard is optimized for monitoring specific aspects of your security infrastructure.
+  1065→        </p>
+  1066→      </div>
+  1067→
+  1068→      {/* Category Filter */}
+  1069→      <div className="flex flex-wrap gap-2">
+  1070→        {categories.map(cat => (
+  1071→          <button
+  1072→            key={cat}
+  1073→            onClick={() => setSelectedCategory(cat)}
+  1074→            className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
+  1075→              selectedCategory === cat
+  1076→                ? 'bg-blue-600 text-white'
+  1077→                : 'bg-white text-gray-700 hover:bg-gray-100 shadow'
+  1078→            }`}
+  1079→          >
+  1080→            {cat.charAt(0).toUpperCase() + cat.slice(1)}
+  1081→          </button>
+  1082→        ))}
+  1083→      </div>
+  1084→
+  1085→      {/* Dashboard Cards */}
+  1086→      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+  1087→        {filteredDashboards.map(dashboard => (
+  1088→          <div
+  1089→            key={dashboard.uid}
+  1090→            className="bg-white rounded-xl shadow-lg overflow-hidden hover:shadow-xl transition-shadow"
+  1091→          >
+  1092→            {/* Preview Header */}
+  1093→            <div className="h-40 bg-gradient-to-br from-gray-800 to-gray-900 flex items-center justify-center relative">
+  1094→              <span className="text-6xl">{dashboard.icon}</span>
+  1095→              
+  1096→              <div className="absolute top-3 right-3">
+  1097→                <span className="px-2 py-1 text-xs bg-blue-500 text-white rounded-full">
+  1098→                  {dashboard.category}
+  1099→                </span>
+  1100→              </div>
+  1101→            </div>
+  1102→
+  1103→            {/* Content */}
+  1104→            <div className="p-5">
+  1105→              <h3 className="text-lg font-semibold text-gray-900 mb-2">{dashboard.name}</h3>
+  1106→              <p className="text-sm text-gray-600 mb-4 line-clamp-2">{dashboard.description}</p>
+  1107→
+  1108→              {/* Stats */}
+  1109→              <div className="flex items-center gap-4 text-sm text-gray-500 mb-4">
+  1110→                <span className="flex items-center gap-1">
+  1111→                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+  1112→                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2V6zM14 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2V6zM4 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2v-2zM14 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2v-2z" />
+  1113→                  </svg>
+  1114→                  {dashboard.panels} panels
+  1115→                </span>
+  1116→                <span className="flex items-center gap-1">
+  1117→                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+  1118→                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 7h.01M7 3h5c.512 0 1.024.195 1.414.586l7 7a2 2 0 010 2.828l-7 7a2 2 0 01-2.828 0l-7-7A1.994 1.994 0 013 12V7a4 4 0 014-4z" />
+  1119→                  </svg>
+  1120→                  {dashboard.variables.length} variables
+  1121→                </span>
+  1122→              </div>
+  1123→
+  1124→              {/* Tags */}
+  1125→              <div className="flex flex-wrap gap-1 mb-4">
+  1126→                {dashboard.tags.map(tag => (
+  1127→                  <span key={tag} className="px-2 py-0.5 text-xs bg-gray-100 text-gray-600 rounded">
+  1128→                    {tag}
+  1129→                  </span>
+  1130→                ))}
+  1131→              </div>
+  1132→
+  1133→              {/* Actions */}
+  1134→              <div className="flex gap-2">
+  1135→                <button
+  1136→                  onClick={() => onSelectDashboard(dashboard.uid)}
+  1137→                  className="flex-1 px-4 py-2 bg-blue-600 text-white text-sm font-medium rounded-lg hover:bg-blue-700 transition-colors"
+  1138→                >
+  1139→                  View Dashboard
+  1140→                </button>
+  1141→                <button
+  1142→                  className="px-4 py-2 border border-gray-300 text-gray-700 text-sm font-medium rounded-lg hover:bg-gray-50 transition-colors"
+  1143→                >
+  1144→                  Import JSON
+  1145→                </button>
+  1146→              </div>
+  1147→            </div>
+  1148→          </div>
+  1149→        ))}
+  1150→      </div>
+  1151→    </div>
+  1152→  );
+  1153→};
+  1154→
+  1155→// ============================================================
+  1156→// Main Grafana Dashboard Component
+  1157→// ============================================================
+  1158→
+  1159→type TabId = 'overview' | 'dashboards' | 'alerts' | 'datasources' | 'embedded' | 'prebuilt';
+  1160→
+  1161→interface GrafanaDashboardProps {
+  1162→  /** Initial tab to display */
+  1163→  initialTab?: TabId;
+  1164→  /** Custom class name */
+  1165→  className?: string;
+  1166→  /** Whether to show header */
+  1167→  showHeader?: boolean;
+  1168→}
+  1169→
+  1170→/**
+  1171→ * Main Grafana Monitoring Dashboard Component
+  1172→ * 
+  1173→ * @example
+  1174→ * ```tsx
+  1175→ * <GrafanaDashboard initialTab="overview" />
+  1176→ * ```
+  1177→ */
+  1178→export const GrafanaDashboard: React.FC<GrafanaDashboardProps> = ({
+  1179→  initialTab = 'overview',
+  1180→  className = '',
+  1181→  showHeader = true,
+  1182→}) => {
+  1183→  const [activeTab, setActiveTab] = useState<TabId>(initialTab);
+  1184→  const [embeddedDashboardUid, setEmbeddedDashboardUid] = useState<string>('soc-overview');
+  1185→
+  1186→  // Combined hook for all data
+  1187→  const {
+  1188→    stats,
+  1189→    dashboards,
+  1190→    alerts,
+  1191→    datasources,
+  1192→    isReady,
+  1193→    hasErrors,
+  1194→    systemStatus,
+  1195→    refreshAll,
+  1196→  } = useGrafanaDashboard();
+  1197→
+  1198→  /** Tab definitions */
+  1199→  const tabs: Array<{ id: TabId; label: string; icon: JSX.Element; badge?: number }> = [
+  1200→    {
+  1201→      id: 'overview',
+  1202→      label: 'Overview',
+  1203→      icon: (
+  1204→        <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+  1205→          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 5a1 1 0 011-1h14a1 1 0 011 1v2a1 1 0 01-1 1H5a1 1 0 01-1-1V5zM4 13a1 1 0 011-1h6a1 1 0 011 1v6a1 1 0 01-1 1H5a1 1 0 01-1-1v-6zM16 13a1 1 0 011-1h2a1 1 0 011 1v6a1 1 0 01-1 1h-2a1 1 0 01-1-1v-6z" />
+  1206→        </svg>
+  1207→      ),
+  1208→    },
+  1209→    {
+  1210→      id: 'dashboards',
+  1211→      label: 'Dashboards',
+  1212→      icon: (
+  1213→        <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+  1214→          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 17V7m0 10a2 2 0 01-2 2H5a2 2 0 01-2-2V7a2 2 0 012-2h2a2 2 0 012 2m0 10a2 2 0 002 2h2a2 2 0 002-2M9 7a2 2 0 012-2h2a2 2 0 012 2m0 10V7m0 10a2 2 0 002 2h2a2 2 0 002-2V7a2 2 0 00-2-2h-2a2 2 0 00-2 2" />
+  1215→        </svg>
+  1216→      ),
+  1217→    },
+  1218→    {
+  1219→      id: 'alerts',
+  1220→      label: 'Alerts',
+  1221→      icon: (
+  1222→        <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+  1223→          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9" />
+  1224→        </svg>
+  1225→      ),
+  1226→      badge: alerts.summary.alerting,
+  1227→    },
+  1228→    {
+  1229→      id: 'datasources',
+  1230→      label: 'Data Sources',
+  1231→      icon: (
+  1232→        <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+  1233→          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 7v10c0 2.21 3.582 4 8 4s8-1.79 8-4V7M4 7c0 2.21 3.582 4 8 4s8-1.79 8-4M4 7c0-2.21 3.582-4 8-4s8 1.79 8 4m0 5c0 2.21-3.582 4-8 4s-8-1.79-8-4" />
+  1234→        </svg>
+  1235→      ),
+  1236→      badge: datasources.unhealthyCount > 0 ? datasources.unhealthyCount : undefined,
+  1237→    },
+  1238→    {
+  1239→      id: 'embedded',
+  1240→      label: 'Live View',
+  1241→      icon: (
+  1242→        <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+  1243→          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" />
+  1244→        </svg>
+  1245→      ),
+  1246→    },
+  1247→    {
+  1248→      id: 'prebuilt',
+  1249→      label: 'SOC Templates',
+  1250→      icon: (
+  1251→        <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+  1252→          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" />
+  1253→        </svg>
+  1254→      ),
+  1255→    },
+  1256→  ];
+  1257→
+  1258→  /** Render active tab content */
+  1259→  const renderTabContent = () => {
+  1260→    switch (activeTab) {
+  1261→      case 'overview':
+  1262→        return (
+  1263→          <OverviewTabContent
+  1264→            kpis={stats.kpis}
+  1265→            timelineEvents={stats.timelineEvents}
+  1266→            systemStatus={systemStatus}
+  1267→          />
+  1268→        );
+  1269→
+  1270→      case 'dashboards':
+  1271→        return (
+  1272→          <DashboardsTabContent
+  1273→            dashboards={dashboards.data}
+  1274→            loading={dashboards.loading}
+  1275→            error={dashboards.error}
+  1276→            total={dashboards.total}
+  1277→            onOpenDashboard={(uid) => {
+  1278→              setEmbeddedDashboardUid(uid);
+  1279→              setActiveTab('embedded');
+  1280→            }}
+  1281→          />
+  1282→        );
+  1283→
+  1284→      case 'alerts':
+  1285→        return (
+  1286→          <AlertsTabContent
+  1287→            alerts={alerts.data}
+  1288→            loading={alerts.loading}
+  1289→            error={alerts.error}
+  1290→            summary={alerts.summary}
+  1291→            onPause={alerts.pauseAlert}
+  1292→            onResume={alerts.resumeAlert}
+  1293→            onTogglePause={alerts.togglePause}
+  1294→          />
+  1295→        );
+  1296→
+  1297→      case 'datasources':
+  1298→        return (
+  1299→          <DataSourcesTabContent
+  1300→            datasources={datasources.data}
+  1301→            loading={datasources.loading}
+  1302→            error={datasources.error}
+  1303→            healthyCount={datasources.healthyCount}
+  1304→            unhealthyCount={datasources.unhealthyCount}
+  1305→            onTestConnection={datasources.testConnection}
+  1306→          />
+  1307→        );
+  1308→
+  1309→      case 'embedded':
+  1310→        return (
+  1311→          <EmbeddedViewTabContent
+  1312→            dashboardUid={embeddedDashboardUid}
+  1313→            onDashboardChange={setEmbeddedDashboardUid}
+  1314→          />
+  1315→        );
+  1316→
+  1317→      case 'prebuilt':
+  1318→        return (
+  1319→          <PrebuiltDashboardsTabContent
+  1320→            onSelectDashboard={(uid) => {
+  1321→              setEmbeddedDashboardUid(uid);
+  1322→              setActiveTab('embedded');
+  1323→            }}
+  1324→          />
+  1325→        );
+  1326→
+  1327→      default:
+  1328→        return null;
+  1329→    }
+  1330→  };
+  1331→
+  1332→  return (
+  1333→    <div className={`bg-gray-50 min-h-screen ${className}`}>
+  1334→      {/* Header */}
+  1335→      {showHeader && (
+  1336→        <header className="bg-white shadow-sm border-b border-gray-200">
+  1337→          <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+  1338→            <div className="flex items-center justify-between h-16">
+  1339→              <div className="flex items-center gap-3">
+  1340→                <div className="w-10 h-10 bg-gradient-to-br from-orange-500 via-pink-500 to-purple-600 rounded-lg flex items-center justify-center">
+  1341→                  <svg className="w-6 h-6 text-white" fill="currentColor" viewBox="0 0 24 24">
+  1342→                    <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z"/>
+  1343→                  </svg>
+  1344→                </div>
+  1345→                <div>
+  1346→                  <h1 className="text-xl font-bold text-gray-900">Grafana Monitoring</h1>
+  1347→                  <p className="text-sm text-gray-500">Algeria National SOC Platform</p>
+  1348→                </div>
+  1349→              </div>
+  1350→
+  1351→              <div className="flex items-center gap-4">
+  1352→                {/* System Status Indicator */}
+  1353→                <div className={`flex items-center gap-2 px-3 py-1.5 rounded-full text-sm font-medium ${
+  1354→                  systemStatus === 'healthy' ? 'bg-green-100 text-green-800' :
+  1355→                  systemStatus === 'degraded' ? 'bg-yellow-100 text-yellow-800' :
+  1356→                  'bg-red-100 text-red-800'
+  1357→                }`}>
+  1358→                  <span className={`w-2 h-2 rounded-full ${
+  1359→                    systemStatus === 'healthy' ? 'bg-green-500' :
+  1360→                    systemStatus === 'degraded' ? 'bg-yellow-500' :
+  1361→                    'bg-red-500'
+  1362→                  }`}></span>
+  1363→                  {systemStatus.charAt(0).toUpperCase() + systemStatus.slice(1)}
+  1364→                </div>
+  1365→
+  1366→                {/* Refresh Button */}
+  1367→                <button
+  1368→                  onClick={refreshAll}
+  1369→                  disabled={!isReady}
+  1370→                  className="p-2 text-gray-500 hover:text-gray-700 hover:bg-gray-100 rounded-lg disabled:opacity-50"
+  1371→                  title="Refresh all data"
+  1372→                >
+  1373→                  <svg className={`w-5 h-5 ${!isReady ? 'animate-spin' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+  1374→                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+  1375→                  </svg>
+  1376→                </button>
+  1377→              </div>
+  1378→            </div>
+  1379→          </div>
+  1380→        </header>
+  1381→      )}
+  1382→
+  1383→      {/* Tab Navigation */}
+  1384→      <nav className="bg-white border-b border-gray-200 sticky top-0 z-10">
+  1385→        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+  1386→          <div className="flex space-x-1 overflow-x-auto">
+  1387→            {tabs.map(tab => (
+  1388→              <button
+  1389→                key={tab.id}
+  1390→                onClick={() => setActiveTab(tab.id)}
+  1391→                className={`flex items-center gap-2 px-4 py-4 text-sm font-medium border-b-2 transition-colors whitespace-nowrap ${
+  1392→                  activeTab === tab.id
+  1393→                    ? 'border-blue-600 text-blue-600'
+  1394→                    : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+  1395→                }`}
+  1396→              >
+  1397→                {tab.icon}
+  1398→                {tab.label}
+  1399→                {tab.badge !== undefined && tab.badge > 0 && (
+  1400→                  <span className={`px-1.5 py-0.5 text-xs rounded-full ${
+  1401→                    activeTab === tab.id
+  1402→                      ? 'bg-blue-100 text-blue-700'
+  1403→                      : 'bg-gray-100 text-gray-600'
+  1404→                  }`}>
+  1405→                    {tab.badge}
+  1406→                  </span>
+  1407→                )}
+  1408→              </button>
+  1409→            ))}
+  1410→          </div>
+  1411→        </div>
+  1412→      </nav>
+  1413→
+  1414→      {/* Main Content */}
+  1415→      <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
+  1416→        {!isReady && !hasErrors ? (
+  1417→          <LoadingSpinner size="lg" message="Loading monitoring data..." />
+  1418→        ) : (
+  1419→          renderTabContent()
+  1420→        )}
+  1421→      </main>
+  1422→    </div>
+  1423→  );
+  1424→};
+  1425→
+  1426→export default GrafanaDashboard;
+  1427→
+  1428→// Export sub-components for standalone use
+  1429→export {
+  1430→  OverviewTabContent,
+  1431→  DashboardsTabContent,
+  1432→  AlertsTabContent,
+  1433→  DataSourcesTabContent,
+  1434→  EmbeddedViewTabContent,
+  1435→  PrebuiltDashboardsTabContent,
+  1436→  KPICard,
+  1437→  StatusBadge,
+  1438→  SeverityBadge,
+  1439→};
+  1440→

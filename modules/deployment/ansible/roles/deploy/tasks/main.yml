@@ -1,0 +1,313 @@
+# =============================================================================
+# Deploy Role - Main Tasks
+# Handles: Application deployment with rollback procedures
+# =============================================================================
+---
+
+- name: "DEPLOY | Display role start message"
+  debug:
+    msg: "═══ Starting Application Deployment ═══"
+
+# ============================================================================
+# SECTION 1: Pre-Deployment Checks
+# ============================================================================
+- name: "DEPLOY | Check if previous deployment exists"
+  stat:
+    path: /opt/soc-platform/.deployment-info
+  register: deployment_info_check
+  tags: [deploy-precheck]
+
+- name: "DEPLOY | Load previous deployment information"
+  slurp:
+    src: /opt/soc-platform/.deployment-info
+  register: prev_deployment_info
+  when: deployment_info_check.stat.exists
+  tags: [deploy-precheck]
+
+- name: "DEPLOY | Verify all required services are healthy"
+  script: "{{ soc_scripts_dir }}/health-check.sh --quick"
+  register: health_check_result
+  ignore_errors: yes
+  tags: [deploy-precheck]
+
+- name: "DEPLOY | Fail if critical services are unhealthy"
+  fail:
+    msg: "Critical services are not healthy. Aborting deployment. Run health-check.sh for details."
+  when:
+    - health_check_result.rc != 0
+    - force_deploy | default(false) | bool == false
+  tags: [deploy-precheck]
+
+# ============================================================================
+# SECTION 2: Backup Before Deployment
+# ============================================================================
+- name: "DEPLOY | Create backup of current configuration"
+  archive:
+    path:
+      - /opt/soc-platform/configs
+      - /opt/soc-platform/docker-compose.yml
+    dest: "/var/backups/soc/pre-deploy-{{ ansible_date_time.epoch }}.tar.gz"
+    format: gz
+  when: skip_backup | default(false) | bool == false
+  tags: [deploy-backup]
+
+- name: "DEPLOY | Backup current Docker images"
+  shell: |
+    docker images --format '{{.Repository}}:{{.Tag}}' | grep -E '(soc|wazuh|suricata|misp|thehive)' | while read img; do
+      docker save "$img" | gzip > "/var/backups/soc/images/${img//\//-}-{{ ansible_date_time.epoch }}.tar.gz"
+    done
+  args:
+    creates: /var/backups/soc/images
+    when: 
+      - skip_backup | default(false) | bool == false
+      - docker_images_backup | default(true) | bool
+  ignore_errors: yes
+  tags: [deploy-backup]
+
+# ============================================================================
+# SECTION 3: Pull and Deploy Docker Images
+# ============================================================================
+- name: "DEPLOY | Copy production docker-compose file"
+  copy:
+    src: ../../docker/docker-compose.prod.yml
+    dest: /opt/soc-platform/docker-compose.yml
+    mode: '0644'
+  backup: yes
+  tags: [deploy-compose]
+
+- name: "DEPLOY | Pull latest Docker images"
+  command: docker compose pull
+  args:
+    chdir: /opt/soc-platform
+  register: docker_pull_result
+  retries: 3
+  delay: 10
+  until: docker_pull_result.rc == 0
+  tags: [deploy-pull]
+
+- name: "DEPLOY | Display pulled images summary"
+  debug:
+    msg: |
+      Pulled {{ docker_pull_result.stdout_lines | length }} image layers
+      Latest changes:
+      {% for line in docker_pull_result.stdout_lines[-5:] %}
+        {{ line }}
+      {% endfor %}
+  when: docker_pull_result.changed
+  tags: [deploy-pull]
+
+# ============================================================================
+# SECTION 4: Rolling Deployment Strategy
+# ============================================================================
+- name: "DEPLOY | Execute rolling update for stateless services"
+  command: >
+    docker compose up -d --no-deps --build --remove-orphans
+    {{ deploy_services | default('') }}
+  args:
+    chdir: /opt/soc-platform
+  register: rolling_update_result
+  when: rolling_update | default(true) | bool
+  notify: Wait for services to be healthy
+  tags: [deploy-update]
+
+- name: "DEPLOY | Standard deployment (non-rolling)"
+  command: >
+    docker compose up -d --remove-orphans
+  args:
+    chdir: /opt/soc-platform
+  register: standard_update_result
+  when: not (rolling_update | default(true) | bool)
+  notify: Wait for services to be healthy
+  tags: [deploy-update]
+
+# ============================================================================
+# SECTION 5: Database Migrations (if needed)
+# ============================================================================
+- name: "DEPLOY | Check for pending database migrations"
+  stat:
+    path: /opt/soc-platform/migrations/pending
+  register: migrations_check
+  tags: [deploy-migrations]
+
+- name: "DEPLOY | Execute database migrations"
+  command: docker compose exec -T postgres psql -U soc_admin -d soc_platform -f /docker-entrypoint-initdb.d/migrations.sql
+  args:
+    chdir: /opt/soc-platform
+  when: migrations_check.stat.exists
+  register: migration_result
+  tags: [deploy-migrations]
+
+- name: "DEPLOY | Mark migrations as completed"
+  command: mv /opt/soc-platform/migrations/pending /opt/soc-platform/migrations/completed
+  when: 
+    - migrations_check.stat.exists
+    - migration_result.rc == 0
+  tags: [deploy-migrations]
+
+# ============================================================================
+# SECTION 6: Post-Deployment Verification
+# ============================================================================
+- name: "DEPLOY | Wait for services to start"
+  pause:
+    seconds: 30
+  when: wait_for_services | default(true) | bool
+  tags: [deploy-verify]
+
+- name: "DEPLOY | Run comprehensive health check"
+  script: "{{ soc_scripts_dir }}/health-check.sh"
+  register: post_deploy_health
+  until: post_deploy_health.rc == 0
+  retries: 6
+  delay: 30
+  tags: [deploy-verify]
+
+- name: "DEPLOY | Display service status after deployment"
+  command: docker compose ps
+  args:
+    chdir: /opt/soc-platform
+  register: service_status
+  tags: [deploy-verify]
+
+- name: "DEPLOY | Show running services"
+  debug:
+    var: service_status.stdout_lines
+  tags: [deploy-verify]
+
+# ============================================================================
+# SECTION 7: Record Deployment Information
+# ============================================================================
+- name: "DEPLOY | Save deployment metadata"
+  copy:
+    content: |
+      # Deployment Information
+      deployed_at: {{ ansible_date_time.iso8601 }}
+      version: {{ soc_platform_version }}
+      environment: {{ soc_environment }}
+      deployed_by: {{ ansible_user_id | default('ansible') }}
+      commit_sha: {{ git_commit_sha | default('unknown') }}
+      rollback_version: {{ prev_deployment_info['content'] | b64decode | default('none') }}
+      
+      # Services Status
+      services:
+      {% for line in service_status.stdout_lines[1:] %}
+        - {{ line }}
+      {% endfor %}
+    dest: /opt/soc-platform/.deployment-info
+    mode: '0644'
+  tags: [deploy-record]
+
+- name: "DEPLOY | Log deployment event"
+  lineinfile:
+    path: /var/log/soc/deployments.log
+    line: "{{ ansible_date_time.iso8601 }} | {{ soc_environment }} | {{ soc_platform_version }} | {{ ansible_user_id | default('ansible') }} | SUCCESS"
+    create: yes
+    mode: '0644'
+  tags: [deploy-record]
+
+# ============================================================================
+# SECTION 8: Cleanup Old Resources
+# ============================================================================
+- name: "DEPLOY | Remove unused Docker images"
+  command: docker image prune -f --filter "until=24h"
+  register: prune_images
+  changed_when: "'Total reclaimed space' in prune_images.stdout"
+  when: cleanup_after_deploy | default(false) | bool
+  tags: [deploy-cleanup]
+
+- name: "DEPLOY | Remove old backup files (>7 days)"
+  find:
+    paths: /var/backups/soc
+        age: 7d
+        recurse: no
+  register: old_backups
+  when: auto_cleanup_backups | default(true) | bool
+  tags: [deploy-cleanup]
+
+- name: "DEPLOY | Delete old backups"
+  file:
+    path: "{{ item.path }}"
+    state: absent
+  loop: "{{ old_backups.files }}"
+  loop_control:
+    label: "{{ item.path }}"
+  when: 
+    - auto_cleanup_backups | default(true) | bool
+    - old_backups.matched > 0
+  tags: [deploy-cleanup]
+
+# ============================================================================
+# SECTION 9: Rollback on Failure
+# ============================================================================
+- name: "DEPLOY | Initiate rollback if deployment failed"
+  block:
+    - name: "DEPLOY | Deployment failed - initiating rollback"
+      debug:
+        msg: "Deployment verification failed. Initiating automatic rollback..."
+    
+    - name: "DEPLOY | Restore from previous backup"
+      command: >
+        docker compose down && 
+        tar xzf /var/backups/soc/pre-deploy-latest.tar.gz -C /
+      args:
+        chdir: /opt/soc-platform
+    
+    - name: "DEPLOY | Restart services with previous config"
+      command: docker compose up -d
+      args:
+        chdir: /opt/soc-platform
+    
+    - name: "DEPLOY | Notify about rollback"
+      debug:
+        msg: "Rollback completed. Previous version restored."
+  when:
+    - post_deploy_health.rc != 0
+    - auto_rollback | default(true) | bool
+  rescue:
+    - name: "DEPLOY | Rollback also failed - manual intervention required"
+      fail:
+        msg: |
+          CRITICAL: Both deployment and rollback failed!
+          Manual intervention is required.
+          Previous backup available at: /var/backups/soc/
+          Contact SOC operations team immediately.
+  tags: [deploy-rollback]
+
+# ============================================================================
+# SECTION 10: Final Summary
+# ============================================================================
+- name: "DEPLOY | Display deployment completion summary"
+  debug:
+    msg: |
+      ╔═══════════════════════════════════════════════════════════╗
+      ║     ✅ DEPLOYMENT COMPLETED                               ║
+      ╠═══════════════════════════════════════════════════════════╣
+      ║                                                          ║
+      ║  Version:     {{ soc_platform_version }}                       ║
+      ║  Environment: {{ soc_environment }}                          ║
+      ║  Time:        {{ ansible_date_time.iso8601 }}                ║
+      ║                                                          ║
+      ║  Services:                                                  ║
+      {% for svc in service_status.stdout_lines[1:-1] if svc.strip() %}
+      ║    {{ svc }}                                               ║
+      {% endfor %}
+      ║                                                          ║
+      ║  Next Steps:                                               ║
+      ║  • Monitor logs: docker compose logs -f                    ║
+      ║  • Check dashboards: http://{{ ansible_default_ipv4.address }}:3000   ║
+      ╚═══════════════════════════════════════════════════════════╝
+  tags: [deploy-summary]
+
+- name: "DEPLOY | Display role completion message"
+  debug:
+    msg: "═══ Application Deployment Complete ═══"
+
+# ============================================================================
+# HANDLERS
+# ============================================================================
+handlers:
+  - name: Wait for services to be healthy
+    command: "{{ soc_scripts_dir }}/health-check.sh --wait"
+    register: wait_health
+    retries: 12
+    delay: 10
+    until: wait_health.rc == 0

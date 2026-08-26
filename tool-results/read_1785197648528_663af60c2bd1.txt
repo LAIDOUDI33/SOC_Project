@@ -1,0 +1,828 @@
+     1→/**
+     2→ * National SOC Platform - Behavioral Analytics Engine
+     3→ * 
+     4→ * User and Entity Behavior Analytics (UEBA) for:
+     5→ * - Insider threat detection
+     6→ * - Compromised account identification
+     7→ * - Telecom-specific behavior patterns
+     8→ * - Risk scoring based on behavioral anomalies
+     9→ * 
+    10→ * @version 2.0.0 (Phase 7 Enhancement)
+    11→ * @module analytics/ml/behavioral-analytics
+    12→ */
+    13→
+    14→// ============================================================
+    15→// TYPES & INTERFACES
+    16→// ============================================================
+    17→
+    18→export interface BehaviorProfile {
+    19→  entityId: string;
+    20→  entityType: 'user' | 'endpoint' | 'service_account' | 'network_segment';
+    21→  entityName: string;
+    22→  
+    23→  // Baseline behavior (learned over time)
+    24→  baseline: BehaviorBaseline;
+    25→  
+    26→  // Current session/activity
+    27→  currentSession: ActivitySession;
+    28→  
+    29→  // Risk assessment
+    30→  riskScore: number; // 0-100
+    31→  riskLevel: 'low' | 'medium' | 'high' | 'critical';
+    32→  riskFactors: RiskFactor[];
+    33→  
+    34→  // Metadata
+    35→  lastUpdated: Date;
+    36→  profileAgeDays: number;
+    37→}
+    38→
+    39→export interface BehaviorBaseline {
+    40→  // Temporal patterns
+    41→  typicalLoginHours: number[]; // 0-23, probability distribution
+    42→  typicalWorkdays: number[]; // 0-6, Mon-Sun
+    43→  
+    44→  // Activity volumes
+    45→  avgDailyActions: number;
+    46→  avgDataAccessedMB: number;
+    47→  avgSystemsAccessed: number;
+    48→  
+    49→  // Access patterns
+    50→  typicalLocations: string[];
+    51→  typicalEndpoints: string[];
+    52→  typicalResources: string[];
+    53→  
+    54→  // Peer group comparison
+    55→  peerGroupDeviation: number; // How much this entity differs from peers
+    56→}
+    57→
+    58→export interface ActivitySession {
+    59→  sessionId: string;
+    60→  startTime: Date;
+    61→  endTime?: Date;
+    62→  
+    63→  actions: ActionEvent[];
+    64→  totalActions: number;
+    65→  uniqueSystemsAccessed: Set<string>;
+    66→  uniqueResourcesAccessed: Set<string>;
+    67→  
+    68→  // Anomalies detected
+    69→  anomalies: BehaviorAnomaly[];
+    70→  anomalyCount: number;
+    71→  maxAnomalySeverity: 'low' | 'medium' | 'high' | 'critical';
+    72→}
+    73→
+    74→export interface ActionEvent {
+    75→  timestamp: Date;
+    76→  actionType: ActionType;
+    77→  resource: string;
+    78→  endpoint?: string;
+    79→  location?: string;
+    80→  outcome: 'success' | 'failure' | 'denied';
+    81→  riskContribution: number; // 0-1, how much this action contributes to risk
+    82→  details?: Record<string, any>;
+    83→}
+    84→
+    85→export type ActionType = 
+    86→  | 'login'
+    87→  | 'logout'
+    88→  | 'file_access'
+    89→  | 'file_download'
+    90→  | 'file_upload'
+    91→  | 'config_change'
+    92→  | 'privilege_escalation'
+    93→  | 'data_export'
+    94→  | 'api_call'
+    95→  | 'database_query'
+    96→  | 'remote_access'
+    97→  | 'email_sent'
+    98→  | 'print_action';
+    99→
+   100→export interface BehaviorAnomaly {
+   101→  id: string;
+   102→  timestamp: Date;
+   103→  anomalyType: AnomalyType;
+   104→  severity: 'low' | 'medium' | 'high' | 'critical';
+   105→  score: number; // 0-100
+   106→  description: string;
+   107→  
+   108→  // Context
+   109→  baselineValue: number;
+   110→  observedValue: number;
+   111→  deviationFactor: number;
+   112→  
+   113→  // Related indicators
+   114→  relatedEvents: string[]; // Action IDs
+   115→  mitreTechnique?: string;
+   116→  recommendation: string;
+   117→}
+   118→
+   119→export type AnomalyType = 
+   120→  | 'impossible_travel'
+   121→  | 'after_hours_access'
+   122→  | 'unusual_data_volume'
+   123→  | 'unusual_location'
+   124→  | 'privilege_abuse'
+   125→  | 'lateral_movement'
+   126→  | 'data_exfiltration'
+   127→  | 'credential_stuffing'
+   128→  | 'behavior_drift'
+   129→  | 'peer_anomaly';
+   130→
+   131→export interface RiskFactor {
+   132→  name: string;
+   133→  weight: number; // 0-1
+   134→  value: number;
+   135→  severity: 'low' | 'medium' | 'high' | 'critical';
+   136→  description: string;
+   137→}
+   138→
+   139→// ============================================================
+   140→// BEHAVIORAL ANALYSIS ENGINE
+   141→// ============================================================
+   142→
+   143→/**
+   144→ * Analyze user behavior and generate risk assessment
+   145→ */
+   146→export function analyzeBehavior(
+   147→  currentActivities: ActionEvent[],
+   148→  baseline: BehaviorBaseline,
+   149→  context: {
+   150→    currentTime: Date;
+   151→    entityInfo: { name: string; department: string; role: string };
+   152→    peerGroupAvg?: BehaviorBaseline;
+   153→  }
+   154→): BehaviorProfile {
+   155→  const session = buildSession(currentActivities);
+   156→  const anomalies = detectBehavioralAnomalies(currentActivities, baseline, context.currentTime);
+   157→  const riskFactors = calculateRiskFactors(currentActivities, anomalies, baseline, context);
+   158→  const riskScore = calculateOverallRiskScore(riskFactors, anomalies);
+   159→
+   160→  return {
+   161→    entityId: context.entityInfo.name.toLowerCase().replace(/\s+/g, '.'),
+   162→    entityType: inferEntityType(context.entityInfo.role),
+   163→    entityName: context.entityInfo.name,
+   164→    baseline,
+   165→    currentSession: {
+   166→      ...session,
+   167→      anomalies,
+   168→      anomalyCount: anomalies.length,
+   169→      maxAnomalySeverity: anomalies.length > 0 
+   170→        ? anomalies.sort((a, b) => getSeverityWeight(b.severity) - getSeverityWeight(a.severity))[0].severity 
+   171→        : 'low',
+   172→    },
+   173→    riskScore,
+   174→    riskLevel: getRiskLevel(riskScore),
+   175→    riskFactors,
+   176→    lastUpdated: new Date(),
+   177→    profileAgeDays: Math.floor(Math.random() * 90) + 30, // Simulated profile age
+   178→  };
+   179→}
+   180→
+   181→/**
+   182→ * Build activity session from raw events
+   183→ */
+   184→function buildSession(events: ActionEvent[]): Omit<ActivitySession, 'anomalies' | 'anomalyCount' | 'maxAnomalySeverity'> {
+   185→  return {
+   186→    sessionId: `sess-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+   187→    startTime: events.length > 0 ? events[0].timestamp : new Date(),
+   188→    endTime: events.length > 0 ? events[events.length - 1].timestamp : new Date(),
+   189→    actions: events,
+   190→    totalActions: events.length,
+   191→    uniqueSystemsAccessed: new Set(events.map(e => e.endpoint).filter(Boolean) as string[]),
+   192→    uniqueResourcesAccessed: new Set(events.map(e => e.resource)),
+   193→  };
+   194→}
+   195→
+   196→/**
+   197→ * Detect behavioral anomalies compared to baseline
+   198→ */
+   199→function detectBehavioralAnomalies(
+   200→  events: ActionEvent[],
+   201→  baseline: BehaviorBaseline,
+   202→  currentTime: Date
+   203→): BehaviorAnomaly[] {
+   204→  const anomalies: BehaviorAnomaly[] = [];
+   205→
+   206→  // 1. Check for impossible travel
+   207→  const travelAnomaly = detectImpossibleTravel(events, baseline);
+   208→  if (travelAnomaly) anomalies.push(travelAnomaly);
+   209→
+   210→  // 2. Check for after-hours access
+   211→  const hoursAnomaly = detectAfterHoursAccess(events, baseline, currentTime);
+   212→  if (hoursAnomaly) anomalies.push(hoursAnomaly);
+   213→
+   214→  // 3. Check for unusual data volume
+   215→  const volumeAnomaly = detectUnusualDataVolume(events, baseline);
+   216→  if (volumeAnomaly) anomalies.push(volumeAnomaly);
+   217→
+   218→  // 4. Check for unusual location
+   219→  const locationAnomaly = detectUnusualLocation(events, baseline);
+   220→  if (locationAnomaly) anomalies.push(locationAnomaly);
+   221→
+   222→  // 5. Check for privilege abuse
+   223→  const privilegeAnomaly = detectPrivilegeAbuse(events, baseline);
+   224→  if (privilegeAnomaly) anomalies.push(privilegeAnomaly);
+   225→
+   226→  // 6. Check for lateral movement
+   227→  const lateralAnomaly = detectLateralMovement(events, baseline);
+   228→  if (lateralAnomaly) anomalies.push(lateralAnomaly);
+   229→
+   230→  // 7. Check for data exfiltration signals
+   231→  const exfilAnomaly = detectDataExfiltration(events, baseline);
+   232→  if (exfilAnomaly) anomalies.push(exfilAnomaly);
+   233→
+   234→  // 8. Check for credential stuffing
+   235→  const credAnomaly = detectCredentialStuffing(events, baseline);
+   236→  if (credAnomaly) anomalies.push(credAnomaly);
+   237→
+   238→  return anomalies.sort((a, b) => b.score - a.score);
+   239→}
+   240→
+   241→// ============================================================
+   242→// SPECIFIC ANOMALY DETECTORS
+   243→// ============================================================
+   244→
+   245→function detectImpossibleTravel(events: ActionEvent[], _baseline: BehaviorBaseline): BehaviorAnomaly | null {
+   246→  const locationEvents = events.filter(e => e.location && e.actionType === 'login');
+   247→  
+   248→  if (locationEvents.length < 2) return null;
+   249→
+   250→  for (let i = 1; i < locationEvents.length; i++) {
+   251→    const prev = locationEvents[i - 1];
+   252→    const curr = locationEvents[i];
+   253→    
+   254→    const timeDiffHours = (curr.timestamp.getTime() - prev.timestamp.getTime()) / (1000 * 60 * 60);
+   255→    const distanceKm = estimateDistance(prev.location!, curr.location!);
+   256→    const speedKmh = distanceKm / timeDiffHours;
+   257→
+   258→    // Impossible travel: >900 km/h (commercial flight speed)
+   259→    if (speedKmh > 900 && timeDiffHours < 24) {
+   260→      return {
+   261→        id: `anom-${Date.now()}-travel`,
+   262→        timestamp: curr.timestamp,
+   263→        anomalyType: 'impossible_travel',
+   264→        severity: 'critical',
+   265→        score: 95,
+   266→        description: `Impossible travel detected: ${prev.location} to ${curr.location} in ${timeDiffHours.toFixed(1)} hours (${speedKmh.toFixed(0)} km/h)`,
+   267→        baselineValue: 0,
+   268→        observedValue: speedKmh,
+   269→        deviationFactor: speedKmh / 900,
+   270→        relatedEvents: [prev.timestamp.toISOString(), curr.timestamp.toISOString()],
+   271→        mitreTechnique: 'T1021.003', // Remote Services: Remote Desktop Protocol
+   272→        recommendation: 'Immediate investigation required. Possible account compromise or credential sharing.'
+   273→      };
+   274→    }
+   275→  }
+   276→
+   277→  return null;
+   278→}
+   279→
+   280→function detectAfterHoursAccess(events: ActionEvent[], baseline: BehaviorBaseline, currentTime: Date): BehaviorAnomaly | null {
+   281→  const hour = currentTime.getHours();
+   282→  const dayOfWeek = currentTime.getDay();
+   283→  
+   284→  // Check if this is outside normal hours
+   285→  const isWeekend = dayOfWeek === 0 || dayOfWeek === 6;
+   286→  const isAfterHours = hour < 6 || hour > 22 || isWeekend;
+   287→  
+   288→  if (!isAfterHours) return null;
+   289→
+   290→  // Calculate how unusual this is based on baseline
+   291→  const hourProbability = baseline.typicalLoginHours[hour] || 0;
+   292→  const dayProbability = baseline.typicalWorkdays[dayOfWeek] || 0;
+   293→  const combinedProbability = hourProbability * dayProbability;
+   294→
+   295→  // If very unlikely based on baseline
+   296→  if (combinedProbability < 0.05 && events.length > 0) {
+   297→    return {
+   298→      id: `anom-${Date.now()}-afterhours`,
+   299→      timestamp: currentTime,
+   300→      anomalyType: 'after_hours_access',
+   301→      severity: combinedProbability < 0.01 ? 'high' : 'medium',
+   302→      score: Math.round((1 - combinedProbability) * 70),
+   303→      description: `After-hours access at ${hour}:00 on ${['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'][dayOfWeek]} (${events.length} actions)`,
+   304→      baselineValue: combinedProbability * 100,
+   305→      observedValue: 100,
+   306→      deviationFactor: 1 / (combinedProbability + 0.01),
+   307→      relatedEvents: events.slice(0, 3).map(e => e.timestamp.toISOString()),
+   308→      recommendation: 'Verify legitimate business reason. Monitor for additional suspicious activity.'
+   309→    };
+   310→  }
+   311→
+   312→  return null;
+   313→}
+   314→
+   315→function detectUnusualDataVolume(events: ActionEvent[], baseline: BehaviorBaseline): BehaviorAnomaly | null {
+   316→  const dataEvents = events.filter(e => 
+   317→    ['file_download', 'file_upload', 'data_export', 'database_query'].includes(e.actionType)
+   318→  );
+   319→  
+   320→  if (dataEvents.length === 0) return null;
+   321→
+   322→  // Estimate total data volume (simplified)
+   323→  const estimatedVolumeMB = dataEvents.reduce((sum, e) => {
+   324→    switch (e.actionType) {
+   325→      case 'file_download': return sum + (e.details?.sizeMB || 5);
+   326→      case 'file_upload': return sum + (e.details?.sizeMB || 3);
+   327→      case 'data_export': return sum + (e.details?.sizeMB || 10);
+   328→      case 'database_query': return sum + (e.details?.rowCount ? e.details.rowCount / 1000 : 2);
+   329→      default: return sum;
+   330→    }
+   331→  }, 0);
+   332→
+   333→  const volumeRatio = estimatedVolumeMB / (baseline.avgDataAccessedMB || 1);
+   334→
+   335→  if (volumeRatio > 5) {
+   336→    return {
+   337→      id: `anom-${Date.now()}-volume`,
+   338→      timestamp: new Date(),
+   339→      anomalyType: 'unusual_data_volume',
+   340→      severity: volumeRatio > 20 ? 'critical' : volumeRatio > 10 ? 'high' : 'medium',
+   341→      score: Math.min(95, Math.round(volumeRatio * 4)),
+   342→      description: `Unusual data volume: ${estimatedVolumeMB.toFixed(1)}MB accessed (baseline: ${baseline.avgDataAccessedMB?.toFixed(1) || 'N/A'}MB, ${(volumeRatio).toFixed(1)}x normal)`,
+   343→      baselineValue: baseline.avgDataAccessedMB || 0,
+   344→      observedValue: estimatedVolumeMB,
+   345→      deviationFactor: volumeRatio,
+   346→      relatedEvents: dataEvents.map(e => e.timestamp.toISOString()),
+   347→      mitreTechnique: 'T1530', // Data from Cloud Storage Object
+   348→      recommendation: 'Review data access purpose. Check for bulk downloads or unauthorized exports.'
+   349→    };
+   350→  }
+   351→
+   352→  return null;
+   353→}
+   354→
+   355→function detectUnusualLocation(events: ActionEvent[], baseline: BehaviorBaseline): BehaviorAnomaly | null {
+   356→  const locations = [...new Set(events.map(e => e.location).filter(Boolean))];
+   357→  const unusualLocations = locations.filter(l => !baseline.typicalLocations.includes(l!));
+   358→
+   359→  if (unusualLocations.length > 0) {
+   360→    return {
+   361→      id: `anom-${Date.now()}-location`,
+   362→      timestamp: new Date(),
+   363→      anomalyType: 'unusual_location',
+   364→      severity: 'medium',
+   365→      score: Math.min(70, unusualLocations.length * 25),
+   366→      description: `Access from unusual location(s): ${unusualLocations.join(', ')}`,
+   367→      baselineValue: baseline.typicalLocations.length,
+   368→      observedValue: locations.length,
+   369→      deviationFactor: locations.length / (baseline.typicalLocations.length || 1),
+   370→      relatedEvents: events.filter(e => unusualLocations.includes(e.location!)).map(e => e.timestamp.toISOString()),
+   371→      recommendation: 'Verify location legitimacy. Consider geo-blocking if unauthorized region.'
+   372→    };
+   373→  }
+   374→
+   375→  return null;
+   376→}
+   377→
+   378→function detectPrivilegeAbuse(events: ActionEvent[], _baseline: BehaviorBaseline): BehaviorAnomaly | null {
+   379→  const privEvents = events.filter(e => e.actionType === 'privilege_escalation');
+   380→  
+   381→  if (privEvents.length > 0) {
+   382→    const failedPrivEvents = privEvents.filter(e => e.outcome !== 'success');
+   383→    
+   384→    if (failedPrivEvents.length > 0) {
+   385→      return {
+   386→        id: `anom-${Date.now()}-privilege`,
+   387→        timestamp: failedPrivEvents[0].timestamp,
+   388→        anomalyType: 'privilege_abuse',
+   389→        severity: 'high',
+   390→        score: 85,
+   391→        description: `${failedPrivEvents.length} failed privilege escalation attempt(s) detected`,
+   392→        baselineValue: 0,
+   393→        observedValue: failedPrivEvents.length,
+   394→        deviationFactor: failedPrivEvents.length + 1,
+   395→        relatedEvents: failedPrivEvents.map(e => e.timestamp.toISOString()),
+   396→        mitreTechnique: 'T1548', // Abuse Elevation Control Mechanism
+   397→        recommendation: 'Immediate security review. Check for account compromise or insider threat.'
+   398→      };
+   399→    }
+   400→
+   401→    if (privEvents.length > 3) {
+   402→      return {
+   403→        id: `anom-${Date.now()}-privilege-multi`,
+   404→        timestamp: new Date(),
+   405→        anomalyType: 'privilege_abuse',
+   406→        severity: 'medium',
+   407→        score: 60,
+   408→        description: `Multiple privilege escalations (${privEvents.length}) in single session`,
+   409→        baselineValue: 1,
+   410→        observedValue: privEvents.length,
+   411→        deviationFactor: privEvents.length,
+   412→        relatedEvents: privEvents.map(e => e.timestamp.toISOString()),
+   413→        recommendation: 'Review privilege escalation justifications. Verify change management approval.'
+   414→      };
+   415→    }
+   416→  }
+   417→
+   418→  return null;
+   419→}
+   420→
+   421→function detectLateralMovement(events: ActionEvent[], baseline: BehaviorBaseline): BehaviorAnomaly | null {
+   422→  const endpoints = [...new Set(events.map(e => e.endpoint).filter(Boolean))];
+   423→  const newEndpoints = endpoints.filter(e => !baseline.typicalEndpoints.includes(e!));
+   424→
+   425→  if (newEndpoints.length > baseline.typicalSystemsAccessed * 2) {
+   426→    return {
+   427→      id: `anom-${Date.now()}-lateral`,
+   428→      timestamp: new Date(),
+   429→      anomalyType: 'lateral_movement',
+   430→      severity: newEndpoints.length > 5 ? 'high' : 'medium',
+   431→      score: Math.min(80, newEndpoints.length * 15),
+   432→      description: `Potential lateral movement: ${newEndpoints.length} new system(s) accessed`,
+   433→      baselineValue: baseline.typicalSystemsAccessed,
+   434→      observedValue: endpoints.length,
+   435→      deviationFactor: endpoints.length / (baseline.typicalSystemsAccessed || 1),
+   436→      relatedEvents: events.filter(e => newEndpoints.includes(e.endpoint!)).map(e => e.timestamp.toISOString()),
+   437→      mitreTechnique: 'T1021', // Remote Services
+   438→      recommendation: 'Investigate access pattern. Check for reconnaissance or pivot attempts.'
+   439→    };
+   440→  }
+   441→
+   442→  return null;
+   443→}
+   444→
+   445→function detectDataExfiltration(events: ActionEvent[], baseline: BehaviorBaseline): BehaviorAnomaly | null {
+   446→  const exfilSignals = events.filter(e => 
+   447→    e.actionType === 'data_export' || 
+   448→    (e.actionType === 'file_download' && (e.details?.sizeMB || 0) > 50) ||
+   449→    e.actionType === 'email_sent' && e.resource.includes('.zip')
+   450→  );
+   451→
+   452→  if (exfilSignals.length >= 2) {
+   453→    const totalVolume = exfilSignals.reduce((sum, e) => sum + (e.details?.sizeMB || 20), 0);
+   454→    
+   455→    return {
+   456→      id: `anom-${Date.now()}-exfil`,
+   457→      timestamp: new Date(),
+   458→      anomalyType: 'data_exfiltration',
+   459→      severity: totalVolume > 500 ? 'critical' : totalVolume > 100 ? 'high' : 'medium',
+   460→      score: Math.min(95, exfilSignals.length * 30 + (totalVolume > 100 ? 20 : 0)),
+   461→      description: `Potential data exfiltration: ${exfilSignals.length} export(s), ~${totalVolume}MB total`,
+   462→      baselineValue: baseline.avgDataAccessedMB * 0.1, // 10% of normal as export baseline
+   463→      observedValue: totalVolume,
+   464→      deviationFactor: totalVolume / (baseline.avgDataAccessedMB * 0.1 + 1),
+   465→      relatedEvents: exfilSignals.map(e => e.timestamp.toISOString()),
+   466→      mitreTechnique: 'T1048', // Exfiltration Over Alternative Protocol
+   467→      recommendation: 'URGENT: Review data exports. Check DLP alerts. Interview user if needed.'
+   468→    };
+   469→  }
+   470→
+   471→  return null;
+   472→}
+   473→
+   474→function detectCredentialStuffing(events: ActionEvent[], _baseline: BehaviorBaseline): BehaviorAnomaly | null {
+   475→  const loginFailures = events.filter(e => e.actionType === 'login' && e.outcome === 'failure');
+   476→
+   477→  if (loginFailures.length >= 5) {
+   478→    const timeSpanMinutes = (events[events.length - 1].timestamp.getTime() - events[0].timestamp.getTime()) / (1000 * 60);
+   479→    const failureRate = loginFailures.length / (timeSpanMinutes || 1);
+   480→
+   481→    if (failureRate > 2) { // More than 2 failures per minute
+   482→      return {
+   483→        id: `anom-${Date.now()}-creds`,
+   484→        timestamp: loginFailures[0].timestamp,
+   485→        anomalyType: 'credential_stuffing',
+   486→        severity: failureRate > 10 ? 'critical' : 'high',
+   487→        score: Math.min(90, loginFailures.length * 12),
+   488→        description: `Possible credential stuffing: ${loginFailures.length} failures in ${timeSpanMinutes.toFixed(0)}min (${failureRate.toFixed(1)}/min)`,
+   489→        baselineValue: 0.5, // Normal: occasional typo
+   490→        observedValue: failureRate,
+   491→        deviationFactor: failureRate / 0.5,
+   492→        relatedEvents: loginFailures.map(e => e.timestamp.toISOString()),
+   493→        mitreTechnique: 'T1110', // Brute Force
+   494→        recommendation: 'Lock account if not already. Check source IPs. Enable MFA enforcement.'
+   495→      };
+   496→    }
+   497→  }
+   498→
+   499→  return null;
+   500→}
+   501→
+   502→// ============================================================
+   503→// RISK CALCULATION
+   504→// ============================================================
+   505→
+   506→function calculateRiskFactors(
+   507→  events: ActionEvent[],
+   508→  anomalies: BehaviorAnomaly[],
+   509→  baseline: BehaviorBaseline,
+   510→  context: { currentTime: Date; entityInfo: { name: string; department: string; role: string } }
+   511→): RiskFactor[] {
+   512→  const factors: RiskFactor[] = [];
+   513→
+   514→  // Anomaly-based risk
+   515→  if (anomalies.length > 0) {
+   516→    factors.push({
+   517→      name: 'Behavioral Anomalies',
+   518→      weight: 0.35,
+   519→      value: anomalies.reduce((sum, a) => sum + a.score, 0) / anomalies.length,
+   520→      severity: anomalies.some(a => a.severity === 'critical') ? 'critical' : 
+   521→              anomalies.some(a => a.severity === 'high') ? 'high' : 'medium',
+   522→      description: `${anomalies.length} anomaly(ies) detected`
+   523→    });
+   524→  }
+   525→
+   526→  // Volume-based risk
+   527→  const volumeRatio = events.length / (baseline.avgDailyActions / 24 || 1); // Hourly baseline
+   528→  if (volumeRatio > 2) {
+   529→    factors.push({
+   530→      name: 'Activity Volume',
+   531→      weight: 0.2,
+   532→      value: Math.min(1, volumeRatio / 10),
+   533→      severity: volumeRatio > 5 ? 'high' : 'medium',
+   534→      description: `${events.length} actions (${volumeRatio.toFixed(1)}x normal hourly rate)`
+   535→    });
+   536→  }
+   537→
+   538→  // Sensitive resource access
+   539→  const sensitiveAccesses = events.filter(e => 
+   540→    e.resource.includes('admin') || 
+   541→    e.resource.includes('config') ||
+   542→    e.resource.includes('password') ||
+   543→    e.resource.includes('secret')
+   544→  ).length;
+   545→  if (sensitiveAccesses > 0) {
+   546→    factors.push({
+   547→      name: 'Sensitive Resource Access',
+   548→      weight: 0.25,
+   549→      value: sensitiveAccesses / events.length,
+   550→      severity: sensitiveAccesses > 3 ? 'high' : 'medium',
+   551→      description: `${sensitiveAccesses} sensitive resource(s) accessed`
+   552→    });
+   553→  }
+   554→
+   555→  // Failure rate
+   556→  const failures = events.filter(e => e.outcome !== 'success').length;
+   557→  const failureRate = failures / events.length;
+   558→  if (failureRate > 0.1) {
+   559→    factors.push({
+   560→      name: 'Failure Rate',
+   561→      weight: 0.1,
+   562→      value: failureRate,
+   563→      severity: failureRate > 0.3 ? 'high' : 'medium',
+   564→      description: `${((failureRate) * 100).toFixed(0)}% action failure rate`
+   565→    });
+   566→  }
+   567→
+   568→  // Time-based risk (after hours, weekend)
+   569→  const hour = context.currentTime.getHours();
+   570→  const dayOfWeek = context.currentTime.getDay();
+   571→  if (hour < 7 || hour > 20 || dayOfWeek === 0 || dayOfWeek === 6) {
+   572→    factors.push({
+   573→      name: 'Temporal Anomaly',
+   574→      weight: 0.1,
+   575→      value: 0.7,
+   576→      severity: 'low',
+   577→      description: `Access during non-standard hours`
+   578→    });
+   579→  }
+   580→
+   581→  return factors.sort((a, b) => b.weight - a.weight);
+   582→}
+   583→
+   584→function calculateOverallRiskScore(factors: RiskFactor[], anomalies: BehaviorAnomaly[]): number {
+   585→  let weightedScore = 0;
+   586→  
+   587→  factors.forEach(factor => {
+   588→    weightedScore += factor.value * factor.weight * 100;
+   589→  });
+   590→
+   591→  // Boost from critical anomalies
+   592→  const criticalBoost = anomalies.filter(a => a.severity === 'critical').length * 15;
+   593→  const highBoost = anomalies.filter(a => a.severity === 'high').length * 8;
+   594→
+   595→  return Math.min(100, Math.round(weightedScore + criticalBoost + highBoost));
+   596→}
+   597→
+   598→function getRiskLevel(score: number): BehaviorProfile['riskLevel'] {
+   599→  if (score >= 80) return 'critical';
+   600→  if (score >= 60) return 'high';
+   601→  if (score >= 30) return 'medium';
+   602→  return 'low';
+   603→}
+   604→
+   605→function inferEntityType(role: string): BehaviorProfile['entityType'] {
+   606→  if (role.toLowerCase().includes('admin') || role.toLowerCase().includes('administrator')) {
+   607→    return 'service_account';
+   608→  }
+   609→  if (role.toLowerCase().includes('service') || role.toLowerCase().includes('system')) {
+   610→    return 'service_account';
+   611→  }
+   612→  return 'user';
+   613→}
+   614→
+   615→function getSeverityWeight(severity: string): number {
+   616→  switch (severity) {
+   617→    case 'critical': return 4;
+   618→    case 'high': return 3;
+   619→    case 'medium': return 2;
+   620→    case 'low': return 1;
+   621→    default: return 0;
+   622→  }
+   623→}
+   624→
+   625→function estimateDistance(loc1: string, loc2: string): number {
+   626→  // Simplified distance estimation based on common city pairs
+   627→  // In production, use proper geocoding
+   628→  const distances: Record<string, Record<string, number>> = {
+   629→    'algiers': { 'oran': 400, 'constantine': 430, 'paris': 1620, 'london': 1660, 'newyork': 7630 },
+   630→    'oran': { 'algiers': 400, 'paris': 1480, 'madrid': 780 },
+   631→    'paris': { 'algiers': 1620, 'london': 340, 'berlin': 1050 },
+   632→  };
+   633→
+   634→  const l1 = loc1.toLowerCase().split(',')[0];
+   635→  const l2 = loc2.toLowerCase().split(',')[0];
+   636→
+   637→  return distances[l1]?.[l2] || 500; // Default 500km if unknown
+   638→}
+   639→
+   640→// ============================================================
+   641→// DEMO DATA GENERATORS FOR CEO PRESENTATION
+   642→// ============================================================
+   643→
+   644→/**
+   645→ * Generate sample behavior profiles for demo
+   646→ */
+   647→export function generateDemoBehaviorProfiles(): BehaviorProfile[] {
+   648→  const profiles: BehaviorProfile[] = [];
+   649→
+   650→  // Normal user - low risk
+   651→  profiles.push(analyzeBehavior(
+   652→    generateNormalUserActivities(),
+   653→    createNormalBaseline(),
+   654→    { currentTime: new Date(), entityInfo: { name: 'Ahmed Benali', department: 'IT Operations', role: 'Analyst' } }
+   655→  ));
+   656→
+   657→  // Busy but legitimate user - low-medium risk
+   658→  profiles.push(analyzeBehavior(
+   659→    generateBusyUserActivities(),
+   660→    createBusyBaseline(),
+   661→    { currentTime: new Date(), entityInfo: { name: 'Fatima Zerhouni', department: 'Security Team', role: 'Senior Analyst' } }
+   662→  ));
+   663→
+   664→  // After-hours worker - medium risk (false positive candidate)
+   665→  profiles.push(analyzeBehavior(
+   666→    generateAfterHoursActivities(),
+   667→    createAfterHoursBaseline(),
+   668→    { currentTime: new Date(2026, 6, 26, 23, 30), entityInfo: { name: 'Karim Mansouri', department: 'Development', role: 'Developer' } }
+   669→  ));
+   670→
+   671→  // Compromised account simulation - HIGH RISK
+   672→  profiles.push(analyzeBehavior(
+   673→    generateCompromisedAccountActivities(),
+   674→    createNormalBaseline(),
+   675→    { currentTime: new Date(), entityInfo: { name: 'Test Account (Simulated)', department: 'Finance', role: 'Accountant' } }
+   676→  ));
+   677→
+   678→  // Insider threat simulation - CRITICAL RISK
+   679→  profiles.push(analyzeBehavior(
+   680→    generateInsiderThreatActivities(),
+   681→    createInsiderBaseline(),
+   682→    { currentTime: new Date(), entityInfo: { name: 'Suspicious User (Demo)', department: 'Executive Office', role: 'Executive Assistant' } }
+   683→  ));
+   684→
+   685→  return profiles;
+   686→}
+   687→
+   688→// Helper functions to generate demo activities
+   689→function generateNormalUserActivities(): ActionEvent[] {
+   690→  const now = new Date();
+   691→  return [
+   692→    { timestamp: new Date(now.getTime() - 3600000 * 8), actionType: 'login', resource: 'workstation-01', outcome: 'success', riskContribution: 0.01 },
+   693→    { timestamp: new Date(now.getTime() - 3600000 * 7.5), actionType: 'email_sent', resource: 'outlook', outcome: 'success', riskContribution: 0.02 },
+   694→    { timestamp: new Date(now.getTime() - 3600000 * 6), actionType: 'file_access', resource: 'shared/project-docs/', outcome: 'success', riskContribution: 0.02 },
+   695→    { timestamp: new Date(now.getTime() - 3600000 * 4), actionType: 'database_query', resource: 'prod-db-replica', outcome: 'success', riskContribution: 0.05, details: { rowCount: 150 } },
+   696→    { timestamp: new Date(now.getTime() - 3600000 * 2), actionType: 'file_download', resource: 'report-q2.xlsx', outcome: 'success', riskContribution: 0.03, details: { sizeMB: 2.5 } },
+   697→    { timestamp: new Date(now.getTime() - 60000), actionType: 'logout', resource: 'workstation-01', outcome: 'success', riskContribution: 0.01 },
+   698→  ];
+   699→}
+   700→
+   701→function generateBusyUserActivities(): ActionEvent[] {
+   702→  const now = new Date();
+   703→  const activities: ActionEvent[] = [
+   704→    { timestamp: new Date(now.getTime() - 3600000 * 9), actionType: 'login', resource: 'security-console', outcome: 'success', riskContribution: 0.01 },
+   705→    { timestamp: new Date(now.getTime() - 3600000 * 8.5), actionType: 'api_call', resource: 'siem-api', outcome: 'success', riskContribution: 0.03 },
+   706→    { timestamp: new Date(now.getTime() - 3600000 * 7), actionType: 'database_query', resource: 'security-db', outcome: 'success', riskContribution: 0.05, details: { rowCount: 2500 } },
+   707→    { timestamp: new Date(now.getTime() - 3600000 * 6), actionType: 'file_access', resource: '/cases/incident-2026-089/', outcome: 'success', riskContribution: 0.04 },
+   708→    { timestamp: new Date(now.getTime() - 3600000 * 5), actionType: 'file_download', resource: 'pcap-analysis.zip', outcome: 'success', riskContribution: 0.05, details: { sizeMB: 45 } },
+   709→    { timestamp: new Date(now.getTime() - 3600000 * 4), actionType: 'api_call', resource: 'threat-intel-api', outcome: 'success', riskContribution: 0.03 },
+   710→    { timestamp: new Date(now.getTime() - 3600000 * 3), actionType: 'config_change', resource: 'siem-rule-147', outcome: 'success', riskContribution: 0.08 },
+   711→    { timestamp: new Date(now.getTime() - 3600000 * 2), actionType: 'file_upload', resource: 'updated-ioc-list.csv', outcome: 'success', riskContribution: 0.04, details: { sizeMB: 1.2 } },
+   712→    { timestamp: new Date(now.getTime() - 3600000), actionType: 'database_query', resource: 'compliance-db', outcome: 'success', riskContribution: 0.05, details: { rowCount: 800 } },
+   713→    { timestamp: new Date(now.getTime() - 300000), actionType: 'email_sent', resource: 'incident-report.pdf', outcome: 'success', riskContribution: 0.02 },
+   714→  ];
+   715→  return activities;
+   716→}
+   717→
+   718→function generateAfterHoursActivities(): ActionEvent[] {
+   719→  const now = new Date(2026, 6, 26, 23, 30);
+   720→  return [
+   721→    { timestamp: new Date(now.getTime() - 7200000), actionType: 'login', resource: 'vpn-portal', outcome: 'success', riskContribution: 0.05, location: 'Home Office' },
+   722→    { timestamp: new Date(now.getTime() - 7000000), actionType: 'remote_access', resource: 'dev-server-03', outcome: 'success', riskContribution: 0.08 },
+   723→    { timestamp: new Date(now.getTime() - 6000000), actionType: 'file_access', source: '/src/backend/', outcome: 'success', riskContribution: 0.04 },
+   724→    { timestamp: new Date(now.getTime() - 3600000), actionType: 'api_call', resource: 'ci-cd-pipeline', outcome: 'success', riskContribution: 0.06 },
+   725→    { timestamp: new Date(now.getTime() - 1800000), actionType: 'file_download', resource: 'build-artifacts.tar.gz', outcome: 'success', riskContribution: 0.07, details: { sizeMB: 120 } },
+   726→    { timestamp: now, actionType: 'database_query', resource: 'dev-db', outcome: 'success', riskContribution: 0.05, details: { rowCount: 50 } },
+   727→  ];
+   728→}
+   729→
+   730→function generateCompromisedAccountActivities(): ActionEvent[] {
+   731→  const now = new Date();
+   732→  return [
+   733→    { timestamp: new Date(now.getTime() - 3600000 * 3), actionType: 'login', resource: 'finance-workstation', outcome: 'success', riskContribution: 0.1, location: 'Unknown IP (Tor Exit Node)' },
+   734→    { timestamp: new Date(now.getTime() - 3600000 * 2.9), actionType: 'login', resource: 'email-system', outcome: 'failure', riskContribution: 0.3 },
+   735→    { timestamp: new Date(now.getTime() - 3600000 * 2.8), actionType: 'login', resource: 'email-system', outcome: 'failure', riskContribution: 0.3 },
+   736→    { timestamp: new Date(now.getTime() - 3600000 * 2.7), actionType: 'login', resource: 'email-system', outcome: 'success', riskContribution: 0.2 },
+   737→    { timestamp: new Date(now.getTime() - 3600000 * 2.5), actionType: 'file_access', resource: '/financial/reports/confidential/', outcome: 'success', riskContribution: 0.4 },
+   738→    { timestamp: new Date(now.getTime() - 3600000 * 2.3), actionType: 'file_download', resource: 'Q2-financials.xlsx', outcome: 'success', riskContribution: 0.5, details: { sizeMB: 85 } },
+   739→    { timestamp: new Date(now.getTime() - 3600000 * 2), actionType: 'database_query', resource: 'financial-db-prod', outcome: 'success', riskContribution: 0.4, details: { rowCount: 15000 } },
+   740→    { timestamp: new Date(now.getTime() - 3600000 * 1.8), actionType: 'data_export', resource: 'customer-data-export', outcome: 'success', riskContribution: 0.6, details: { sizeMB: 245 } },
+   741→    { timestamp: new Date(now.getTime() - 3600000 * 1.5), actionType: 'email_sent', resource: 'external@unknown.com', outcome: 'success', riskContribution: 0.5 },
+   742→    { timestamp: new Date(now.getTime() - 3600000), actionType: 'privilege_escalation', resource: 'admin-panel', outcome: 'success', riskContribution: 0.7 },
+   743→    { timestamp: now, actionType: 'file_access', resource: '/etc/shadow', outcome: 'denied', riskContribution: 0.8 },
+   744→  ];
+   745→}
+   746→
+   747→function generateInsiderThreatActivities(): ActionEvent[] {
+   748→  const now = new Date();
+   749→  const activities: ActionEvent[] = [
+   750→    { timestamp: new Date(now.getTime() - 3600000 * 14), actionType: 'login', resource: 'exec-workstation', outcome: 'success', riskContribution: 0.02, location: 'HQ Building A' },
+   751→    { timestamp: new Date(now.getTime() - 3600000 * 13), actionType: 'file_access', resource: '/executive/board-materials/', outcome: 'success', riskContribution: 0.08 },
+   752→    { timestamp: new Date(now.getTime() - 3600000 * 12), actionType: 'file_download', resource: 'M&A-plans-confidential.pdf', outcome: 'success', riskContribution: 0.15, details: { sizeMB: 25 } },
+   753→    { timestamp: new Date(now.getTime() - 3600000 * 10), actionType: 'database_query', resource: 'hr-database', outcome: 'success', riskContribution: 0.2, details: { rowCount: 5000 } },
+   754→    { timestamp: new Date(now.getTime() - 3600000 * 9), actionType: 'file_download', resource: 'employee-salaries.xlsx', outcome: 'success', riskContribution: 0.25, details: { sizeMB: 15 } },
+   755→    { timestamp: new Date(now.getTime() - 3600000 * 7), actionType: 'login', resource: 'file-server-02', outcome: 'success', riskContribution: 0.1, location: 'HQ Building B' }, // Different building
+   756→    { timestamp: new Date(now.getTime() - 3600000 * 6.5), actionType: 'file_access', source: '/finance/acquisitions/', outcome: 'success', riskContribution: 0.2 },
+   757→    { timestamp: new Date(now.getTime() - 3600000 * 5), actionType: 'data_export', resource: 'confidential-merger-data', outcome: 'success', riskContribution: 0.4, details: { sizeMB: 380 } },
+   758→    { timestamp: new Date(now.getTime() - 3600000 * 4), actionType: 'usb_copy', resource: 'personal-drive', outcome: 'success', riskContribution: 0.5, details: { sizeMB: 450 } },
+   759→    { timestamp: new Date(now.getTime() - 3600000 * 2), actionType: 'email_sent', resource: 'competitor-email.com', outcome: 'success', riskContribution: 0.6 },
+   760→    { timestamp: new Date(now.getTime() - 3600000), actionType: 'file_delete', resource: 'audit-trail.log', outcome: 'success', riskContribution: 0.7 },
+   761→    { timestamp: now, actionType: 'privilege_escalation', resource: 'domain-admin', outcome: 'success', riskContribution: 0.8 },
+   762→  ];
+   763→  return activities;
+   764→}
+   765→
+   766→// Baseline generators
+   767→function createNormalBaseline(): BehaviorBaseline {
+   768→  return {
+   769→    typicalLoginHours: [0, 0, 0, 0, 0, 0, 0.05, 0.3, 0.8, 0.95, 1.0, 0.9, 0.85, 0.8, 0.75, 0.7, 0.65, 0.5, 0.2, 0.05, 0, 0, 0],
+   770→    typicalWorkdays: [0, 0.9, 0.95, 0.98, 0.95, 0.9, 0.1],
+   771→    avgDailyActions: 45,
+   772→    avgDataAccessedMB: 25,
+   773→    avgSystemsAccessed: 3,
+   774→    typicalLocations: ['Office HQ', 'VPN-Corporate'],
+   775→    typicalEndpoints: ['workstation-01', 'file-server-01'],
+   776→    typicalResources: ['/projects/', '/shared/', 'email', 'intranet'],
+   777→    peerGroupDeviation: 0.1,
+   778→  };
+   779→}
+   780→
+   781→function createBusyBaseline(): BehaviorBaseline {
+   782→  return {
+   783→    typicalLoginHours: [0, 0, 0, 0, 0, 0.02, 0.1, 0.5, 0.9, 1.0, 1.0, 0.95, 0.9, 0.85, 0.8, 0.75, 0.7, 0.5, 0.2, 0.1, 0.02, 0, 0, 0],
+   784→    typicalWorkdays: [0.1, 0.95, 1.0, 1.0, 0.98, 0.9, 0.3],
+   785→    avgDailyActions: 120,
+   786→    avgDataAccessedMB: 150,
+   787→    avgSystemsAccessed: 8,
+   788→    typicalLocations: ['SOC Building', 'HQ Data Center', 'VPN-Security'],
+   789→    typicalEndpoints: ['security-console', 'siem-server', 'threat-intel-platform'],
+   790→    typicalResources: ['/incidents/', '/cases/', 'siem-api', 'threat-intel-api', '/ioc/'],
+   791→    peerGroupDeviation: 0.2,
+   792→  };
+   793→}
+   794→
+   795→function createAfterHoursBaseline(): BehaviorBaseline {
+   796→  return {
+   797→    typicalLoginHours: [0.05, 0.02, 0.01, 0.01, 0.02, 0.05, 0.1, 0.15, 0.2, 0.25, 0.3, 0.28, 0.25, 0.22, 0.2, 0.25, 0.35, 0.5, 0.65, 0.7, 0.5, 0.3, 0.15, 0.08],
+   798→    typicalWorkdays: [0.3, 0.5, 0.5, 0.5, 0.5, 0.6, 0.7], // Works weekends too
+   799→    avgDailyActions: 80,
+   800→    avgDataAccessedMB: 200,
+   801→    avgSystemsAccessed: 5,
+   802→    typicalLocations: ['Home Office', 'VPN-Developer'],
+   803→    typicalEndpoints: ['dev-server-03', 'dev-server-04', 'ci-cd-runner'],
+   804→    typicalResources: ['/src/', '/build/', 'git-repo', 'ci-cd-pipeline'],
+   805→    peerGroupDeviation: 0.4,
+   806→  };
+   807→}
+   808→
+   809→function createInsiderBaseline(): BehaviorBaseline {
+   810→  return {
+   811→    typicalLoginHours: [0, 0, 0, 0, 0, 0, 0.05, 0.4, 0.85, 1.0, 1.0, 0.95, 0.9, 0.85, 0.8, 0.75, 0.6, 0.3, 0.1, 0.02, 0, 0, 0, 0],
+   812→    typicalWorkdays: [0, 0.95, 0.98, 1.0, 0.98, 0.9, 0.2],
+   813→    avgDailyActions: 35,
+   814→    avgDataAccessedMB: 15,
+   815→    avgSystemsAccessed: 2,
+   816→    typicalLocations: ['Executive Floor', 'HQ Building A'],
+   817→    typicalEndpoints: ['exec-workstation', 'exec-printer'],
+   818→    typicalResources: ['/executive/', '/board/', 'email', 'calendar'],
+   819→    peerGroupDeviation: 0.05, // Very consistent pattern - makes deviations obvious
+   820→  };
+   821→}
+   822→
+   823→// Export everything
+   824→export {
+   825→  analyzeBehavior,
+   826→  generateDemoBehaviorProfiles,
+   827→};
+   828→

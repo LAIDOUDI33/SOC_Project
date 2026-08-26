@@ -1,0 +1,1185 @@
+     1→'use client'
+     2→
+     3→import React, { useState, useEffect } from 'react'
+     4→import { 
+     5→  Shield, AlertTriangle, Activity, Clock, Users, Server, 
+     6→  Globe, Lock, Eye, TrendingUp, Bell, Search, Filter,
+     7→  CheckCircle, XCircle, AlertCircle, ChevronRight, RefreshCw,
+     8→  Wifi, Database, Cpu, HardDrive, Network, Zap,
+     9→  ArrowRight, ExternalLink, Settings, Terminal, BarChart3,
+    10→  Radar, Bug, Crosshair, FileSearch, Layers, Plug,
+    11→  Pause, Play, MoreVertical, Maximize2, Link2
+    12→} from 'lucide-react'
+    13→
+    14→// ============= TYPES =============
+    15→interface Platform {
+    16→  id: string
+    17→  name: string
+    18→  fullName: string
+    19→  category: 'siem' | 'soar' | 'threat-intel' | 'ids' | 'logging' | 'monitoring' | 'security' | 'infrastructure'
+    20→  status: 'operational' | 'degraded' | 'down' | 'starting' | 'maintenance'
+    21→  version: string
+    22→  uptime: string
+    23→  eventsToday: number
+    24→  alertsCount: number
+    25→  lastSync: string
+    26→  icon: React.ReactNode
+    27→  color: string
+    28→  description: string
+    29→  endpoint: string
+    30→  features: string[]
+    31→}
+    32→
+    33→interface Integration {
+    34→  id: string
+    35→  source: string
+    36→  target: string
+    37→  dataType: string
+    38→  status: 'active' | 'inactive' | 'error'
+    39→  frequency: string
+    40→}
+    41→
+    42→interface Alert {
+    43→  id: string
+    44→  severity: 'critical' | 'high' | 'medium' | 'low' | 'info'
+    45→  title: string
+    46→  description: string
+    47→  source: string
+    48→  platform: string
+    49→  timestamp: Date
+    50→  status: 'new' | 'investigating' | 'resolved'
+    51→}
+    52→
+    53→interface SystemMetric {
+    54→  label: string
+    55→  value: string | number
+    56→  change: number
+    57→  icon: React.ReactNode
+    58→}
+    59→
+    60→// ============= PLATFORM DATA =============
+    61→const platforms: Platform[] = [
+    62→  {
+    63→    id: 'wazuh',
+    64→    name: 'Wazuh',
+    65→    fullName: 'Wazuh SIEM/EDR',
+    66→    category: 'siem',
+    67→    status: 'operational',
+    68→    version: '4.8.0',
+    69→    uptime: '99.97%',
+    70→    eventsToday: 2847563,
+    71→    alertsCount: 1247,
+    72→    lastSync: '2s ago',
+    73→    icon: <Shield className="w-6 h-6" />,
+    74→    color: 'from-green-500 to-emerald-600',
+    75→    description: 'Security Information & Event Management + Endpoint Detection & Response',
+    76→    endpoint: 'wazuh.soc.local:55000',
+    77→    features: ['Log Analysis', 'File Integrity', 'Vulnerability Detection', 'Compliance', 'Active Response']
+    78→  },
+    79→  {
+    80→    id: 'thehive',
+    81→    name: 'TheHive',
+    82→    fullName: 'TheHive SOAR',
+    83→    category: 'soar',
+    84→    status: 'operational',
+    85→    version: '5.3.0',
+    86→    uptime: '99.95%',
+    87→    eventsToday: 89,
+    88→    alertsCount: 23,
+    89→    lastSync: '15s ago',
+    90→    icon: <Bug className="w-6 h-6" />,
+    91→    color: 'from-orange-500 to-amber-600',
+    92→    description: 'Security Orchestration, Automation & Response Platform',
+    93→    endpoint: 'thehive.soc.local:9000',
+    94→    features: ['Case Management', 'Task Automation', 'Playbooks', 'Observable Analysis', 'Collaboration']
+    95→  },
+    96→  {
+    97→    id: 'misp',
+    98→    name: 'MISP',
+    99→    fullName: 'MISP Threat Intelligence',
+   100→    category: 'threat-intel',
+   101→    status: 'operational',
+   102→    version: '2.4.180',
+   103→    uptime: '99.98%',
+   104→    eventsToday: 156,
+   105→    alertsCount: 45,
+   106→    lastSync: '5m ago',
+   107→    icon: <Radar className="w-6 h-6" />,
+   108→    color: 'from-red-500 to-rose-600',
+   109→    description: 'Malware Information Sharing Platform - Threat Intelligence',
+   110→    endpoint: 'misp.soc.local:443',
+   111→    features: ['IOC Management', 'Indicator Sharing', 'YARA Rules', 'Galaxy Taxonomy', 'Feeds']
+   112→  },
+   113→  {
+   114→    id: 'suricata',
+   115→    name: 'Suricata',
+   116→    fullName: 'Suricata IDS/IPS',
+   117→    category: 'ids',
+   118→    status: 'operational',
+   119→    version: '7.0.0',
+   120→    uptime: '99.99%',
+   121→    eventsToday: 1456789,
+   122→    alertsCount: 3421,
+   123→    lastSync: 'Real-time',
+   124→    icon: <Crosshair className="w-6 h-6" />,
+   125→    color: 'from-blue-500 to-indigo-600',
+   126→    description: 'Intrusion Detection & Prevention System - Network Security Monitoring',
+   127→    endpoint: 'suricata.soc.local',
+   128→    features: ['IDS/IPS', 'Network Analysis', 'EVE JSON', 'Rule Management', 'Protocol Detection']
+   129→  },
+   130→  {
+   131→    id: 'elasticsearch',
+   132→    name: 'Elasticsearch',
+   133→    fullName: 'Elasticsearch Log Pipeline',
+   134→    category: 'logging',
+   135→    status: 'operational',
+   136→    version: '8.12.0',
+   137→    uptime: '99.96%',
+   138→    eventsToday: 15234567,
+   139→    alertsCount: 0,
+   140→    lastSync: '1s ago',
+   141→    icon: <Database className="w-6 h-6" />,
+   142→    color: 'from-yellow-500 to-yellow-600',
+   143→    description: 'Centralized Log Aggregation & Analytics Pipeline',
+   144→    endpoint: 'elasticsearch.soc.local:9200',
+   145→    features: ['Log Aggregation', 'Full-text Search', 'Data Analytics', 'Indexing', 'Kibana Integration']
+   146→  },
+   147→  {
+   148→    id: 'grafana',
+   149→    name: 'Grafana',
+   150→    fullName: 'Grafana Dashboards',
+   151→    category: 'monitoring',
+   152→    status: 'operational',
+   153→    version: '11.0.0',
+   154→    uptime: '99.99%',
+   155→    eventsToday: 0,
+   156→    alertsCount: 7,
+   157→    lastSync: '30s ago',
+   158→    icon: <BarChart3 className="w-6 h-6" />,
+   159→    color: 'from-purple-500 to-violet-600',
+   160→    description: 'Monitoring Dashboard & Visualization (6 SOC Dashboards)',
+   161→    endpoint: 'grafana.soc.local:3000',
+   162→    features: ['SOC Overview', 'Security Events', 'Threat Intel', 'Incident Response', 'System Health']
+   163→  },
+   164→  {
+   165→    id: 'security',
+   166→    name: 'Security Module',
+   167→    fullName: 'OWASP Hardening & SSL/TLS',
+   168→    category: 'security',
+   169→    status: 'operational',
+   170→    version: '1.0.0',
+   171→    uptime: '100%',
+   172→    eventsToday: 1234567,
+   173→    alertsCount: 12,
+   174→    lastSync: 'Real-time',
+   175→    icon: <Lock className="w-6 h-6" />,
+   176→    color: 'from-cyan-500 to-teal-600',
+   177→    description: 'Security Headers, Rate Limiting, TLS Configuration, Access Control',
+   178→    endpoint: 'nginx.soc.local:443',
+   179→    features: ['OWASP Headers', 'TLS 1.3', 'Rate Limiting', 'CSP Policies', 'Audit Logging']
+   180→  },
+   181→  {
+   182→    id: 'logging',
+   183→    name: 'Audit System',
+   184→    fullName: 'Centralized Audit Logging',
+   185→    category: 'logging',
+   186→    status: 'operational',
+   187→    version: '1.0.0',
+   188→    uptime: '100%',
+   189→    eventsToday: 987654,
+   190→    alertsCount: 0,
+   191→    lastSync: 'Real-time',
+   192→    icon: <FileSearch className="w-6 h-6" />,
+   193→    color: 'from-slate-500 to-slate-600',
+   194→    description: 'GDPR/SOC2/ISO27001 Compliant Audit Trail System',
+   195→    endpoint: 'logging.soc.local',
+   196→    features: ['Audit Trail', 'PII Masking', 'Tamper Evidence', 'Retention Policy', 'Compliance Reports']
+   197→  }
+   198→]
+   199→
+   200→// ============= INTEGRATION DATA =============
+   201→const integrations: Integration[] = [
+   202→  { id: 'int-1', source: 'suricata', target: 'misp', dataType: 'IOC Indicators', status: 'active', frequency: 'Real-time' },
+   203→  { id: 'int-2', source: 'suricata', target: 'thehive', dataType: 'Alerts → Cases', status: 'active', frequency: 'Real-time' },
+   204→  { id: 'int-3', source: 'wazuh', target: 'elasticsearch', dataType: 'Security Events', status: 'active', frequency: 'Continuous' },
+   205→  { id: 'int-4', source: 'misp', target: 'suricata', dataType: 'Threat Rules', status: 'active', frequency: '15 min' },
+   206→  { id: 'int-5', source: 'misp', target: 'wazuh', dataType: 'IOC Feeds', status: 'active', frequency: '30 min' },
+   207→  { id: 'int-6', source: 'thehive', target: 'wazuh', dataType: 'Response Actions', status: 'active', frequency: 'On-demand' },
+   208→  { id: 'int-7', source: 'all', target: 'elasticsearch', dataType: 'All Logs', status: 'active', frequency: 'Continuous' },
+   209→  { id: 'int-8', source: 'all', target: 'grafana', dataType: 'Metrics', status: 'active', frequency: '30s' },
+   210→  { id: 'int-9', source: 'all', target: 'logging', dataType: 'Audit Events', status: 'active', frequency: 'Real-time' },
+   211→]
+   212→
+   213→// ============= MOCK ALERTS =============
+   214→const generateAlerts = (): Alert[] => [
+   215→  {
+   216→    id: 'ALT-001',
+   217→    severity: 'critical',
+   218→    title: 'Multiple Failed Login Attempts Detected',
+   219→    description: 'Brute force attack detected from IP 192.168.1.100 - 150+ attempts in 5 minutes',
+   220→    source: 'Wazuh EDR',
+   221→    platform: 'wazuh',
+   222→    timestamp: new Date(Date.now() - 2 * 60 * 1000),
+   223→    status: 'new'
+   224→  },
+   225→  {
+   226→    id: 'ALT-002',
+   227→    severity: 'high',
+   228→    title: 'Suspicious File Execution on Workstation',
+   229→    description: 'Potential malware execution detected on WS-ALG-0456 in Finance Department',
+   230→    source: 'Wazuh FIM',
+   231→    platform: 'wazuh',
+   232→    timestamp: new Date(Date.now() - 8 * 60 * 1000),
+   233→    status: 'investigating'
+   234→  },
+   235→  {
+   236→    id: 'ALT-003',
+   237→    severity: 'high',
+   238→    title: 'ET TROJAN Known C2 Pattern Detected',
+   239→    description: 'Suricata detected known command & control communication pattern',
+   240→    source: 'Suricata IDS',
+   241→    platform: 'suricata',
+   242→    timestamp: new Date(Date.now() - 12 * 60 * 1000),
+   243→    status: 'new'
+   244→  },
+   245→  {
+   246→    id: 'ALT-004',
+   247→    severity: 'medium',
+   248→    title: 'New IOC Match from MISP Feed',
+   249→    description: 'Alert correlated with MISP event #45281 - APT29 related indicators',
+   250→    source: 'MISP Threat Intel',
+   251→    platform: 'misp',
+   252→    timestamp: new Date(Date.now() - 18 * 60 * 1000),
+   253→    status: 'investigating'
+   254→  },
+   255→  {
+   256→    id: 'ALT-005',
+   257→    severity: 'high',
+   258→    title: 'Case Escalation Required',
+   259→    description: 'TheHive case INC-2026-042 requires escalation - critical assets affected',
+   260→    source: 'TheHive SOAR',
+   261→    platform: 'thehive',
+   262→    timestamp: new Date(Date.now() - 25 * 60 * 1000),
+   263→    status: 'new'
+   264→  }
+   265→]
+   266→
+   267→// ============= SYSTEM METRICS =============
+   268→const generateMetrics = (): SystemMetric[] => [
+   269→  { label: 'Events/sec', value: '847K', change: 12.5, icon: <Activity className="w-4 h-4" /> },
+   270→  { label: 'Total Alerts', value: 4732, change: 8.3, icon: <AlertTriangle className="w-4 h-4" /> },
+   271→  { label: 'MTTD', value: '3.2m', change: -18.3, icon: <Clock className="w-4 h-4" /> },
+   272→  { label: 'MTTR', value: '12.4m', change: -22.1, icon: <RefreshCw className="w-4 h-4" /> },
+   273→  { label: 'Platforms Online', value: '8/8', change: 0, icon: <Server className="w-4 h-4" /> },
+   274→  { label: 'Integrations Active', value: '9/9', change: 0, icon: <Plug className="w-4 h-4" /> },
+   275→]
+   276→
+   277→// ============= STATUS HELPERS =============
+   278→const statusColors = {
+   279→  operational: 'bg-green-500',
+   280→  degraded: 'bg-yellow-500',
+   281→  down: 'bg-red-500',
+   282→  starting: 'bg-blue-500 animate-pulse',
+   283→  maintenance: 'bg-slate-500'
+   284→}
+   285→
+   286→const statusTextColors = {
+   287→  operational: 'text-green-400 bg-green-900/30 border-green-800',
+   288→  degraded: 'text-yellow-400 bg-yellow-900/30 border-yellow-800',
+   289→  down: 'text-red-400 bg-red-900/30 border-red-800',
+   290→  starting: 'text-blue-400 bg-blue-900/30 border-blue-800',
+   291→  maintenance: 'text-slate-400 bg-slate-900/30 border-slate-800'
+   292→}
+   293→
+   294→const severityColors = {
+   295→  critical: 'bg-red-100 text-red-800 border-red-200',
+   296→  high: 'bg-orange-100 text-orange-800 border-orange-200',
+   297→  medium: 'bg-yellow-100 text-yellow-800 border-yellow-200',
+   298→  low: 'bg-blue-100 text-blue-800 border-blue-200',
+   299→  info: 'bg-gray-100 text-gray-800 border-gray-200'
+   300→}
+   301→
+   302→const severityBadge = (severity: string) => {
+   303→  const colors: Record<string, string> = {
+   304→    critical: 'bg-red-500',
+   305→    high: 'bg-orange-500',
+   306→    medium: 'bg-yellow-500',
+   307→    low: 'bg-blue-500',
+   308→    info: 'bg-gray-500'
+   309→  }
+   310→  return colors[severity] || 'bg-gray-500'
+   311→}
+   312→
+   313→// ============= MAIN COMPONENT =============
+   314→export default function SOCCommandCenter() {
+   315→  const [alerts, setAlerts] = useState<Alert[]>([])
+   316→  const [metrics, setMetrics] = useState<SystemMetric[]>([])
+   317→  const [selectedPlatform, setSelectedPlatform] = useState<string | null>(null)
+   318→  const [currentTime, setCurrentTime] = useState(new Date())
+   319→  const [isRefreshing, setIsRefreshing] = useState(false)
+   320→  const [activeView, setActiveView] = useState<'command-center' | 'platforms' | 'integrations' | 'alerts'>('command-center')
+   321→  const [searchQuery, setSearchQuery] = useState('')
+   322→  const [selectedCategory, setSelectedCategory] = useState<string>('all')
+   323→
+   324→  // Initialize data
+   325→  useEffect(() => {
+   326→    setAlerts(generateAlerts())
+   327→    setMetrics(generateMetrics())
+   328→  }, [])
+   329→
+   330→  // Update time every second
+   331→  useEffect(() => {
+   332→    const timer = setInterval(() => setCurrentTime(new Date()), 1000)
+   333→    return () => clearInterval(timer)
+   334→  }, [])
+   335→
+   336→  // Simulate refresh
+   337→  const handleRefresh = () => {
+   338→    setIsRefreshing(true)
+   339→    setTimeout(() => {
+   340→      setAlerts(generateAlerts())
+   341→      setMetrics(generateMetrics())
+   342→      setIsRefreshing(false)
+   343→    }, 1000)
+   344→  }
+   345→
+   346→  const formatTime = (date: Date) => {
+   347→    return date.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit' })
+   348→  }
+   349→
+   350→  const formatRelativeTime = (date: Date) => {
+   351→    const diff = Math.floor((Date.now() - date.getTime()) / 1000)
+   352→    if (diff < 60) return `${diff}s ago`
+   353→    if (diff < 3600) return `${Math.floor(diff / 60)}m ago`
+   354→    return `${Math.floor(diff / 3600)}h ago`
+   355→  }
+   356→
+   357→  // Filter platforms by search and category
+   358→  const filteredPlatforms = platforms.filter(p => {
+   359→    const matchesSearch = p.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
+   360→                         p.fullName.toLowerCase().includes(searchQuery.toLowerCase())
+   361→    const matchesCategory = selectedCategory === 'all' || p.category === selectedCategory
+   362→    return matchesSearch && matchesCategory
+   363→  })
+   364→
+   365→  // Get platform by ID
+   366→  const getPlatformById = (id: string) => platforms.find(p => p.id === id)
+   367→
+   368→  // Calculate overall system health
+   369→  const operationalPlatforms = platforms.filter(p => p.status === 'operational').length
+   370→  const totalPlatforms = platforms.length
+   371→  const healthPercentage = Math.round((operationalPlatforms / totalPlatforms) * 100)
+   372→
+   373→  return (
+   374→    <div className="min-h-screen bg-slate-950 text-white">
+   375→      {/* ==================== HEADER ==================== */}
+   376→      <header className="bg-gradient-to-r from-slate-900 via-slate-900 to-slate-800 border-b border-slate-700/50 px-6 py-4">
+   377→        <div className="flex items-center justify-between">
+   378→          {/* Logo & Title */}
+   379→          <div className="flex items-center gap-4">
+   380→            <div className="relative">
+   381→              <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-cyan-500 to-blue-600 flex items-center justify-center shadow-lg shadow-cyan-500/20">
+   382→                <Shield className="w-7 h-7 text-white" />
+   383→              </div>
+   384→              <span className="absolute -top-1 -right-1 w-4 h-4 bg-green-500 rounded-full border-2 border-slate-900 animate-pulse"></span>
+   385→            </div>
+   386→            <div>
+   387→              <h1 className="text-2xl font-bold bg-gradient-to-r from-white to-slate-300 bg-clip-text text-transparent">
+   388→                🇩🇿 Algeria National SOC
+   389→              </h1>
+   390→              <p className="text-sm text-slate-400">Security Operations Center • Command Center</p>
+   391→            </div>
+   392→          </div>
+   393→
+   394→          {/* System Health Indicator */}
+   395→          <div className="hidden md:flex items-center gap-6">
+   396→            <div className="bg-slate-800/50 rounded-lg px-4 py-2 border border-slate-700/50">
+   397→              <div className="flex items-center gap-3">
+   398→                <span className="text-sm text-slate-400">System Health</span>
+   399→                <div className="flex items-center gap-2">
+   400→                  <div className="w-24 h-2 bg-slate-700 rounded-full overflow-hidden">
+   401→                    <div 
+   402→                      className={`h-full transition-all duration-500 ${healthPercentage === 100 ? 'bg-green-500' : healthPercentage >= 80 ? 'bg-yellow-500' : 'bg-red-500'}`}
+   403→                      style={{ width: `${healthPercentage}%` }}
+   404→                    ></div>
+   405→                  </div>
+   406→                  <span className={`font-mono font-bold ${healthPercentage === 100 ? 'text-green-400' : 'text-yellow-400'}`}>
+   407→                    {healthPercentage}%
+   408→                  </span>
+   409→                </div>
+   410→              </div>
+   411→            </div>
+   412→
+   413→            {/* Status Indicators */}
+   414→            <div className="flex items-center gap-4 text-sm">
+   415→              <div className="flex items-center gap-2">
+   416→                <span className="w-2 h-2 bg-green-500 rounded-full animate-pulse"></span>
+   417→                <span className="text-slate-300">{operationalPlatforms}/{totalPlatforms} Systems</span>
+   418→              </div>
+   419→              <div className="text-slate-500">|</div>
+   420→              <div className="text-slate-400">
+   421→                {currentTime.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })}
+   422→              </div>
+   423→              <div className="font-mono text-cyan-400">{formatTime(currentTime)}</div>
+   424→            </div>
+   425→
+   426→            {/* Actions */}
+   427→            <button 
+   428→              onClick={handleRefresh}
+   429→              disabled={isRefreshing}
+   430→              className="p-2 hover:bg-slate-700/50 rounded-lg transition-colors"
+   431→            >
+   432→              <RefreshCw className={`w-5 h-5 text-slate-400 ${isRefreshing ? 'animate-spin text-cyan-400' : ''}`} />
+   433→            </button>
+   434→            
+   435→            <button className="relative p-2 hover:bg-slate-700/50 rounded-lg transition-colors">
+   436→              <Bell className="w-5 h-5 text-slate-400" />
+   437→              <span className="absolute top-1 right-1 w-2.5 h-2.5 bg-red-500 rounded-full"></span>
+   438→            </button>
+   439→            
+   440→            <button className="p-2 hover:bg-slate-700/50 rounded-lg transition-colors">
+   441→              <Settings className="w-5 h-5 text-slate-400" />
+   442→            </button>
+   443→          </div>
+   444→        </div>
+   445→      </header>
+   446→
+   447→      {/* ==================== NAVIGATION TABS ==================== */}
+   448→      <nav className="bg-slate-900/80 border-b border-slate-800 px-6 backdrop-blur-sm sticky top-0 z-40">
+   449→        <div className="flex items-center justify-between">
+   450→          <div className="flex gap-1">
+   451→            {[
+   452→              { id: 'command-center', label: 'Command Center', icon: <Layers className="w-4 h-4" /> },
+   453→              { id: 'platforms', label: 'Platforms', icon: <Server className="w-4 h-4" /> },
+   454→              { id: 'integrations', label: 'Integrations', icon: <Plug className="w-4 h-4" /> },
+   455→              { id: 'alerts', label: 'Live Alerts', icon: <AlertTriangle className="w-4 h-4" /> },
+   456→            ].map((tab) => (
+   457→              <button
+   458→                key={tab.id}
+   459→                onClick={() => setActiveView(tab.id as typeof activeView)}
+   460→                className={`flex items-center gap-2 px-4 py-4 border-b-2 transition-all ${
+   461→                  activeView === tab.id 
+   462→                    ? 'border-cyan-400 text-cyan-400 bg-cyan-400/5' 
+   463→                    : 'border-transparent text-slate-400 hover:text-slate-200 hover:border-slate-600'
+   464→                }`}
+   465→              >
+   466→                {tab.icon}
+   467→                <span className="font-medium">{tab.label}</span>
+   468→              </button>
+   469→            ))}
+   470→          </div>
+   471→
+   472→          {/* Search */}
+   473→          <div className="relative">
+   474→            <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+   475→            <input 
+   476→              type="text" 
+   477→              placeholder="Search platforms..."
+   478→              value={searchQuery}
+   479→              onChange={(e) => setSearchQuery(e.target.value)}
+   480→              className="bg-slate-800/50 border border-slate-700 rounded-lg pl-9 pr-4 py-2 text-sm focus:outline-none focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500/50 w-64"
+   481→            />
+   482→          </div>
+   483→        </div>
+   484→      </nav>
+   485→
+   486→      {/* ==================== MAIN CONTENT ==================== */}
+   487→      <main className="p-6">
+   488→        
+   489→        {/* ========== COMMAND CENTER VIEW ========== */}
+   490→        {activeView === 'command-center' && (
+   491→          <div className="space-y-6">
+   492→            {/* Key Metrics Row */}
+   493→            <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
+   494→              {metrics.map((metric, index) => (
+   495→                <div key={index} className="bg-gradient-to-br from-slate-900 to-slate-900/50 rounded-xl p-4 border border-slate-800/50 hover:border-slate-700 transition-all group">
+   496→                  <div className="flex items-center justify-between mb-3">
+   497→                    <span className="text-slate-400 text-xs uppercase tracking-wider">{metric.label}</span>
+   498→                    <div className="text-cyan-400 group-hover:scale-110 transition-transform">{metric.icon}</div>
+   499→                  </div>
+   500→                  <div className="text-2xl font-bold text-white mb-1">{metric.value}</div>
+   501→                  <div className={`flex items-center text-xs ${metric.change > 0 ? 'text-red-400' : metric.change < 0 ? 'text-green-400' : 'text-slate-500'}`}>
+   502→                    {metric.change > 0 ? <TrendingUp className="w-3 h-3 mr-1" /> : null}
+   503→                    {metric.change !== 0 ? `${Math.abs(metric.change)}% ${metric.change > 0 ? '↑' : '↓'}` : '—'}
+   504→                  </div>
+   505→                </div>
+   506→              ))}
+   507→            </div>
+   508→
+   509→            {/* Main Grid: Platforms + Alerts + Integrations */}
+   510→            <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+   511→              
+   512→              {/* LEFT COLUMN - Platforms Grid (2/3 width) */}
+   513→              <div className="lg:col-span-2 space-y-6">
+   514→                
+   515→                {/* Integrated Platforms Cards */}
+   516→                <div className="bg-slate-900/50 rounded-xl border border-slate-800/50">
+   517→                  <div className="px-6 py-4 border-b border-slate-800/50 flex items-center justify-between">
+   518→                    <h2 className="font-semibold flex items-center gap-2">
+   519→                      <Server className="w-5 h-5 text-cyan-400" />
+   520→                      Integrated Security Platforms
+   521→                    </h2>
+   522→                    <div className="flex items-center gap-2">
+   523→                      <span className="text-sm text-slate-400">{filteredPlatforms.length} platforms</span>
+   524→                      <button 
+   525→                        onClick={() => setActiveView('platforms')}
+   526→                        className="text-xs text-cyan-400 hover:text-cyan-300 flex items-center gap-1"
+   527→                      >
+   528→                        View All <ExternalLink className="w-3 h-3" />
+   529→                      </button>
+   530→                    </div>
+   531→                  </div>
+   532→                  
+   533→                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4 p-6">
+   534→                    {platforms.slice(0, 6).map((platform) => (
+   535→                      <div 
+   536→                        key={platform.id}
+   537→                        onClick={() => setSelectedPlatform(selectedPlatform === platform.id ? null : platform.id)}
+   538→                        className={`bg-slate-800/30 rounded-lg p-4 border cursor-pointer transition-all hover:border-slate-600 hover:bg-slate-800/50 ${
+   539→                          selectedPlatform === platform.id ? 'border-cyan-500/50 ring-1 ring-cyan-500/20' : 'border-slate-700/50'
+   540→                        }`}
+   541→                      >
+   542→                        <div className="flex items-start justify-between mb-3">
+   543→                          <div className="flex items-center gap-3">
+   544→                            <div className={`w-10 h-10 rounded-lg bg-gradient-to-br ${platform.color} flex items-center justify-center text-white`}>
+   545→                              {platform.icon}
+   546→                            </div>
+   547→                            <div>
+   548→                              <h3 className="font-semibold text-white">{platform.name}</h3>
+   549→                              <p className="text-xs text-slate-400">{platform.fullName}</p>
+   550→                            </div>
+   551→                          </div>
+   552→                          <div className="flex items-center gap-2">
+   553→                            <span className={`w-2 h-2 rounded-full ${statusColors[platform.status]}`}></span>
+   554→                            <span className={`text-xs px-2 py-0.5 rounded border ${statusTextColors[platform.status]}`}>
+   555→                              {platform.status}
+   556→                            </span>
+   557→                          </div>
+   558→                        </div>
+   559→
+   560→                        <p className="text-xs text-slate-400 mb-3 line-clamp-2">{platform.description}</p>
+   561→
+   562→                        <div className="grid grid-cols-3 gap-2 text-xs">
+   563→                          <div className="bg-slate-900/50 rounded px-2 py-1.5">
+   564→                            <div className="text-slate-500">Version</div>
+   565→                            <div className="text-slate-300 font-medium">{platform.version}</div>
+   566→                          </div>
+   567→                          <div className="bg-slate-900/50 rounded px-2 py-1.5">
+   568→                            <div className="text-slate-500">Uptime</div>
+   569→                            <div className="text-green-400 font-medium">{platform.uptime}</div>
+   570→                          </div>
+   571→                          <div className="bg-slate-900/50 rounded px-2 py-1.5">
+   572→                            <div className="text-slate-500">Events</div>
+   573→                            <div className="text-cyan-400 font-medium">{(platform.eventsToday / 1000000).toFixed(1)}M</div>
+   574→                          </div>
+   575→                        </div>
+   576→
+   577→                        {/* Expanded Details */}
+   578→                        {selectedPlatform === platform.id && (
+   579→                          <div className="mt-4 pt-4 border-t border-slate-700/50">
+   580→                            <div className="mb-3">
+   581→                              <div className="text-xs text-slate-500 mb-2">Key Features</div>
+   582→                              <div className="flex flex-wrap gap-1">
+   583→                                {platform.features.slice(0, 4).map((feature) => (
+   584→                                  <span key={feature} className="text-xs bg-slate-700/50 text-slate-300 px-2 py-0.5 rounded">
+   585→                                    {feature}
+   586→                                  </span>
+   587→                                ))}
+   588→                              </div>
+   589→                            </div>
+   590→                            <div className="flex items-center justify-between">
+   591→                              <span className="text-xs text-slate-500 font-mono">{platform.endpoint}</span>
+   592→                              <button className="text-xs text-cyan-400 hover:text-cyan-300 flex items-center gap-1">
+   593→                                Open Dashboard <ExternalLink className="w-3 h-3" />
+   594→                              </button>
+   595→                            </div>
+   596→                          </div>
+   597→                        )}
+   598→                      </div>
+   599→                    ))}
+   600→                  </div>
+   601→                </div>
+   602→
+   603→                {/* Integration Flow Visualization */}
+   604→                <div className="bg-slate-900/50 rounded-xl border border-slate-800/50">
+   605→                  <div className="px-6 py-4 border-b border-slate-800/50 flex items-center justify-between">
+   606→                    <h2 className="font-semibold flex items-center gap-2">
+   607→                      <Link2 className="w-5 h-5 text-cyan-400" />
+   608→                      Data Integration Flows
+   609→                    </h2>
+   610→                    <button 
+   611→                      onClick={() => setActiveView('integrations')}
+   612→                      className="text-xs text-cyan-400 hover:text-cyan-300 flex items-center gap-1"
+   613→                    >
+   614→                      View All <ExternalLink className="w-3 h-3" />
+   615→                    </button>
+   616→                  </div>
+   617→                  
+   618→                  <div className="p-6">
+   619→                    <div className="relative">
+   620→                      {/* Central Hub */}
+   621→                      <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+   622→                        <div className="w-20 h-20 rounded-full bg-gradient-to-br from-cyan-500/20 to-blue-500/20 border border-cyan-500/30 flex items-center justify-center">
+   623→                          <Zap className="w-8 h-8 text-cyan-400" />
+   624→                        </div>
+   625→                      </div>
+   626→
+   627→                      {/* Platform Nodes arranged in circle */}
+   628→                      <div className="grid grid-cols-4 gap-4 min-h-[280px]">
+   629→                        {platforms.slice(0, 8).map((platform, idx) => (
+   630→                          <div key={platform.id} className="flex flex-col items-center">
+   631→                            <div className={`w-14 h-14 rounded-xl bg-gradient-to-br ${platform.color} flex items-center justify-center text-white shadow-lg relative group cursor-pointer hover:scale-105 transition-transform`}>
+   632→                              {platform.icon}
+   633→                              <span className="absolute -top-1 -right-1 w-3 h-3 bg-green-500 rounded-full border-2 border-slate-900"></span>
+   634→                              
+   635→                              {/* Tooltip */}
+   636→                              <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none z-10">
+   637→                                <div className="bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 whitespace-nowrap shadow-xl">
+   638→                                  <div className="text-xs font-semibold">{platform.name}</div>
+   639→                                  <div className="text-[10px] text-slate-400">{platform.eventsToday.toLocaleString()} events today</div>
+   640→                                </div>
+   641→                              </div>
+   642→                            </div>
+   643→                            <span className="mt-2 text-xs text-slate-400 font-medium">{platform.name}</span>
+   644→                          </div>
+   645→                        ))}
+   646→                      </div>
+   647→                    </div>
+   648→
+   649→                    {/* Active Integrations List */}
+   650→                    <div className="mt-6 pt-4 border-t border-slate-800/50">
+   651→                      <div className="text-xs text-slate-500 mb-3">Active Data Flows ({integrations.filter(i => i.status === 'active').length})</div>
+   652→                      <div className="flex flex-wrap gap-2">
+   653→                        {integrations.slice(0, 6).map((integration) => {
+   654→                          const source = getPlatformById(integration.source === 'all' ? 'wazuh' : integration.source)
+   655→                          const target = getPlatformById(integration.target)
+   656→                          return (
+   657→                            <div key={integration.id} className="flex items-center gap-2 bg-slate-800/30 rounded-lg px-3 py-1.5 border border-slate-700/50 text-xs">
+   658→                              <span className="text-slate-400">{source?.name || 'All'}</span>
+   659→                              <ArrowRight className="w-3 h-3 text-cyan-400" />
+   660→                              <span className="text-slate-400">{target?.name}</span>
+   661→                              <span className="text-slate-500">•</span>
+   662→                              <span className="text-cyan-400">{integration.dataType}</span>
+   663→                              <span className={`w-1.5 h-1.5 rounded-full ${integration.status === 'active' ? 'bg-green-400' : 'bg-red-400'}`}></span>
+   664→                            </div>
+   665→                          )
+   666→                        })}
+   667→                      </div>
+   668→                    </div>
+   669→                  </div>
+   670→                </div>
+   671→              </div>
+   672→
+   673→              {/* RIGHT COLUMN - Live Alerts + Quick Stats */}
+   674→              <div className="space-y-6">
+   675→                
+   676→                {/* Live Alerts Feed */}
+   677→                <div className="bg-slate-900/50 rounded-xl border border-slate-800/50">
+   678→                  <div className="px-6 py-4 border-b border-slate-800/50 flex items-center justify-between">
+   679→                    <h2 className="font-semibold flex items-center gap-2">
+   680→                      <Activity className="w-5 h-5 text-cyan-400" />
+   681→                      Live Alert Feed
+   682→                    </h2>
+   683→                    <span className="flex items-center gap-2 text-sm">
+   684→                      <span className="w-2 h-2 bg-red-500 rounded-full animate-pulse"></span>
+   685→                      <span className="text-slate-400">{alerts.length} active</span>
+   686→                    </span>
+   687→                  </div>
+   688→                  
+   689→                  <div className="divide-y divide-slate-800/50 max-h-[420px] overflow-y-auto">
+   690→                    {alerts.map((alert) => {
+   691→                      const platform = getPlatformById(alert.platform)
+   692→                      return (
+   693→                        <div key={alert.id} className="p-4 hover:bg-slate-800/30 transition-colors cursor-pointer">
+   694→                          <div className="flex items-start gap-3">
+   695→                            <div className={`w-2 h-2 mt-2 rounded-full ${severityBadge(alert.severity)}`}></div>
+   696→                            <div className="flex-1 min-w-0">
+   697→                              <div className="flex items-center gap-2 mb-1">
+   698→                                <span className={`px-1.5 py-0.5 rounded text-[10px] font-semibold uppercase ${severityColors[alert.severity]}`}>
+   699→                                  {alert.severity}
+   700→                                </span>
+   701→                                <span className="text-[10px] text-slate-500">{formatRelativeTime(alert.timestamp)}</span>
+   702→                              </div>
+   703→                              <h3 className="text-sm font-medium text-white mb-1 line-clamp-1">{alert.title}</h3>
+   704→                              <p className="text-xs text-slate-400 line-clamp-2 mb-2">{alert.description}</p>
+   705→                              <div className="flex items-center gap-2 text-xs">
+   706→                                {platform && (
+   707→                                  <span className={`flex items-center gap-1 px-1.5 py-0.5 rounded bg-gradient-to-r ${platform.color} text-white`}>
+   708→                                    {platform.icon}
+   709→                                    <span className="w-3 h-3">{platform.name}</span>
+   710→                                  </span>
+   711→                                )}
+   712→                                <span className="text-slate-500">{alert.source}</span>
+   713→                              </div>
+   714→                            </div>
+   715→                            <ChevronRight className="w-4 h-4 text-slate-600" />
+   716→                          </div>
+   717→                        </div>
+   718→                      )
+   719→                    })}
+   720→                  </div>
+   721→                </div>
+   722→
+   723→                {/* Quick Stats Panel */}
+   724→                <div className="bg-slate-900/50 rounded-xl border border-slate-800/50 p-6">
+   725→                  <h2 className="font-semibold mb-4 flex items-center gap-2">
+   726→                    <BarChart3 className="w-5 h-5 text-cyan-400" />
+   727→                    Today's Summary
+   728→                  </h2>
+   729→                  <div className="space-y-3">
+   730→                    <div className="flex items-center justify-between text-sm">
+   731→                      <span className="text-slate-400">Total Events Processed</span>
+   732→                      <span className="font-mono text-white font-semibold">21.4M</span>
+   733→                    </div>
+   734→                    <div className="flex items-center justify-between text-sm">
+   735→                      <span className="text-slate-400">Alerts Generated</span>
+   736→                      <span className="font-mono text-white font-semibold">4,732</span>
+   737→                    </div>
+   738→                    <div className="flex items-center justify-between text-sm">
+   739→                      <span className="text-slate-400">Incidents Created</span>
+   740→                      <span className="font-mono text-white font-semibold">23</span>
+   741→                    </div>
+   742→                    <div className="flex items-center justify-between text-sm">
+   743→                      <span className="text-slate-400">Auto-Resolved</span>
+   744→                      <span className="font-mono text-green-400 font-semibold">3,891 (82%)</span>
+   745→                    </div>
+   746→                    <div className="flex items-center justify-between text-sm">
+   747→                      <span className="text-slate-400">Threat IOCs Shared</span>
+   748→                      <span className="font-mono text-white font-semibold">1,247</span>
+   749→                    </div>
+   750→                    <div className="pt-3 mt-3 border-t border-slate-800/50">
+   751→                      <div className="flex items-center justify-between text-sm">
+   752→                        <span className="text-slate-400">Data Throughput</span>
+   753→                        <span className="font-mono text-cyan-400">847 GB/day</span>
+   754→                      </div>
+   755→                    </div>
+   756→                  </div>
+   757→                </div>
+   758→
+   759→                {/* Platform Status Summary */}
+   760→                <div className="bg-slate-900/50 rounded-xl border border-slate-800/50 p-6">
+   761→                  <h2 className="font-semibold mb-4 flex items-center gap-2">
+   762→                    <Server className="w-5 h-5 text-cyan-400" />
+   763→                    Platform Status
+   764→                  </h2>
+   765→                  <div className="space-y-2">
+   766→                    {platforms.map((platform) => (
+   767→                      <div key={platform.id} className="flex items-center justify-between text-sm py-1.5 border-b border-slate-800/30 last:border-0">
+   768→                        <div className="flex items-center gap-2">
+   769→                          <div className={`w-6 h-6 rounded bg-gradient-to-r ${platform.color} flex items-center justify-center text-white`}>
+   770→                            {React.cloneElement(platform.icon as React.ReactElement, { className: 'w-3 h-3' })}
+   771→                          </div>
+   772→                          <span className="text-slate-300">{platform.name}</span>
+   773→                        </div>
+   774→                        <div className="flex items-center gap-2">
+   775→                          <span className={`text-xs ${statusTextColors[platform.status].split(' ')[0]} px-2 py-0.5 rounded border`}>
+   776→                            {platform.status}
+   777→                          </span>
+   778→                        </div>
+   779→                      </div>
+   780→                    ))}
+   781→                  </div>
+   782→                </div>
+   783→              </div>
+   784→            </div>
+   785→          </div>
+   786→        )}
+   787→
+   788→        {/* ========== PLATFORMS VIEW ========== */}
+   789→        {activeView === 'platforms' && (
+   790→          <div className="space-y-6">
+   791→            {/* Category Filters */}
+   792→            <div className="flex items-center gap-3 flex-wrap">
+   793→              <span className="text-sm text-slate-400">Filter:</span>
+   794→              {[
+   795→                { id: 'all', label: 'All Platforms' },
+   796→                { id: 'siem', label: 'SIEM/EDR' },
+   797→                { id: 'soar', label: 'SOAR' },
+   798→                { id: 'threat-intel', label: 'Threat Intel' },
+   799→                { id: 'ids', label: 'IDS/IPS' },
+   800→                { id: 'logging', label: 'Logging' },
+   801→                { id: 'monitoring', label: 'Monitoring' },
+   802→                { id: 'security', label: 'Security' },
+   803→              ].map((cat) => (
+   804→                <button
+   805→                  key={cat.id}
+   806→                  onClick={() => setSelectedCategory(cat.id)}
+   807→                  className={`px-3 py-1.5 rounded-lg text-sm transition-all ${
+   808→                    selectedCategory === cat.id
+   809→                      ? 'bg-cyan-500/20 text-cyan-400 border border-cyan-500/50'
+   810→                      : 'bg-slate-800/50 text-slate-400 border border-slate-700/50 hover:border-slate-600'
+   811→                  }`}
+   812→                >
+   813→                  {cat.label}
+   814→                </button>
+   815→              ))}
+   816→            </div>
+   817→
+   818→            {/* Platforms Grid */}
+   819→            <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6">
+   820→              {filteredPlatforms.map((platform) => (
+   821→                <div key={platform.id} className="bg-slate-900/50 rounded-xl border border-slate-800/50 overflow-hidden hover:border-slate-700 transition-all group">
+   822→                  {/* Header with gradient */}
+   823→                  <div className={`bg-gradient-to-r ${platform.color} px-6 py-4`}>
+   824→                    <div className="flex items-center justify-between">
+   825→                      <div className="flex items-center gap-3">
+   826→                        <div className="w-12 h-12 rounded-lg bg-white/20 backdrop-blur-sm flex items-center justify-center text-white">
+   827→                          {platform.icon}
+   828→                        </div>
+   829→                        <div>
+   830→                          <h3 className="text-lg font-bold text-white">{platform.name}</h3>
+   831→                          <p className="text-sm text-white/70">{platform.fullName}</p>
+   832→                        </div>
+   833→                      </div>
+   834→                      <div className="flex items-center gap-2">
+   835→                        <span className={`w-3 h-3 rounded-full ${statusColors[platform.status]} shadow-lg`}></span>
+   836→                        <span className="text-xs bg-white/20 backdrop-blur-sm text-white px-2 py-1 rounded capitalize">
+   837→                          {platform.status}
+   838→                        </span>
+   839→                      </div>
+   840→                    </div>
+   841→                  </div>
+   842→
+   843→                  {/* Body */}
+   844→                  <div className="p-6 space-y-4">
+   845→                    <p className="text-sm text-slate-400">{platform.description}</p>
+   846→
+   847→                    {/* Stats Grid */}
+   848→                    <div className="grid grid-cols-2 gap-3">
+   849→                      <div className="bg-slate-800/50 rounded-lg p-3">
+   850→                        <div className="text-xs text-slate-500 mb-1">Version</div>
+   851→                        <div className="text-sm font-semibold text-white">{platform.version}</div>
+   852→                      </div>
+   853→                      <div className="bg-slate-800/50 rounded-lg p-3">
+   854→                        <div className="text-xs text-slate-500 mb-1">Uptime</div>
+   855→                        <div className="text-sm font-semibold text-green-400">{platform.uptime}</div>
+   856→                      </div>
+   857→                      <div className="bg-slate-800/50 rounded-lg p-3">
+   858→                        <div className="text-xs text-slate-500 mb-1">Events Today</div>
+   859→                        <div className="text-sm font-semibold text-cyan-400">{platform.eventsToday.toLocaleString()}</div>
+   860→                      </div>
+   861→                      <div className="bg-slate-800/50 rounded-lg p-3">
+   862→                        <div className="text-xs text-slate-500 mb-1">Alerts</div>
+   863→                        <div className="text-sm font-semibold text-orange-400">{platform.alertsCount.toLocaleString()}</div>
+   864→                      </div>
+   865→                    </div>
+   866→
+   867→                    {/* Features */}
+   868→                    <div>
+   869→                      <div className="text-xs text-slate-500 mb-2">Features</div>
+   870→                      <div className="flex flex-wrap gap-1.5">
+   871→                        {platform.features.map((feature) => (
+   872→                          <span key={feature} className="text-xs bg-slate-800 text-slate-300 px-2 py-1 rounded border border-slate-700/50">
+   873→                            {feature}
+   874→                          </span>
+   875→                        ))}
+   876→                      </div>
+   877→                    </div>
+   878→
+   879→                    {/* Endpoint & Actions */}
+   880→                    <div className="pt-4 border-t border-slate-800/50 flex items-center justify-between">
+   881→                      <code className="text-xs text-slate-500 font-mono">{platform.endpoint}</code>
+   882→                      <button className="flex items-center gap-1 text-sm text-cyan-400 hover:text-cyan-300 transition-colors">
+   883→                        Open Dashboard <ExternalLink className="w-4 h-4" />
+   884→                      </button>
+   885→                    </div>
+   886→                  </div>
+   887→                </div>
+   888→              ))}
+   889→            </div>
+   890→          </div>
+   891→        )}
+   892→
+   893→        {/* ========== INTEGRATIONS VIEW ========== */}
+   894→        {activeView === 'integrations' && (
+   895→          <div className="space-y-6">
+   896→            {/* Integration Stats */}
+   897→            <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+   898→              <div className="bg-slate-900/50 rounded-xl border border-slate-800/50 p-4">
+   899→                <div className="flex items-center gap-3">
+   900→                  <div className="w-10 h-10 rounded-lg bg-green-500/20 flex items-center justify-center">
+   901→                    <CheckCircle className="w-5 h-5 text-green-400" />
+   902→                  </div>
+   903→                  <div>
+   904→                    <div className="text-2xl font-bold text-white">{integrations.filter(i => i.status === 'active').length}</div>
+   905→                    <div className="text-sm text-slate-400">Active Integrations</div>
+   906→                  </div>
+   907→                </div>
+   908→              </div>
+   909→              <div className="bg-slate-900/50 rounded-xl border border-slate-800/50 p-4">
+   910→                <div className="flex items-center gap-3">
+   911→                  <div className="w-10 h-10 rounded-lg bg-red-500/20 flex items-center justify-center">
+   912→                    <XCircle className="w-5 h-5 text-red-400" />
+   913→                  </div>
+   914→                  <div>
+   915→                    <div className="text-2xl font-bold text-white">{integrations.filter(i => i.status === 'error').length}</div>
+   916→                    <div className="text-sm text-slate-400">Errors</div>
+   917→                  </div>
+   918→                </div>
+   919→              </div>
+   920→              <div className="bg-slate-900/50 rounded-xl border border-slate-800/50 p-4">
+   921→                <div className="flex items-center gap-3">
+   922→                  <div className="w-10 h-10 rounded-lg bg-cyan-500/20 flex items-center justify-center">
+   923→                    <Zap className="w-5 h-5 text-cyan-400" />
+   924→                  </div>
+   925→                  <div>
+   926→                    <div className="text-2xl font-bold text-white">Real-time</div>
+   927→                    <div className="text-sm text-slate-400">Fastest Sync</div>
+   928→                  </div>
+   929→                </div>
+   930→              </div>
+   931→              <div className="bg-slate-900/50 rounded-xl border border-slate-800/50 p-4">
+   932→                <div className="flex items-center gap-3">
+   933→                  <div className="w-10 h-10 rounded-lg bg-purple-500/20 flex items-center justify-center">
+   934→                    <Database className="w-5 h-5 text-purple-400" />
+   935→                  </div>
+   936→                  <div>
+   937→                    <div className="text-2xl font-bold text-white">21.4M</div>
+   938→                    <div className="text-sm text-slate-400">Events/Day</div>
+   939→                  </div>
+   940→                </div>
+   941→              </div>
+   942→            </div>
+   943→
+   944→            {/* Integration Flow Diagram */}
+   945→            <div className="bg-slate-900/50 rounded-xl border border-slate-800/50 p-6">
+   946→              <h2 className="font-semibold mb-6 flex items-center gap-2">
+   947→                <Link2 className="w-5 h-5 text-cyan-400" />
+   948→                Integration Architecture
+   949→              </h2>
+   950→              
+   951→              <div className="overflow-x-auto">
+   952→                <div className="min-w-[800px] flex items-center justify-center gap-4 py-8">
+   953→                  {/* Source Platforms */}
+   954→                  <div className="space-y-3">
+   955→                    {['suricata', 'wazuh', 'misp'].map((id) => {
+   956→                      const p = getPlatformById(id)
+   957→                      return p ? (
+   958→                        <div key={id} className={`w-32 bg-gradient-to-r ${p.color} rounded-lg p-3 text-center text-white`}>
+   959→                          <div className="flex justify-center mb-1">{p.icon}</div>
+   960→                          <div className="text-xs font-semibold">{p.name}</div>
+   961→                        </div>
+   962→                      ) : null
+   963→                    })}
+   964→                  </div>
+   965→
+   966→                  {/* Arrows */}
+   967→                  <div className="flex flex-col items-center gap-2">
+   968→                    <ArrowRight className="w-8 h-8 text-cyan-400 rotate-0" />
+   969→                    <ArrowRight className="w-8 h-8 text-cyan-400 rotate-0" />
+   970→                    <ArrowRight className="w-8 h-8 text-cyan-400 rotate-0" />
+   971→                  </div>
+   972→
+   973→                  {/* Central Hub */}
+   974→                  <div className="w-40 h-40 rounded-2xl bg-gradient-to-br from-cyan-500/20 to-blue-500/20 border-2 border-cyan-500/50 flex flex-col items-center justify-center">
+   975→                    <Zap className="w-12 h-12 text-cyan-400 mb-2" />
+   976→                    <div className="text-sm font-bold text-white">Elasticsearch</div>
+   977→                    <div className="text-xs text-slate-400">Log Aggregation</div>
+   978→                  </div>
+   979→
+   980→                  {/* Arrows */}
+   981→                  <div className="flex flex-col items-center gap-2">
+   982→                    <ArrowRight className="w-8 h-8 text-cyan-400 rotate-0" />
+   983→                    <ArrowRight className="w-8 h-8 text-cyan-400 rotate-0" />
+   984→                  </div>
+   985→
+   986→                  {/* Destination Platforms */}
+   987→                  <div className="space-y-3">
+   988→                    {['thehive', 'grafana', 'logging'].map((id) => {
+   989→                      const p = getPlatformById(id)
+   990→                      return p ? (
+   991→                        <div key={id} className={`w-32 bg-gradient-to-r ${p.color} rounded-lg p-3 text-center text-white`}>
+   992→                          <div className="flex justify-center mb-1">{p.icon}</div>
+   993→                          <div className="text-xs font-semibold">{p.name}</div>
+   994→                        </div>
+   995→                      ) : null
+   996→                    })}
+   997→                  </div>
+   998→                </div>
+   999→              </div>
+  1000→            </div>
+  1001→
+  1002→            {/* All Integrations Table */}
+  1003→            <div className="bg-slate-900/50 rounded-xl border border-slate-800/50">
+  1004→              <div className="px-6 py-4 border-b border-slate-800/50">
+  1005→                <h2 className="font-semibold">All Data Integrations</h2>
+  1006→              </div>
+  1007→              <div className="overflow-x-auto">
+  1008→                <table className="w-full">
+  1009→                  <thead className="bg-slate-800/50">
+  1010→                    <tr>
+  1011→                      <th className="px-6 py-3 text-left text-xs font-medium text-slate-400 uppercase tracking-wider">Source</th>
+  1012→                      <th className="px-6 py-3 text-left text-xs font-medium text-slate-400 uppercase tracking-wider">Target</th>
+  1013→                      <th className="px-6 py-3 text-left text-xs font-medium text-slate-400 uppercase tracking-wider">Data Type</th>
+  1014→                      <th className="px-6 py-3 text-left text-xs font-medium text-slate-400 uppercase tracking-wider">Frequency</th>
+  1015→                      <th className="px-6 py-3 text-left text-xs font-medium text-slate-400 uppercase tracking-wider">Status</th>
+  1016→                    </tr>
+  1017→                  </thead>
+  1018→                  <tbody className="divide-y divide-slate-800/50">
+  1019→                    {integrations.map((integration) => {
+  1020→                      const source = getPlatformById(integration.source === 'all' ? 'wazuh' : integration.source)
+  1021→                      const target = getPlatformById(integration.target)
+  1022→                      return (
+  1023→                        <tr key={integration.id} className="hover:bg-slate-800/30 transition-colors">
+  1024→                          <td className="px-6 py-4 whitespace-nowrap">
+  1025→                            <div className="flex items-center gap-2">
+  1026→                              {source && <div className={`w-6 h-6 rounded bg-gradient-to-r ${source.color} flex items-center justify-center text-white`}>{React.cloneElement(source.icon as React.ReactElement, { className: 'w-3 h-3' })}</div>}
+  1027→                              <span className="text-sm text-white">{source?.name || 'All Platforms'}</span>
+  1028→                            </div>
+  1029→                          </td>
+  1030→                          <td className="px-6 py-4 whitespace-nowrap">
+  1031→                            <div className="flex items-center gap-2">
+  1032→                              {target && <div className={`w-6 h-6 rounded bg-gradient-to-r ${target.color} flex items-center justify-center text-white`}>{React.cloneElement(target.icon as React.ReactElement, { className: 'w-3 h-3' })}</div>}
+  1033→                              <span className="text-sm text-white">{target?.name}</span>
+  1034→                            </div>
+  1035→                          </td>
+  1036→                          <td className="px-6 py-4 whitespace-nowrap text-sm text-slate-300">{integration.dataType}</td>
+  1037→                          <td className="px-6 py-4 whitespace-nowrap text-sm text-slate-400">{integration.frequency}</td>
+  1038→                          <td className="px-6 py-4 whitespace-nowrap">
+  1039→                            <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium ${
+  1040→                              integration.status === 'active' ? 'bg-green-500/10 text-green-400' : 'bg-red-500/10 text-red-400'
+  1041→                            }`}>
+  1042→                              <span className={`w-1.5 h-1.5 rounded-full ${integration.status === 'active' ? 'bg-green-400' : 'bg-red-400'}`}></span>
+  1043→                              {integration.status}
+  1044→                            </span>
+  1045→                          </td>
+  1046→                        </tr>
+  1047→                      )
+  1048→                    })}
+  1049→                  </tbody>
+  1050→                </table>
+  1051→              </div>
+  1052→            </div>
+  1053→          </div>
+  1054→        )}
+  1055→
+  1056→        {/* ========== ALERTS VIEW ========== */}
+  1057→        {activeView === 'alerts' && (
+  1058→          <div className="space-y-6">
+  1059→            {/* Alert Stats */}
+  1060→            <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
+  1061→              {[
+  1062→                { severity: 'critical', count: alerts.filter(a => a.severity === 'critical').length, color: 'bg-red-500' },
+  1063→                { severity: 'high', count: alerts.filter(a => a.severity === 'high').length, color: 'bg-orange-500' },
+  1064→                { severity: 'medium', count: alerts.filter(a => a.severity === 'medium').length, color: 'bg-yellow-500' },
+  1065→                { severity: 'low', count: alerts.filter(a => a.severity === 'low').length, color: 'bg-blue-500' },
+  1066→                { severity: 'info', count: alerts.filter(a => a.severity === 'info').length, color: 'bg-gray-500' },
+  1067→              ].map((stat) => (
+  1068→                <div key={stat.severity} className="bg-slate-900/50 rounded-xl border border-slate-800/50 p-4">
+  1069→                  <div className="flex items-center gap-3">
+  1070→                    <div className={`w-10 h-10 rounded-lg ${stat.color}/20 flex items-center justify-center`}>
+  1071→                      <div className={`w-4 h-4 rounded-full ${stat.color}`}></div>
+  1072→                    </div>
+  1073→                    <div>
+  1074→                      <div className="text-2xl font-bold text-white">{stat.count}</div>
+  1075→                      <div className="text-sm text-slate-400 capitalize">{stat.severity}</div>
+  1076→                    </div>
+  1077→                  </div>
+  1078→                </div>
+  1079→              ))}
+  1080→            </div>
+  1081→
+  1082→            {/* Alerts Table */}
+  1083→            <div className="bg-slate-900/50 rounded-xl border border-slate-800/50">
+  1084→              <div className="px-6 py-4 border-b border-slate-800/50 flex items-center justify-between">
+  1085→                <h2 className="font-semibold">All Security Alerts</h2>
+  1086→                <div className="flex items-center gap-3">
+  1087→                  <div className="relative">
+  1088→                    <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+  1089→                    <input 
+  1090→                      type="text" 
+  1091→                      placeholder="Search alerts..."
+  1092→                      className="bg-slate-800 border border-slate-700 rounded-lg pl-9 pr-4 py-2 text-sm focus:outline-none focus:border-cyan-500 w-64"
+  1093→                    />
+  1094→                  </div>
+  1095→                  <button className="flex items-center gap-2 bg-slate-800 hover:bg-slate-700 px-3 py-2 rounded-lg text-sm transition-colors">
+  1096→                    <Filter className="w-4 h-4" />
+  1097→                    Filter
+  1098→                  </button>
+  1099→                </div>
+  1100→              </div>
+  1101→              <div className="overflow-x-auto">
+  1102→                <table className="w-full">
+  1103→                  <thead className="bg-slate-800/50">
+  1104→                    <tr>
+  1105→                      <th className="px-6 py-3 text-left text-xs font-medium text-slate-400 uppercase tracking-wider">Severity</th>
+  1106→                      <th className="px-6 py-3 text-left text-xs font-medium text-slate-400 uppercase tracking-wider">Alert</th>
+  1107→                      <th className="px-6 py-3 text-left text-xs font-medium text-slate-400 uppercase tracking-wider">Platform</th>
+  1108→                      <th className="px-6 py-3 text-left text-xs font-medium text-slate-400 uppercase tracking-wider">Source</th>
+  1109→                      <th className="px-6 py-3 text-left text-xs font-medium text-slate-400 uppercase tracking-wider">Status</th>
+  1110→                      <th className="px-6 py-3 text-left text-xs font-medium text-slate-400 uppercase tracking-wider">Time</th>
+  1111→                      <th className="px-6 py-3 text-left text-xs font-medium text-slate-400 uppercase tracking-wider">Actions</th>
+  1112→                    </tr>
+  1113→                  </thead>
+  1114→                  <tbody className="divide-y divide-slate-800/50">
+  1115→                    {alerts.map((alert) => {
+  1116→                      const platform = getPlatformById(alert.platform)
+  1117→                      return (
+  1118→                        <tr key={alert.id} className="hover:bg-slate-800/30 transition-colors">
+  1119→                          <td className="px-6 py-4 whitespace-nowrap">
+  1120→                            <span className={`px-2 py-1 rounded text-xs font-semibold uppercase ${severityColors[alert.severity]}`}>
+  1121→                              {alert.severity}
+  1122→                            </span>
+  1123→                          </td>
+  1124→                          <td className="px-6 py-4">
+  1125→                            <div className="text-sm font-medium text-white">{alert.title}</div>
+  1126→                            <div className="text-sm text-slate-400 truncate max-w-md">{alert.description}</div>
+  1127→                          </td>
+  1128→                          <td className="px-6 py-4 whitespace-nowrap">
+  1129→                            {platform && (
+  1130→                              <span className={`inline-flex items-center gap-1 px-2 py-1 rounded text-xs bg-gradient-to-r ${platform.color} text-white`}>
+  1131→                                {React.cloneElement(platform.icon as React.ReactElement, { className: 'w-3 h-3' })}
+  1132→                                {platform.name}
+  1133→                              </span>
+  1134→                            )}
+  1135→                          </td>
+  1136→                          <td className="px-6 py-4 whitespace-nowrap text-sm text-slate-300">{alert.source}</td>
+  1137→                          <td className="px-6 py-4 whitespace-nowrap">
+  1138→                            <span className={`capitalize px-2 py-1 rounded text-xs ${
+  1139→                              alert.status === 'new' ? 'bg-blue-900/30 text-blue-400' :
+  1140→                              alert.status === 'investigating' ? 'bg-yellow-900/30 text-yellow-400' :
+  1141→                              'bg-green-900/30 text-green-400'
+  1142→                            }`}>
+  1143→                              {alert.status}
+  1144→                            </span>
+  1145→                          </td>
+  1146→                          <td className="px-6 py-4 whitespace-nowrap text-sm text-slate-400">
+  1147→                            {formatRelativeTime(alert.timestamp)}
+  1148→                          </td>
+  1149→                          <td className="px-6 py-4 whitespace-nowrap">
+  1150→                            <button className="text-cyan-400 hover:text-cyan-300 text-sm font-medium">Investigate →</button>
+  1151→                          </td>
+  1152→                        </tr>
+  1153→                      )
+  1154→                    })}
+  1155→                  </tbody>
+  1156→                </table>
+  1157→              </div>
+  1158→            </div>
+  1159→          </div>
+  1160→        )}
+  1161→
+  1162→      </main>
+  1163→
+  1164→      {/* ==================== FOOTER ==================== */}
+  1165→      <footer className="mt-auto border-t border-slate-800 bg-slate-900/50 px-6 py-4">
+  1166→        <div className="flex flex-col md:flex-row items-center justify-between gap-4 text-sm text-slate-400">
+  1167→          <div className="flex items-center gap-4">
+  1168→            <span className="font-semibold text-white">🇩🇿 Algeria National SOC Platform</span>
+  1169→            <span>|</span>
+  1170→            <span>v2.0.0 • 2026-2030 Strategic Vision</span>
+  1171→          </div>
+  1172→          <div className="flex items-center gap-6">
+  1173→            <span className="flex items-center gap-1">
+  1174→              <Lock className="w-4 h-4" />
+  1175→              Classification: Official Use Only
+  1176→            </span>
+  1177→            <span className="font-mono">Session: SOC-{Date.now().toString(36).toUpperCase().slice(-8)}</span>
+  1178→            <span>{operationalPlatforms}/{totalPlatforms} Systems Operational</span>
+  1179→          </div>
+  1180→        </div>
+  1181→      </footer>
+  1182→    </div>
+  1183→  )
+  1184→}
+  1185→

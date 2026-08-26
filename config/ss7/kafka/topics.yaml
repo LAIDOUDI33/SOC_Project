@@ -1,0 +1,316 @@
+# Djezzy SOC - SS7 Module Kafka Configuration
+# Topic definitions and schema specifications for SS7 security monitoring
+
+# ============================================================
+# KAFKA TOPICS FOR SS7 MODULE
+# ============================================================
+
+topics:
+  # Raw SS7 events from collector
+  - name: ss7-raw-events
+    partitions: 12
+    replication_factor: 3
+    retention_ms: 86400000  # 24 hours
+    segment_bytes: 1073741824  # 1GB segments
+    cleanup_policy: delete
+    compression_type: lz4
+    
+  # Analyzed alerts from analyzer
+  - name: ss7-alerts
+    partitions: 6
+    replication_factor: 3
+    retention_ms: 604800000  # 7 days
+    segment_bytes: 536870912  # 512MB segments
+    cleanup_policy: delete
+    compression_type: lz4
+    
+  # Diameter-specific alerts
+  - name: diameter-alerts
+    partitions: 4
+    replication_factor: 3
+    retention_ms: 604800000
+    segment_bytes: 268435456  # 256MB segments
+    cleanup_policy: delete
+    compression_type: lz4
+    
+  # Fraud indicators (for fraud management system)
+  - name: ss7-fraud-indicators
+    partitions: 4
+    replication_factor: 3
+    retention_ms: 2592000000  # 30 days for compliance
+    segment_bytes: 536870912
+    cleanup_policy: delete
+    compression_type: lz4
+    
+  # PCAP file references (for forensics)
+  - name: ss7-pcap-references
+    partitions: 2
+    replication_factor: 2
+    retention_ms: 604800000
+    compression_type: gzip
+
+# ============================================================
+# SCHEMA DEFINITIONS FOR SS7 EVENTS
+# ============================================================
+
+schemas:
+  ss7-raw-event:
+    type: object
+    properties:
+      timestamp:
+        type: string
+        format: date-time
+        description: "Message capture timestamp (UTC)"
+      
+      message_id:
+        type: string
+        pattern: "^ss7_[0-9]+$"
+        description: "Unique message identifier"
+      
+      capture_source:
+        type: string
+        enum: [stp-a, stp-b, msc-1, msc-2, hlr, vlr, probe-1, probe-2]
+        description: "Source network element or probe"
+      
+      raw_length:
+        type: integer
+        minimum: 0
+        maximum: 65535
+        description: "Raw message length in bytes"
+      
+      protocol:
+        type: string
+        enum: [mtp3, sccp, tcap, map, cap, isup, inap, diameter]
+        description: "Protocol layer"
+      
+      message_type:
+        type: string
+        description: "Protocol-specific message/operation name"
+      
+      opcode:
+        type: integer
+        description: "Numeric operation code"
+      
+      calling_party_gt:
+        type: object
+        properties:
+          number_type:
+            type: integer
+          numbering_plan:
+            type: integer
+          translation_type:
+            type: integer
+          address:
+            type: string
+            pattern: "^[+]?[0-9]{4,15}$"
+      
+      called_party_gt:
+        $ref: "#/schemas/ss7-raw-event/properties/calling_party_gt"
+      
+      originating_point_code:
+        type: integer
+        minimum: 0
+        maximum: 16777215
+      
+      destination_point_code:
+        type: integer
+        minimum: 0
+        maximum: 16777215
+      
+      imsi:
+        type: string
+        pattern: "^[0-9]{15}$"
+        description: "International Mobile Subscriber Identity"
+      
+      msisdn:
+        type: string
+        pattern: "^[+]?[0-9]{10,15}$"
+        description: "Mobile Station International Directory Number"
+      
+      imei:
+        type: string
+        pattern: "^[0-9]{15}$"
+        description: "International Mobile Equipment Identity"
+      
+      msc_address:
+        type: string
+        description: "MSC/VLR GT address"
+      
+      vlr_number:
+        type: string
+        description: "VLR number"
+      
+      location_area:
+        type: object
+        properties:
+          mcc:
+            type: string
+            pattern: "^[0-9]{3}$"
+          mnc:
+            type: string
+            pattern: "^[0-9]{2,3}$"
+          lac:
+            type: integer
+            minimum: 0
+            maximum: 65535
+      
+      cell_id:
+        type: string
+        description: "Cell identifier (CI or ECGI)"
+      
+      payload:
+        type: object
+        description: "Protocol-specific payload fields"
+      
+      risk_score:
+        type: number
+        minimum: 0.0
+        maximum: 1.0
+        description: "Pre-computed risk score from collector"
+      
+      risk_indicators:
+        type: array
+        items:
+          type: string
+
+  ss7-alert:
+    type: object
+    properties:
+      alert_id:
+        type: string
+        pattern: "^ss7_alert_[0-9]+$"
+      
+      rule_name:
+        type: string
+        description: "Detection rule that triggered this alert"
+      
+      severity:
+        type: string
+        enum: [LOW, MEDIUM, HIGH, CRITICAL]
+      
+      title:
+        type: string
+        maxLength: 200
+        description: "Human-readable alert title"
+      
+      description:
+        type: string
+        description: "Detailed alert description with context"
+      
+      source_message:
+        $ref: "#/schemas/ss7-raw-event"
+      
+      timestamp:
+        type: string
+        format: date-time
+      
+      indicators:
+        type: array
+        items:
+          type: string
+      
+      risk_score:
+        type: number
+        minimum: 0.0
+        maximum: 1.0
+      
+      iocs:
+        type: array
+        items:
+          type: object
+          properties:
+            type:
+              type: string
+              enum: [imsi, msisdn, imei, phone-number, ip-address, domain]
+            value:
+              type: string
+            source:
+              type: string
+      
+      status:
+        type: string
+        enum: [new, investigating, escalated, resolved, false_positive]
+      
+      actions_taken:
+        type: array
+        items:
+          type: string
+
+# ============================================================
+# PRODUCER/CONSUMER CONFIGURATIONS
+# ============================================================
+
+producers:
+  ss7-collector:
+    client.id: ss7-collector-producer
+    linger.ms: 10
+    batch.size: 16384
+    compression.type: lz4
+    acks: all
+    enable.idempotence: true
+    max.in.flight.requests.per.connection: 5
+  
+  ss7-analyzer:
+    client.id: ss7-analyzer-producer
+    linger.ms: 5
+    batch.size: 4096
+    compression.type: lz4
+
+consumers:
+  ss7-analyzer:
+    group.id: ss7-analyzer-group
+    auto.offset.reset: latest
+    enable.auto.commit: true
+    auto.commit.interval.ms: 5000
+    session.timeout.ms: 30000
+    max.poll.interval.ms: 300000
+    fetch.max.bytes: 52428800
+    max.partition.fetch.bytes: 1048576
+  
+  diameter-monitor:
+    group.id: diameter-monitor-group
+    auto.offset.reset: latest
+    enable.auto.commit: true
+
+# ============================================================
+# STREAM PROCESSING CONFIGURATION
+# ============================================================
+
+stream_processing:
+  # Windowed aggregations for rate-based detection
+  windows:
+    sliding_1min:
+      type: sliding
+      size_seconds: 60
+      advance_seconds: 10
+    
+    tumbling_5min:
+      type: tumbling
+      size_seconds: 300
+    
+    tumbling_1hour:
+      type: tumbling
+      size_seconds: 3600
+  
+  # Aggregation queries used by detection rules
+  aggregations:
+    sri_per_subscriber_1min:
+      input_topic: ss7-raw-events
+      filter: "message_type == 'sendRoutingInfoForSM'"
+      group_by: imsi
+      window: sliding_1min
+      output: count
+      
+    calls_per_source_1hour:
+      input_topic: ss7-raw-events
+      filter: "message_type == 'initialAddressMessage'"
+      group_by: calling_party_gt.address
+      window: tumbling_1hour
+      output: count
+      
+    ussd_per_msisdn_1min:
+      input_topic: ss7-raw-events
+      filter: "message_type == 'processUnstructuredSSRequest'"
+      group_by: msisdn
+      window: sliding_1min
+      output: count

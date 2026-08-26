@@ -1,0 +1,1201 @@
+     1→/**
+     2→ * Suricata IDS/IPS Client Library
+     3→ * National SOC Platform - Algeria 2026-2030
+     4→ * 
+     5→ * Comprehensive client for:
+     6→ * - Alert management and analysis
+     7→ * - Rule CRUD operations
+     8→ * - Statistics aggregation
+     9→ * - Sensor health monitoring
+    10→ * - Signature updates
+    11→ */
+    12→
+    13→import {
+    14→  EveEvent,
+    15→  SuricataRule,
+    16→  SuricataStats,
+    17→  SuricataSensor,
+    18→  AlertFilter,
+    19→  RuleFilter,
+    20→  AlertResultSet,
+    21→  RuleResultSet,
+    22→  RuleUpdateOptions,
+    23→  RuleUpdateResult,
+    24→  SeverityLevel,
+    25→  RuleState,
+    26→  RuleAction,
+    27→  SignatureSource,
+    28→  AlertCategory,
+    29→  Protocol,
+    30→  TimeRange,
+    31→  AttackMapPoint,
+    32→  GeoLocation,
+    33→  BulkOperationResult,
+    34→  ApiResponse,
+    35→  PaginatedResponse,
+    36→  ExportJob,
+    37→  ExportFormat,
+    38→  ExportStatus,
+    39→  RuleValidationStatus,
+    40→  SensorStatus,
+    41→  SEVERITY_CONFIG,
+    42→  DEFAULT_PORTS
+    43→} from './suricata.types';
+    44→
+    45→// ============================================================================
+    46→// ERROR CLASSES
+    47→// ============================================================================
+    48→
+    49→/** Base error for Suricata client */
+    50→export class SuricataError extends Error {
+    51→  constructor(
+    52→    message: string,
+    53→    public code: string,
+    54→    public statusCode?: number,
+    55→    public details?: string[]
+    56→  ) {
+    57→    super(message);
+    58→    this.name = 'SuricataError';
+    59→  }
+    60→}
+    61→
+    62→/** Authentication error */
+    63→export class SuricataAuthError extends SuricataError {
+    64→  constructor(message: string) {
+    65→    super(message, 'AUTH_ERROR', 401);
+    66→    this.name = 'SuricataAuthError';
+    67→  }
+    68→}
+    69→
+    70→/** Rate limit error */
+    71→export class SuricataRateLimitError extends SuricataError {
+    72→  constructor(retryAfterSeconds: number) {
+    73→    super(
+    74→      `Rate limit exceeded. Retry after ${retryAfterSeconds} seconds`,
+    75→      'RATE_LIMITED',
+    76→      429
+    77→    );
+    78→    this.name = 'SuricataRateLimitError';
+    79→    this.retryAfter = retryAfterSeconds;
+    80→  }
+    81→  
+    82→  retryAfter: number;
+    83→}
+    84→
+    85→/** Connection error */
+    86→export class SuricataConnectionError extends SuricataError {
+    87→  constructor(message: string) {
+    88→    super(message, 'CONNECTION_ERROR');
+    89→    this.name = 'SuricataConnectionError';
+    90→  }
+    91→}
+    92→
+    93→/** Validation error */
+    94→export class SuricataValidationError extends SuricataError {
+    95→  constructor(message: string, details?: string[]) {
+    96→    super(message, 'VALIDATION_ERROR', 400, details);
+    97→    this.name = 'SuricataValidationError';
+    98→  }
+    99→}
+   100→
+   101→/** Rule compilation error */
+   102→export class RuleCompilationError extends SuricataError {
+   103→  constructor(ruleId: string, errors: string[]) {
+   104→    super(
+   105→      `Rule ${ruleId} failed to compile: ${errors.join(', ')}`,
+   106→      'RULE_COMPILATION_ERROR',
+   107→      422,
+   108→      errors
+   109→    );
+   110→    this.name = 'RuleCompilationError';
+   111→    this.ruleId = ruleId;
+   112→    this.errors = errors;
+   113→  }
+   114→  
+   115→  ruleId: string;
+   116→  errors: string[];
+   117→}
+   118→
+   119→// ============================================================================
+   120→// CONFIGURATION & CLIENT CLASS
+   121→// ============================================================================
+   122→
+   123→/** Suricata client configuration */
+   124→export interface SuricataClientConfig {
+   125→  /** Base URL for Suricata REST API (e.g., http://suricata:8080) */
+   126→  baseUrl: string;
+   127→  /** API key for authentication */
+   128→  apiKey?: string;
+   129→  /** Request timeout in milliseconds (default: 30000) */
+   130→  timeout?: number;
+   131→  /** Maximum retries for failed requests (default: 3) */
+   132→  maxRetries?: number;
+   133→  /** Enable debug logging */
+   134→  debug?: boolean;
+   135→  /** Default sensor ID for queries */
+   136→  defaultSensorId?: string;
+   137→  /** Enable response caching */
+   138→  enableCache?: boolean;
+   139→  /** Cache TTL in milliseconds (default: 5000) */
+   140→  cacheTtl?: number;
+   141→}
+   142→
+   143→/** Cached response entry */
+   144→interface CacheEntry<T> {
+   145→  data: T;
+   146→  timestamp: number;
+   147→  expiresAt: number;
+   148→}
+   149→
+   150→/**
+   151→ * Main Suricata IDS/IPS Client Class
+   152→ * 
+   153→ * Provides comprehensive interface to Suricata engine including:
+   154→ * - Alert querying and analysis
+   155→ * - Rule management
+   156→ * - Statistics retrieval
+   157→ * - Sensor monitoring
+   158→ * - Integration with threat intelligence
+   159→ */
+   160→export class SuricataClient {
+   161→  private config: Required<SuricataClientConfig>;
+   162→  private cache: Map<string, CacheEntry<unknown>> = new Map();
+   163→  private requestCount: number = 0;
+   164→  private lastRequestTime: number = 0;
+   165→
+   166→  constructor(config: SuricataClientConfig) {
+   167→    this.config = {
+   168→      timeout: config.timeout ?? 30000,
+   169→      maxRetries: config.maxRetries ?? 3,
+   170→      debug: config.debug ?? false,
+   171→      enableCache: config.enableCache ?? true,
+   172→      cacheTtl: config.cacheTtl ?? 5000,
+   173→      ...config
+   174→    };
+   175→    
+   176→    if (this.config.debug) {
+   177→      console.log('[SuricataClient] Initialized with config:', {
+   178→        baseUrl: this.config.baseUrl,
+   179→        timeout: this.config.timeout,
+   180→        maxRetries: this.config.maxRetries,
+   181→        cacheEnabled: this.config.enableCache
+   182→      });
+   183→    }
+   184→  }
+   185→
+   186→  // ============================================================================
+   187→  // PRIVATE HELPERS
+   188→  // ============================================================================
+   189→
+   190→  /**
+   191→   * Build URL with query parameters
+   192→   */
+   193→  private buildUrl(path: string, params?: Record<string, unknown>): string {
+   194→    const url = new URL(`${this.config.baseUrl}${path}`);
+   195→    
+   196→    if (params) {
+   197→      Object.entries(params).forEach(([key, value]) => {
+   198→        if (value !== undefined && value !== null && value !== '') {
+   199→          if (Array.isArray(value)) {
+   200→            value.forEach(v => url.searchParams.append(key, String(v)));
+   201→          } else {
+   202→            url.searchParams.append(key, String(value));
+   203→          }
+   204→        }
+   205→      });
+   206→    }
+   207→    
+   208→    return url.toString();
+   209→  }
+   210→
+   211→  /**
+   212→   * Get cached data or fetch fresh
+   213→   */
+   214→  private async getCached<T>(cacheKey: string, fetcher: () => Promise<T>): Promise<T> {
+   215→    if (!this.config.enableCache) {
+   216→      return fetcher();
+   217→    }
+   218→
+   219→    const cached = this.cache.get(cacheKey) as CacheEntry<T> | undefined;
+   220→    const now = Date.now();
+   221→
+   222→    if (cached && now < cached.expiresAt) {
+   223→      if (this.config.debug) {
+   224→        console.log(`[SuricataClient] Cache hit: ${cacheKey}`);
+   225→      }
+   226→      return cached.data;
+   227→    }
+   228→
+   229→    const data = await fetcher();
+   230→    this.cache.set(cacheKey, {
+   231→      data,
+   232→      timestamp: now,
+   233→      expiresAt: now + this.config.cacheTtl
+   234→    });
+   235→
+   236→    // Clean up old entries periodically
+   237→    if (this.requestCount % 100 === 0) {
+   238→      this.cleanCache();
+   239→    }
+   240→
+   241→    return data;
+   242→  }
+   243→
+   244→  /**
+   245→   * Remove expired cache entries
+   246→   */
+   247→  private cleanCache(): void {
+   248→    const now = Date.now();
+   249→    for (const [key, entry] of this.cache.entries()) {
+   250→      if (now >= entry.expiresAt) {
+   251→        this.cache.delete(key);
+   252→      }
+   253→    }
+   254→  }
+   255→
+   256→  /**
+   257→   * Clear all cached data
+   258→   */
+   259→  clearCache(): void {
+   260→    this.cache.clear();
+   261→    if (this.config.debug) {
+   262→      console.log('[SuricataClient] Cache cleared');
+   263→    }
+   264→  }
+   265→
+   266→  /**
+   267→   * Execute HTTP request with error handling and retries
+   268→   */
+   269→  private async request<T>(
+   270→    method: string,
+   271→    path: string,
+   272→    body?: unknown,
+   273→    options?: { skipCache?: boolean; headers?: Record<string, string> }
+   274→  ): Promise<T> {
+   275→    const url = this.buildUrl(path);
+   276→    const cacheKey = `${method}:${url}:${JSON.stringify(body)}`;
+   277→
+   278→    // Check rate limiting
+   279→    this.enforceRateLimit();
+   280→
+   281→    const controller = new AbortController();
+   282→    const timeoutId = setTimeout(() => controller.abort(), this.config.timeout);
+   283→
+   284→    try {
+   285→      const headers: Record<string, string> = {
+   286→        'Content-Type': 'application/json',
+   287→        'Accept': 'application/json',
+   288→        ...(this.config.apiKey ? { 'X-API-Key': this.config.apiKey } : {}),
+   289→        ...(options?.headers || {})
+   290→      };
+   291→
+   292→      if (this.config.debug) {
+   293→        console.log(`[SuricataClient] ${method} ${url}`, body ? { body } : '');
+   294→      }
+   295→
+   296→      const response = await fetch(url, {
+   297→        method,
+   298→        headers,
+   299→        body: body ? JSON.stringify(body) : undefined,
+   300→        signal: controller.signal
+   301→      });
+   302→
+   303→      clearTimeout(timeoutId);
+   304→      this.requestCount++;
+   305→      this.lastRequestTime = Date.now();
+   306→
+   307→      // Handle specific status codes
+   308→      if (response.status === 401) {
+   309→        throw new SuricataAuthError('Invalid or missing API key');
+   310→      }
+   311→
+   312→      if (response.status === 429) {
+   313→        const retryAfter = parseInt(response.headers.get('Retry-After') || '60', 10);
+   314→        throw new SuricataRateLimitError(retryAfter);
+   315→      }
+   316→
+   317→      if (!response.ok) {
+   318→        const errorBody = await response.json().catch(() => ({}));
+   319→        throw new SuricataError(
+   320→          errorBody.message || `HTTP ${response.status}: ${response.statusText}`,
+   321→          `HTTP_${response.status}`,
+   322→          response.status,
+   323→          errorBody.details
+   324→        );
+   325→      }
+   326→
+   327→      const data = await response.json();
+   328→      
+   329→      if (options?.skipCache) {
+   330→        return data;
+   331→      }
+   332→      
+   333→      return this.getCached(cacheKey, () => Promise.resolve(data));
+   334→
+   335→    } catch (error) {
+   336→      clearTimeout(timeoutId);
+   337→
+   338→      if (error instanceof SuricataError) {
+   339→        throw error;
+   340→      }
+   341→
+   342→      if (error instanceof DOMException && error.name === 'AbortError') {
+   343→        throw new SuricataConnectionError(`Request timed out after ${this.config.timeout}ms`);
+   344→      }
+   345→
+   346→      throw new SuricataConnectionError(
+   347→        error instanceof Error ? error.message : 'Unknown connection error'
+   348→      );
+   349→    }
+   350→  }
+   351→
+   352→  /**
+   353→   * Enforce rate limiting between requests
+   354→   */
+   355→  private enforceRateLimit(): void {
+   356→    const minInterval = 100; // Minimum 100ms between requests
+   357→    const timeSinceLastRequest = Date.now() - this.lastRequestTime;
+   358→
+   359→    if (timeSinceLastRequest < minInterval && this.lastRequestTime > 0) {
+   360→      const waitTime = minInterval - timeSinceLastRequest;
+   361→      if (this.config.debug) {
+   362→        console.log(`[SuricataClient] Rate limit: waiting ${waitTime}ms`);
+   363→      }
+   364→    }
+   365→  }
+   366→
+   367→  // ============================================================================
+   368→  // HEALTH & STATUS
+   369→  // ============================================================================
+   370→
+   371→  /**
+   372→   * Check Suricata service health
+   373→   */
+   374→  async healthCheck(): Promise<{
+   375→    status: 'healthy' | 'degraded' | 'unhealthy';
+   376→    version: string;
+   377→    uptime_seconds: number;
+   378→    sensors_online: number;
+   379→    sensors_total: number;
+   380→  }> {
+   381→    return this.request('GET', '/health');
+   382→  }
+   383→
+   384→  /**
+   385→   * Get Suricata version information
+   386→   */
+   387→  async getVersion(): Promise<{
+   388→    version: string;
+   389→    git_hash: string;
+   390→    build_info: string;
+   391→    features: string[];
+   392→  }> {
+   393→    return this.request('GET', '/version');
+   394→  }
+   395→
+   396→  /**
+   397→   * Get all registered sensors
+   398→   */
+   399→  async getSensors(): Promise<SuricataSensor[]> {
+   400→    return this.request('GET', '/sensors');
+   401→  }
+   402→
+   403→  /**
+   404→   * Get specific sensor by ID
+   405→   */
+   406→  async getSensor(sensorId: string): Promise<SuricataSensor> {
+   407→    return this.request('GET', `/sensors/${sensorId}`);
+   408→  }
+   409→
+   410→  /**
+   411→   * Get sensor health status
+   412→   */
+   413→  async getSensorHealth(sensorId?: string): Promise<{
+   414→    sensor_id: string;
+   415→    status: SensorStatus;
+   416→    checks: Array<{
+   417→      name: string;
+   418→      status: 'pass' | 'fail' | 'warn';
+   419→      message: string;
+   420→    }>;
+   421→    last_check: string;
+   422→  }> {
+   423→    const id = sensorId || this.config.defaultSensorId || 'default';
+   424→    return this.request('GET', `/sensors/${id}/health`);
+   425→  }
+   426→
+   427→  // ============================================================================
+   428→  // ALERT OPERATIONS
+   429→  // ============================================================================
+   430→
+   431→  /**
+   432→   * Search alerts with filtering and pagination
+   433→   */
+   434→  async searchAlerts(filter: AlertFilter = {}): Promise<AlertResultSet> {
+   435→    const params = this.filterToParams(filter);
+   436→    return this.request('GET', '/alerts', undefined, { skipCache: true });
+   437→  }
+   438→
+   439→  /**
+   440→   * Get single alert by ID
+   441→   */
+   442→  async getAlert(alertId: string): Promise<EveEvent> {
+   443→    return this.request('GET', `/alerts/${alertId}`);
+   444→  }
+   445→
+   446→  /**
+   447→   * Get recent alerts (last N hours)
+   448→   */
+   449→  async getRecentAlerts(hours: number = 24, limit: number = 100): Promise<EveEvent[]> {
+   450→    const filter: AlertFilter = {
+   451→      time_range: TimeRange.LAST_24_HOURS,
+   452→      page_size: limit
+   453→    };
+   454→    const result = await this.searchAlerts(filter);
+   455→    return result.alerts;
+   456→  }
+   457→
+   458→  /**
+   459→   * Get alerts by signature SID
+   460→   */
+   461→  async getAlertsBySignature(signatureId: number, limit: number = 50): Promise<EveEvent[]> {
+   462→    const filter: AlertFilter = {
+   463→      signature_id: signatureId,
+   464→      page_size: limit
+   465→    };
+   466→    const result = await this.searchAlerts(filter);
+   467→    return result.alerts;
+   468→  }
+   469→
+   470→  /**
+   471→   * Get alerts for a specific IP address (source or destination)
+   472→   */
+   473→  async getAlertsByIP(ipAddress: string, limit: number = 100): Promise<EveEvent[]> {
+   474→    const result = await this.searchAlerts({
+   475→      src_ip: ipAddress,
+   476→      dest_ip: ipAddress,
+   477→      page_size: limit
+   478→    });
+   479→    return result.alerts;
+   480→  }
+   481→
+   482→  /**
+   483→   * Get critical/high severity alerts
+   484→   */
+   485→  async getHighPriorityAlerts(limit: number = 50): Promise<EveEvent[]> {
+   486→    const result = await this.searchAlerts({
+   487→      severities: [SeverityLevel.CRITICAL, SeverityLevel.HIGH],
+   488→      page_size: limit,
+   489→      sort_by: 'severity' as any,
+   490→      sort_order: 'desc'
+   491→    });
+   492→    return result.alerts;
+   493→  }
+   494→
+   495→  /**
+   496→   * Get alerts grouped by category
+   497→   */
+   498→  async getAlertsByCategory(category: AlertCategory, limit: number = 50): Promise<EveEvent[]> {
+   499→    const result = await this.searchAlerts({
+   500→      categories: [category],
+   501→      page_size: limit
+   502→    });
+   503→    return result.alerts;
+   504→  }
+   505→
+   506→  /**
+   507→   * Get alerts with threat intelligence matches
+   508→   */
+   509→  async getThreatIntelMatchedAlerts(limit: number = 50): Promise<EveEvent[]> {
+   510→    const result = await this.searchAlerts({
+   511→      has_threat_intel_match: true,
+   512→      page_size: limit
+   513→    });
+   514→    return result.alerts;
+   515→  }
+   516→
+   517→  /**
+   518→   * Mark alert as false positive
+   519→   */
+   520→  async markFalsePositive(alertId: string, reason: string): Promise<void> {
+   521→    await this.request('POST', `/alerts/${alertId}/false-positive`, {
+   522→      reason,
+   523→      marked_at: new Date().toISOString(),
+   524→      marked_by: 'soc-analyst' // TODO: Get from auth context
+   525→    });
+   526→  }
+   527→
+   528→  /**
+   529→   * Bulk mark alerts as false positives
+   530→   */
+   531→  async bulkMarkFalsePositive(alertIds: string[], reason: string): Promise<BulkOperationResult> {
+   532→    return this.request('POST', '/alerts/bulk/false-positive', {
+   533→      alert_ids: alertIds,
+   534→      reason,
+   535→      marked_at: new Date().toISOString()
+   536→    });
+   537→  }
+   538→
+   539→  /**
+   540→   * Get attack map data for visualization
+   541→   */
+   542→  async getAttackMapData(timeRange: TimeRange = TimeRange.LAST_24_HOURS): Promise<AttackMapPoint[]> {
+   543→    return this.request('GET', '/analytics/attack-map', { time_range: timeRange });
+   544→  }
+   545→
+   546→  /**
+   547→   * Get geolocation for IP addresses
+   548→   */
+   549→  async getGeoLocation(ips: string[]): Promise<Map<string, GeoLocation>> {
+   550→    const result = await this.request('POST', '/geo/lookup', { ips });
+   551→    return new Map(result.map((loc: GeoLocation) => [loc.ip, loc]));
+   552→  }
+   553→
+   554→  // ============================================================================
+   555→  // RULE OPERATIONS
+   556→  // ============================================================================
+   557→
+   558→  /**
+   559→   * Get all rules with optional filtering
+   560→   */
+   561→  async searchRules(filter: RuleFilter = {}): Promise<RuleResultSet> {
+   562→    return this.request('GET', '/rules', filter as Record<string, unknown>);
+   563→  }
+   564→
+   565→  /**
+   566→   * Get single rule by SID
+   567→   */
+   568→  async getRule(sid: number): Promise<SuricataRule> {
+   569→    return this.request('GET', `/rules/${sid}`);
+   570→  }
+   571→
+   572→  /**
+   573→   * Create custom rule
+   574→   */
+   575→  async createRule(ruleData: Omit<SuricataRule, 'id' | 'created_at' | 'updated_at' | 'hit_count' | 'false_positive_count'>): Promise<SuricataRule> {
+   576→    // Validate rule syntax before creation
+   577→    const validation = await this.validateRule(ruleData.raw);
+   578→    if (validation.status !== RuleValidationStatus.VALID) {
+   579→      throw new RuleCompilationError('new-rule', validation.errors || ['Validation failed']);
+   580→    }
+   581→
+   582→    return this.request('POST', '/rules', {
+   583→      ...ruleData,
+   584→      source: SignatureSource.CUSTOM,
+   585→      created_at: new Date().toISOString()
+   586→    });
+   587→  }
+   588→
+   589→  /**
+   590→   * Update existing rule
+   591→   */
+   592→  async updateRule(sid: number, updates: Partial<SuricataRule>): Promise<SuricataRule> {
+   593→    // If raw rule changed, re-validate
+   594→    if (updates.raw) {
+   595→      const validation = await this.validateRule(updates.raw);
+   596→      if (validation.status !== RuleValidationStatus.VALID) {
+   597→        throw new RuleCompilationError(String(sid), validation.errors || ['Validation failed']);
+   598→      }
+   599→    }
+   600→
+   601→    return this.request('PUT', `/rules/${sid}`, {
+   602→      ...updates,
+   603→      updated_at: new Date().toISOString()
+   604→    });
+   605→  }
+   606→
+   607→  /**
+   608→   * Delete custom rule
+   609→   */
+   610→  async deleteRule(sid: number): Promise<void> {
+   611→    return this.request('DELETE', `/rules/${sid}`);
+   612→  }
+   613→
+   614→  /**
+   615→   * Enable rule
+   616→   */
+   617→  async enableRule(sid: number, sensorIds?: string[]): Promise<void> {
+   618→    await this.request('POST', `/rules/${sid}/enable`, {
+   619→      sensor_ids: sensorIds,
+   620→      enabled_at: new Date().toISOString()
+   621→    });
+   622→  }
+   623→
+   624→  /**
+   625→   * Disable rule
+   626→   */
+   627→  async disableRule(sid: number, reason?: string, sensorIds?: string[]): Promise<void> {
+   628→    await this.request('POST', `/rules/${sid}/disable`, {
+   629→      reason,
+   630→      sensor_ids: sensorIds,
+   631→      disabled_at: new Date().toISOString()
+   632→    });
+   633→  }
+   634→
+   635→  /**
+   636→   * Bulk enable/disable rules
+   637→   */
+   638→  async bulkToggleRules(sids: number[], state: RuleState, reason?: string): Promise<BulkOperationResult> {
+   639→    return this.request('POST', '/rules/bulk/toggle', {
+   640→      sids,
+   641→      state,
+   642→      reason,
+   643→      toggled_at: new Date().toISOString()
+   644→    });
+   645→  }
+   646→
+   647→  /**
+   648→   * Validate rule syntax
+   649→   */
+   650→  async validateRule(ruleText: string): Promise<{
+   651→    status: RuleValidationStatus;
+   652→    errors?: string[];
+   653→    warnings?: string[];
+   654→    parsed?: Partial<SuricataRule>;
+   655→  }> {
+   656→    return this.request('POST', '/rules/validate', { rule: ruleText });
+   657→  }
+   658→
+   659→  /**
+   660→   * Test rule against sample traffic
+   661→   */
+   662→  async testRule(ruleText: string, pcapSample?: string): Promise<{
+   663→    matched: boolean;
+   664→    match_count: number;
+   665→    sample_alerts: Partial<EveEvent>[];
+   666→    performance_impact: {
+   667→      cpu_overhead_percent: number;
+   668→      memory_bytes: number;
+   669→    };
+   670→  }> {
+   671→    return this.request('POST', '/rules/test', {
+   672→      rule: ruleText,
+   673→      pcap_sample: pcapSample
+   674→    });
+   675→  }
+   676→
+   677→  /**
+   678→   * Update rules from external sources
+   679→   */
+   680→  async updateRules(options: RuleUpdateOptions): Promise<RuleUpdateResult> {
+   681→    return this.request('POST', '/rules/update', options);
+   682→  }
+   683→
+   684→  /**
+   685→   * Get Emerging Threats Open ruleset status
+   686→   */
+   687→  async getETOpenStatus(): Promise<{
+   688→    installed_version: string;
+   689→    latest_version: string;
+   690→    rule_count: number;
+   691→    last_update: string;
+   692→    update_available: boolean;
+   693→  }> {
+   694→    return this.request('GET', '/rules/sources/etopen/status');
+   695→  }
+   696→
+   697→  /**
+   698→   * Get Emerging Threats Pro ruleset status (requires Oinkcode)
+   699→   */
+   700→  async getETProStatus(oinkcode: string): Promise<{
+   701→    installed_version: string;
+   702→    latest_version: string;
+   703→    rule_count: number;
+   704→    last_update: string;
+   705→    subscription_valid: boolean;
+   706→    expiry_date: string;
+   707→  }> {
+   708→    return this.request('GET', '/rules/sources/etpro/status', { oinkcode });
+   709→  }
+   710→
+   711→  /**
+   712→   * Import rules from file
+   713→   */
+   714→  async importRules(fileContent: string, source: SignatureSource = SignatureSource.CUSTOM): Promise<{
+   715→    imported: number;
+   716→    skipped: number;
+   717→    errors: Array<{ line_number: number; error: string }>;
+   718→  }> {
+   719→    return this.request('POST', '/rules/import', {
+   720→      content: fileContent,
+   721→      source
+   722→    });
+   723→  }
+   724→
+   725→  /**
+   726→   * Export rules
+   727→   */
+   728→  async exportRules(filter?: RuleFilter, format: ExportFormat = ExportFormat.SURICATA_RULES): Promise<string> {
+   729→    const response = await this.request('GET', '/rules/export', {
+   730→      ...filter,
+   731→      format
+   732→    }, { skipCache: true });
+   733→    return typeof response === 'string' ? response : JSON.stringify(response, null, 2);
+   734→  }
+   735→
+   736→  // ============================================================================
+   737→  // STATISTICS & ANALYTICS
+   738→  // ============================================================================
+   739→
+   740→  /**
+   741→   * Get comprehensive statistics
+   742→   */
+   743→  async getStatistics(timeRange: TimeRange = TimeRange.LAST_24_HOURS): Promise<SuricataStats> {
+   744→    return this.request('GET', '/statistics', { time_range: timeRange });
+   745→  }
+   746→
+   747→  /**
+   748→   * Get alert trends over time
+   749→   */
+   750→  async getAlertTrends(
+   751→    timeRange: TimeRange = TimeRange.LAST_7_DAYS,
+   752→    interval: 'hour' | 'day' = 'hour'
+   753→  ): Promise<{
+   754→    overall: Array<{ timestamp: string; count: number }>;
+   755→    by_severity: Record<SeverityLevel, Array<{ timestamp: string; count: number }>>;
+   756→    by_category: Record<AlertCategory, Array<{ timestamp: string; count: number }>>;
+   757→  }> {
+   758→    return this.request('GET', '/statistics/trends', {
+   759→      time_range: timeRange,
+   760→      interval
+   761→    });
+   762→  }
+   763→
+   764→  /**
+   765→   * Get top attacking IPs
+   766→   */
+   767→  async topSourceIPs(limit: number = 20, timeRange?: TimeRange): Promise<Array<{
+   768→    ip: string;
+   769→    count: number;
+   770→    country?: string;
+   771→    asn?: number;
+   772→    reputation_score: number;
+   773→  }>> {
+   774→    const stats = await this.getStatistics(timeRange);
+   775→    return stats.top_source_ips.slice(0, limit);
+   776→  }
+   777→
+   778→  /**
+   779→   * Get most targeted IPs/services
+   780→   */
+   781→  async topDestinationIPs(limit: number = 20, timeRange?: TimeRange): Promise<Array<{
+   782→    ip: string;
+   783→    count: number;
+   784→    services: Array<{ port: number; protocol: string; count: number }>;
+   785→  }>> {
+   786→    const stats = await this.getStatistics(timeRange);
+   787→    return stats.top_destination_ips.slice(0, limit);
+   788→  }
+   789→
+   790→  /**
+   791→   * Get protocol distribution
+   792→   */
+   793→  async getProtocolDistribution(timeRange?: TimeRange): Promise<Record<string, number>> {
+   794→    const stats = await this.getStatistics(timeRange);
+   795→    return stats.protocol_distribution;
+   796→  }
+   797→
+   798→  /**
+   799→   * Get top triggered signatures
+   800→   */
+   801→  async topSignatures(limit: number = 20, timeRange?: TimeRange): Promise<Array<{
+   802→    sid: number;
+   803→    signature: string;
+   804→    count: number;
+   805→    severity: SeverityLevel;
+   806→    category: string;
+   807→  }>> {
+   808→    const stats = await this.getStatistics(timeRange);
+   809→    return stats.top_signatures.slice(0, limit);
+   810→  }
+   811→
+   812→  /**
+   813→   * Get packet processing statistics
+   814→   */
+   815→  async getPacketStats(): Promise<{
+   816→    packets_received: number;
+   817→    packets_dropped: number;
+   818→    packets_processed: number;
+   819→    drop_rate: number;
+   820→    bytes_received: number;
+   821→    bytes_processed: number;
+   822→    pps: number; // packets per second
+   823→    bps: number; // bits per second
+   824→  }> {
+   825→    const stats = await this.getStatistics();
+   826→    const uptime = stats.uptime_seconds || 1;
+   827→    return {
+   828→      packets_received: stats.packets_received,
+   829→      packets_dropped: stats.packets_dropped,
+   830→      packets_processed: stats.packets_processed,
+   831→      drop_rate: stats.packets_received > 0 
+   832→        ? (stats.packets_dropped / stats.packets_received) * 100 
+   833→        : 0,
+   834→      bytes_received: stats.bytes_received,
+   835→      bytes_processed: stats.bytes_received, // Approximation
+   836→      pps: Math.round(stats.packets_received / uptime),
+   837→      bps: Math.round((stats.bytes_received * 8) / uptime)
+   838→    };
+   839→  }
+   840→
+   841→  /**
+   842→   * Get flow statistics
+   843→   */
+   844→  async getFlowStats(): Promise<{
+   845→    active_flows: number;
+   846→    total_flows: number;
+   847→    avg_duration_ms: number;
+   848→    protocols: Record<string, number>;
+   849→  }> {
+   850→    const stats = await this.getStatistics();
+   851→    return {
+   852→      active_flows: stats.active_flows,
+   853→      total_flows: stats.total_flows,
+   854→      avg_duration_ms: stats.avg_flow_duration_ms,
+   855→      protocols: stats.protocol_distribution
+   856→    };
+   857→  }
+   858→
+   859→  // ============================================================================
+   860→  // EXPORT OPERATIONS
+   861→  // ============================================================================
+   862→
+   863→  /**
+   864→   * Create export job
+   865→   */
+   866→  async createExportJob(
+   867→    type: 'alerts' | 'rules',
+   868→    format: ExportFormat,
+   869→    filters?: AlertFilter | RuleFilter
+   870→  ): Promise<ExportJob> {
+   871→    return this.request('POST', '/exports', {
+   872→      type,
+   873→      format,
+   874→      filters,
+   875→      created_by: 'soc-analyst' // TODO: From auth context
+   876→    });
+   877→  }
+   878→
+   879→  /**
+   880→   * Get export job status
+   881→   */
+   882→  async getExportJob(jobId: string): Promise<ExportJob> {
+   883→    return this.request('GET', `/exports/${jobId}`);
+   884→  }
+   885→
+   886→  /**
+   887→   * Download exported file
+   888→   */
+   889→  async downloadExport(jobId: string): Promise<Blob> {
+   890→    const response = await fetch(`${this.config.baseUrl}/exports/${jobId}/download`, {
+   891→      headers: this.config.apiKey ? { 'X-API-Key': this.config.apiKey } : {}
+   892→    });
+   893→
+   894→    if (!response.ok) {
+   895→      throw new SuricataError('Failed to download export', 'DOWNLOAD_ERROR', response.status);
+   896→    }
+   897→
+   898→    return response.blob();
+   899→  }
+   900→
+   901→  // ============================================================================
+   902→  // INTEGRATION HELPERS
+   903→  // ============================================================================
+   904→
+   905→  /**
+   906→   * Format alert for MISP event creation
+   907→   */
+   908→  formatAlertForMISP(alert: EveEvent): {
+   909→    title: string;
+   910→    description: string;
+   911→    attributes: Array<{ type: string; value: string; category: string }>;
+   912→    tags: string[];
+   913→  } {
+   914→    if (!alert.alert) {
+   915→      throw new Error('Event is not an alert type');
+   916→    }
+   917→
+   918→    const { alert: alertData } = alert;
+   919→    
+   920→    return {
+   921→      title: `[SURICATA] ${alertData.signature}`,
+   922→      description: `Suricata IDS alert: ${alertData.signature}\n` +
+   923→        `Category: ${alertData.category}\n` +
+   924→        `Severity: ${alertData.severity}\n` +
+   925→        `Source: ${alert.src_ip}:${alert.src_port}\n` +
+   926→        `Destination: ${alert.dest_ip}:${alert.dest_port}\n` +
+   927→        `Timestamp: ${alert.timestamp}`,
+   928→      attributes: [
+   929→        { type: 'ip-src', value: alert.src_ip, category: 'Network activity' },
+   930→        { type: 'ip-dst', value: alert.dest_ip, category: 'Network activity' },
+   931→        { type: 'domain', value: alert.http?.hostname || '', category: 'Network activity' },
+   932→        { type: 'text', value: alertData.signature, category: 'Payload delivery' },
+   933→        { type: 'text', value: alertData.signature_id.toString(), category: 'External analysis' },
+   934→        { type: 'port', value: alert.src_port.toString(), category: 'Network activity' },
+   935→        { type: 'port', value: alert.dest_port.toString(), category: 'Network activity' }
+   936→      ].filter(attr => attr.value),
+   937→      tags: [
+   938→        `suricata:${alertData.signature_id}`,
+   939→        `severity:${alertData.severity}`,
+   940→        `category:${alertData.category.toLowerCase().replace(/\s+/g, '_')}`,
+   941→        ...Object.keys(alertData.metadata || {}).map(k => `metadata:${k}`)
+   942→      ]
+   943→    };
+   944→  }
+   945→
+   946→  /**
+   947→   * Format alert for TheHive case creation
+   948→   */
+   949→  formatAlertForTheHive(alert: EveEvent): {
+   950→    title: string;
+   951→    description: string;
+   952→    severity: number;
+   953→    tags: string[];
+   954→    observables: Array<{ dataType: string; data: string; message: string }>;
+   955→    tlp: number;
+   956→  } {
+   957→    if (!alert.alert) {
+   958→      throw new Error('Event is not an alert type');
+   959→    }
+   960→
+   961→    const { alert: alertData } = alert;
+   962→    const severityMap: Record<number, number> = {
+   963→      1: 1, // Critical -> High
+   964→      2: 2, // High -> Medium-High
+   965→      3: 2, // Medium -> Medium
+   966→      4: 3, // Low -> Low
+   967→      5: 4  // Informational -> Info
+   968→    };
+   969→
+   970→    return {
+   971→      title: `[IDS] ${alertData.signature}`,
+   972→      description: `**Signature:** ${alertData.signature}\n` +
+   973→        `**SID:** ${alertData.signature_id}\n` +
+   974→        `**Category:** ${alertData.category}\n` +
+   975→        `**Severity:** ${alertData.severity}/5\n\n` +
+   976→        `**Source:** ${alert.src_ip}:${alert.src_port}\n` +
+   977→        `**Destination:** ${alert.dest_ip}:${alert.dest_port}\n` +
+   978→        `**Protocol:** ${alert.proto}\n` +
+   979→        `**Timestamp:** ${alert.timestamp}`,
+   980→      severity: severityMap[alertData.severity] || 2,
+   981→      tags: ['suricata', 'ids', `sid:${alertData.signature_id}`, alertData.category.toLowerCase()],
+   982→      observables: [
+   983→        { dataType: 'ip', data: alert.src_ip, message: 'Source IP' },
+   984→        { dataType: 'ip', data: alert.dest_ip, message: 'Destination IP' },
+   985→        { dataType: 'port', data: alert.src_port.toString(), message: 'Source Port' },
+   986→        { dataType: 'port', data: alert.dest_port.toString(), message: 'Destination Port' }
+   987→      ],
+   988→      tlp: 2 // Amber by default
+   989→    };
+   990→  }
+   991→
+   992→  /**
+   993→   * Generate summary report for dashboard
+   994→   */
+   995→  async generateSummaryReport(): Promise<{
+   996→    total_alerts: number;
+   997→    critical_alerts: number;
+   998→    unique_signatures: number;
+   999→    unique_source_ips: number;
+  1000→    unique_dest_ips: number;
+  1001→    top_attack_countries: Array<{ country: string; count: number }>;
+  1002→    packet_stats: Awaited<ReturnType<SuricataClient['getPacketStats']>>;
+  1003→    sensor_status: Array<{ id: string; name: string; status: SensorStatus }>;
+  1004→    last_rule_update: string;
+  1005→  }> {
+  1006→    const [stats, sensors, packetStats] = await Promise.all([
+  1007→      this.getStatistics(),
+  1008→      this.getSensors(),
+  1009→      this.getPacketStats()
+  1010→    ]);
+  1011→
+  1012→    // Aggregate countries from top source IPs
+  1013→    const countryCounts: Record<string, number> = {};
+  1014→    stats.top_source_ips.forEach(ip => {
+  1015→      if (ip.country) {
+  1016→        countryCounts[ip.country] = (countryCounts[ip.country] || 0) + ip.alert_count;
+  1017→      }
+  1018→    });
+  1019→
+  1020→    return {
+  1021→      total_alerts: Object.values(stats.alerts_by_severity).reduce((a, b) => a + b, 0),
+  1022→      critical_alerts: stats.alerts_by_severity[SeverityLevel.CRITICAL] || 0,
+  1023→      unique_signatures: stats.top_signatures.length,
+  1024→      unique_source_ips: stats.top_source_ips.length,
+  1025→      unique_dest_ips: stats.top_destination_ips.length,
+  1026→      top_attack_countries: Object.entries(countryCounts)
+  1027→        .sort(([, a], [, b]) => b - a)
+  1028→        .slice(0, 10)
+  1029→        .map(([country, count]) => ({ country, count })),
+  1030→      packet_stats: packetStats,
+  1031→      sensor_status: sensors.map(s => ({
+  1032→        id: s.id,
+  1033→        name: s.name,
+  1034→        status: s.status
+  1035→      })),
+  1036→      last_rule_update: sensors[0]?.last_rule_update || 'Unknown'
+  1037→    };
+  1038→  }
+  1039→
+  1040→  // ============================================================================
+  1041→  // UTILITY METHODS
+  1042→  // ============================================================================
+  1043→
+  1044→  /**
+  1045→   * Convert filter object to query parameters
+  1046→   */
+  1047→  private filterToParams(filter: AlertFilter): Record<string, unknown> {
+  1048→    const params: Record<string, unknown> = {};
+  1049→
+  1050→    if (filter.time_range) params.time_range = filter.time_range;
+  1051→    if (filter.time_start) params.time_start = filter.time_start;
+  1052→    if (filter.time_end) params.time_end = filter.time_end;
+  1053→    if (filter.severities?.length) params.severities = filter.severities;
+  1054→    if (filter.min_severity) params.min_severity = filter.min_severity;
+  1055→    if (filter.categories?.length) params.categories = filter.categories;
+  1056→    if (filter.src_ip) params.src_ip = filter.src_ip;
+  1057→    if (filter.src_cidr) params.src_cidr = filter.src_cidr;
+  1058→    if (filter.dest_ip) params.dest_ip = filter.dest_ip;
+  1059→    if (filter.dest_cidr) params.dest_cidr = filter.dest_cidr;
+  1060→    if (filter.src_port) params.src_port = filter.src_port;
+  1061→    if (filter.dest_port) params.dest_port = filter.dest_port;
+  1062→    if (filter.protocol) params.protocol = filter.protocol;
+  1063→    if (filter.signature_id) params.signature_id = filter.signature_id;
+  1064→    if (filter.signature_pattern) params.signature_pattern = filter.signature_pattern;
+  1065→    if (filter.category_pattern) params.category_pattern = filter.category_pattern;
+  1066→    if (filter.actions?.length) params.actions = filter.actions;
+  1067→    if (filter.sensor_id) params.sensor_id = filter.sensor_id;
+  1068→    if (filter.sensor_ids?.length) params.sensor_ids = filter.sensor_ids;
+  1069→    if (filter.has_threat_intel_match !== undefined) params.has_threat_intel_match = filter.has_threat_intel_match;
+  1070→    if (filter.has_mitre_mapping !== undefined) params.has_mitre_mapping = filter.has_mitre_mapping;
+  1071→    if (filter.is_false_positive !== undefined) params.is_false_positive = filter.is_false_positive;
+  1072→    if (filter.is_classified !== undefined) params.is_classified = filter.is_classified;
+  1073→    if (filter.page) params.page = filter.page;
+  1074→    if (filter.page_size) params.page_size = filter.page_size;
+  1075→    if (filter.sort_by) params.sort_by = filter.sort_by;
+  1076→    if (filter.sort_order) params.sort_order = filter.sort_order;
+  1077→
+  1078→    return params;
+  1079→  }
+  1080→
+  1081→  /**
+  1082→   * Determine severity level from numeric score
+  1083→   */
+  1084→  static getSeverityFromScore(score: number): SeverityLevel {
+  1085→    if (score >= 4) return SeverityLevel.CRITICAL;
+  1086→    if (score >= 3) return SeverityLevel.HIGH;
+  1087→    if (score >= 2) return SeverityLevel.MEDIUM;
+  1088→    if (score >= 1) return SeverityLevel.LOW;
+  1089→    return SeverityLevel.INFORMATIONAL;
+  1090→  }
+  1091→
+  1092→  /**
+  1093→   * Get severity color for UI display
+  1094→   */
+  1095→  static getSeverityColor(severity: SeverityLevel): string {
+  1096→    return SEVERITY_CONFIG[severity]?.color || '#6B7280';
+  1097→  }
+  1098→
+  1099→  /**
+  1100→   * Get known port service name
+  1101→   */
+  1102→  static getServiceName(port: number, protocol: string): string {
+  1103→    const protoUpper = protocol.toUpperCase();
+  1104→    const knownPorts: Record<string, string> = {
+  1105→      '22': 'SSH',
+  1106→      '23': 'Telnet',
+  1107→      '25': 'SMTP',
+  1108→      '53': 'DNS',
+  1109→      '67': 'DHCP',
+  1110→      '68': 'DHCP',
+  1111→      '80': 'HTTP',
+  1112→      '110': 'POP3',
+  1113→      '143': 'IMAP',
+  1114→      '443': 'HTTPS',
+  1115→      '993': 'IMAPS',
+  1116→      '995': 'POP3S',
+  1117→      '1433': 'MSSQL',
+  1118→      '1521': 'Oracle',
+  1119→      '3306': 'MySQL',
+  1120→      '3389': 'RDP',
+  1121→      '5432': 'PostgreSQL',
+  1122→      '5672': 'RabbitMQ',
+  1123→      '6379': 'Redis',
+  1124→      '8080': 'HTTP-Alt',
+  1125→      '8443': 'HTTPS-Alt',
+  1126→      '27017': 'MongoDB'
+  1127→    };
+  1128→    return knownPorts[port.toString()] || `${protoUpper}/${port}`;
+  1129→  }
+  1130→
+  1131→  /**
+  1132→   * Parse EVE JSON log line
+  1133→   */
+  1134→  static parseEVEJson(line: string): EveEvent | null {
+  1135→    try {
+  1136→      const event = JSON.parse(line) as EveEvent;
+  1137→      
+  1138→      // Basic validation
+  1139→      if (!event.timestamp || !event.event_type) {
+  1140→        return null;
+  1141→      }
+  1142→
+  1143→      return event;
+  1144→    } catch {
+  1145→      return null;
+  1146→    }
+  1147→  }
+  1148→
+  1149→  /**
+  1150→   * Parse multiple EVE JSON lines
+  1151→   */
+  1152→  static parseEVEJsonBatch(content: string): EveEvent[] {
+  1153→    return content
+  1154→      .split('\n')
+  1155→      .map(line => line.trim())
+  1156→      .filter(line => line.length > 0)
+  1157→      .map(line => SuricataClient.parseEVEJson(line))
+  1158→      .filter((event): event is EveEvent => event !== null);
+  1159→  }
+  1160→}
+  1161→
+  1162→// ============================================================================
+  1163→// SINGLETON INSTANCE MANAGEMENT
+  1164→// ============================================================================
+  1165→
+  1166→let suricataClientInstance: SuricataClient | null = null;
+  1167→
+  1168→/**
+  1169→ * Initialize the Suricata client singleton
+  1170→ */
+  1171→export function initializeSuricataClient(config: SuricataClientConfig): SuricataClient {
+  1172→  suricataClientInstance = new SuricataClient(config);
+  1173→  return suricataClientInstance;
+  1174→}
+  1175→
+  1176→/**
+  1177→ * Get the initialized Suricata client instance
+  1178→ * @throws Error if client not initialized
+  1179→ */
+  1180→export function getSuricataClient(): SuricataClient {
+  1181→  if (!suricataClientInstance) {
+  1182→    throw new Error(
+  1183→      'Suricata client not initialized. Call initializeSuricataClient() first.'
+  1184→    );
+  1185→  }
+  1186→  return suricataClientInstance;
+  1187→}
+  1188→
+  1189→/**
+  1190→ * Check if Suricata client is initialized
+  1191→ */
+  1192→export function isSuricataClientInitialized(): boolean {
+  1193→  return suricataClientInstance !== null;
+  1194→}
+  1195→
+  1196→// Export types
+  1197→export type {
+  1198→  SuricataClientConfig,
+  1199→  CacheEntry
+  1200→};
+  1201→

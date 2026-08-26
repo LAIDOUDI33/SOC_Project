@@ -1,0 +1,318 @@
+# =============================================================================
+# Database Role - Main Tasks
+# Handles: PostgreSQL, Redis, MariaDB setup and configuration
+# =============================================================================
+---
+
+- name: "DATABASE | Display role start message"
+  debug:
+    msg: "═══ Starting Database Services Setup ═══"
+
+# ============================================================================
+# SECTION 1: PostgreSQL Configuration
+# ============================================================================
+- name: "DATABASE | Create PostgreSQL data directory"
+  file:
+    path: /var/lib/soc/postgres
+    state: directory
+    mode: '0700'
+    owner: "70"  # postgres UID in container
+    group: "70"
+  tags: [database-postgres]
+
+- name: "DATABASE | Create PostgreSQL configuration directory"
+  file:
+    path: /opt/soc-platform/configs/postgresql
+    state: directory
+    mode: '0755'
+  tags: [database-postgres]
+
+- name: "DATABASE | Generate optimized PostgreSQL configuration"
+  template:
+    src: postgresql.conf.j2
+    dest: /opt/soc-platform/configs/postgresql/postgresql.conf
+    mode: '0644'
+  vars:
+    # Auto-tune based on available memory
+    total_memory_mb: "{{ ansible_memtotal_mb }}"
+    shared_buffers: "{{ (ansible_memtotal_mb * 0.25) | int }}MB"
+    effective_cache_size: "{{ (ansible_memtotal_mb * 0.75) | int }}MB"
+    maintenance_work_mem: "{{ (ansible_memtotal_mb * 0.04) | int }}MB"
+    work_mem: "{{ ((ansible_memtotal_mb * 0.03) / (max_connections | default(200))) | int }}MB"
+  tags: [database-postgres]
+
+- name: "DATABASE | Create PostgreSQL initialization scripts directory"
+  file:
+    path: /opt/soc-platform/scripts/init-sql
+    state: directory
+    mode: '0755'
+  tags: [database-postgres]
+
+- name: "DATABASE | Create database initialization SQL"
+  template:
+    src: init-databases.sql.j2
+    dest: /opt/soc-platform/scripts/init-sql/01-init-databases.sql
+    mode: '0644'
+  tags: [database-postgres]
+
+- name: "DATABASE | Create application databases SQL script"
+  copy:
+    content: |
+      -- Application Databases for National SOC Platform
+      
+      -- Wazuh Database
+      CREATE DATABASE IF NOT EXISTS wazuh WITH ENCODING 'UTF8';
+      
+      -- TheHive Database
+      CREATE DATABASE IF NOT EXISTS thehive WITH ENCODING 'UTF8';
+      
+      -- Cortex Database  
+      CREATE DATABASE IF NOT EXISTS cortex WITH ENCODING 'UTF8';
+      
+      -- MISP Database
+      CREATE DATABASE IF NOT EXISTS misp WITH ENCODING 'UTF8';
+      
+      -- Keycloak Database
+      CREATE DATABASE IF NOT EXISTS keycloak WITH ENCODING 'UTF8';
+      
+      -- Grafana Database
+      CREATE DATABASE IF NOT EXISTS grafana WITH ENCODING 'UTF8';
+      
+      -- Grant privileges to soc_admin
+      GRANT ALL PRIVILEGES ON DATABASE wazuh TO soc_admin;
+      GRANT ALL PRIVILEGES ON DATABASE thehive TO soc_admin;
+      GRANT ALL PRIVILEGES ON DATABASE cortex TO soc_admin;
+      GRANT ALL PRIVILEGES ON DATABASE misp TO soc_admin;
+      GRANT ALL PRIVILEGES ON DATABASE keycloak TO soc_admin;
+      GRANT ALL PRIVILEGES ON DATABASE grafana TO soc_admin;
+    dest: /opt/soc-platform/scripts/init-sql/02-create-databases.sql
+    mode: '0644'
+  tags: [database-postgres]
+
+- name: "DATABASE | Configure PostgreSQL backup cron job"
+  cron:
+    name: "PostgreSQL Backup"
+    minute: "0"
+    hour: "2"
+    job: >
+      docker exec soc-postgres pg_dumpall -U soc_admin 
+      | gzip > /var/backups/soc/postgres-full-$(date +\%Y\%m\%d-\%H\%M\%S).sql.gz
+      && find /var/backups/soc/postgres-*.sql.gz -mtime +7 -delete
+    user: root
+    state: present
+  when: soc_environment == "production"
+  tags: [database-backup]
+
+# ============================================================================
+# SECTION 2: Redis Configuration
+# ============================================================================
+- name: "DATABASE | Create Redis data directory"
+  file:
+    path: /var/lib/soc/redis
+    state: directory
+    mode: '0755'
+    owner: "999"  # redis UID in container
+    group: "999"
+  tags: [database-redis]
+
+- name: "DATABASE | Create Redis configuration directory"
+  file:
+    path: /opt/soc-platform/configs/redis
+    state: directory
+    mode: '0755'
+  tags: [database-redis]
+
+- name: "DATABASE | Generate Redis production configuration"
+  template:
+    src: redis.conf.j2
+    dir: /opt/soc-platform/configs/redis/
+    mode: '0644'
+  vars:
+    maxmemory: "{{ (ansible_memtotal_mb * 0.1) | int }}mb"
+    maxmemory_policy: allkeys-lru
+  tags: [database-redis]
+
+- name: "DATABASE | Configure Redis persistence settings"
+  blockinfile:
+    path: /opt/soc-platform/configs/redis/redis.conf
+    marker: "# {mark} ANSIBLE MANAGED BLOCK - PERSISTENCE"
+    block: |
+      # Persistence Settings for Production
+      save 900 1
+      save 300 10
+      save 60 10000
+      stop-writes-on-bgsave-error yes
+      rdbcompression yes
+      rdbchecksum yes
+      dbfilename dump.rdb
+      dir /data
+      appendonly yes
+      appendfsync everysec
+      no-appendfsync-on-rewrite no
+      auto-aof-rewrite-percentage 100
+      auto-aof-rewrite-min-size 64mb
+  tags: [database-redis]
+
+# ============================================================================
+# SECTION 3: Elasticsearch Data Directory
+# ============================================================================
+- name: "DATABASE | Create Elasticsearch data directory"
+  file:
+    path: /var/lib/soc/elasticsearch
+    state: directory
+    mode: '0755'
+    owner: "1000"  # elasticsearch UID
+    group: "1000"
+  tags: [database-elasticsearch]
+
+- name: "DATABASE | Create Elasticsearch configuration directory"
+  file:
+    path: /opt/soc-platform/configs/elasticsearch
+    state: directory
+    mode: '0755'
+  tags: [database-elasticsearch]
+
+- name: "DATABASE | Configure Elasticsearch JVM options"
+  template:
+    src: jvm.options.j2
+    dest: /opt/soc-platform/configs/elasticsearch/jvm.options
+    mode: '0644'
+  vars:
+    heap_size: "{{ (ansible_memtotal_mb * 0.3) | int }}m"
+  tags: [database-elasticsearch]
+
+- name: "DATABASE | Configure Elasticsearch main settings"
+  template:
+    src: elasticsearch.yml.j2
+    dest: /opt/soc-platform/configs/elasticsearch/elasticsearch.yml
+    mode: '0644'
+  tags: [database-elasticsearch]
+
+- name: "DATABASE | Configure vm.max_map_count for Elasticsearch"
+  sysctl:
+    name: vm.max_map_count
+    value: "262144"
+    state: present
+    sysctl_set: yes
+  tags: [database-elasticsearch]
+
+# ============================================================================
+# SECTION 4: MinIO Object Storage
+# ============================================================================
+- name: "DATABASE | Create MinIO data directory"
+  file:
+    path: /var/lib/soc/minio
+    state: directory
+    mode: '0755'
+  tags: [database-minio]
+
+- name: "DATABASE | Create MinIO buckets on startup"
+  copy:
+    content: |
+      #!/bin/bash
+      # Initialize MinIO buckets for SOC Platform
+      sleep 10  # Wait for MinIO to start
+      
+      mc alias set local http://minio:9000 $MINIO_ROOT_USER $MINIO_ROOT_PASSWORD
+      
+      # Create required buckets
+      mc mb local/evidence --ignore-existing
+      mc mb local/files --ignore-existing
+      mc mb local/reports --ignore-existing
+      mc mb local/backups --ignore-existing
+      mc mb local/logs-archive --ignore-existing
+      
+      # Set bucket policies
+      mc anonymous set download local/evidence
+      mc anonymous set download local/reports
+      
+      echo "MinIO buckets initialized successfully"
+    dest: /opt/soc-platform/scripts/init-minio.sh
+    mode: '0755'
+  tags: [database-minio]
+
+# ============================================================================
+# SECTION 5: RabbitMQ Configuration
+# ============================================================================
+- name: "DATABASE | Create RabbitMQ data directory"
+  file:
+    path: /var/lib/soc/rabbitmq
+    state: directory
+    mode: '0755'
+    owner: "999"
+    group: "999"
+  tags: [database-rabbitmq]
+
+- name: "DATABASE | Create RabbitMQ configuration directory"
+  file:
+    path: /opt/soc-platform/configs/rabbitmq
+    state: directory
+    mode: '0755'
+  tags: [database-rabbitmq]
+
+- name: "DATABASE | Configure RabbitMQ"
+  template:
+    src: rabbitmq.conf.j2
+    dest: /opt/soc-platform/configs/rabbitmq/rabbitmq.conf
+    mode: '0644'
+  tags: [database-rabbitmq]
+
+- name: "DATABASE | Define RabbitMQ queues and exchanges"
+  copy:
+    content: |
+      {
+        "users": [
+          {"name": "soc_user", "password": "${RABBITMQ_PASSWORD}", "tags": "monitoring,management"}
+        ],
+        "vhosts": [{"name": "/"}],
+        "permissions": [
+          {"user": "soc_user", "vhost": "/", "configure": ".*", "write": ".*", "read": ".*"}
+        ],
+        "queues": [
+          {"name": "alerts", "vhost": "/", "durable": true, "auto_delete": false},
+          {"name": "events", "vhost": "/", "durable": true, "auto_delete": false},
+          {"name": "ioc-updates", "vhost": "/", "durable": true, "auto_delete": false}
+        ],
+        "exchanges": [
+          {"name": "soc-exchange", "vhost": "/", "type": "topic", "durable": true}
+        ],
+        "bindings": [
+          {"source": "soc-exchange", "vhost": "/", "destination": "alerts", "routing_key": "alert.#"},
+          {"source": "soc-exchange", "vhost": "/", "destination": "events", "routing_key": "event.#"},
+          {"source": "soc-exchange", "vhost": "/", "destination": "ioc-updates", "routing_key": "ioc.#"}
+        ]
+      }
+    dest: /opt/soc-platform/configs/rabbitmq/definitions.json
+    mode: '0644'
+  tags: [database-rabbitmq]
+
+# ============================================================================
+# SECTION 6: Keycloak Database Preparation
+# ============================================================================
+- name: "DATABASE | Create Keycloak data directory"
+  file:
+    path: /var/lib/soc/keycloak
+    state: directory
+    mode: '0755'
+  tags: [database-keycloak]
+
+- name: "DATABASE | Prepare Keycloak realm import"
+  template:
+    src: keycloak-realm.json.j2
+    dest: /opt/soc-platform/configs/keycloak/soc-realm.json
+    mode: '0644'
+  tags: [database-keycloak]
+
+# ============================================================================
+# SECTION 7: Health Check Scripts
+# ============================================================================
+- name: "DATABASE | Create database health check script"
+  template:
+    src: db-health-check.sh.j2
+    dest: /opt/soc-platform/scripts/db-health-check.sh
+    mode: '0755'
+  tags: [database-health]
+
+- name: "DATABASE | Display role completion message"
+  debug:
+    msg: "═══ Database Services Setup Complete ═══"

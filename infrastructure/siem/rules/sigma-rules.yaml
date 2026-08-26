@@ -1,0 +1,906 @@
+# =============================================================================
+# Djezzy National SOC Platform - Phase 5: SIEM Integration
+# Sigma Detection Rules for Security Analytics
+# =============================================================================
+# Sigma-compatible rules for:
+# - MITRE ATT&CK mapped detections
+# - Telecom-specific fraud patterns
+# - Compliance violations (ARTP/ANSSI)
+# - Advanced persistent threat (APT) indicators
+# =============================================================================
+
+title: Djezzy SOC Platform - Sigma Rules Collection
+version: 1.0.0
+author: Djezzy SOC Team
+date: 2026-01-28
+
+logsources:
+  category: webserver_access, product: apache
+  category: webserver_access, product: nginx
+  category: firewall
+  category: dns_query
+  category: process_creation
+  category: registry_event
+  category: authentication_log
+  category: application
+  category: database
+  category: telecom_signaling
+
+# ========================================
+# CRITICAL SEVERITY RULES
+# ========================================
+
+rules:
+
+  # Rule: SQL Injection Attack Detection
+  - id: WEB-SQLI-001
+    title: SQL Injection Attempt Detected
+    description: |
+      Detects potential SQL injection attacks through URL parameters,
+      POST data, or HTTP headers containing common SQL injection patterns.
+      Covers UNION-based, error-based, time-based blind, and boolean-based techniques.
+    level: critical
+    status: production
+    references:
+      - https://attack.mitre.org/techniques/T1190/
+      - https://owasp.org/www-community/attacks/SQL_Injection
+    author: Djezzy SOC Team
+    date: 2026/01/28
+    logsource:
+      category: webserver_access
+      product: [apache, nginx]
+    detection:
+      selection:
+        cs-method|request.method|http.request.method:
+          - GET
+          - POST
+          - PUT
+        cs-uri-query|request.uri|url.query|cs-uri-stem|url.path|cs-uri:
+          - "*UNION*SELECT*"
+          - "*OR*1=1*"
+          - "*OR*'='*"
+          - "*';*DROP*TABLE*"
+          - "*';*DELETE*FROM*"
+          - "*';*INSERT*INTO*"
+          - "*EXEC*XP_*"
+          - "*WAITFOR*DELAY*"
+          - "*BENCHMARK(*"
+          - "*SLEEP(*"
+          - "*CONCAT(*"
+          - "*CHAR(*"
+          - "*0x[0-9a-f]*"
+          - "*information_schema*"
+          - "*sysobjects*"
+          - "*syscolumns*"
+          - "*mysql.user*"
+          - "*pg_catalog*"
+          - "*LOAD_FILE(*"
+          - "*INTO*OUTFILE*"
+          - "*INTO*DUMPFILE*"
+      condition: selection
+    falsepositives:
+      - Legitimate applications using similar patterns in URLs (rare)
+      - Web development testing environments
+    tags:
+      - attack.initial_access
+      - attack.t1190
+      - cve.cve-2021-44228
+      - artp.web-security
+      - anssi.injection
+
+  # Rule: Cross-Site Scripting (XSS) Detection
+  - id: WEB-XSS-001
+    title: Cross-Site Scripting (XSS) Attempt Detected
+    description: |
+      Detects potential XSS attempts through URL parameters or POST data
+      containing script tags, event handlers, or JavaScript code.
+      Covers reflected, stored, and DOM-based XSS vectors.
+    level: high
+    status: production
+    references:
+      - https://attack.mitre.org/techniques/T1059.007/
+      - https://owasp.org/www-community/attacks/xss/
+    author: Djezzy SOC Team
+    date: 2026/01/28
+    logsource:
+      category: webserver_access
+      product: [apache, nginx]
+    detection:
+      selection:
+        cs-uri-query|request.uri|url.query|request.body:
+          - "*<script>*"
+          - "*javascript:*"
+          - "*onerror=*"
+          - "*onload=*"
+          - "*onclick=*"
+          - "*onmouseover=*"
+          - "*alert(*"
+          - "*document.cookie*"
+          - "*document.location*"
+          - "*eval(*"
+          - "*fromCharCode*"
+          - "*String.fromCharCode*"
+          - "*innerHTML=*"
+          - "*document.write*"
+          - "*expression(*"
+          - "*vbscript:*"
+          - "*data:text/html*"
+          - "*<iframe*"
+          - "*<object*"
+          - "*<embed*"
+          - "*<svg/onload*"
+          - "*<img/src=x*onerror*"
+          - "*<body/onload*"
+      condition: selection
+    falsepositives:
+      - Web development testing
+      - Rich text editors
+      - Security scanning tools
+    tags:
+      - attack.execution
+      - attack.t1059.007
+      - artp.client-side-security
+      - anssi.xss
+
+  # Rule: Path Traversal / Local File Inclusion
+  - id: WEB-PATH-001
+    title: Path Traversal / LFI Attempt Detected
+    description: |
+      Detects path traversal and local file inclusion attempts through
+      URL parameters containing directory traversal sequences or file paths.
+    level: critical
+    status: production
+    references:
+      - https://attack.mitre.org/techniques/T1083/
+    author: Djezzy SOC Team
+    date: 2026/01/28
+    logsource:
+      category: webserver_access
+      product: [apache, nginx]
+    detection:
+      selection:
+        cs-uri-query|request.uri|url.query:
+          - "..\\..\\..\\"
+          - "../../../"
+          - "....//....//"
+          - "%2e%2e%2f"
+          - "%2e%2e/"
+          - "..%255c..%255c"
+          - "/etc/passwd"
+          - "/etc/shadow"
+          - "/windows/system32"
+          - "\\windows\\system32"
+          - "boot.ini"
+          - "win.ini"
+          - "web.config"
+          - ".htaccess"
+          - "wp-config.php"
+          - "/proc/self/environ"
+          - "php://filter"
+          - "php://input"
+          - "data://"
+          - "zip://"
+          - "phar://"
+          - "expect://"
+      condition: selection
+    falsepositives:
+      - File download features in legitimate applications
+      - Documentation systems showing file paths
+    tags:
+      - attack.discovery
+      - attack.t1083
+      - artp.file-access-control
+      - anssi.path-traversal
+
+  # Rule: Command Injection / Remote Code Execution
+  - id: WEB-CMDI-001
+    title: Command Injection / RCE Attempt Detected
+    description: |
+      Detects command injection attempts through URL parameters,
+      headers, or user input containing shell commands or special characters.
+    level: critical
+    status: production
+    references:
+      - https://attack.mitre.org/techniques/T1059/
+      - https://cheatsheetseries.owasp.org/cheatsheets/OS_Command_Injection_Prevention_Cheat_Sheet.html
+    author: Djezzy SOC Team
+    date: 2026/01/28
+    logsource:
+      category: webserver_access
+      product: [apache, nginx]
+    detection:
+      selection:
+        cs-uri-query|request.uri|url.query|request.body|User-Agent:
+          - ";*ls*"
+          - ";*cat*"
+          - ";*wget*"
+          - ";*curl*"
+          - ";*nc*"
+          - "|*sh*"
+          - "|*bash*"
+          - "`*`"
+          - "$(*"
+          - "&*&&*"
+          - "*;*rm*-rf*"
+          - "*;*chmod*777*"
+          - "*;*chown*"
+          - "*;*passwd*"
+          - "*;*id*"
+          - "*;*whoami*"
+          - "*;*uname*-a*"
+          - "*;*netstat*"
+          - "*;*ifconfig*"
+          - "*;*ping*-c*"
+          - "*base64*-d*"
+          - "*|*tee*"
+          - "*>/etc/*"
+          - "*curl*|*sh*"
+          - "*wget*|*sh*"
+      condition: selection
+    falsepositives:
+      - Development/debugging endpoints
+      - API documentation examples
+    tags:
+      - attack.execution
+      - attack.t1059
+      - artp.system-hardening
+      - anssi.command-injection
+
+  # ========================================
+  # TELECOM-SPECIFIC FRAUD RULES
+  # ========================================
+
+  # Rule: SS7 MAP Fraud - Unauthorized Location Update
+  - id: TEL-SS7-MAP-001
+    title: SS7 MAP UpdateLocation Fraud Pattern
+    description: |
+      Detects suspicious MAP UpdateLocation messages that may indicate
+      SIM cloning, location spoofing, or unauthorized roaming scenarios.
+      High-frequency updates from different SGSNs are strong indicators of fraud.
+    level: critical
+    status: production
+    references:
+      - https://www.3gpp.org/specs/29-002
+      - GSMA FS.11 - Signaling Attack Scenarios
+    author: Djezzy SOC Team
+    date: 2026/01/28
+    logsource:
+      category: telecom_signaling
+      product: ss7_map
+    detection:
+      selection_update_location:
+        telecom.protocol: MAP
+        ss7_op_code: updateLocation
+      selection_suspicious_patterns:
+        or:
+          - source.ip:
+              - "10.0.0.0/8"  # Private IP as SGSN (suspicious)
+              - "172.16.0.0/12"
+              - "192.168.0.0/16"
+          - destination.ip:
+              - "10.0.0.0/8"  # Private IP as HLR/VLR
+              - "172.16.0.0/12"
+              - "192.168.0.0/16"
+      selection_high_frequency:
+        |count_by(telecom.msisdn)| > 5
+        timeframe: 1h
+      condition: selection_update_location and (selection_suspicious_patterns or selection_high_frequency)
+    falsepositives:
+      - Legitimate roaming with multiple border gateways
+      - Network maintenance activities
+    tags:
+      - fraud.ss7
+      - fraud.sim-cloning
+      - fraud.location-spoofing
+      - artp.telecom-security
+      - gsma.fs.11
+
+  # Rule: GTP Tunnel Misuse / Data Theft
+  - id: TEL-GTP-001
+    title: GTP Tunnel Anomaly - Potential Data Exfiltration
+    description: |
+      Detects anomalous GTP tunnel behavior including unusual bandwidth usage,
+      long-lived tunnels to unknown destinations, or tunnel creation from
+      non-standard network elements.
+    level: high
+    status: production
+    references:
+      - https://www.3gpp.org/specs/29-281
+      - GSMA FS.19 - GTP Security
+    author: Djezzy SOC Team
+    date: 2026/01/28
+    logsource:
+      category: telecom_signaling
+      product: gtp
+    detection:
+      selection_gtp:
+        telecom.protocol: GTP-U
+      selection_anomalies:
+        or:
+          - network.bytes: >1073741824  # >1GB in single session
+          - network.packets: >10000000   # High packet count
+          - duration: >86400            # >24 hours session
+          - destination.geo.country_name:
+              - North Korea
+              - Unknown
+          - apn_ni: "*tunnel*"  # Suspicious APN names
+      condition: selection_gtp and selection_anomalies
+    falsepositives:
+      - Enterprise VPN users
+      - IoT devices with constant connectivity
+    tags:
+      - fraud.gtp-tunnel
+      - exfiltration.mobile-data
+      - artp.data-protection
+      - gsma.fs.19
+
+  # Rule: SIP Toll Fraud / PBX Hacking
+  - id: TEL-SIP-001
+    title: SIP Toll Fraud Pattern Detected
+    description: |
+      Detects SIP-based toll fraud including premium-rate number dialing,
+      call forwarding abuse, PBX hacking indicators, and Wangiri patterns.
+    level: high
+    status: production
+    references:
+      - RFC 3261 - SIP Protocol
+      - GSMA IR.21 - IP Interconnection
+    author: Djezzy SOC Team
+    date: 2026/01/28
+    logsource:
+      category: telecom_signaling
+      product: sip
+    detection:
+      selection_sip:
+        telecom.protocol: SIP
+      selection_fraud_indicators:
+        or:
+          - called_party:
+              - "+900*"     # Premium rate
+              - "+976*"     # Premium rate
+              - "+876*"     # Premium rate
+              - "+1-900*"   # US Premium
+              - "+44-909*"  # UK Premium
+          - sip_method: INVITE
+            call_duration: <5  # Short calls (Wangiri pattern)
+          - called_party: "*@*premium*"
+          - sip_user_agent:
+              - "*sipcli*"
+              - "*sipvicious*"
+              - "*Viproy*"
+              - "*SIPp*"
+      selection_high_volume:
+        |count_by(calling_party)| > 50
+        timeframe: 1h
+      condition: selection_sip and (selection_fraud_indicators or selection_high_volume)
+    falsepositives:
+      - Call center operations
+      - Emergency services
+    tags:
+      - fraud.toll-fraud
+      - fraud.wangiri
+      - fraud.pbx-hacking
+      - artp.fraud-prevention
+      - gsma.ir.21
+
+  # Rule: Diameter Roaming Fraud
+  - id: TEL-DIAMETER-001
+    title: Diameter CCR/CCA Anomaly - Roaming Fraud Indicator
+    description: |
+      Detects suspicious Diameter Credit Control Request/Answer patterns
+      indicative of roaming fraud, including excessive quota requests,
+      multiple simultaneous sessions, and abnormal service usage.
+    level: medium
+    status: production
+    references:
+      - RFC 4006 - Diameter CC Application
+      - TS 32.299 - Diameter Charging Applications
+    author: Djezzy SOC Team
+    date: 2026/01/28
+    logsource:
+      category: telecom_signaling
+      product: diameter
+    detection:
+      selection_diameter:
+        telecom.protocol: Diameter
+        diameter_command_code: "272"  # Credit Control
+      selection_anomalies:
+        or:
+          - diameter_requested_service_unit_cc_total_octets: >104857600  # >100MB request
+          - diameter_requested_service_unit_cc_time: >3600             # >1 hour request
+          - |count_by(imsi)| > 20  # Multiple IMSIs per session
+            timeframe: 1h
+          - roaming_partner:
+              - Unknown
+              - Suspicious
+      condition: selection_diameter and selection_anomalies
+    falsepositives:
+      - Video streaming services
+      - Large file downloads
+    tags:
+      - fraud.roaming-fraud
+      - fraud.bypass-fraud
+      - artp.roaming-security
+      - 3gpp.ts.32.299
+
+  # ========================================
+  # AUTHENTICATION & ACCESS RULES
+  # ========================================
+
+  # Rule: Brute Force Login Attack
+  - id: AUTH-BF-001
+    title: Brute Force Login Attack Detected
+    description: |
+      Detects brute force login attacks based on multiple failed authentication
+      attempts from a single source IP within a short time window.
+    level: high
+    status: production
+    references:
+      - https://attack.mitre.org/techniques/T1110/
+    author: Djezzy SOC Team
+    date: 2026/01/28
+    logsource:
+      category: authentication_log
+      product: [linux, windows, web_application]
+    detection:
+      selection_failure:
+        event.outcome: failure
+        event.category: authentication
+      selection_source:
+        source.ip: exists
+      threshold:
+        |count() by source.ip| > 10
+        timeframe: 5m
+      condition: selection_failure and selection_source | threshold
+    falsepositives:
+      - Users who frequently forget passwords
+      - Misconfigured applications
+      - Legacy system integrations
+    tags:
+      - attack.credential_access
+      - attack.t1110
+      - brute-force
+      - artp.access-control
+
+  # Rule: Impossible Travel / Credential Stuffing
+  - id: AUTH-IMPOSSIBLE-001
+    title: Impossible Travel / Credential Stuffing Detected
+    description: |
+      Detects impossible travel scenarios where the same account authenticates
+      from geographically distant locations within a time window that would make
+      physical travel impossible. Also detects credential stuffing patterns.
+    level: critical
+    status: production
+    references:
+      - https://attack.mitre.org/techniques/T1110.004/
+    author: Djezzy SOC Team
+    date: 2026/01/28
+    logsource:
+      category: authentication_log
+      product: [okta, azure_ad, active_directory]
+    detection:
+      selection_success:
+        event.outcome: success
+        event.category: authentication
+      selection_same_user:
+        user.name: exists
+      selection_impossible_travel:
+        |unique_count(source.geo.country_name) by user.name| > 1
+        timeframe: 30m
+      condition: selection_success and selection_same_user | selection_impossible_travel
+    falsepositives:
+      - VPN usage
+      - Proxy servers
+      - Mobile device roaming
+    tags:
+      - attack.credential_access
+      - attack.t1110.004
+      - impossible-travel
+      - credential-stuffing
+      - artp.identity-management
+
+  # Rule: Privileged Account Abuse
+  - id: AUTH-PRIV-001
+    title: Privileged Account Activity Outside Normal Hours
+    description: |
+      Detects privileged account (admin, root, domain admin) activity
+      occurring outside normal business hours, which may indicate
+      compromised credentials or insider threat.
+    level: high
+    status: production
+    references:
+      - https://attack.mitre.org/techniques/T1098.001/
+    author: Djezzy SOC Team
+    date: 2026/01/28
+    logsource:
+      category: authentication_log
+      product: [active_directory, linux, database]
+    detection:
+      selection_privileged:
+        user.name:
+          - administrator
+          - admin
+          - root
+          - sa
+          - postgres
+          - *admin*
+          - *svc_*
+      selection_after_hours:
+        timestamp:
+          - "T22:00"  # After 10 PM
+          - "T06:00"  # Before 6 AM
+          - weekend: true
+      selection_action:
+        event.action:
+          - login
+          - execute
+          - modify
+          - delete
+          - grant
+      condition: selection_privileged and selection_after_hours and selection_action
+    falsepositives:
+      - Scheduled maintenance tasks
+      - On-call rotations
+      - Automated backup jobs
+    tags:
+      - attack.persistence
+      - attack.t1098.001
+      - privileged-access
+      - insider-threat
+      - artp.privilege-management
+
+  # ========================================
+  # MALWARE & PERSISTENCE RULES
+  # ========================================
+
+  # Rule: Ransomware Behavior Detection
+  - id: MAL-RANSOM-001
+    title: Ransomware File Encryption Pattern
+    description: |
+      Detects ransomware-like behavior through mass file encryption,
+      ransom note creation, and known ransomware process execution.
+    level: critical
+    status: production
+    references:
+      - https://attack.mitre.org/techniques/T1486/
+    author: Djezzy SOC Team
+    date: 2026/01/28
+    logsource:
+      category: file_access
+      product: [windows, linux]
+    detection:
+      selection_encryption:
+        target.file.extension:
+          - .encrypted
+          - .locked
+          - .crypto
+          - .ransom
+          - .xyz
+          - .locky
+          - .zepto
+          - .cerber
+          - .wannacry
+          - .notpetya
+      selection_ransom_note:
+        target.file.name:
+          - "*README*"
+          - "*DECRYPT*"
+          - "*RESTORE*"
+          - "*RECOVER*"
+          - "*HOW_TO_DECRYPT*"
+          - "*!READ_ME!*"
+      selection_process:
+        process.name:
+          - "*crypt*"
+          - "*encrypt*"
+          - "*lock*"
+          - "*wannacry*"
+          - "*petya*"
+          - "*notpetya*"
+          - "*ryuk*"
+          - "*maze*"
+          - "*conti*"
+          - "*lockbit*"
+      selection_mass_modification:
+        |count() by process.name| > 50
+        timeframe: 5m
+      condition: (selection_encryption or selection_ransom_note) and (selection_process or selection_mass_modification)
+    falsepositives:
+      - Legitimate encryption tools (rarely mass files)
+      - Backup software
+    tags:
+      - attack.impact
+      - attack.t1486
+      - ransomware
+      - malware
+      - artp.malware-protection
+
+  # Rule: Web Shell Detection
+  - id: MAL-WEBSHELL-001
+    title: Web Shell / Backdoor Detected
+    description: |
+      Detects known web shells, backdoors, and suspicious web server
+      file modifications indicating potential compromise.
+    level: critical
+    status: production
+    references:
+      - https://attack.mitre.org/techniques/T1505.003/
+    author: Djezzy SOC Team
+    date: 2026/01/28
+    logsource:
+      category: file_access
+      product: [web_server]
+    detection:
+      selection_webshell_names:
+        target.file.name:
+          - c99.php
+          - r57.php
+          - b374k.php
+          - weevely.php
+          - alfa.php
+          - webshell.asp
+          - cmd.aspx
+          - jsp-reverse.jsp
+          - KHR.php
+          - wso.php
+          - FilesMan.php
+          - r57.php
+          - phpspy.php
+      selection_suspicious_content:
+        target.file.content:
+          - "*eval(base64_decode(*"
+          - "*system($_POST[*"
+          - "*shell_exec(*"
+          - "*passthru(*"
+          - "*assert($*"
+          - "*preg_replace('/.*'/e,*"
+          - "*call_user_func_array(*"
+          - "*create_function(*"
+      selection_web_access:
+        url.original:
+          - "*cmd=*"
+          - "*exec=*"
+          - "*command=*"
+          - "*?*"
+          - "*.php?*cmd*"
+      condition: selection_webshell_names or selection_suspicious_content or selection_web_access
+    falsepositives:
+      - Security testing tools
+      - Development frameworks
+    tags:
+      - attack.persistence
+      - attack.t1505.003
+      - web-shell
+      - backdoor
+      - artp.web-application-security
+
+  # Rule: Persistence via Scheduled Task / Cron Job
+  - id: MAL-PERSIST-001
+    title: Malicious Scheduled Task / Cron Job Creation
+    description: |
+      Detects creation of scheduled tasks or cron jobs with suspicious
+      commands, commonly used for persistence after initial compromise.
+    level: high
+    status: production
+    references:
+      - https://attack.mitre.org/techniques/T1053.005/
+    author: Djezzy SOC Team
+    date: 2026/01/28
+    logsource:
+      category: process_creation
+      product: [windows, linux]
+    detection:
+      selection_windows:
+        process.name:
+          - schtasks.exe
+        process.command_line:
+          - "*create*"
+          - "*run*"
+          - "*powershell*"
+          - "*cmd.exe*"
+          - "*certutil*"
+          - "*bitsadmin*"
+          - "*mshta*"
+          - "*regsvr32*"
+          - "*rundll32*"
+      selection_linux:
+        process.name:
+          - crontab
+          - at
+        process.command_line:
+          - "*curl*|*sh*"
+          - "*wget*|*sh*"
+          - "*bash*-i*>&*/dev/tcp/*"
+          - "*python*-c*import*socket*"
+          - "*perl*-e*socket*"
+          - "*nc*-e*"
+          - "*mkfifo*"
+      condition: selection_windows or selection_linux
+    falsepositives:
+      - Legitimate IT administration tasks
+      - Software deployment tools
+    tags:
+      - attack.persistence
+      - attack.t1053.005
+      - scheduled-task
+      - cron-job
+      - artp.hardening
+
+  # ========================================
+  # COMPLIANCE VIOLATION RULES (ARTP/ANSSI)
+  # ========================================
+
+  # Rule: Unauthorized Data Export
+  - id: COMP-DATA-EXPORT-001
+    title: Unauthorized Bulk Data Export Attempt
+    description: |
+      Detects bulk data export operations that may violate ARTP data protection
+      regulations or internal data classification policies.
+    level: high
+    status: production
+    references:
+      - ARTP Decision on Personal Data Protection
+      - ANSSI PSSI Framework
+    author: Djezzy SOC Team
+    date: 2026/01/28
+    logsource:
+      category: database
+      product: [postgresql, mysql, oracle, mssql]
+    detection:
+      selection_export:
+        sql.query:
+          - "SELECT * INTO OUTFILE*"
+          - "COPY (* TO*"
+          - "UNLOAD TO*"
+          - "sp_configure 'xp_cmdshell'*"
+          - "BULK EXPORT*"
+          - "pg_dump*"
+          - "mysqldump*"
+      selection_bulk_select:
+        sql.query:
+          - "SELECT * FROM subscriber*"
+          - "SELECT * FROM customer*"
+          - "SELECT * FROM call_detail_record*"
+          - "SELECT * FROM billing*"
+          - "SELECT * FROM location_history*"
+        |count() by user.name| > 100
+        timeframe: 10m
+      condition: selection_export or selection_bulk_select
+    falsepositives:
+      - Authorized backup operations
+      - Business intelligence reporting
+      - Database migrations
+    tags:
+      - compliance.artp
+      - compliance.anssi
+      - data-protection
+      - dlp
+      - gdpr
+
+  # Rule: Privilege Escalation Without Approval
+  - id: COMP-PRIV-ESC-001
+    title: Unauthorized Privilege Escalation
+    description: |
+      Detects privilege escalation actions without corresponding change management
+      approval, violating ANSSI least privilege principles.
+    level: high
+    status: production
+    references:
+      - ANSSI PSSI - Least Privilege Principle
+      - ISO 27001 A.9.4
+    author: Djezzy SOC Team
+    date: 2026/01/28
+    logsource:
+      category: audit
+      product: [active_directory, linux, database]
+    detection:
+      selection_privilege_change:
+        event.action:
+          - add_member_to_group
+          - modify_privilege
+          - GRANT
+          - CREATE USER
+          - ALTER ROLE
+          - sudoers modification
+      selection_sensitive_groups:
+        target.resource:
+          - Domain Admins
+          - Enterprise Admins
+          - Schema Admins
+          - db_owner
+          - superuser
+          - root
+      selection_no_approval:
+        change_management.approval_id: not exists
+      condition: selection_privilege_change and selection_sensitive_groups and selection_no_approval
+    falsepositives:
+      - Emergency privilege grants (should have post-hoc approval)
+      - Automated service account changes
+    tags:
+      - compliance.anssi
+      - compliance.iso27001
+      - privilege-management
+      - change-management
+      - artp.access-control
+
+  # Rule: Encryption Key Access Violation
+  - id: COMP-CRYPTO-001
+    title: Unauthorized Cryptographic Key Access
+    description: |
+      Detects access to cryptographic keys, certificates, or HSM modules
+      without proper authorization, potentially compromising PKI infrastructure.
+    level: critical
+    status: production
+    references:
+      - ANSSI RGS Guidelines for Cryptography
+      - ARTP PKI Requirements
+    author: Djezzy SOC Team
+    date: 2026/01/28
+    logsource:
+      category: audit
+      product: [hsm, certificate_authority, key_management]
+    detection:
+      selection_key_access:
+        target.resource:
+          - private_key
+          - signing_key
+          - encryption_key
+          - master_key
+          - hsm_partition
+          - keystore
+          - pkcs12
+      selection_unauthorized:
+        user.role:
+          - not: crypto_admin
+          - not: security_admin
+          - not: ca_operator
+      condition: selection_key_access and selection_unauthorized
+    falsepositives:
+      - Authorized key rotation procedures
+      - Certificate renewal processes
+    tags:
+      - compliance.anssi
+      - compliance.rgs
+      - cryptography
+      - pki-security
+      - key-management
+      - artp.pki
+
+  # Rule: Audit Log Tampering
+  - id: COMP-AUDIT-TAMPER-001
+    title: Audit Log Modification or Deletion
+    description: |
+      Detects attempts to modify, delete, or disable audit logging,
+      which is a violation of ARTP record retention requirements
+      and indicates potential cover-up activity.
+    level: critical
+    status: production
+    references:
+      - ARTP Record Retention Requirements
+      - ANSSI Logging Guidelines
+    author: Djezzy SOC Team
+    date: 2026/01/28
+    logsource:
+      category: audit
+      product: [os, database, application]
+    detection:
+      selection_audit_tamper:
+        event.action:
+          - delete_audit_log
+          - truncate_table
+          - DROP TABLE audit*
+          - ALTER TABLE audit*
+          - disable_logging
+          - clear_eventlog
+          - wevtutil cl
+          - journalctl --vacuum-time=*
+      condition: selection_audit_tamper
+    falsepositives:
+      - Log rotation scripts (should use approved methods)
+      - Storage cleanup (should preserve compliance period)
+    tags:
+      - compliance.artp
+      - compliance.anssi
+      - audit-integrity
+      - anti-forensics
+      - cover-up

@@ -1,0 +1,71 @@
+# ===========================================
+# National SOC Platform - Grafana Datasources
+# Algeria 2026-2030 | Production Monitoring
+# ===========================================
+
+apiVersion: 1
+
+datasources:
+  # ============= PROMETHEUS (Primary Metrics) =============
+  
+  - name: Prometheus
+    type: prometheus
+    access: proxy
+    url: http://prometheus:9090
+    isDefault: true
+    editable: false
+    jsonData:
+      httpMethod: POST
+      manageAlerts: true
+      prometheusType: Prometheus
+      timeInterval: "15s"
+      cacheDuration: "30s"
+    secureJsonData:
+      # Add if authentication enabled
+      # httpHeaderValue: 'Bearer xxx'
+
+  # ============= GRAFANA INTERNAL (Annotations) =============
+  
+  - name: Grafana
+    type: grafana
+    access: proxy
+    url: http://grafana:3000
+    isDefault: false
+    editable: false
+
+  # ============= ALERTMANAGER (Alert Status) =============
+  
+  - name: Alertmanager
+    type: alertmanager
+    access: proxy
+    url: http://alertmanager:9093
+    isDefault: false
+    editable: false
+    jsonData:
+      implementation: prometheus
+      handleGrafanaAlerts: true
+
+  # ============= LOKI (Log Aggregation - Optional) =============
+  
+  # - name: Loki
+  #   type: loki
+  #   access: proxy
+  #   url: http://loki:3100
+  #   isDefault: false
+  #   editable: false
+  #   jsonData:
+  #     maxLines: 1000
+  #     derivedFields:
+  #       - name: TraceID
+  #         matcherRegex: '"traceId":"(\w+)"'
+  #         url: '$${__value.raw}'
+  #         datasourceUid: tempo
+
+  # ============= TEMPO (Tracing - Optional) =============
+  
+  # - name: Tempo
+  #   type: tempo
+  #   access: proxy
+  #   url: http://tempo:3200
+  #   isDefault: false
+  #   editable: false

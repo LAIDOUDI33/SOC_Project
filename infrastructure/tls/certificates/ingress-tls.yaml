@@ -1,0 +1,332 @@
+# ============================================================
+# National SOC Platform - TLS-Enabled Ingress
+# Production-Ready NGINX Ingress with Full Security
+# Phase 3: TLS Automation
+# ============================================================
+#
+# Features:
+# - Automatic TLS via cert-manager
+# - HSTS (HTTP Strict Transport Security)
+# - OWASP Security Headers
+# - Rate Limiting & DDoS Protection
+# - WebSocket/SSE Support
+# - CORS Configuration
+#
+# ============================================================
+
+---
+# ============================================================
+# Main SOC Platform Ingress (Production)
+# Domain: soc.djezzy.dz, *.soc.djezzy.dz
+# ============================================================
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: soc-platform-ingress-production
+  namespace: soc-platform
+  labels:
+    app.kubernetes.io/name: soc-platform
+    app.kubernetes.io/component: ingress
+    app.kubernetes.io/part-of: national-soc
+    environment: production
+    tier: frontend
+  annotations:
+    # ========================================
+    # Ingress Controller Class
+    # ========================================
+    kubernetes.io/ingress.class: "nginx"
+    
+    # ========================================
+    # cert-manager TLS Automation
+    # ========================================
+    cert-manager.io/cluster-issuer: "letsencrypt-production"
+    cert-manager.io/acme-http01-edit-in-place: "true"
+    
+    # ========================================
+    # SSL/TLS Configuration
+    # ========================================
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/force-ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/ssl-temporary-redirect: "false"
+    
+    # TLS Protocols & Ciphers (CIS Benchmark Compliant)
+    nginx.ingress.kubernetes.io/ssl-protocols: "TLSv1.2 TLSv1.3"
+    nginx.ingress.kubernetes.io/ssl-ciphers: "ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384:DHE-RSA-AES128-GCM-SHA256:DHE-RSA-AES256-GCM-SHA384"
+    nginx.ingress.kubernetes.io/ssl-prefer-server-ciphers: "true"
+    
+    # OCSP Stapling
+    nginx.ingress.kubernetes.io/ssl-stapling: "true"
+    nginx.ingress.kubernetes.io/ssl-stapling-verify: "true"
+    
+    # Session Tickets (disable for forward secrecy)
+    nginx.ingress.kubernetes.io/ssl-session-ticket-key: ""
+    nginx.ingress.kubernetes.io/ssl-session-cache: "shared:SSL:10m"
+    nginx.ingress.kubernetes.io/ssl-session-timeout: "1d"
+    
+    # ========================================
+    # HSTS - HTTP Strict Transport Security
+    # 2 years, include subdomains, preload ready
+    # ========================================
+    nginx.ingress.kubernetes.io/configuration-snippet: |
+      # HSTS Header (2 years = 63072000 seconds)
+      more_set_headers "Strict-Transport-Security max-age=63072000; includeSubDomains; preload";
+      
+      # OWASP Recommended Security Headers
+      more_set_headers "X-Frame-Options SAMEORIGIN";
+      more_set_headers "X-Content-Type-Options nosniff";
+      more_set_headers "X-XSS-Protection 1; mode=block";
+      more_set_headers "Referrer-Policy strict-origin-when-cross-origin";
+      
+      # Content Security Policy
+      more_set_headers "Content-Security-Policy default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: https:; connect-src 'self' wss: https:; frame-ancestors 'self'";
+      
+      # Permissions Policy
+      more_set_headers "Permissions-Policy camera=(), microphone=(), geolocation=(), payment=()";
+      
+      # Cache control for API responses
+      more_set_headers "Cache-Control no-store, no-cache, must-revalidate, proxy-revalidate";
+      more_set_headers "Pragma no-cache";
+      
+      # Remove server version disclosure
+      more_set_headers "Server Djezzy-SOC";
+      
+      # CORS headers for API
+      if ($request_uri ~* "^/api") {
+        more_set_headers "Access-Control-Allow-Origin https://soc.djezzy.dz";
+        more_set_headers "Access-Control-Allow-Methods GET, POST, PUT, DELETE, OPTIONS, PATCH";
+        more_set_headers "Access-Control-Allow-Headers Authorization, Content-Type, X-Requested-With, Accept, Origin, X-CSRF-Token";
+        more_set_headers "Access-Control-Max-Age 3600";
+        more_set_headers "Access-Control-Allow-Credentials true";
+      }
+    
+    # ========================================
+    # Rate Limiting (DDoS Protection)
+    # ========================================
+    nginx.ingress.kubernetes.io/limit-rps: "100"
+    nginx.ingress.kubernetes.io/limit-connections: "50"
+    nginx.ingress.kubernetes.io/limit-rpm: "5000"
+    nginx.ingress.kubernetes.io/limit-burst: "200"
+    nginx.ingress.kubernetes.io/limit-status: "429"
+    nginx.ingress.kubernetes.io/limit-reject-code: "429"
+    
+    # Custom rate limit response body
+    nginx.ingress.kubernetes.io/limit-request-body: "10m"
+    
+    # ========================================
+    # Proxy Timeouts
+    # ========================================
+    nginx.ingress.kubernetes.io/proxy-connect-timeout: "60"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "300"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "86400"  # For SSE streaming
+    
+    # ========================================
+    # WebSocket / SSE Support
+    # ========================================
+    nginx.ingress.kubernetes.io/proxy-http-version: "1.1"
+    nginx.ingress.kubernetes.io/upstream-hash-by: "$remote_addr"
+    nginx.ingress.kubernetes.io/proxy-buffering: "off"
+    
+    # WebSocket upgrade headers
+    nginx.ingress.kubernetes.io/proxy-set-headers: "soc-platform/sse-headers"
+    
+    # ========================================
+    # Real IP Forwarding
+    # ========================================
+    nginx.ingress.kubernetes.io/use-forwarded-headers: "true"
+    nginx.ingress.kubernetes.io/compute-full-forwarded-for: "true"
+    nginx.ingress.kubernetes.io/forwarded-for-header: "X-Forwarded-For"
+    nginx.ingress.kubernetes.io/use-proxy-protocol: "false"
+    
+    # ========================================
+    # Request Size Limits
+    # ========================================
+    nginx.ingress.kubernetes.io/proxy-body-size: "100m"
+    nginx.ingress.kubernetes.io/client-max-body-size: "100m"
+    
+    # ========================================
+    # Access Control
+    # ========================================
+    nginx.ingress.kubernetes.io/whitelist-source-range: "0.0.0.0/0"  # Adjust for production
+    
+    # Enable modsecurity WAF integration (if available)
+    nginx.ingress.kubernetes.io/enable-modsecurity: "true"
+    nginx.ingress.kubernetes.io/modsecurity-snippet: |
+      SecRuleEngine On
+      SecRule REQUEST_URI "@beginsWith /api" "phase:1,nolog,allow,ctl:ruleRemoveById=942100"
+
+spec:
+  # ========================================
+  # TLS Configuration (cert-managed)
+  # ========================================
+  tls:
+    - hosts:
+        - soc.djezzy.dz
+        - "*.soc.djezzy.dz"
+        - api.soc.djezzy.dz
+      secretName: soc-tls-secret  # Managed by Certificate resource
+  
+  # ========================================
+  # Routing Rules
+  # ========================================
+  rules:
+    # Main Application Domain
+    - host: soc.djezzy.dz
+      http:
+        paths:
+          # Frontend (Next.js static + SSR)
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: soc-platform-service
+                port:
+                  number: 80
+          
+          # REST API Endpoints
+          - path: /api
+            pathType: Prefix
+            backend:
+              service:
+                name: soc-platform-service
+                port:
+                  number: 80
+          
+          # Server-Sent Events (SSE) Streaming
+          - path: /api/stream
+            pathType: Prefix
+            backend:
+              service:
+                name: soc-platform-service
+                port:
+                  number: 80
+    
+    # API Subdomain
+    - host: api.soc.djezzy.dz
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: soc-platform-service
+                port:
+                  number: 80
+    
+    # Wildcard Support
+    - host: "*.soc.djezzy.dz"
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: soc-platform-service
+                port:
+                  number: 80
+
+---
+# ============================================================
+# Internal Services Ingress (Internal CA)
+# For internal microservices communication
+# ============================================================
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: soc-platform-ingress-internal
+  namespace: soc-platform
+  labels:
+    app.kubernetes.io/name: soc-platform
+    app.kubernetes.io/component: ingress
+    app.kubernetes.io/part-of: national-soc
+    environment: internal
+    tier: internal
+  annotations:
+    kubernetes.io/ingress.class: "nginx"
+    cert-manager.io/cluster-issuer: "djezzy-internal-ca"
+    
+    # Stricter security for internal services
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/configuration-snippet: |
+      more_set_headers "Strict-Transport-Security max-age=31536000; includeSubDomains";
+      more_set_headers "X-Frame-Options DENY";
+      more_set_headers "X-Content-Type-Options nosniff";
+
+spec:
+  tls:
+    - hosts:
+        - soc-internal.djezzy.dz
+        - "*.internal.djezzy.dz"
+      secretName: soc-internal-tls-secret
+  
+  rules:
+    - host: soc-internal.djezzy.dz
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: soc-platform-service
+                port:
+                  number: 3000
+
+---
+# ============================================================
+# Monitoring Stack Ingress
+# Grafana, Kibana, Prometheus Web UI
+# ============================================================
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: soc-monitoring-ingress
+  namespace: monitoring
+  labels:
+    app.kubernetes.io/name: soc-monitoring
+    app.kubernetes.io/component: ingress
+    app.kubernetes.io/part-of: national-soc
+    environment: production
+    tier: monitoring
+  annotations:
+    kubernetes.io/ingress.class: "nginx"
+    cert-manager.io/cluster-issuer: "letsencrypt-production"
+    
+    # Basic Auth for monitoring (additional layer)
+    nginx.ingress.kubernetes.io/auth-type: basic
+    nginx.ingress.kubernetes.io-auth-secret: monitoring-basic-auth
+    nginx.ingress.kubernetes.io/auth-realm: "Djezzy SOC Monitoring - Authentication Required"
+    
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/configuration-snippet: |
+      more_set_headers "Strict-Transport-Security max-age=63072000; includeSubDomains";
+      more_set_headers "X-Frame-Options SAMEORIGIN";  # Allow Grafana embedding
+
+spec:
+  tls:
+    - hosts:
+        - grafana.soc.djezzy.dz
+        - kibana.soc.djezzy.dz
+        - prometheus.soc.djezzy.dz
+      secretName: soc-monitoring-tls-secret
+  
+  rules:
+    - host: grafana.soc.djezzy.dz
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: grafana
+                port:
+                  number: 300
+    
+    - host: kibana.soc.djezzy.dz
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: kibana
+                port:
+                  number: 5601

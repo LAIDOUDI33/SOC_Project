@@ -1,0 +1,949 @@
+     1→/**
+     2→ * National SOC Platform - Redis Client Utility
+     3→ * Algeria 2026-2030 | High-Traffic Caching Layer
+     4→ * 
+     5→ * Features:
+     6→ * - Connection pooling with automatic reconnection
+     7→ * - Circuit breaker pattern for fault tolerance
+     8→ * - Request queuing and batching for high throughput
+     9→ * - Health checks and monitoring integration
+    10→ * - Optimized for 100K+ events/second telecom traffic
+    11→ */
+    12→
+    13→import Redis from 'ioredis'
+    14→import { promisify } from 'util'
+    15→
+    16→// ===========================================
+    17→// Configuration Types
+    18→// ===========================================
+    19→
+    20→export interface RedisConfig {
+    21→  host: string
+    22→  port: number
+    23→  password?: string
+    24→  db: number
+    25→  maxRetriesPerRequest: number
+    26→  retryDelayOnFailover: number
+    27→  maxClientsPerPool: number
+    28→  enableReadyCheck: boolean
+    29→  enableOfflineQueue: boolean
+    30→  connectTimeout: number
+    31→  commandTimeout: number
+    32→  lazyConnect: boolean
+    33→  keepAlive?: number
+    34→  connectionName?: string
+    35→}
+    36→
+    37→export interface CacheOptions {
+    38→  /** Time to live in seconds */
+    39→  ttl: number
+    40→  /** Use stale-while-revalidate pattern (return stale data while refreshing) */
+    41→  swr?: boolean
+    42→  /** Stale-while-revalidate time in seconds (how long to serve stale data) */
+    43→  swrTtl?: number
+    44→  /** Key prefix for namespacing */
+    45→  prefix?: string
+    46→  /** Compress large values (>1KB) */
+    47→  compress?: boolean
+    48→  /** Serialize as JSON */
+    49→  json?: boolean
+    50→}
+    51→
+    52→export interface CacheResult<T> {
+    53→  data: T | null
+    54→  hit: boolean
+    55→  stale: boolean
+    56→  ttl?: number
+    57→  source: 'cache' | 'database' | 'stale'
+    58→}
+    59→
+    60→export interface CacheMetrics {
+    61→  hits: number
+    62→  misses: number
+    63→  staleHits: number
+    64→  errors: number
+    65→  totalRequests: number
+    66→  hitRate: number
+    67→  avgResponseTime: number
+    68→}
+    69→
+    70→// ===========================================
+    71→// Default Configuration
+    72→// ===========================================
+    73→
+    74→const DEFAULT_CONFIG: RedisConfig = {
+    75→  host: process.env.REDIS_HOST || 'redis',
+    76→  port: parseInt(process.env.REDIS_PORT || '6379'),
+    77→  password: process.env.REDIS_PASSWORD,
+    78→  db: parseInt(process.env.REDIS_DB || '0'),
+    79→  maxRetriesPerRequest: 3,
+    80→  retryDelayOnFailover: 100,
+    81→  maxClientsPerPool: 20,
+    82→  enableReadyCheck: true,
+    83→  enableOfflineQueue: true,
+    84→  connectTimeout: 5000,
+    85→  commandTimeout: 3000,
+    86→  lazyConnect: false,
+    87→  keepAlive: 10000,
+    88→  connectionName: 'soc-platform-app'
+    89→}
+    90→
+    91→// Default TTL values (in seconds) for different cache types
+    92→export const CACHE_TTL = {
+    93→  // Short-lived caches (real-time data)
+    94→  ALERTS_LIVE: 5,                    // 5 seconds - Live alerts feed
+    95→  ALERTS_STATS: 30,                  // 30 seconds - Alert statistics
+    96→  INCIDENTS_ACTIVE: 15,              // 15 seconds - Active incidents
+    97→  
+    98→  // Medium-lived caches (frequently accessed)
+    99→  DASHBOARD_KPI: 60,                 // 1 minute - Dashboard KPIs
+   100→  THREAT_INTEL: 120,                 // 2 minutes - Threat intelligence
+   101→  ASSET_LIST: 300,                   // 5 minutes - Asset inventory
+   102→  USER_SESSION: 1800,                // 30 minutes - User sessions
+   103→  
+   104→  // Long-lived caches (rarely changing)
+   105→  REFERENCE_DATA: 3600,              // 1 hour - Reference data (countries, etc.)
+   106→  SYSTEM_CONFIG: 7200,               // 2 hours - System configuration
+   107→  ARPT_REPORTS: 86400,              // 24 hours - ARPT reports
+   108→  
+   109→  // Telecom-specific caches
+   110→  TELECOM_SUBSCRIBERS: 10,           // 10 seconds - Subscriber lookups
+   111→  PROTOCOL_STATS: 20,               // 20 seconds - Protocol statistics
+   112→  ROAMING_DATA: 60,                 // 1 minute - Roaming information
+   113→} as const
+   114→
+   115→// Key prefixes for namespacing
+   116→const KEY_PREFIXES = {
+   117→  ALERTS: 'soc:alerts',
+   118→  INCIDENTS: 'soc:incidents',
+   119→  THREATS: 'soc:threats',
+   120→  ASSETS: 'soc:assets',
+   121→  USERS: 'soc:users',
+   122→  DASHBOARD: 'soc:dashboard',
+   123→  TELECOM: 'soc:telecom',
+   124→  SESSION: 'soc:session',
+   125→  RATE_LIMIT: 'soc:ratelimit',
+   126→  LOCK: 'soc:lock',
+   127→} as const
+   128→
+   129→// ===========================================
+   130→// Cache Metrics Collector
+   131→// ===========================================
+   132→
+   133→class MetricsCollector {
+   134→  private metrics: Map<string, { hits: number; misses: number; errors: number; responseTimes: number[] }> = new Map()
+   135→  
+   136→  recordHit(key: string, responseTime: number): void {
+   137→    this.ensureKey(key)
+   138→    this.metrics.get(key)!.hits++
+   139→    this.metrics.get(key)!.responseTimes.push(responseTime)
+   140→  }
+   141→  
+   142→  recordMiss(key: string): void {
+   143→    this.ensureKey(key)
+   144→    this.metrics.get(key)!.misses++
+   145→  }
+   146→  
+   147→  recordStaleHit(key: string, responseTime: number): void {
+   148→    this.ensureKey(key)
+   149→    this.metrics.get(key)!.staleHits++
+   150→    this.metrics.get(key)!.responseTimes.push(responseTime)
+   151→  }
+   152→  
+   153→  recordError(key: string): void {
+   154→    this.ensureKey(key)
+   155→    this.metrics.get(key)!.errors++
+   156→  }
+   157→  
+   158→  private ensureKey(key: string): void {
+   159→    if (!this.metrics.has(key)) {
+   160→      this.metrics.set(key, { hits: 0, misses: 0, errors: 0, staleHits: 0, responseTimes: [] })
+   161→    }
+   162→  }
+   163→  
+   164→  getMetrics(): Record<string, CacheMetrics> {
+   165→    const result: Record<string, CacheMetrics> = {}
+   166→    
+   167→    for (const [key, data] of this.metrics) {
+   168→      const totalRequests = data.hits + data.misses + data.staleHits
+   169→      const avgResponseTime = data.responseTimes.length > 0 
+   170→        ? data.responseTimes.reduce((a, b) => a + b, 0) / data.responseTimes.length 
+   171→        : 0
+   172→      
+   173→      result[key] = {
+   174→        hits: data.hits,
+   175→        misses: data.misses,
+   176→        staleHits: data.staleHits,
+   177→        errors: data.errors,
+   178→        totalRequests,
+   179→        hitRate: totalRequests > 0 ? (data.hits + data.staleHits) / totalRequests : 0,
+   180→        avgResponseTime
+   181→      }
+   182→    }
+   183→    
+   184→    return result
+   185→  }
+   186→  
+   187→  reset(): void {
+   188→    this.metrics.clear()
+   189→  }
+   190→}
+   191→
+   192→export const cacheMetrics = new MetricsCollector()
+   193→
+   194→// ===========================================
+   195→// Main Redis Client Class
+   196→// ===========================================
+   197→
+   198→class RedisClient {
+   199→  private client: Redis | null = null
+   200→  private subscriberClient: Redis | null = null
+   201→  private config: RedisConfig
+   202→  private isConnected: boolean = false
+   203→  private isConnecting: boolean = false
+   204→  private circuitOpen: boolean = false
+   205→  private circuitOpenUntil: number = 0
+   206→  private circuitFailureCount: number = 0
+   207→  private readonly CIRCUIT_THRESHOLD = 5
+   208→  private readonly CIRCUIT_TIMEOUT = 30000 // 30 seconds
+   209→  
+   210→  constructor(config: Partial<RedisConfig> = {}) {
+   211→    this.config = { ...DEFAULT_CONFIG, ...config }
+   212→  }
+   213→
+   214→  /**
+   215→   * Initialize Redis connection with error handling
+   216→   */
+   217→  async connect(): Promise<void> {
+   218→    if (this.isConnected || this.isConnecting) {
+   219→      return
+   220→    }
+   221→
+   222→    this.isConnecting = true
+   223→    
+   224→    try {
+   225→      console.log('[Redis] Connecting to Redis at', `${this.config.host}:${this.config.port}`)
+   226→      
+   227→      this.client = new Redis({
+   228→        host: this.config.host,
+   229→        port: this.config.port,
+   230→        password: this.config.password,
+   231→        db: this.config.db,
+   232→        maxRetriesPerRequest: this.config.maxRetriesPerRequest,
+   233→        retryStrategy: (times: number) => {
+   234→          if (times > this.config.maxRetriesPerRequest) {
+   235→            console.error('[Redis] Max retries reached')
+   236→            return null // Stop retrying
+   237→          }
+   238→          return Math.min(times * this.config.retryDelayOnFailover, 3000)
+   239→        },
+   240→        enableReadyCheck: this.config.enableReadyCheck,
+   241→        enableOfflineQueue: this.config.enableOfflineQueue,
+   242→        connectTimeout: this.config.connectTimeout,
+   243→        keepAlive: this.config.keepAlive,
+   244→        connectionName: this.config.connectionName,
+   245→        // Reconnect automatically
+   246→        autoResubscribe: true,
+   247→        autoResendUnfulfilledCommands: true,
+   248→        // Enable cluster mode detection
+   249→        enableRunOnSet: true,
+   250→        // Lazy connect if configured
+   251→        lazyConnect: this.config.lazyConnect,
+   252→      })
+   253→
+   254→      // Set up event handlers
+   255→      this.setupEventHandlers()
+   256→      
+   257→      // Test connection
+   258→      await this.client.ping()
+   259→      
+   260→      this.isConnected = true
+   261→      console.log('[Redis] Connected successfully')
+   262→      
+   263→    } catch (error) {
+   264→      console.error('[Redis] Connection failed:', error)
+   265→      this.isConnected = false
+   266→      throw error
+   267→    } finally {
+   268→      this.isConnecting = false
+   269→    }
+   270→  }
+   271→
+   272→  /**
+   273→   * Set up Redis event handlers for monitoring
+   274→   */
+   275→  private setupEventHandlers(): void {
+   276→    if (!this.client) return
+   277→
+   278→    this.client.on('connect', () => {
+   279→      console.log('[Redis] Connection established')
+   280→      this.isConnected = true
+   281→      this.circuitOpen = false
+   282→      this.circuitFailureCount = 0
+   283→    })
+   284→
+   285→    this.client.on('ready', () => {
+   286→      console.log('[Redis] Ready to accept commands')
+   287→      this.isConnected = true
+   288→    })
+   289→
+   290→    this.client.on('error', (error: Error) => {
+   291→      console.error('[Redis] Error:', error.message)
+   292→      this.handleFailure()
+   293→    })
+   294→
+   295→    this.client.on('close', () => {
+   296→      console.warn('[Redis] Connection closed')
+   297→      this.isConnected = false
+   298→    })
+   299→
+   300→    this.client.on('reconnecting', (timeMs: number) => {
+   301→      console.log(`[Redis] Reconnecting in ${timeMs}ms`)
+   302→    })
+   303→
+   304→    this.client.on('end', () => {
+   305→      console.warn('[Redis] Connection ended')
+   306→      this.isConnected = false
+   307→    })
+   308→  }
+   309→
+   310→  /**
+   311→   * Handle failures for circuit breaker pattern
+   312→   */
+   313→  private handleFailure(): void {
+   314→    this.circuitFailureCount++
+   315→    
+   316→    if (this.circuitFailureCount >= this.CIRCUIT_THRESHOLD && !this.circuitOpen) {
+   317→      this.circuitOpen = true
+   318→      this.circuitOpenUntil = Date.now() + this.CIRCUIT_TIMEOUT
+   319→      console.error(`[Redis] Circuit breaker OPENED after ${this.circuitFailureCount} failures`)
+   320→    }
+   321→  }
+   322→
+   323→  /**
+   324→   * Check if circuit breaker allows requests
+   325→   */
+   326→  private isCircuitClosed(): boolean {
+   327→    if (!this.circuitOpen) return true
+   328→    
+   329→    if (Date.now() > this.circuitOpenUntil) {
+   330→      this.circuitOpen = false
+   331→      this.circuitFailureCount = 0
+   332→      console.log('[Redis] Circuit breaker CLOSED - allowing requests')
+   333→      return true
+   334→    }
+   335→    
+   336→    return false
+   337→  }
+   338→
+   339→  /**
+   340→   * Get Redis client instance (lazy initialization)
+   341→   */
+   342→  async getClient(): Promise<Redis> {
+   343→    if (!this.client) {
+   344→      await this.connect()
+   345→    }
+   346→    
+   347→    if (!this.isConnected && !this.isConnecting) {
+   348→      await this.connect()
+   349→    }
+   350→    
+   351→    return this.client!
+   352→  }
+   353→
+   354→  /**
+   355→   * Check health status of Redis connection
+   356→   */
+   357→  async healthCheck(): Promise<{
+   358→    status: 'healthy' | 'degraded' | 'unhealthy'
+   359→    latency: number | null
+   360→    connected: boolean
+   361→    info?: any
+   362→  }> {
+   363→    try {
+   364→      const client = await this.getClient()
+   365→      const start = Date.now()
+   366→      const pong = await client.ping()
+   367→      const latency = Date.now() - start
+   368→      
+   369→      if (pong !== 'PONG') {
+   370→        return { status: 'degraded', latency: null, connected: true }
+   371→      }
+   372→      
+   373→      // Get Redis info for detailed health
+   374→      const info = await client.info()
+   375→      const parsedInfo = this.parseRedisInfo(info)
+   376→      
+   377→      return {
+   378→        status: latency < 10 ? 'healthy' : 'degraded',
+   379→        latency,
+   380→        connected: true,
+   381→        info: parsedInfo
+   382→      }
+   383→    } catch (error) {
+   384→      return { 
+   385→        status: 'unhealthy', 
+   386→        latency: null, 
+   387→        connected: false,
+   388→        error: error instanceof Error ? error.message : String(error)
+   389→      } as any
+   390→    }
+   391→  }
+   392→
+   393→  /**
+   394→   * Parse Redis INFO output to object
+   395→   */
+   396→  private parseRedisInfo(info: string): Record<string, any> {
+   397→    const lines = info.split('\r\n')
+   398→    const result: Record<string, any> = {}
+   399→    let currentSection = ''
+   400→    
+   401→    for (const line of lines) {
+   402→      if (line.startsWith('# ')) {
+   403→        currentSection = line.slice(2).toLowerCase()
+   404→        result[currentSection] = {}
+   405→        continue
+   406→      }
+   407→      
+   408→      const colonIndex = line.indexOf(':')
+   409→      if (colonIndex === -1) continue
+   410→      
+   411→      const key = line.slice(0, colonIndex).trim()
+   412→      const value = line.slice(colonIndex + 1).trim()
+   413→      
+   414→      if (currentSection) {
+   415→        result[currentSection][key] = value
+   416→      } else {
+   417→        result[key] = value
+   418→      }
+   419→    }
+   420→    
+   421→    return result
+   422→  }
+   423→
+   424→  // ===========================================
+   425→  // Core Cache Operations
+   426→  // ===========================================
+   427→
+   428→  /**
+   429→   * Get value from cache with optional stale-while-revalidate
+   430→   */
+   431→  async get<T>(key: string, options: CacheOptions = { ttl: 300 }): Promise<CacheResult<T>> {
+   432→    const startTime = Date.now()
+   433→    const cacheKey = options.prefix ? `${options.prefix}:${key}` : key
+   434→    
+   435→    try {
+   436→      // Check circuit breaker
+   437→      if (!this.isCircuitClosed()) {
+   438→        cacheMetrics.recordMiss(cacheKey)
+   439→        return { data: null, hit: false, stale: false, source: 'database' }
+   440→      }
+   441→
+   442→      const client = await this.getClient()
+   443→      
+   444→      // Try to get main key
+   445→      const value = await client.get(cacheKey)
+   446→      
+   447→      if (value !== null) {
+   448→        const ttl = await client.ttl(cacheKey)
+   449→        const parsedValue = options.json !== false ? JSON.parse(value) : value
+   450→        
+   451→        cacheMetrics.recordHit(cacheKey, Date.now() - startTime)
+   452→        
+   453→        return {
+   454→          data: parsedValue,
+   455→          hit: true,
+   456→          stale: false,
+   457→          ttl,
+   458→          source: 'cache'
+   459→        }
+   460→      }
+   461→      
+   462→      // Check for stale data if SWR enabled
+   463→      if (options.swr && options.swrTtl) {
+   464→        const staleKey = `${cacheKey}:stale`
+   465→        const staleValue = await client.get(staleKey)
+   466→        
+   467→        if (staleValue !== null) {
+   468→          const parsedValue = options.json !== false ? JSON.parse(staleValue) : staleValue
+   469→          
+   470→          cacheMetrics.recordStaleHit(cacheKey, Date.now() - startTime)
+   471→          
+   472→          return {
+   473→            data: parsedValue,
+   474→            hit: true,
+   475→            stale: true,
+   476→            ttl: 0,
+   477→            source: 'stale'
+   478→          }
+   479→        }
+   480→      }
+   481→      
+   482→      cacheMetrics.recordMiss(cacheKey)
+   483→      return { data: null, hit: false, stale: false, source: 'database' }
+   484→      
+   485→    } catch (error) {
+   486→      console.error(`[Redis] GET error for key ${cacheKey}:`, error)
+   487→      cacheMetrics.recordError(cacheKey)
+   488→      return { data: null, hit: false, stale: false, source: 'database' }
+   489→    }
+   490→  }
+   491→
+   492→  /**
+   493→   * Set value in cache with TTL and optional SWR
+   494→   */
+   495→  async set<T>(key: string, value: T, options: CacheOptions = { ttl: 300 }): Promise<boolean> {
+   496→    const cacheKey = options.prefix ? `${options.prefix}:${key}` : key
+   497→    
+   498→    try {
+   499→      if (!this.isCircuitClosed()) {
+   500→        return false
+   501→      }
+   502→
+   503→      const client = await this.getClient()
+   504→      const serializedValue = options.json !== false ? JSON.stringify(value) : String(value)
+   505→      
+   506→      // Compress large values if enabled
+   507→      const finalValue = (options.compress && serializedValue.length > 1024)
+   508→        ? await this.compress(serializedValue)
+   509→        : serializedValue
+   510→      
+   511→      // Set main key with TTL
+   512→      await client.setex(cacheKey, options.ttl, finalValue)
+   513→      
+   514→      // Store stale copy if SWR enabled
+   515→      if (options.swr && options.swrTtl) {
+   516→        const staleKey = `${cacheKey}:stale`
+   517→        await client.setex(staleKey, options.swrTtl, finalValue)
+   518→      }
+   519→      
+   520→      return true
+   521→      
+   522→    } catch (error) {
+   523→      console.error(`[Redis] SET error for key ${cacheKey}:`, error)
+   524→      return false
+   525→    }
+   526→  }
+   527→
+   528→  /**
+   529→   * Delete key(s) from cache
+   530→   */
+   531→  async delete(keys: string | string[], prefix?: string): Promise<number> {
+   532→    try {
+   533→      if (!this.isCircuitClosed()) {
+   534→        return 0
+   535→      }
+   536→
+   537→      const client = await this.getClient()
+   538→      const keyArray = Array.isArray(keys) : keys
+   539→      const prefixedKeys = keyArray.map(k => prefix ? `${prefix}:${k}` : k)
+   540→      
+   541→      if (prefixedKeys.length === 1) {
+   542→        return await client.del(prefixedKeys[0])
+   543→      }
+   544→      
+   545→      return await client.del(...prefixedKeys)
+   546→      
+   547→    } catch (error) {
+   548→      console.error('[Redis] DELETE error:', error)
+   549→      return 0
+   550→    }
+   551→  }
+   552→
+   553→  /**
+   554→   * Clear all keys matching a pattern (use carefully!)
+   555→   */
+   556→  async clearPattern(pattern: string): Promise<number> {
+   557→    try {
+   558→      if (!this.isCircuitClosed()) {
+   559→        return 0
+   560→      }
+   561→
+   562→      const client = await this.getClient()
+   563→      let cursor = '0'
+   564→      let deleted = 0
+   565→      
+   566→      do {
+   567→        const [nextCursor, keys] = await client.scan(cursor, 'MATCH', pattern, 'COUNT', 100)
+   568→        cursor = nextCursor
+   569→        
+   570→        if (keys.length > 0) {
+   571→          deleted += await client.del(...keys)
+   572→        }
+   573→        
+   574→      } while (cursor !== '0')
+   575→      
+   576→      return deleted
+   577→      
+   578→    } catch (error) {
+   579→      console.error('[Redis] CLEAR_PATTERN error:', error)
+   580→      return 0
+   581→    }
+   582→  }
+   583→
+   584→  /**
+   585→   * Get or set pattern (cache-aside pattern)
+   586→   */
+   587→  async getOrSet<T>(
+   588→    key: string,
+   589→    fetcher: () => Promise<T>,
+   590→    options: CacheOptions = { ttl: 300 }
+   591→  ): Promise<CacheResult<T>> {
+   592→    // Try to get from cache first
+   593→    const cached = await this.get<T>(key, options)
+   594→    
+   595→    if (cached.data !== null && !cached.stale) {
+   596→      return cached
+   597→    }
+   598→    
+   599→    // If we have stale data, return it but refresh in background
+   600→    if (cached.stale && cached.data !== null) {
+   601→      // Background refresh (fire and forget)
+   602→      this.refreshInBackground(key, fetcher, options).catch(console.error)
+   603→      return cached
+   604→    }
+   605→    
+   606→    // Cache miss - fetch from source
+   607→    try {
+   608→      const freshData = await fetcher()
+   609→      await this.set(key, freshData, options)
+   610→      
+   611→      return {
+   612→        data: freshData,
+   613→        hit: false,
+   614→        stale: false,
+   615→        source: 'database'
+   616→      }
+   617→      
+   618→    } catch (error) {
+   619→      console.error(`[Redis] Fetcher error for key ${key}:`, error)
+   620→      
+   621→      // If we have stale data, return it even on error
+   622→      if (cached.data !== null) {
+   623→        return cached
+   624→      }
+   625→      
+   626→      throw error
+   627→    }
+   628→  }
+   629→
+   630→  /**
+   631→   * Refresh cache in background (for SWR pattern)
+   632→   */
+   633→  private async refreshInBackground<T>(
+   634→    key: string,
+   635→    fetcher: () => Promise<T>,
+   636→    options: CacheOptions
+   637→  ): Promise<void> {
+   638→    try {
+   639→      const freshData = await fetcher()
+   640→      await this.set(key, freshData, options)
+   641→    } catch (error) {
+   642→      console.error(`[Redis] Background refresh failed for key ${key}:`, error)
+   643→    }
+   644→  }
+   645→
+   646→  // ===========================================
+   647→  // Advanced Operations
+   648→  // ===========================================
+   649→
+   650→  /**
+   651→   * Atomic increment with TTL
+   652→   */
+   653→  async increment(key: string, amount: number = 1, ttl?: number, prefix?: string): Promise<number> {
+   654→    const cacheKey = prefix ? `${prefix}:${key}` : key
+   655→    
+   656→    try {
+   657→      if (!this.isCircuitClosed()) {
+   658→        return 0
+   659→      }
+   660→
+   661→      const client = await this.getClient()
+   662→      
+   663→      const result = await client.incrby(cacheKey, amount)
+   664→      
+   665→      if (ttl && result === amount) {
+   666→        // Only set TTL on first increment (new key)
+   667→        await client.expire(cacheKey, ttl)
+   668→      }
+   669→      
+   670→      return result
+   671→      
+   672→    } catch (error) {
+   673→      console.error('[Redis] INCREMENT error:', error)
+   674→      throw error
+   675→    }
+   676→  }
+   677→
+   678→  /**
+   679→   * Distributed lock implementation
+   680→   */
+   681→  async acquireLock(
+   682→    lockKey: string,
+   683→    ownerId: string,
+   684→    ttl: number = 30,
+   685→    prefix?: string
+   686→  ): Promise<boolean> {
+   687→    const fullKey = `${prefix || KEY_PREFIXES.LOCK}:${lockKey}`
+   688→    
+   689→    try {
+   690→      if (!this.isCircuitClosed()) {
+   691→        return false
+   692→      }
+   693→
+   694→      const client = await this.getClient()
+   695→      
+   696→      // SET NX EX (only set if not exists, with expiry)
+   697→      const result = await client.set(fullKey, ownerId, 'NX', 'EX', ttl)
+   698→      
+   699→      return result === 'OK'
+   700→      
+   701→    } catch (error) {
+   702→      console.error('[Redis] ACQUIRE_LOCK error:', error)
+   703→      return false
+   704→    }
+   705→  }
+   706→
+   707→  /**
+   708→   * Release distributed lock
+   709→   */
+   710→  async releaseLock(lockKey: string, ownerId: string, prefix?: string): Promise<boolean> {
+   711→    const fullKey = `${prefix || KEY_PREFIXES.LOCK}:${lockKey}`
+   712→    
+   713→    try {
+   714→      if (!this.isCircuitClosed()) {
+   715→        return false
+   716→      }
+   717→
+   718→      const client = await this.getClient()
+   719→      
+   720→      // Lua script for atomic check-and-delete
+   721→      const script = `
+   722→        if redis.call("get", KEYS[1]) == ARGV[1] then
+   723→          return redis.call("del", KEYS[1])
+   724→        else
+   725→          return 0
+   726→        end
+   727→      `
+   728→      
+   729→      const result = await client.eval(script, 1, fullKey, ownerId)
+   730→      
+   731→      return result === 1
+   732→      
+   733→    } catch (error) {
+   734→      console.error('[Redis] RELEASE_LOCK error:', error)
+   735→      return false
+   736→    }
+   737→  }
+   738→
+   739→  /**
+   740→   * Rate limiting using sliding window
+   741→   */
+   742→  async checkRateLimit(
+   743→    identifier: string,
+   744→    limit: number,
+   745→    windowSeconds: number,
+   746→    prefix?: string
+   747→  ): Promise<{ allowed: boolean; remaining: number; resetTime: number }> {
+   748→    const key = `${prefix || KEY_PREFIXES.RATE_LIMIT}:${identifier}`
+   749→    
+   750→    try {
+   751→      if (!this.isCircuitClosed()) {
+   752→        // If Redis is down, allow request (fail-open)
+   753→        return { allowed: true, remaining: limit, resetTime: Date.now() + windowSeconds * 1000 }
+   754→      }
+   755→
+   756→      const client = await this.getClient()
+   757→      const now = Math.floor(Date.now() / 1000)
+   758→      windowStart = now - windowSeconds
+   759→      
+   760→      // Remove old entries outside window
+   761→      await client.zremrangebyscore(key, '-inf', windowStart)
+   762→      
+   763→      // Count current window requests
+   764→      const count = await client.zcard(key)
+   765→      
+   766→      if (count >= limit) {
+   767→        // Find when oldest entry expires
+   768→        const oldest = await client.zrange(key, 0, 0, 'WITHSCORES')
+   769→        const resetTime = oldest.length > 0 ? parseInt(oldest[1]) + windowSeconds : now + windowSeconds
+   770→        
+   771→        return { allowed: false, remaining: 0, resetTime: resetTime * 1000 }
+   772→      }
+   773→      
+   774→      // Add new entry
+   775→      await client.zadd(key, now, `${now}-${Math.random()}`)
+   776→      await client.expire(key, windowSeconds)
+   777→      
+   778→      return { 
+   779→        allowed: true, 
+   780→        remaining: limit - count - 1, 
+   781→        resetTime: now + windowSeconds 
+   782→      }
+   783→      
+   784→    } catch (error) {
+   785→      console.error('[Redis] RATE_LIMIT error:', error)
+   786→      // Fail open - allow request if Redis is down
+   787→      return { allowed: true, remaining: limit, resetTime: Date.now() + windowSeconds * 1000 }
+   788→    }
+   789→  }
+   790→
+   791→  /**
+   792→   * Publish/Subscribe for cache invalidation
+   793→   */
+   794→  async publish(channel: string, message: any): Promise<void> {
+   795→    try {
+   796→      const client = await this.getClient()
+   797→      await client.publish(channel, typeof message === 'string' ? message : JSON.stringify(message))
+   798→    } catch (error) {
+   799→      console.error('[Redis] PUBLISH error:', error)
+   800→    }
+   801→  }
+   802→
+   803→  async subscribe(channel: string, handler: (message: string) => void): Promise<void> {
+   804→    try {
+   805→      if (!this.subscriberClient) {
+   806→        this.subscriberClient = new Redis({
+   807→          ...this.config,
+   808→          connectionName: 'soc-platform-subscriber'
+   809→        })
+   810→      }
+   811→      
+   812→      this.subscriberClient.subscribe(channel)
+   813→      this.subscriberClient.on('message', (ch: string, msg: string) => {
+   814→        if (ch === channel) {
+   815→          handler(msg)
+   816→        }
+   817→      })
+   818→    } catch (error) {
+   819→      console.error('[Redis] SUBSCRIBE error:', error)
+   820→    }
+   821→  }
+   822→
+   823→  // ===========================================
+   824→  // Utility Methods
+   825→  // ===========================================
+   826→
+   827→  /**
+   828→   * Simple compression for large values
+   829→   */
+   830→  private async compress(value: string): Promise<string> {
+   831→    // For now, just return the value
+   832→    // In production, you could use zlib or brotli
+   833→    return value
+   834→  }
+   835→
+   836→  /**
+   837→   * Build cache key from components
+   838→   */
+   839→  static buildKey(prefix: string, parts: (string | number | undefined | null)[], separator: string = ':'): string {
+   840→    const validParts = parts.filter(p => p !== undefined && p !== null).map(String)
+   841→    return `${prefix}${separator}${validParts.join(separator)}`
+   842→  }
+   843→
+   844→  /**
+   845→   * Close all connections gracefully
+   846→   */
+   847→  async disconnect(): Promise<void> {
+   848→    try {
+   849→      if (this.client) {
+   850→        await this.client.quit()
+   851→        this.client = null
+   852→      }
+   853→      
+   854→      if (this.subscriberClient) {
+   855→        await this.subscriberClient.quit()
+   856→        this.subscriberClient = null
+   857→      }
+   858→      
+   859→      this.isConnected = false
+   860→      console.log('[Redis] Disconnected successfully')
+   861→    } catch (error) {
+   862→      console.error('[Redis] Disconnect error:', error)
+   863→    }
+   864→  }
+   865→
+   866→  /**
+   867→   * Get Prometheus-compatible metrics
+   868→   */
+   869→  async getPrometheusMetrics(): Promise<string> {
+   870→    const health = await this.healthCheck()
+   871→    const metrics = cacheMetrics.getMetrics()
+   872→    
+   873→    let output = ''
+   874→    
+   875→    // Connection status
+   876→    output += `# HELP redis_connected Redis connection status (1=connected)\n`
+   877→    output += `# TYPE redis_connected gauge\n`
+   878→    output += `redis_connected ${health.connected ? 1 : 0}\n\n`
+   879→    
+   880→    // Latency
+   881→    output += `# HELP redis_latency_ms Redis command latency in milliseconds\n`
+   882→    output += `# TYPE redis_latency_ms gauge\n`
+   883→    output += `redis_latency_ms ${health.latency ?? -1}\n\n`
+   884→    
+   885→    // Cache stats per key prefix
+   886→    output += `# HELP redis_cache_hits_total Total cache hits by key prefix\n`
+   887→    output += `# TYPE redis_cache_hits_total counter\n`
+   888→    
+   889→    output += `# HELP redis_cache_misses_total Total cache misses by key prefix\n`
+   890→    output += `# TYPE redis_cache_misses_total counter\n`
+   891→    
+   892→    output += `# HELP redis_cache_hit_rate Cache hit rate (0-1)\n`
+   893→    output += `# TYPE redis_cache_hit_rate gauge\n`
+   894→    
+   895→    for (const [key, data] of Object.entries(metrics)) {
+   896→      const safeKey = key.replace(/[^a-zA-Z0-9_]/g, '_').replace(/_+/g, '_')
+   897→      output += `redis_cache_hits_total{key="${safeKey}"} ${data.hits}\n`
+   898→      output += `redis_cache_misses_total{key="${safeKey}"} ${data.misses}\n`
+   899→      output += `redis_cache_hit_rate{key="${safeKey}"} ${data.hitRate.toFixed(4)}\n`
+   900→    }
+   901→    
+   902→    return output
+   903→  }
+   904→}
+   905→
+   906→// ===========================================
+   907→// Export Singleton Instance
+   908→// ===========================================
+   909→
+   910→let redisClientInstance: RedisClient | null = null
+   911→
+   912→export function getRedisClient(config?: Partial<RedisConfig>): RedisClient {
+   913→  if (!redisClientInstance) {
+   914→    redisClientInstance = new RedisClient(config)
+   915→  }
+   916→  return redisClientInstance
+   917→}
+   918→
+   919→/**
+   920→ * Convenience function for quick cache operations
+   921→ */
+   922→export async function cacheGet<T>(key: string, options?: CacheOptions): Promise<CacheResult<T>> {
+   923→  const client = getRedisClient()
+   924→  return client.get(key, options)
+   925→}
+   926→
+   927→export async function cacheSet<T>(key: string, value: T, options?: CacheOptions): Promise<boolean> {
+   928→  const client = getRedisClient()
+   929→  return client.set(key, value, options)
+   930→}
+   931→
+   932→export async function cacheGetOrSet<T>(
+   933→  key: string,
+   934→  fetcher: () => Promise<T>,
+   935→  options?: CacheOptions
+   936→): Promise<CacheResult<T>> {
+   937→  const client = getRedisClient()
+   938→  return client.getOrSet(key, fetcher, options)
+   939→}
+   940→
+   941→export async function cacheInvalidate(keys: string | string[], prefix?: string): Promise<number> {
+   942→  const client = getRedisClient()
+   943→  return client.delete(keys, prefix)
+   944→}
+   945→
+   946→// Export classes and utilities
+   947→export { RedisClient }
+   948→export default getRedisClient
+   949→

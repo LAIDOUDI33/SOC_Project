@@ -1,0 +1,309 @@
+# =============================================================================
+# Djezzy National SOC Platform - Phase 5: SIEM Integration
+# Packetbeat Configuration - Network Traffic Analysis
+# =============================================================================
+# Deep packet inspection for:
+- Protocol analysis (HTTP, DNS, TLS, ICMP, etc.)
+- Network flow analysis
+- Performance monitoring
+- Security anomaly detection
+- Telecom protocol visibility (SS7, GTP, SIP, Diameter)
+# =============================================================================
+
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: packetbeat-config
+  namespace: siem
+  labels:
+    app.kubernetes.io/name: packetbeat
+data:
+  packetbeat.yml: |
+    # Packetbeat Configuration for Djezzy SOC Platform
+    
+    # ========================================
+    # Main Settings
+    # ========================================
+    packetbeat.interfaces.device: any
+    packetbeat.flows:
+      timeout: 30s
+      period: 10s
+      report_timeout: 5m
+      
+    # ========================================
+    # Processors
+    # ========================================
+    processors:
+      - add_host_metadata: ~
+      - add_cloud_metadata: ~
+      - add_docker_metadata: ~
+      - add_kubernetes_metadata:
+          host: ${NODE_NAME}
+      - add_geoip:
+          source_ip_field: source.ip
+          target_field: source.geo
+          database_path: /usr/share/packetbeat/data/GeoLite2-City.mmdb
+      - add_geoip:
+          source_ip_field: destination.ip
+          target_field: destination.geo
+          database_path: /usr/share/packetbeat/data/GeoLite2-City.mmdb
+      - add_fields:
+          target: ''
+          fields:
+            observer.name: djezzy-soc-packetbeat
+            ecs.version: 8.11.0
+
+    # ========================================
+    # Output Configuration
+    # ========================================
+    output.logstash:
+      hosts: ['logstash.siem:5044']
+      loadbalance: true
+      bulk_max_size: 1024
+      worker: 1
+      compression_level: 3
+      
+      ssl.enabled: true
+      ssl.certificate_authorities: ["/etc/packetbeat/certs/ca.crt"]
+      ssl.certificate: "/etc/packetbeat/certs/client.crt"
+      ssl.key: "/etc/packetbeat/client.key"
+      ssl.verification_mode: full
+
+    # ========================================
+    # Monitoring
+    # ========================================
+    monitoring.enabled: true
+    monitoring.elasticsearch:
+      hosts: ["https://elasticsearch-client:9200"]
+      username: "${ELASTICSEARCH_USER}"
+      password: "${ELASTICSEARCH_PASSWORD}"
+      ssl.enabled: true
+      ssl.certificate_authorities: ["/etc/packetbeat/certs/ca.crt"]
+      
+    logging.level: info
+    logging.to_files: true
+    logging.files:
+      path: /var/log/packetbeat
+      name: packetbeat
+      keepfiles: 7
+      
+    http.enabled: true
+    http.port: 5068
+
+    # ========================================
+    # Protocol Analyzers
+    # ========================================
+    packetbeat.protocols:
+    
+    # HTTP Traffic Analysis
+    - type: http
+      enabled: true
+      ports: [80, 8080, 8000, 5000, 8002]
+      send_headers: true
+      send_all_headers: true
+      split_cookie: true
+      include_body_for: ["text/html", "application/json", "application/xml"]
+      real_ip_header: X-Forwarded-For
+      redirect: first_response
+      
+    # DNS Analysis (critical for threat detection)
+    - type: dns
+      enabled: true
+      ports: [53]
+      include_authorities: true
+      include_additionals: true
+      send_authority: true
+      send_additionals: true
+      cache_ttl: 300
+      record_type: A, AAAA, CNAME, MX, NS, TXT, SOA, SRV, PTR, CAA, DS, DNSKEY, NSEC, RRSIG, NSEC3PARAM, NSEC3, SPF, SVCB, HTTPS
+      
+    # TLS/SSL Handshake Analysis
+    - type: tls
+      enabled: true
+      ports: [443, 8443, 9200, 9300]
+      send_certs: true
+      send_certificate_chain: true
+      include_master_secret: false
+      with_ja3: true  # JA3 fingerprinting for client identification
+      
+    # ICMP Analysis
+    - type: icmp
+      enabled: true
+      include_content: true
+      enable_network_events: true
+      
+    # MySQL Protocol Analysis
+    - type: mysql
+      enabled: true
+      ports: [3306]
+      
+    # PostgreSQL Protocol Analysis
+    - type: pgsql
+      enabled: true
+      ports: [5432]
+      
+    # Redis Protocol Analysis
+    - type: redis
+      enabled: true
+      ports: [6379]
+      
+    # MongoDB Protocol Analysis
+    - type: mongodb
+      enabled: true
+      ports: [27017]
+      
+    # Kafka Protocol Analysis
+    - type: kafka
+      enabled: true
+      ports: [9092, 9093, 9094]
+      
+    # AMQP Protocol Analysis
+    - type: amqp
+      enabled: true
+      ports: [5672, 5671]
+      
+    # Cassandra Protocol Analysis
+    - type: cassandra
+      enabled: true
+      ports: [9042]
+
+---
+# Packetbeat DaemonSet (requires host networking)
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: packetbeat
+  namespace: siem
+  labels:
+    app.kubernetes.io/name: packetbeat
+    app.kubernetes.io/component: network-analyzer
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: packetbeat
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: packetbeat
+        app.kubernetes.io/component: network-analyzer
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "5068"
+        prometheus.io/path: "/metrics"
+    spec:
+      serviceAccountName: packetbeat
+      hostNetwork: true  # Required for packet capture
+      dnsPolicy: ClusterFirstWithHostNet
+      terminationGracePeriodSeconds: 30
+      containers:
+        - name: packetbeat
+          image: docker.elastic.co/beats/packetbeat:8.12.0
+          args: [
+            "-c", "/etc/packetbeat/packetbeat.yml",
+            "-e",
+            "-strict.perms=false"
+          ]
+          env:
+            - name: NODE_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+            - name: ELASTICSEARCH_USER
+              valueFrom:
+                secretKeyRef:
+                  name: elasticsearch-credentials
+                  key: username
+            - name: ELASTICSEARCH_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: elasticsearch-credentials
+                  key: password
+          securityContext:
+            runAsUser: 0
+            privileged: true
+            capabilities:
+              add:
+                - NET_ADMIN
+                - NET_RAW
+          resources:
+            requests:
+              cpu: "200m"
+              memory: "500Mi"
+            limits:
+              cpu: "1000m"
+              memory: "1Gi"
+          volumeMounts:
+            - name: config
+              mountPath: /etc/packetbeat/packetbeat.yml
+              subPath: packetbeat.yml
+              readOnly: true
+            - name: certs
+              mountPath: /etc/packetbeat/certs
+              readOnly: true
+            - name: data
+              mountPath: /usr/share/packetbeat/data
+          livenessProbe:
+            exec:
+              command:
+                - curl
+                - -f
+                - http://localhost:5068/health
+            initialDelaySeconds: 30
+            periodSeconds: 30
+            failureThreshold: 5
+          readinessProbe:
+            exec:
+              command:
+                - curl
+                - -f
+                - http://localhost:5068/health
+            initialDelaySeconds: 15
+            periodSeconds: 15
+            failureThreshold: 3
+      volumes:
+        - name: config
+          configMap:
+            name: packetbeat-config
+        - name: certs
+          secret:
+            secretName: elasticsearch-tls-certs
+            defaultMode: 0400
+        - name: data
+          hostPath:
+            path: /var/lib/packetbeat-data
+            type: DirectoryOrCreate
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: packetbeat
+  namespace: siem
+  labels:
+    app.kubernetes.io/name: packetbeat
+---
+# RBAC for Packetbeat
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: packetbeat-cluster-role
+  labels:
+    app.kubernetes.io/name: packetbeat
+rules:
+  - apiGroups: [""]
+    resources:
+      - nodes
+      - namespaces
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: packetbeat-cluster-role-binding
+subjects:
+  - kind: ServiceAccount
+    name: packetbeat
+    namespace: siem
+roleRef:
+  kind: ClusterRole
+  name: packetbeat-cluster-role
+  apiGroup: rbac.authorization.k8s.io

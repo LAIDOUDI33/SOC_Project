@@ -1,0 +1,123 @@
+<!--
+  Djezzy SOC - Wazuh SS7 Alert Decoder
+  REMEDIATION MED-005: This file was missing, causing SS7 alerts from Kafka
+  to not be parsed by Wazuh. It defines the ss7_alert decoder with field
+  extraction for rule matching.
+  
+  Place in: /var/ossec/etc/decoders/local_decoder.xml
+         or /opt/wazuh/etc/ossec/rules/decoders/ss7_decoders.xml
+-->
+
+<!-- SS7 Security Alert Decoder -->
+<decoder name="ss7_alert">
+  <parent>json</parent>
+  
+  <!-- Match JSON format messages from Kafka/Analyzer -->
+  <prematch>^{"rule_name":"ss7_</prematch>
+  
+  <type>ss7</type>
+  
+  <!-- Extract key fields for rule matching -->
+  <regex type="pcre2">^{"rule_name":"(\S+)"</regex>
+  <order>rule_name</order>
+  
+  <regex type="pcre2">"severity":"(\S+)"</regex>
+  <order>severity</order>
+  
+  <regex type="pcre2">"title":"([^"]+)"</regex>
+  <order>alert_title</order>
+  
+  <regex type="pcre2">"imsi":"(\d{15})?"</regex>
+  <order>imsi</order>
+  
+  <regex type="pcre2">"msisdn":"(\S+)?"</regex>
+  <order>msisdn</order>
+  
+  <regex type="pcre2">"source_ip":"(\S+)"</regex>
+  <order>srcip</order>
+  
+  <regex type="pcre2">"protocol":"(\S+)"</regex>
+  <order>protocol</order>
+  
+  <regex type="pcre2">"message_type":"(\S+)"</regex>
+  <order>message_type</order>
+  
+  <regex type="pcre2">"risk_score":([\d.]+)</regex>
+  <order>risk_score</order>
+  
+  <regex type="pcre2">"calling_party_gt":\{[^}]*"address":"(\S+)"</regex>
+  <order>calling_party</order>
+  
+  <regex type="pcre2">"called_party_gt":\{[^}]*"address":"(\S+)"</regex>
+  <order>called_party</order>
+  
+  <!-- Additional context fields -->
+  <regex type="pcre2">"timestamp":"([^"]+)"</regex>
+  <order>event_timestamp</order>
+  
+  <regex type="pcre2">"indicators":\[([^\]]+)\]</regex>
+  <order>indicators</order>
+</decoder>
+
+<!-- 
+  Alternative: Decoder for normalized SS7 events (non-alert)
+  Use this if you want to parse raw SS7 events before analysis
+-->
+<decoder name="ss7_event">
+  <parent>json</parent>
+  
+  <prematch>^{"protocol":"(ss7|m3ua|sctp|diameter)"</prematch>
+  
+  <type>ss7_event</type>
+  
+  <regex type="pcre2">"protocol":"(ss7|m3ua|sctp|diameter)"</regex>
+  <order>protocol</order>
+  
+  <regex type="pcre2">"message_type":"(\S+)"</regex>
+  <order>message_type</order>
+  
+  <regex type="pcre2">"imsi":"(\d{15})?"</regex>
+  <order>imsi</order>
+  
+  <regex type="pcre2">"msisdn":"(\S+)?"</regex>
+  <order>msisdn</order>
+  
+  <regex type="pcre2">"source_ip":"(\S+)"</regex>
+  <order>srcip</order>
+  
+  <regex type="pcre2">"destination_ip":"(\S+)"</regex>
+  <order>dstip</order>
+</decoder>
+
+<!--
+  Decoder for Diameter-specific events with full AVP extraction
+-->
+<decoder name="diameter_event">
+  <parent>ss7_event</parent>
+  
+  <prematch>^{"protocol":"diameter"</prematch>
+  
+  <type>diameter</type>
+  
+  <!-- Extract Diameter-specific fields -->
+  <regex type="pcre2">"application_id":(\d+)</regex>
+  <order>diameter_app_id</order>
+  
+  <regex type="pcre2">"application_name":"(\S+)"</regex>
+  <order>diameter_app_name</order>
+  
+  <regex type="pcre2">"command_code":(\d+)</regex>
+  <order>diameter_command_code</order>
+  
+  <regex type="pcre2">"result_code":(\d+)</regex>
+  <order>diameter_result_code</order>
+  
+  <regex type="pcre2">"session_id":"(\S+)"</regex>
+  <order>diameter_session_id</order>
+  
+  <regex type="pcre2">"origin_host":"(\S+)"</regex>
+  <order>diameter_origin_host</order>
+  
+  <regex type="pcre2">"destination_host":"(\S+)"</regex>
+  <order>diameter_destination_host</order>
+</decoder>

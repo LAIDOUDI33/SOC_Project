@@ -1,0 +1,265 @@
+# ============================================================
+# National SOC Platform - Certificate Policies
+# Rotation, Monitoring & Compliance Rules
+# Phase 3: TLS Automation
+# ============================================================
+#
+# Contents:
+# 1. Certificate Renewal Policies
+# 2. Validity Period Constraints
+# 3. Monitoring Alerts for Certificate Expiry
+# 4. Compliance Checks (ARTP/ANSSI)
+#
+# ============================================================
+
+---
+# ============================================================
+# CertificatePolicy - Production Certificates
+# Enforces strict security requirements
+# Requires cert-manager with policy controller
+# ============================================================
+apiVersion: cert-manager.io/v1alpha1
+kind: CertificatePolicy
+metadata:
+  name: soc-production-certificate-policy
+  namespace: cert-manager
+  labels:
+    app.kubernetes.io/name: cert-manager
+    app.kubernetes.io/component: policy
+    app.kubernetes.io/part-of: national-soc
+  annotations:
+    description: "Enforce strict certificate policies for production SOC"
+spec:
+  # Selector - Which certificates this applies to
+  selector:
+    matchLabels:
+      environment: production
+  
+  # Maximum certificate duration (90 days for public certs)
+  maxDuration:
+    value: 2160h  # 90 days
+  
+  # Minimum duration before renewal
+  renewBeforePercentage: 15  # Renew when 15% of validity remains
+  
+  # Private key requirements
+  privateKey:
+    # Minimum key size
+    minSize: 2048
+    
+    # Allowed algorithms (in order of preference)
+    allowedAlgorithms:
+      - ECDSA
+      - RSA
+    
+    # Rotation policy
+    rotationPolicy: Always
+  
+  # Required usages
+  usages:
+    - server auth
+    - client auth  # For mTLS scenarios
+  
+  # Key usage constraints
+  keyUsage:
+    digitalSignature: true
+    keyEncipherment: true
+    dataEncipherment: false
+    keyCertSign: false
+    crlSign: false
+    encipherOnly: false
+    decipherOnly: false
+  
+  # DNS name constraints (prevent certificate misuse)
+  dnsNames:
+    allowedPatterns:
+      - "^.*\\.djezzy\\.dz$"
+      - "^.*\\.soc-platform\\.svc\\.cluster\\.local$"
+    forbiddenPatterns:
+      - ".*\\.evil\\.com$"
+  
+  # IP address constraints
+  ipAddresses:
+    allowedRanges:
+      - "10.0.0.0/8"     # Private RFC1918
+      - "172.16.0.0/12"   # Private RFC1918
+      - "192.168.0.0/16"  # Private RFC1918
+
+---
+# ============================================================
+# CertificatePolicy - Internal Certificates
+# More relaxed for internal CA-issued certificates
+# ============================================================
+apiVersion: cert-manager.io/v1alpha1
+kind: CertificatePolicy
+metadata:
+  name: soc-internal-certificate-policy
+  namespace: cert-manager
+  labels:
+    app.kubernetes.io/name: cert-manager
+    app.kubernetes.io/component: policy
+    app.kubernetes.io/part-of: national-soc
+    environment: internal
+spec:
+  selector:
+    matchLabels:
+      environment: internal
+  
+  # Longer duration for internal certs (1 year)
+  maxDuration:
+    value: 8760h  # 365 days
+  
+  renewBeforePercentage: 10
+  
+  privateKey:
+    minSize: 256  # ECDSA P-256 minimum
+    allowedAlgorithms:
+      - ECDSA
+      - RSA
+    rotationPolicy: Always
+  
+  usages:
+    - server auth
+    - client auth
+
+---
+# ============================================================
+# PrometheusRule - Certificate Expiry Alerts
+# Integration with Prometheus AlertManager
+# ============================================================
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: soc-certificate-alerts
+  namespace: monitoring
+  labels:
+    app.kubernetes.io/name: soc-platform
+    app.kubernetes.io/component: alerting
+    app.kubernetes.io/part-of: national-soc
+    team: soc-ops
+    severity: critical
+  annotations:
+    description: "Alert rules for certificate expiry monitoring"
+spec:
+  groups:
+    - name: certificate-expiry
+      rules:
+        # CRITICAL: Certificate expires in less than 7 days
+        - alert: CertificateExpiringSoonCritical
+          expr: |
+            cert_manager_certificate_expiration_timestamp_seconds{namespace="soc-platform"} - time() < 604800
+          for: 1h
+          labels:
+            severity: critical
+            team: soc-ops
+            runbook: "https://wiki.djezzy.dz/soc/runbooks/certificate-renewal"
+          annotations:
+            summary: "SOC Certificate '{{ $labels.name }}' expires in less than 7 days"
+            description: >
+              Certificate {{ $labels.name }} in namespace {{ $labels.namespace }}
+              will expire in {{ $value | humanizeDuration }}.
+              Immediate action required to prevent service disruption.
+              
+              Run: kubectl get certificate {{ $labels.name }} -n {{ $labels.namespace }}
+        
+        # WARNING: Certificate expires in less than 30 days
+        - alert: CertificateExpiringSoonWarning
+          expr: |
+            cert_manager_certificate_expiration_timestamp_seconds{namespace="soc-platform"} - time() < 2592000
+          for: 2h
+          labels:
+            severity: warning
+            team: soc-ops
+          annotations:
+            summary: "Certificate '{{ $labels.name }}' expires in less than 30 days"
+            description: >
+              Certificate {{ $labels.name }} will expire soon.
+              Plan for renewal before expiration.
+        
+        # ERROR: Certificate renewal failed
+        - alert: CertificateRenewalFailed
+          expr: |
+            cert_manager_certificate_ready_status{namespace="soc-platform"} == 0
+          for: 30m
+          labels:
+            severity: error
+            team: soc-ops
+          annotations:
+            summary: "Certificate '{{ $labels.name }}' renewal failed"
+            description: >
+              The last renewal attempt for certificate {{ $labels.name }} failed.
+              Check cert-manager logs for details.
+              
+              Command: kubectl logs -n cert-manager -l app=cert-manager --tail=100
+        
+        # INFO: Certificate successfully renewed
+        - alert: CertificateRenewedSuccessfully
+          expr: |
+            increase(cert_manager_certificate_expiration_timestamp_seconds{namespace="soc-platform"}[1h]) > 0
+          for: 5m
+          labels:
+            severity: info
+            team: soc-ops
+          annotations:
+            summary: "Certificate '{{ $labels.name }}' was renewed successfully"
+            description: >
+              Certificate {{ $labels.name }} has been renewed.
+              New expiry: {{ $value | humanizeTimestamp }}
+
+    - name: tls-compliance
+      rules:
+        # Check for weak cipher suites
+        - alert: TLSCipherSuiteDeprecated
+          expr: |
+            nginx_ingress_controller_ssl_cipher_suite{cipher!~"ECDHE|AES|GCM|SHA256|SHA384"} > 0
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Deprecated TLS cipher suite detected: {{ $labels.cipher }}"
+            description: >
+              Ingress is using deprecated cipher suite {{ $labels.cipher }}.
+              Update nginx configuration to use only strong ciphers.
+        
+        # Check for TLSv1.0 or TLSv1.1 (insecure)
+        - alert: TLSVersionInsecure
+          expr: |
+            nginx_ingress_controller_ssl_protocol{protocol=~"TLSv1[01]"} > 0
+          for: 5m
+          labels:
+            severity: critical
+          annotations:
+            summary: "Insecure TLS version detected: {{ $labels.protocol }}"
+            description: >
+              Connection using insecure protocol {{ $labels.protocol }} detected.
+              Disable TLSv1.0 and TLSv1.1 immediately.
+
+---
+# ============================================================
+# ValidatingWebhookConfiguration
+# Ensures all certificates meet security requirements
+# ============================================================
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingWebhookConfiguration
+metadata:
+  name: cert-manager-webhook
+  labels:
+    app: webhook
+    app.kubernetes.io/name: cert-manager
+    app.kubernetes.io/component: webhook
+webhooks:
+  - name: validate.cert-manager.io
+    rules:
+      - apiGroups: ["cert-manager.io"]
+        apiVersions: ["v1", "v1alpha1"]
+        operations: ["CREATE", "UPDATE"]
+        resources: ["certificates", "issuers", "clusterissuers"]
+    failurePolicy: Fail
+    sideEffects: None
+    admissionReviewVersions: ["v1"]
+    timeoutSeconds: 5
+    clientConfig:
+      service:
+        name: cert-manager-webhook
+        namespace: cert-manager
+        path: /validate

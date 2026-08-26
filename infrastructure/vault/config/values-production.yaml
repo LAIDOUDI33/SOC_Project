@@ -1,0 +1,226 @@
+# ============================================================
+# National SOC Platform - Vault Helm Values (Production)
+# Djezzy Telecom - Enterprise Deployment
+# ============================================================
+
+global:
+  enabled: true
+  imagePullSecrets:
+    - name: registry-credentials
+  environmentVars:
+    VAULT_ADDR: "https://vault.djezzy.dz"
+    VAULT_CLUSTER_ADDR: "https://${HOSTNAME}.vault-internal:8201"
+
+# Server configuration
+server:
+  # Resource limits for production
+  resources:
+    requests:
+      memory: "4Gi"
+      cpu: "2000m"
+    limits:
+      memory: "8Gi"
+      cpu: "4000m"
+  
+  # High availability
+  ha:
+    enabled: true
+    replicas: 3
+    
+    # Raft storage integration
+    raft:
+      enabled: true
+      setNodeId: true
+      
+      config: |
+        storage "raft" {
+          path = "/vault/data"
+          node_id = "${POD_NAME}"
+          
+          retry_join {
+            leader_api_addr = "https://vault-0.vault-internal:8201"
+            leader_ca_cert_file = "/vault/tls/ca.crt"
+            leader_client_cert_file = "/vault/tls/client.crt"
+            leader_client_key_file = "/vault/tls/client.key"
+          }
+          
+          performance_multiplier = 2
+        }
+        
+        listener "tcp" {
+          address       = "[::]:8200"
+          cluster_address = "[::]:8201"
+          tls_cert_file = "/vault/tls/server.crt"
+          tls_key_file  = "/vault/tls/server.key"
+          tls_client_ca_file = "/vault/tls/ca.crt"
+          
+          tls_min_version = "tls12"
+        }
+        
+        disable_mlock = true
+        ui = true
+        
+        seal "awskms" {
+          region     = "eu-west-3"
+          kms_key_id = "alias/djezzy-soc-vault-unseal"
+        }
+        
+        service_registration {
+          default = {}
+        }
+
+  # Ingress configuration
+  ingress:
+    enabled: true
+    className: "nginx"
+    annotations:
+      cert-manager.io/cluster-issuer: "letsencrypt-prod"
+      nginx.ingress.kubernetes.io/ssl-passthrough: "true"
+      nginx.ingress.kubernetes.io/backend-protocol: "HTTPS"
+    hosts:
+      - host: vault.djezzy.dz
+        paths:
+          - path: /
+            pathType: Prefix
+    tls:
+      - secretName: vault-tls
+        hosts:
+          - vault.djezzy.dz
+
+  # Data persistence
+  dataStorage:
+    enabled: true
+    size: 50Gi
+    storageClass: "premium-ssd"  # Use fast SSD
+  
+  # Audit log storage
+  auditStorage:
+    enabled: true
+    size: 20Gi
+    mountPath: "/vault/audit"
+
+  # Extra volumes for TLS certificates
+  extraVolumes:
+    - name: vault-tls
+      secret:
+        secretName: vault-tls-certificates
+  extraVolumeMounts:
+    - name: vault-tls
+      mountPath: /vault/tls
+      readOnly: true
+
+  # Affinity rules (spread across availability zones)
+  affinity:
+    podAntiAffinity:
+      requiredDuringSchedulingIgnoredDuringExecution:
+        - labelSelector:
+            matchLabels:
+              app.kubernetes.io/name: vault
+          topologyKey: topology.kubernetes.io/zone
+
+  # Tolerations for dedicated nodes
+  tolerations:
+    - key: "dedicated"
+      operator: "Equal"
+      value: "vault"
+      effect: "NoSchedule"
+
+  # Node selector for dedicated infrastructure nodes
+  nodeSelector:
+    dedicated: "vault"
+
+  # Liveness and readiness probes
+  probes:
+    livenessProbe:
+      enabled: true
+      path: "/v1/sys/health?standbyok=true&sealedcode=204&uninitcode=204"
+      failureThreshold: 3
+      initialDelaySeconds: 10
+      periodSeconds: 10
+      successThreshold: 1
+      timeoutSeconds: 3
+    readinessProbe:
+      enabled: true
+      path: "/v1/sys/health?standbyok=true&sealedcode=204&uninitcode=204"
+      failureThreshold: 3
+      initialDelaySeconds: 5
+      periodSeconds: 5
+      successThreshold: 1
+      timeoutSeconds: 3
+
+  # Security context
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 100
+    runAsGroup: 1000
+    fsGroup: 1000
+
+# UI Configuration
+ui:
+  enabled: true
+  serviceType: ClusterIP
+  activeVaultPodOnly: false
+
+# Custom startup scripts
+extraInitContainers: |
+  - name: init-permissions
+    image: busybox:latest
+    command: ['sh', '-c', 'chown -R 100:1000 /vault/data /vault/audit']
+    volumeMounts:
+      - name: data
+        mountPath: /vault/data
+      - name: audit
+        mountPath: /vault/audit
+
+# Service account configuration
+serviceAccount:
+  create: true
+  name: vault-auth-sa
+  annotations:
+    eks.amazonaws.com/role-arn: arn:aws:iam::<ACCOUNT>:role/vault-role
+
+# Network policies
+networkPolicy:
+  enabled: true
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              name: kube-system
+      ports:
+        - port: 443
+          protocol: TCP
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              name: soc-platform
+      ports:
+        - port: 5432
+          protocol: TCP
+        - port: 6379
+          protocol: TCP
+
+# Monitoring
+monitoring:
+  prometheus:
+    enabled: true
+    metricsPath: /v1/sys/metrics
+    params:
+      format: ['prometheus']
+    
+  grafanaDashboard:
+    enabled: true
+    label: grafana_dashboard
+
+# Annotations for all pods
+annotations:
+  prometheus.io/scrape: "true"
+  prometheus.io/port: "8200"
+  prometheus.io/path: "/v1/sys/metrics"
+
+# Labels
+labels:
+  project: djezzy-soc-platform
+  managed-by: helm
+  environment: production
+  security-classification: confidential

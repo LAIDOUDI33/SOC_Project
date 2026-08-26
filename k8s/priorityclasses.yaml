@@ -1,0 +1,243 @@
+# ============================================================
+# National SOC Platform - Kubernetes Priority Classes
+# Djezzy Production Environment
+# ============================================================
+# Priority classes define the scheduling importance of pods.
+# Higher priority pods preempt lower priority pods when 
+# resources are constrained. This ensures critical security
+# and core services remain available during resource pressure.
+#
+# Priority Class Hierarchy:
+#   1000000000 - Critical (security alerts, auth)
+#    100000000 - High (core SOC functions)
+#     10000000 - Medium (analytics, reports)
+#      1000000 - Low (batch jobs, archiving)
+#           0 - Best-effort (development/testing)
+# ============================================================
+
+---
+# ============================================================
+# PRIORITY CLASS: CRITICAL
+# ============================================================
+# For mission-critical workloads that MUST always run.
+# These pods will never be evicted by other workloads.
+# Use for: Security alerting, authentication services,
+#          monitoring agents, logging collectors.
+
+apiVersion: scheduling.k8s.io/v1
+kind: PriorityClass
+metadata:
+  name: soc-critical
+  labels:
+    app.kubernetes.io/name: soc-platform
+    app.kubernetes.io/part-of: national-soc
+    priority-tier: critical
+  annotations:
+    description: "Critical priority for security-critical SOC workloads"
+    use-cases: "Security alerting, authentication, monitoring, logging"
+value: 1000000000
+globalDefault: false
+preemptionPolicy: PreemptLowerPriority
+description: >
+  Critical priority class for mission-critical SOC platform workloads.
+  Pods with this priority will preempt all lower-priority workloads
+  during resource contention. Use only for essential services that
+  must remain available at all times.
+
+---
+# ============================================================
+# PRIORITY CLASS: HIGH
+# ============================================================
+# For core production workloads that are business-critical.
+# These pods have high scheduling priority but can be preempted
+# by critical workloads if absolutely necessary.
+# Use for: Main application, API servers, database clients,
+#          real-time event processing, WebSocket handlers.
+
+apiVersion: scheduling.k8s.io/v1
+kind: PriorityClass
+metadata:
+  name: soc-high
+  labels:
+    app.kubernetes.io/name: soc-platform
+    app.kubernetes.io/part-of: national-soc
+    priority-tier: high
+  annotations:
+    description: "High priority for core SOC platform functions"
+    use-cases: "Main application, APIs, real-time processing"
+value: 100000000
+globalDefault: false
+preemptionPolicy: PreemptLowerPriority
+description: >
+  High priority class for core SOC platform workloads.
+  Main application components should use this priority to ensure
+  they receive resources ahead of batch and background tasks.
+
+---
+# ============================================================
+# PRIORITY CLASS: MEDIUM
+# ============================================================
+# For important but non-time-critical workloads.
+# These workloads contribute to operations but can tolerate
+# brief interruptions during resource pressure.
+# Use for: Analytics engines, report generators, data aggregation,
+#          backup coordination, scheduled jobs.
+
+apiVersion: scheduling.k8s.io/v1
+kind: PriorityClass
+metadata:
+  name: soc-medium
+  labels:
+    app.kubernetes.io/name: soc-platform
+    app.kubernetes.io/part-of: national-soc
+    priority-tier: medium
+  annotations:
+    description: "Medium priority for analytics and reporting"
+    use-cases: "Analytics, reports, data processing, backups"
+value: 10000000
+globalDefault: false
+preemptionPolicy: PreemptLowerPriority
+description: >
+  Medium priority class for analytics and reporting workloads.
+  These workloads are important for SOC operations but can be
+  temporarily paused during resource constraints without impacting
+  real-time security monitoring capabilities.
+
+---
+# ============================================================
+# PRIORITY CLASS: LOW
+# ============================================================
+# For background and batch processing workloads.
+# These workloads can tolerate significant delays or pauses.
+# They will be the first to be evicted when resources are needed.
+# Use for: Log archival, data cleanup, batch ETL jobs,
+#          historical data processing, development builds.
+
+apiVersion: scheduling.k8s.io/v1
+kind: PriorityClass
+metadata:
+  name: soc-low
+  labels:
+    app.kubernetes.io/name: soc-platform
+    app.kubernetes.io/part-of: national-soc
+    priority-tier: low
+  annotations:
+    description: "Low priority for batch jobs and archiving"
+    use-cases: "Archival, cleanup, batch processing, dev/test"
+value: 1000000
+globalDefault: false
+preemptionPolicy: PreemptLowerPriority
+description: >
+  Low priority class for batch and background workloads.
+  These workloads will be preempted by higher priority pods
+  during resource constraints. Suitable for non-urgent tasks
+  that can be resumed later without impact.
+
+---
+# ============================================================
+# PRIORITY CLASS: BEST-EFFORT (DEFAULT)
+# ============================================================
+# The default priority for any pod without explicit assignment.
+# These workloads get whatever resources are available after
+# higher-priority pods are scheduled.
+# Use for: Development environments, testing, experimentation,
+#          non-production demos, CI/CD test runs.
+
+apiVersion: scheduling.k8s.io/v1
+kind: PriorityClass
+metadata:
+  name: soc-best-effort
+  labels:
+    app.kubernetes.io/name: soc-platform
+    app.kubernetes.io/part-of: national-soc
+    priority-tier: best-effort
+  annotations:
+    description: "Best-effort priority for development and testing"
+    use-cases: "Development, testing, experiments, CI/CD"
+value: 0
+globalDefault: true
+preemptionPolicy: PreemptLowerPriority
+description: >
+  Best-effort priority class (default). Workloads using this
+  priority will only run when cluster resources are available
+  after satisfying all higher-priority workloads. Ideal for
+  development, testing, and experimental workloads.
+
+---
+# ============================================================
+# USAGE EXAMPLES
+# ============================================================
+# To assign a priority class to a pod/deployment:
+
+# apiVersion: apps/v1
+# kind: Deployment
+# metadata:
+#   name: soc-platform
+# spec:
+#   template:
+#     spec:
+#       priorityClassName: soc-high  # <-- Add this line
+
+# ============================================================
+# RECOMMENDED ASSIGNMENTS
+# ============================================================
+#
+# WORKLOAD                          | PRIORITY CLASS
+# -----------------------------------|------------------
+# Prometheus/Alertmanager            | soc-critical
+# Grafana                           | soc-high
+# ELK Stack (logging)               | soc-critical
+# Security alerting (SOAR)          | soc-critical
+# Authentication service (LDAP/SAML) | soc-critical
+# Certificate manager (cert-manager) | soc-critical
+# -----------------------------------|------------------
+# SOC Platform (main application)    | soc-high
+# API Gateway / Ingress              | soc-high
+# Real-time event stream             | soc-high
+# WebSocket handler                 | soc-high
+# SIEM correlation engine           | soc-high
+# -----------------------------------|------------------
+# Analytics engine                  | soc-medium
+# Report generator                  | soc-medium
+# Data aggregation jobs             | soc-medium
+# Backup coordinator                | soc-medium
+# Scheduled maintenance tasks        | soc-medium
+# -----------------------------------|------------------
+# Log archival                       | soc-low
+# Historical data cleanup           | soc-low
+# Batch ETL jobs                    | soc-low
+# Data export jobs                  | soc-low
+# -----------------------------------|------------------
+# Development environment           | soc-best-effort
+# Staging environment               | soc-best-effort
+# Load testing                      | soc-best-effort
+# Experimentation                   | soc-best-effort
+# CI/CD test runners                | soc-best-effort
+
+# ============================================================
+# DOCUMENTATION
+# ============================================================
+#
+# Preemption Behavior:
+# When a node is under resource pressure, Kubernetes may evict
+# lower-priority pods to make room for higher-priority pods.
+#
+# Preemption Order (highest to lowest):
+# 1. soc-critical (1,000,000,000)
+# 2. soc-high     (100,000,000)
+# 3. soc-medium   (10,000,000)
+# 4. soc-low      (1,000,000)
+# 5. soc-best-effort (0)
+#
+# Best Practices:
+# - Always specify priorityClassName in production deployments
+# - Reserve capacity for critical workloads using resource quotas
+# - Monitor preemption events in Kubernetes events
+# - Test preemption behavior during load testing
+# - Document rationale for each workload's priority assignment
+#
+# References:
+# - K8s Priority Classes: https://kubernetes.io/docs/concepts/scheduling-eviction/pod-priority-preemption/
+# - Pod Priority: https://kubernetes.io/docs/concepts/scheduling-eviction/pod-priority-preemption/#pod-priority
+#
+# ============================================================

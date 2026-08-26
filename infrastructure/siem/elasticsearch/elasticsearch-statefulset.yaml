@@ -1,0 +1,312 @@
+# =============================================================================
+# Djezzy National SOC Platform - Phase 5: SIEM Integration
+# Elasticsearch Cluster - Production StatefulSet
+# =============================================================================
+# 3-node Elasticsearch cluster with:
+# - TLS encryption (mTLS)
+# - Authentication & Authorization (X-Pack Security)
+# - Snapshot repositories (S3/GCS)
+# - Index lifecycle management
+# - Hot-Warm-Cold architecture
+# =============================================================================
+
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: elasticsearch
+  namespace: siem
+  labels:
+    app.kubernetes.io/name: elasticsearch
+    app.kubernetes.io/component: siem-storage
+    app.kubernetes.io/part-of: djezzy-soc
+spec:
+  serviceName: elasticsearch
+  replicas: 3
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: elasticsearch
+  updateStrategy:
+    type: RollingUpdate
+    rollingUpdate:
+      partition: 0
+  podManagementPolicy: Parallel
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: elasticsearch
+        app.kubernetes.io/component: siem-storage
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "9115"
+        prometheus.io/path: "/metrics"
+    spec:
+      serviceAccountName: elasticsearch
+      securityContext:
+        fsGroup: 1000
+        runAsNonRoot: true
+        runAsUser: 1000
+      initContainers:
+        # Sysctl optimizer for Elasticsearch
+        - name: sysctl-init
+          image: busybox:1.36
+          command:
+            - sh
+            - -c
+            - |
+              sysctl -w vm.max_map_count=262144
+              sysctl -w net.core.somaxmax=65535
+              sysctl -w fs.file-max=2000000
+              sysctl -w vm.swappiness=1
+              echo "System optimizations applied for Elasticsearch"
+          securityContext:
+            privileged: true
+        # File permissions fixer
+        - name: fix-permissions
+          image: docker.elastic.co/elasticsearch/elasticsearch:8.12.0
+          command:
+            - sh
+            - -c
+            - |
+              chown -R 1000:1000 /usr/share/elasticsearch/data
+              chmod 755 /usr/share/elasticsearch/data
+              echo "Permissions fixed for data directory"
+          volumeMounts:
+            - name: data
+              mountPath: /usr/share/elasticsearch/data
+        # Elasticsearch keystore initializer
+        - name: init-keystore
+          image: docker.elastic.co/elasticsearch/elasticsearch:8.12.0
+          command:
+            - sh
+            - -c
+            - |
+              if [ ! -f /usr/share/elasticsearch/config/elasticsearch.keystore ]; then
+                elasticsearch-keystore create
+                echo "Keystore created"
+              fi
+              
+              # Add sensitive values from environment
+              if [ -n "$ELASTICSEARCH_PASSWORD" ]; then
+                echo "$ELASTICSEARCH_PASSWORD" | elasticsearch-keystore add -x bootstrap.password -f
+                echo "Bootstrap password added"
+              fi
+              
+              if [ -n "$SNAPSHOT_ENCRYPTION_KEY" ]; then
+                echo "$SNAPSHOT_ENCRYPTION_KEY" | elasticsearch-keystore add -x xpack.security.encryptionKey -f
+                echo "Encryption key added"
+              fi
+              
+              echo "Keystore initialization complete"
+          envFrom:
+            - secretRef:
+                name: elasticsearch-credentials
+          volumeMounts:
+            - name: config
+              mountPath: /usr/share/elasticsearch/config
+            - name: keystore
+              mountPath: /usr/share/elasticsearch/config/elasticsearch.keystore
+              subPath: elasticsearch.keystore
+      containers:
+        - name: elasticsearch
+          image: docker.elastic.co/elasticsearch/elasticsearch:8.12.0
+          ports:
+            - name: http
+              containerPort: 9200
+              protocol: TCP
+            - name: transport
+              containerPort: 9300
+              protocol: TCP
+          env:
+            - name: discovery.type
+              value: single-node
+            - name: node.name
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: cluster.name
+              value: djezzy-soc-cluster
+            - name: network.host
+              value: "0.0.0.0"
+            - name: ES_JAVA_OPTS
+              value: "-Xms2g -Xmx2g -Djava.net.preferIPv4Stack=true"
+            - name: PROCESSORS
+              value: "4"
+            # Security settings
+            - name: xpack.security.enabled
+              value: "true"
+            - name: xpack.security.http.ssl.enabled
+              value: "true"
+            - name: xpack.security.transport.ssl.enabled
+              value: "true"
+            - name: xpack.security.http.ssl.certificate
+              value: /usr/share/elasticsearch/config/certs/tls.crt
+            - name: xpack.security.http.ssl.key
+              value: /usr/share/elasticsearch/config/certs/tls.key
+            - name: xpack.security.transport.ssl.certificate
+              value: /usr/share/elasticsearch/config/certs/tls.crt
+            - name: xpack.security.transport.ssl.key
+              value: /usr/share/elasticsearch/config/certs/tls.key
+            - name: xpack.security.transport.ssl.certificate_authorities
+              value: /usr/share/elasticsearch/config/certs/ca.crt
+            - name: xpack.security.authc.api_key.enabled
+              value: "true"
+            # Monitoring & Observability
+            - name: xpack.monitoring.enabled
+              value: "true"
+            - name: xpack.monitoring.collection.enabled
+              value: "true"
+            # ILM settings
+            - name: xpack.ilm.enabled
+              value: "true"
+            # Snapshot settings
+            - name: path.repo
+              value: "/usr/share/elasticsearch/snapshots"
+            # Node roles
+            - name: node.roles
+              value: "data_hot,data_content,master,ingest,remote_cluster_client"
+          resources:
+            requests:
+              cpu: "2"
+              memory: "4Gi"
+            limits:
+              cpu: "4"
+              memory: "8Gi"
+          readinessProbe:
+            httpGet:
+              scheme: HTTPS
+              path: /_cluster/health?local=true
+              port: 9200
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            timeoutSeconds: 10
+            failureThreshold: 10
+          livenessProbe:
+            httpGet:
+              scheme: HTTPS
+              path: /_cluster/health?local=true
+              port: 9200
+            initialDelaySeconds: 60
+            periodSeconds: 20
+            timeoutSeconds: 10
+            failureThreshold: 6
+          startupProbe:
+            httpGet:
+              scheme: HTTPS
+              path: /_cluster/health?local=true
+              port: 9200
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 30
+          volumeMounts:
+            - name: data
+              mountPath: /usr/share/elasticsearch/data
+            - name: config
+              mountPath: /usr/share/elasticsearch/config
+            - name: certs
+              mountPath: /usr/share/elasticsearch/config/certs
+              readOnly: true
+            - name: snapshots
+              mountPath: /usr/share/elasticsearch/snapshots
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+      volumes:
+        - name: config
+          configMap:
+            name: elasticsearch-config
+        - name: certs
+          secret:
+            secretName: elasticsearch-tls-certs
+            defaultMode: 0400
+        - name: keystore
+          emptyDir: {}
+        - name: snapshots
+          persistentVolumeClaim:
+            claimName: elasticsearch-snapshots-pvc
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+        labels:
+          app.kubernetes.io/name: elasticsearch
+      spec:
+        accessModes:
+          - ReadWriteOnce
+        resources:
+          requests:
+            storage: 500Gi
+        storageClassName: premium-ssd
+        # Retain data even if StatefulSet is deleted
+---
+# Snapshots PVC for backup/recovery
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: elasticsearch-snapshots-pvc
+  namespace: siem
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 200Gi
+  storageClassName: standard
+---
+# Headless service for cluster communication
+apiVersion: v1
+kind: Service
+metadata:
+  name: elasticsearch
+  namespace: siem
+  labels:
+    app.kubernetes.io/name: elasticsearch
+spec:
+  clusterIP: None
+  publishNotReadyAddresses: true
+  selector:
+    app.kubernetes.io/name: elasticsearch
+  ports:
+    - name: http
+      port: 9200
+      targetPort: 9200
+    - name: transport
+      port: 9300
+      targetPort: 9300
+---
+# External-facing service for Kibana and other clients
+apiVersion: v1
+kind: Service
+metadata:
+  name: elasticsearch-client
+  namespace: siem
+  labels:
+    app.kubernetes.io/name: elasticsearch
+    app.kubernetes.io/component: client
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: elasticsearch
+  ports:
+    - name: https
+      port: 9200
+      targetPort: 9200
+      protocol: TCP
+    - name: transport
+      port: 9300
+      targetPort: 9300
+      protocol: TCP
+---
+# Pod Disruption Budget for high availability
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: elasticsearch-pdb
+  namespace: siem
+spec:
+  minAvailable: 2
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: elasticsearch

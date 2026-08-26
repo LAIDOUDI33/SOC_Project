@@ -1,0 +1,204 @@
+# =============================================================================
+# REMEDIATION HIGH-007: Grafana Role-Based Access Control Configuration
+# =============================================================================
+# This configuration implements team-based access control for Grafana dashboards,
+# particularly for sensitive SS7/telecom data panels.
+#
+# Teams:
+#   - soc-admins: Full access to all dashboards, can manage users
+#   - soc-analysts: Access to operational dashboards, limited SS7 detail
+#   - ss7-operators: Full SS7 dashboard access including IMSI/MSISDN views
+#   - viewers: Read-only access to non-sensitive summary dashboards
+#
+# Sensitive Dashboard Tags:
+#   - ss7: Contains IMSI ranges, signaling details, fraud indicators
+#   - pii: Contains subscriber-identifiable information
+#   - network: Contains infrastructure topology details
+# =============================================================================
+
+apiVersion: 1
+
+# =============================================================================
+# ORGANIZATIONS
+# =============================================================================
+organizations:
+  - name: Djezzy SOC Platform
+    orgId: 1
+    # Default organization for all SOC operations
+
+# =============================================================================
+# TEAMS (Role-Based Groups)
+# =============================================================================
+teams:
+  - name: soc-admins
+    email: soc-admins@djezzy.dz
+    # Full administrative access
+    permissions:
+      - viewer
+      - editor
+      - admin
+    
+  - name: soc-analysts
+    email: soc-analysts@djezzy.dz
+    # Security analysts with standard access
+    permissions:
+      - viewer
+      - editor
+    
+  - name: ss7-operators
+    email: ss7-operators@djezzy.dz
+    # Telecom signaling specialists with SS7 access
+    permissions:
+      - viewer
+      - editor
+    # Can view sensitive SS7 dashboards
+    allowed_dashboard_tags:
+      - ss7
+      - telecom
+      - fraud
+    
+  - name: viewers
+    email: viewers@djezzy.dz
+    # Read-only access to public dashboards only
+    permissions:
+      - viewer
+    allowed_dashboard_tags:
+      - public
+      - summary
+
+# =============================================================================
+# DASHBOARD PERMISSIONS (Tag-Based)
+# =============================================================================
+dashboard_permissions:
+  # SS7 Security Overview - RESTRICTED
+  - dashboard_uid: "ss7-security-overview"
+    name: "SS7 Security Overview"
+    tags: [ss7, pii, telecom]
+    teams_with_access:
+      - soc-admins
+      - ss7-operators
+    restricted_fields:
+      - "IMSI Range Distribution"
+      - "MSISDN Lookup Table"
+      - "Subscriber Location Map"
+    reason: "Contains IMSI/MSISDN data requiring need-to-know justification"
+  
+  # IRSF Fraud Detection - RESTRICTED
+  - dashboard_uid: "irsf-fraud-detection"
+    name: "IRSF Fraud Detection Dashboard"
+    tags: [ss7, fraud, financial]
+    teams_with_access:
+      - soc-admins
+      - ss7-operators
+      - soc-analysts
+    restricted_fields:
+      - "High-Risk Destination Details"
+      - "Revenue Impact Analysis"
+    reason: "Financial fraud investigation data"
+  
+  # Network Security Overview - SEMI-RESTRICTED
+  - dashboard_uid: "soc-platform-overview"
+    name: "SOC Platform Overview"
+    tags: [public, summary]
+    teams_with_access:
+      - soc-admins
+      - soc-analysts
+      - ss7-operators
+      - viewers
+    restricted_fields: []
+    reason: "Operational summary with no sensitive data"
+
+# =============================================================================
+# DATA SOURCE PERMISSIONS
+# =============================================================================
+data_source_permissions:
+  # Elasticsearch - SS7 Index Restrictions
+  - data_source_name: "Elasticsearch-SS7"
+    teams_with_full_access:
+      - soc-admins
+      - ss7-operators
+    teams_with_limited_access:
+      - soc-analysts  # Aggregated data only, no raw IMSI
+    index_restrictions:
+      soc-analysts:
+        - "ss7-events-*"  # Allowed: aggregated events
+        - "ss7-alerts"    # Allowed: alerts without full IMSI
+        denied:
+          - "ss7-raw-pcap"  # Denied: raw packet captures
+          - "subscriber-db" # Denied: full subscriber database
+  
+  # Prometheus Metrics
+  - data_source_name: "Prometheus"
+    teams_with_full_access:
+      - soc-admins
+      - soc-analysts
+      - ss7-operators
+      - viewers
+    # No restrictions on metrics (aggregated data)
+
+# =============================================================================
+# USER ROLES MAPPING
+# =============================================================================
+user_roles:
+  # LDAP Group -> Grafana Team Mapping
+  ldap_mappings:
+    - ldap_group: "cn=soc-admins,ou=groups,dc=djezzy,dc=dz"
+      grafana_team: "soc-admins"
+      role: "Admin"
+    
+    - ldap_group: "cn=soc-analysts,ou=groups,dc=djezzy,dc=dz"
+      grafana_team: "soc-analysts"
+      role: "Editor"
+    
+    - ldap_group: "cn=ss7-operators,ou=groups,dc=djezzy,dc=dz"
+      grafana_team: "ss7-operators"
+      role: "Editor"
+    
+    - ldap_group: "cn=viewers,ou=groups,dc=djezzy,dc=dz"
+      grafana_team: "viewers"
+      role: "Viewer"
+
+# =============================================================================
+# AUDIT LOGGING CONFIGURATION
+# =============================================================================
+audit:
+  enabled: true
+  log_actions:
+    - dashboard_view
+    - dashboard_edit
+    - dashboard_delete
+    - data_source_query
+    - user_login
+    - user_logout
+    - permission_change
+  
+  # Alert on suspicious activities
+  alert_on:
+    - multiple_failed_logins: 5  # Alert after 5 failed logins from same IP
+    - dashboard_export_by_viewer: true  # Alert when viewer exports data
+    - after_hours_admin_action: true  # Alert on admin actions outside business hours
+
+# =============================================================================
+# API KEY RESTRICTIONS
+# =============================================================================
+api_keys:
+  # Service accounts for automation
+  - name: "wazuh-integration"
+    key_env_var: "GRAFANA_WAZUH_API_KEY"
+    role: "Viewer"
+    allowed_dashboards:
+      - "soc-platform-overview"
+      - "alert-summary"
+    
+  - name: "thehive-biocorrelation"
+    key_env_var: "GRAFANA_THEHIVE_API_KEY"
+    role: "Viewer"
+    allowed_dashboards:
+      - "incident-timeline"
+      - "threat-intel-overview"
+  
+  - name: "monitoring-system"
+    key_env_var: "GRAFANA_PROMETHEUS_API_KEY"
+    role: "Admin"  # Monitoring needs full metric access
+    allowed_dashboards:
+      - "*"  # All dashboards for health checks

@@ -1,0 +1,2002 @@
+     1→     1→// This is your Prisma schema file,
+     2→     2→// National SOC Platform - Production Schema (PostgreSQL)
+     3→     3→// Algeria 2026-2030 | 100% Open Source
+     4→     4→// Phase 11: Production Data Persistence Layer
+     5→     5→
+     6→     6→generator client {
+     7→     7→  provider = "prisma-client-js"
+     8→     8→}
+     9→     9→
+    10→    10→datasource db {
+    11→    11→  provider = "postgresql"
+    12→    12→  url      = env("DATABASE_URL")
+    13→    13→}
+    14→    14→
+    15→    15→// ============= USER & AUTHENTICATION =============
+    16→    16→
+    17→    17→model User {
+    18→    18→  id              String      @id @default(cuid())
+    19→    19→  email           String      @unique
+    20→    20→  name            String
+    21→    21→  passwordHash    String?
+    22→    22→  
+    23→    23→  // Role & Permissions
+    24→    24→  role            UserRole    @default(ANALYST)
+    25→    25→  department      String?
+    26→    26→  permissions     Jsonb?      @db.JsonB // Granular permission overrides
+    27→    27→  
+    28→    28→  // Contact Information
+    29→    29→  phone           String?
+    30→    30→  alternativePhone String?
+    31→    31→  avatar          String?
+    32→    32→  locale          String      @default("fr-DZ") // Default: Algerian French
+    33→    33→  
+    34→    34→  // Account Status
+    35→    35→  isActive        Boolean     @default(true)
+    36→    36→  isLocked        Boolean     @default(false)
+    37→    37→  lockedUntil     DateTime?
+    38→    38→  failedLoginAttempts Int     @default(0)
+    39→    39→  lastLoginAt     DateTime?
+    40→    40→  lastLoginIp     String?
+    41→    41→  passwordChangedAt DateTime?
+    42→    42→  passwordExpiresAt DateTime?
+    43→    43→  
+    44→    44→  // MFA Configuration
+    45→    45→  mfaEnabled      Boolean     @default(false)
+    46→    46→  mfaSecret       String?     // Encrypted TOTP secret
+    47→    47→  mfaBackupCodes  String?     @db.JsonB // Encrypted backup codes array
+    48→    48→  mfaVerifiedAt   DateTime?
+    49→    49→  mfaMethod       MfaMethod? @default(TOTP) // TOTP, SMS, EMAIL, FIDO2
+    50→    50→  
+    51→    51→  // API Keys for programmatic access
+    52→    52→  apiKeys         ApiKey[]
+    53→    53→  
+    54→    54→  // Audit Fields
+    55→    55→  createdBy       String?
+    56→    56→  updatedBy       String?
+    57→    57→  deletedAt       DateTime?   // Soft delete support
+    58→    58→  
+    59→    59→  // Timestamps
+    60→    60→  createdAt       DateTime    @default(now()) @db.Timestamptz
+    61→    61→  updatedAt       DateTime    @updatedAt @db.Timestamptz
+    62→    62→
+    63→    63→  // Relations
+    64→    64→  alerts          Alert[]             @relation("AssignedAnalyst")
+    65→    65→  incidents       Incident[]          @relation("IncidentHandler")
+    66→    66→  assignedTasks   Task[]              @relation("TaskAssignee")
+    67→    67→  auditLogs       AuditLog[]
+    68→    68→  sessions        Session[]
+    69→    69→  notifications   Notification[]
+    70→    70→  comments        Comment[]
+    71→    71→  createdAssets   Asset[]             @relation("AssetCreator")
+    72→    72→  createdReports  ComplianceReport[]  @relation("ReportAuthor")
+    73→    73→
+    74→    74→  @@index([email])
+    75→    75→  @@index([role])
+    76→    76→  @@index([isActive])
+    77→    77→  @@index([department])
+    78→    78→  @@index([createdAt])
+    79→    79→  @@map("users")
+    80→    80→}
+    81→    81→
+    82→    82→enum MfaMethod {
+    83→    83→  TOTP
+    84→    84→  SMS
+    85→    85→  EMAIL
+    86→    86→  FIDO2
+    87→    87→  WEBAUTHN
+    88→    88→}
+    89→    89→
+    90→    90→model ApiKey {
+    91→    91→  id              String      @id @default(cuid())
+    92→    92→  name            String
+    93→    93→  keyHash         String      // Hashed API key
+    94→    94→  keyPrefix       String      // First 8 chars for identification
+    95→    95→  userId          String
+    96→    96→  user            User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+    97→    97→  
+    98→    98→  // Permissions & Scopes
+    99→    99→  scopes          String[]    @db.Text[] // Array of permission scopes
+   100→   100→  rateLimit       Int         @default(1000) // Requests per hour
+   101→   101→  
+   102→   102→  // Status
+   103→   103→  isActive        Boolean     @default(true)
+   104→   104→  lastUsedAt      DateTime?
+   105→   105→  lastUsedIp      String?
+   106→   106→  usageCount      BigInt      @default(0)
+   107→   107→  
+   108→   108→  // Expiration
+   109→   109→  expiresAt       DateTime?
+   110→   110→  
+   111→   111→  // Audit
+   112→   112→  createdBy       String?
+   113→   113→  createdAt       DateTime    @default(now()) @db.Timestamptz
+   114→   114→  revokedAt       DateTime?
+   115→   115→  revokedBy       String?
+   116→   116→
+   117→   117→  @@index([userId])
+   118→   118→  @@index([keyPrefix])
+   119→   119→  @@map("api_keys")
+   120→   120→}
+   121→   121→
+   122→   122→model Session {
+   123→   123→  id              String      @id @default(cuid())
+   124→   124→  sessionToken    String      @unique
+   125→   125→  userId          String
+   126→   126→  user            User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+   127→   127→  
+   128→   128→  // Session Metadata
+   129→   129→  ipAddress       String?
+   130→   130→  userAgent       String?     @db.Text
+   131→   131→  deviceFingerprint String?
+   132→   132→  
+   133→   133→  // Security
+   134→   134→  isTwoFactorVerified Boolean @default(false)
+   135→   135→  isAuthenticated    Boolean @default(true)
+   136→   136→  
+   137→   137→  // Timing
+   138→   138→  expiresAt        DateTime   @db.Timestamptz
+   139→   139→  lastActivityAt   DateTime   @default(now()) @db.Timestamptz
+   140→   140→  
+   141→   141→  createdAt        DateTime   @default(now()) @db.Timestamptz
+   142→   142→
+   143→   143→  @@index([userId])
+   144→   144→  @@index([sessionToken])
+   145→   145→  @@index([expiresAt])
+   146→   146→  @@map("sessions")
+   147→   147→}
+   148→   148→
+   149→   149→enum UserRole {
+   150→   150→  VIEWER
+   151→   151→  ANALYST
+   152→   152→  SENIOR_ANALYST
+   153→   153→  INCIDENT_RESPONDER
+   154→   154→  THREAT_HUNTER
+   155→   155→  MANAGER
+   156→   156→  ADMIN
+   157→   157→  SUPER_ADMIN
+   158→   158→}
+   159→   159→
+   160→   160→// ============= SECURITY ALERTS =============
+   161→   161→
+   162→   162→model Alert {
+   163→   163→  id                  String          @id @default(cuid())
+   164→   164→  alertId             String          @unique // External alert ID (e.g., ALT-001)
+   165→   165→  title               String
+   166→   166→  description         String?         @db.Text
+   167→   167→  
+   168→   168→  // Classification
+   169→   169→  severity            AlertSeverity   @default(MEDIUM)
+   170→   170→  status              AlertStatus     @default(NEW)
+   171→   171→  category            AlertCategory?
+   172→   172→  confidence          Float           @default(0.0) // 0.0 to 1.0
+   173→   173→  
+   174→   174→  // Source Information
+   175→   175→  source              String          // Wazuh, Suricata, MISP, TheHive, etc.
+   176→   176→  sourceRef           String?         // Reference ID in source system
+   177→   177→  platform            String?         // Platform identifier
+   178→   178→  rawEvent            Jsonb?          @db.JsonB // Original event data
+   179→   179→  
+   180→   180→  // Network Details
+   181→   181→  sourceIp            String?
+   182→   182→  destinationIp       String?
+   183→   183→  sourcePort          Int?
+   184→   184→  destinationPort     Int?
+   185→   185→  protocol            String?
+   186→   186→  icmpCode            Int?
+   187→   187→  icmpType            Int?
+   188→   188→  packetLength        Int?
+   189→   189→  
+   190→   190→  // Telecom-Specific Fields (for mobile operator integration)
+   191→   191→  telecomProtocol     TelecomProtocol?
+   192→   192→  imsi                String?         // International Mobile Subscriber Identity
+   193→   193→  imei                String?         // International Mobile Equipment Identity
+   194→   194→  msisdn              String?         // Mobile station international subscriber directory number
+   195→   195→  iccid               String?         // Integrated Circuit Card Identifier (SIM)
+   196→   196→  gtpSessionId        String?         // GTP tunnel session identifier
+   197→   197→  ss7OpCode           String?         // SS7 operation code
+   198→   198→  ss7CallingParty     String?         // SS7 calling party address
+   199→   199→  ss7CalledParty      String?         // SS7 called party address
+   200→   200→  apn                 String?         // Access Point Name
+   201→   201→  cellId              String?         // Cell tower identifier
+   202→   202→  lac                 String?         // Location Area Code
+   203→   203→  tac                 String?         // Tracking Area Code (LTE)
+   204→   204→  ratType             RatType?        // Radio Access Technology type
+   205→   205→  roamingStatus       RoamingStatus?
+   206→   206→  
+   207→   207→  // Endpoint Details
+   208→   208→  hostname            String?
+   209→   209→  agentId             String?
+   210→   210→  username            String?
+   211→   211→  processName         String?
+   212→   212→  processId           Int?
+   213→   213→  filePath            String?
+   214→   214→  registryKey         String?
+   215→   215→  
+   216→   216→  // MITRE ATT&CK Mapping
+   217→   217→  mitreTactic         String?
+   218→   218→  mitreTechnique      String?
+   219→   219→  mitreId             String?
+   220→   220→  mitreSubtechnique   String?
+   221→   221→  
+   222→   222→  // Threat Intelligence Enrichment
+   223→   223→  threatIntelMatch    Boolean         @default(false)
+   224→   224→  iocIndicator        String?
+   225→   225→  iocType             IndicatorType?
+   226→   226→  threatActor         String?
+   227→   227→  campaign            String?
+   228→   228→  
+   229→   229→  // Assignment & Response
+   230→   230→  assignedToId        String?
+   231→   231→  assignedTo          User?           @relation("AssignedAnalyst", fields: [assignedToId], references: [id])
+   232→   232→  incidentId          String?
+   233→   233→  incident            Incident?       @relation(fields: [incidentId], references: [id])
+   234→   234→  escalationLevel     Int             @default(0)
+   235→   235→  slaDeadline         DateTime?       @db.Timestamptz
+   236→   236→  slaBreached         Boolean         @default(false)
+   237→   237→  
+   238→   238→  // Timeline
+   239→   239→  timestamp           DateTime        @db.Timestamptz
+   240→   240→  firstSeen           DateTime        @db.Timestamptz
+   241→   241→  lastSeen            DateTime?       @db.Timestamptz
+   242→   242→  acknowledgedAt      DateTime?       @db.Timestamptz
+   243→   243→  resolvedAt          DateTime?       @db.Timestamptz
+   244→   244→  
+   245→   245→  // ARPT Compliance Fields
+   246→   246→  arptReportable      Boolean         @default(false)
+   247→   247→  arptReportedAt      DateTime?       @db.Timestamptz
+   248→   248→  arptReference       String?         // Reference to regulatory filing
+   249→   249→  dataRetentionExpiry DateTime?       @db.Timestamptz
+   250→   250→  
+   251→   251→  // Metadata
+   252→   252→  tags                String[]        @db.Text[]
+   253→   253→  customFields        Jsonb?          @db.JsonB
+   254→   254→  suppressionRule     String?         // If suppressed by a rule
+   255→   255→  isSuppressed        Boolean         @default(false)
+   256→   256→  isFalsePositive     Boolean         @default(false)
+   257→   257→  falsePositiveReason String?         @db.Text
+   258→   258→  
+   259→   259→  // Soft Delete & Audit
+   260→   260→  deletedAt           DateTime?       @db.Timestamptz
+   261→   261→  createdBy           String?
+   262→   262→  updatedBy           String?
+   263→   263→  
+   264→   264→  createdAt           DateTime        @default(now()) @db.Timestamptz
+   265→   265→  updatedAt           DateTime        @updatedAt @db.Timestamptz
+   266→   266→
+   267→   267→  @@index([severity])
+   268→   268→  @@index([status])
+   269→   269→  @@index([source])
+   270→   270→  @@index([timestamp])
+   271→   271→  @@index([assignedToId])
+   272→   272→  @@index([incidentId])
+   273→   273→  @@index([sourceIp])
+   274→   274→  @@index([destinationIp])
+   275→   275→  @@index([threatIntelMatch])
+   276→   276→  @@index([telecomProtocol])
+   277→   277→  @@index([imsi])
+   278→   278→  @@index([msisdn])
+   279→   279→  @@index([createdAt])
+   280→   280→  // Full-text search index (via generated column or separate table)
+   281→   281→  @@map("alerts")
+   282→   282→}
+   283→   283→
+   284→   284→enum TelecomProtocol {
+   285→   285→  GTP
+   286→   286→  GTP_V2
+   287→   287→  DIAMETER
+   288→   288→  RADIUS
+   289→   289→  SS7_MAP
+   290→   290→  SS7_CAP
+   291→   291→  SS7_ISUP
+   292→   292→  SIP
+   293→   293→  H248_MEGACO
+   294→   294→  SMPP
+   295→   295→  HTTP_REST
+   296→   296→  GRPC
+   297→   297→  WEBRTC
+   298→   298→  LTE_NAS
+   299→   299→  NR_NAS
+   300→   300→}
+   301→   301→
+   302→   302→enum RatType {
+   303→   303→  GSM_GPRS
+   304→   304→  UMTS
+   305→   305→  LTE
+   306→   306→  NR_5G
+   307→   307→  WLAN
+   308→   308→  WIMAX
+   309→   309→  HSPA
+   310→   310→  CDMA2000
+   311→   311→  EVDO
+   312→   312→  UNKNOWN
+   313→   313→}
+   314→   314→
+   315→   315→enum RoamingStatus {
+   316→   316→  HOME
+   317→   317→  ROAMING_INTERNATIONAL
+   318→   318→  ROAMING_NATIONAL
+   319→   319→  UNKNOWN
+   320→   320→}
+   321→   321→
+   322→   322→enum AlertSeverity {
+   323→   323→  CRITICAL
+   324→   324→  HIGH
+   325→   325→  MEDIUM
+   326→   326→  LOW
+   327→   327→  INFO
+   328→   328→}
+   329→   329→
+   330→   330→enum AlertStatus {
+   331→   331→  NEW
+   332→   332→  ACKNOWLEDGED
+   333→   333→  INVESTIGATING
+   334→   334→  CONTAINED
+   335→   335→  ERADICATED
+   336→   336→  RESOLVED
+   337→   337→  FALSE_POSITIVE
+   338→   338→  ESCALATED
+   339→   339→  CLOSED
+   340→   340→  SUPPRESSED
+   341→   341→}
+   342→   342→
+   343→   343→enum AlertCategory {
+   344→   344→  MALWARE
+   345→   345→  PHISHING
+   346→   346→  UNAUTHORIZED_ACCESS
+   347→   347→  DATA_BREACH
+   348→   348→  DOS
+   349→   349→  INSIDER_THREAT
+   350→   350→  SUPPLY_CHAIN
+   351→   351→  PHYSICAL
+   352→   352→  POLICY_VIOLATION
+   353→   353→  VULNERABILITY
+   354→   354→  NETWORK_ANOMALY
+   355→   355→  FRAUD
+   356→   356→  TELECOM_FRAUD
+   357→   357→  SIM_SWAP
+   358→   358→  SS7_ATTACK
+   359→   359→  IMSI_CATCHER
+   360→   360→  LOCATION_TRACKING
+   361→   361→  SIGNALLING_STORM
+   362→   362→  BSS_FRAUD
+   363→   363→  IRREVENT_FRAUD
+   364→   364→  PREMIUM_RATE_FRAUD
+   365→   365→  INTERCONNECT_FRAUD
+   366→   366→}
+   367→   367→
+   368→   368→// ============= INCIDENT MANAGEMENT =============
+   369→   369→
+   370→   370→model Incident {
+   371→   371→  id                    String              @id @default(cuid())
+   372→   372→  incidentId            String              @unique // e.g., INC-2026-042
+   373→   373→  title                 String
+   374→   374→  description           String?             @db.Text
+   375→   375→  severity              IncidentSeverity    @default(SEV1)
+   376→   376→  status                IncidentStatus      @default(DETECTED)
+   377→   377→  category              IncidentCategory?
+   378→   378→  
+   379→   379→  // Classification
+   380→   380→  classification        IncidentClassification?
+   381→   381→  impact                ImpactLevel         @default(MODERATE)
+   382→   382→  urgency               UrgencyLevel        @default(MEDIUM)
+   383→   383→  
+   384→   384→  // Assignment
+   385→   385→  handlerId             String?
+   386→   386→  handler               User?               @relation("IncidentHandler", fields: [handlerId], references: [id])
+   387→   387→  team                  String?
+   388→   388→  escalationTeam        String?             @db.Text[] // Array of team names
+   389→   389→  
+   390→   390→  // SLA Tracking
+   391→   391→  slaTarget             SlaTarget?
+   392→   392→  slaActualResponse     Int?                // Minutes to first response
+   393→   393→  slaActualResolution   Int?                // Minutes to resolution
+   394→   394→  slaBreached           Boolean             @default(false)
+   395→   395→  slaBreachReason       String?             @db.Text
+   396→   396→  
+   397→   397→  // Timeline
+   398→   398→  detectedAt            DateTime            @db.Timestamptz
+   399→   399→  reportedAt            DateTime?           @db.Timestamptz
+   400→   400→  acknowledgedAt        DateTime?           @db.Timestamptz
+   401→   401→  containedAt           DateTime?           @db.Timestamptz
+   402→   402→  eradicatedAt          DateTime?           @db.Timestamptz
+   403→   403→  recoveredAt           DateTime?           @db.Timestamptz
+   404→   404→  closedAt              DateTime?           @db.Timestamptz
+   405→   405→  targetResolution      DateTime?           @db.Timestamptz
+   406→   406→  
+   407→   407→  // Metrics
+   408→   408→  mttdMinutes           Int?                // Mean Time To Detect
+   409→   409→  mttrMinutes           Int?                // Mean Time To Respond
+   410→   410→  totalDowntime         Int?                // Minutes
+   411→   411→  
+   412→   412→  // Telecom Impact Assessment
+   413→   413→  telecomImpact         TelecomImpactAssessment? @db.JsonB
+   414→   414→  subscribersAffected   BigInt?             @default(0)
+   415→   415→  baseStationsAffected  Int?                @default(0)
+   416→   416→  networkRegion         String?             // Affected region code
+   417→   417→  servicesImpacted      String[]            @db.Text[] // Array of affected services
+   418→   418→  
+   419→   419→  // Scope
+   420→   420→  affectedAssets        String[]            @db.Text[]
+   421→   421→  affectedUsers         Int?                @default(0)
+   422→   422→  dataBreach            Boolean             @default(false)
+   423→   423→  recordsAffected       Int?
+   424→   424→  dataSensitivity       DataSensitivity?
+   425→   425→  
+   426→   426→  // Resolution
+   427→   427→  rootCause             String?             @db.Text
+   428→   428→  resolution            String?             @db.Text
+   429→   429→  lessonsLearned        String?             @db.Text
+   430→   430→  remediationActions    String[]            @db.Text[]
+   431→   431→  
+   432→   432→  // Relations
+   433→   433→  alerts                Alert[]
+   434→   434→  tasks                 Task[]
+   435→   435→  evidence              Evidence[]
+   436→   436→  
+   437→   437→  // Escalation Chain
+   438→   438→  escalationHistory     Jsonb?              @db.JsonB // Array of escalation events
+   439→   439→  
+   440→   440→  // ARPT Compliance
+   441→   441→  arptNotifiable        Boolean             @default(false)
+   442→   442→  arptNotificationDate  DateTime?           @db.Timestamptz
+   443→   443→  arptReference         String?
+   444→   444→  regulatoryFindings    String?             @db.Text
+   445→   445→  
+   446→   446→  // Cost Tracking
+   447→   447→  costEstimate          Float?
+   448→   448→  actualCost           Float?
+   449→   449→  currency              String              @default("DZD")
+   450→   450→  
+   451→   451→  // Metadata
+   452→   452→  tags                  String[]            @db.Text[]
+   453→   453→  externalRefs          Jsonb?              @db.JsonB
+   454→   454→  complianceImpact      String[]            @db.Text[]
+   455→   455→  
+   456→   456→  // Soft Delete & Audit
+   457→   457→  deletedAt             DateTime?           @db.Timestamptz
+   458→   458→  createdBy             String?
+   459→   459→  updatedBy             String?
+   460→   460→  
+   461→   461→  createdAt             DateTime            @default(now()) @db.Timestamptz
+   462→   462→  updatedAt             DateTime            @updatedAt @db.Timestamptz
+   463→   463→
+   464→   464→  @@index([status])
+   465→   465→  @@index([severity])
+   466→   466→  @@index([handlerId])
+   467→   467→  @@index([detectedAt])
+   468→   468→  @@index([category])
+   469→   469→  @@index([arptNotifiable])
+   470→   470→  @@map("incidents")
+   471→   471→}
+   472→   472→
+   473→   473→enum SlaTarget {
+   474→   474→  P1_CRITICAL_15MIN  // Critical: 15 minutes
+   475→   475→  P2_HIGH_1HOUR      // High: 1 hour
+   476→   476→  P3_MEDIUM_4HOURS   // Medium: 4 hours
+   477→   477→  P4_LOW_24HOURS     // Low: 24 hours
+   478→   478→  P5_PLANNED_72HOURS // Planned: 72 hours
+   479→   479→}
+   480→   480→
+   481→   481→enum DataSensitivity {
+   482→   482→  PUBLIC
+   483→   483→  INTERNAL
+   484→   484→  CONFIDENTIAL
+   485→   485→  RESTRICTED
+   486→   486→  TOP_SECRET
+   487→   487→  PERSONAL_DATA_PII
+   488→   488→  TELECOM_SUBSCRIBER
+   489→   489→  NATIONAL_SECURITY
+   490→   490→}
+   491→   491→
+   492→   492→type TelecomImpactAssessment {
+   493→   493→  voiceServiceAffected     Boolean
+   494→   494→  dataServiceAffected      Boolean
+   495→   495→  smsServiceAffected       Boolean
+   496→   496→  roamingAffected          Boolean
+   497→   497→  prepaidAffected          Boolean
+   498→   498→  postpaidAffected         Boolean
+   499→   499→  enterpriseAffected       Boolean
+   500→   500→  wholesaleAffected        Boolean
+   501→   501→  estimatedRevenueLoss     Float
+   502→   502→  customerComplaintCount   Int
+   503→   503→  mediaCoverage            Boolean
+   504→   504→  governmentNotified       Boolean
+   505→   505→  recoveryEstimateHours    Int
+   506→   506→}
+   507→   507→
+   508→   508→enum IncidentSeverity {
+   509→   509→  SEV0 // Critical - Immediate action required
+   510→   510→  SEV1 // High - Business impact
+   511→   511→  SEV2 // Medium - Significant impact
+   512→   512→  SEV3 // Low - Limited impact
+   513→   513→  SEV4 // Informational - No immediate impact
+   514→   514→}
+   515→   515→
+   516→   516→enum IncidentStatus {
+   517→   517→  DETECTED
+   518→   518→  TRIAGE
+   519→   519→  IN_PROGRESS
+   520→   520→  CONTAINED
+   521→   521→  ERADICATED
+   522→   522→  RECOVERY
+   523→   523→  POST_INCIDENT
+   524→   524→  CLOSED
+   525→   525→  CANCELLED
+   526→   526→}
+   527→   527→
+   528→   528→enum IncidentCategory {
+   529→   529→  SECURITY_BREACH
+   530→   530→  MALWARE
+   531→   531→  PHISHING
+   532→   532→  DATA_EXFILTRATION
+   533→   533→  RANSOMWARE
+   534→   534→  DDoS
+   535→   535→  INSIDER_THREAT
+   536→   536→  SUPPLY_CHAIN
+   537→   537→  PHYSICAL_SECURITY
+   538→   538→  TELECOM_FRAUD
+   539→   539→  SUBSCRIPTION_FRAUD
+   540→   540→  SIM_SWAP_ATTACK
+   541→   541→  SS7_VULNERABILITY
+   542→   542→  IMSI_CATCHER_ATTACK
+   543→   543→  SIGNALLING_ATTACK
+   544→   544→  NETWORK_OUTAGE
+   545→   545→  REGULATORY_COMPLIANCE
+   546→   546→  DATA_PRIVACY
+   547→   547→  THIRD_PARTY_BREACH
+   548→   548→}
+   549→   549→
+   550→   550→enum IncidentClassification {
+   551→   551→  TRUE_POSITIVE
+   552→   552→  FALSE_POSITIVE
+   553→   553→  BENIGN_POSITIVE
+   554→   554→  UNKNOWN
+   555→   555→}
+   556→   556→
+   557→   557→enum ImpactLevel {
+   558→   558→  CRITICAL
+   559→   559→  MAJOR
+   560→   560→  MODERATE
+   561→   561→  MINOR
+   562→   562→  NEGLIGIBLE
+   563→   563→}
+   564→   564→
+   565→   565→enum UrgencyLevel {
+   566→   566→  CRITICAL
+   567→   567→  HIGH
+   568→   568→  MEDIUM
+   569→   569→  LOW
+   570→   570→}
+   571→   571→
+   572→   572→// ============= TASK MANAGEMENT =============
+   573→   573→
+   574→   574→model Task {
+   575→   575→  id                  String      @id @default(cuid())
+   576→   576→  title               String
+   577→   577→  description         String?     @db.Text
+   578→   578→  status              TaskStatus  @default(PENDING)
+   579→   579→  priority            Priority    @default(MEDIUM)
+   580→   580→  taskType            TaskType?
+   581→   581→  
+   582→   582→  // Assignment
+   583→   583→  assignedToId        String?
+   584→   584→  assignedTo          User?       @relation("TaskAssignee", fields: [assignedToId], references: [id])
+   585→   585→  incidentId          String
+   586→   586→  incident            Incident    @relation(fields: [incidentId], references: [id], onDelete: Cascade)
+   587→   587→  
+   588→   588→  // Timing
+   589→   589→  dueDate             DateTime?   @db.Timestamptz
+   590→   590→  startedAt           DateTime?   @db.Timestamptz
+   591→   591→  completedAt         DateTime?   @db.Timestamptz
+   592→   592→  timeEstimated       Int?        // Minutes
+   593→   593→  timeSpent           Int?        // Actual minutes spent
+   594→   594→  
+   595→   595→  // Dependencies
+   596→   596→  parentTaskId        String?
+   597→   597→  dependsOn           String[]    @db.Text[] // Array of task IDs this depends on
+   598→   598→  order               Int         @default(0)
+   599→   599→  
+   600→   600→  // Automation
+   601→   601→  automationJobId     String?     // External job reference
+   602→   602→  autoRetryCount      Int         @default(0)
+   603→   603→  maxRetries          Int         @default(3)
+   604→   604→  
+   605→   605→  // Audit
+   606→   606→  createdBy           String?
+   607→   607→  updatedBy           String?
+   608→   608→  
+   609→   609→  createdAt           DateTime    @default(now()) @db.Timestamptz
+   610→   610→  updatedAt           DateTime    @updatedAt @db.Timestamptz
+   611→   611→
+   612→   612→  @@index([incidentId])
+   613→   613→  @@index([status])
+   614→   614→  @@index([assignedToId])
+   615→   615→  @@index([dueDate])
+   616→   616→  @@map("tasks")
+   617→   617→}
+   618→   618→
+   619→   619→enum TaskStatus {
+   620→   620→  PENDING
+   621→   621→  IN_PROGRESS
+   622→   622→  BLOCKED
+   623→   623→  COMPLETED
+   624→   624→  CANCELLED
+   625→   625→  SKIPPED
+   626→   626→  FAILED
+   627→   627→  AUTO_RUNNING
+   628→   628→}
+   629→   629→
+   630→   630→enum Priority {
+   631→   631→  CRITICAL
+   632→   632→  HIGH
+   633→   633→  MEDIUM
+   634→   634→  LOW
+   635→   635→}
+   636→   636→
+   637→   637→enum TaskType {
+   638→   638→  INVESTIGATION
+   639→   639→  CONTAINMENT
+   640→   640→  ERADICATION
+   641→   641→  RECOVERY
+   642→   642→  COMMUNICATION
+   643→   643→  DOCUMENTATION
+   644→   644→  ESCALATION
+   645→   645→  COORDINATION
+   646→   646→  AUTOMATION
+   647→   647→  ANALYSIS
+   648→   648→  FORENSICS
+   649→   649→  NOTIFICATION
+   650→   650→  PATCHING
+   651→   651→  ISOLATION
+   652→   652→  BLOCKLIST_UPDATE
+   653→   653→  TELECOM_SPECIFIC
+   654→   654→}
+   655→   655→
+   656→   656→// ============= EVIDENCE MANAGEMENT =============
+   657→   657→
+   658→   658→model Evidence {
+   659→   659→  id                  String          @id @default(cuid())
+   660→   660→  title               String
+   661→   661→  description         String?         @db.Text
+   662→   662→  type                EvidenceType
+   663→   663→  status              EvidenceStatus  @default(COLLECTING)
+   664→   664→  
+   665→   665→  // File/Artifact
+   666→   666→  fileName            String?
+   667→   667→  fileType            String?
+   668→   668→  fileSize            BigInt?         // in bytes
+   669→   669→  fileHashSha256      String?         // SHA256 hash
+   670→   670→  fileHashMd5         String?         // MD5 hash (legacy compatibility)
+   671→   671→  filePath            String?
+   672→   672→  fileUrl             String?
+   673→   673→  storageBucket       String?         // For cloud storage integration
+   674→   674→  
+   675→   675→  // Collection Details
+   676→   676→  collectedBy         String?
+   677→   677→  collectedAt         DateTime?       @db.Timestamptz
+   678→   678→  location            String?         @db.Text // Where evidence was found
+   679→   679→  collectionMethod    String?
+   680→   680→  preserved           Boolean         @default(false)
+   681→   681→  chainOfCustody      Jsonb?          @db.JsonB // Array of custody transfers with timestamps and signatures
+   682→   682→  
+   683→   683→  // Relation
+   684→   684→  incidentId          String
+   685→   685→  incident            Incident        @relation(fields: [incidentId], references: [id], onDelete: Cascade)
+   686→   686→  
+   687→   687→  // Analysis
+   688→   688→  analysisResult      String?         @db.Text
+   689→   689→  analysisTools       String?         @db.Text[] // Tools used for analysis
+   690→   690→  analyzedAt          DateTime?       @db.Timestamptz
+   691→   691→  analyzedBy          String?
+   692→   692→  
+   693→   693→  // Legal Hold
+   694→   694→  legalHold           Boolean         @default(false)
+   695→   695→  legalHoldReason     String?         @db.Text
+   696→   696→  legalHoldPlacedBy   String?
+   697→   697→  legalHoldDate       DateTime?       @db.Timestamptz
+   698→   698→  
+   699→   699→  // Metadata
+   700→   700→  tags                String[]        @db.Text[]
+   701→   701→  isSensitive         Boolean         @default(false)
+   702→   702→  classification      DataSensitivity?
+   703→   703→  retentionUntil      DateTime?       @db.Timestamptz
+   704→   704→  retentionPolicy     String?         // Policy reference
+   705→   705→  
+   706→   706→  // Audit
+   707→   707→  createdBy           String?
+   708→   708→  updatedBy           String?
+   709→   709→  deletedAt           DateTime?       @db.Timestamptz
+   710→   710→  
+   711→   711→  createdAt           DateTime        @default(now()) @db.Timestamptz
+   712→   712→  updatedAt           DateTime        @updatedAt @db.Timestamptz
+   713→   713→
+   714→   714→  @@index([incidentId])
+   715→   715→  @@index([status])
+   716→   716→  @@index([type])
+   717→   717→  @@index([fileHashSha256])
+   718→   718→  @@map("evidence")
+   719→   719→}
+   720→   720→
+   721→   721→enum EvidenceType {
+   722→   722→  FILE
+   723→   723→  MEMORY_DUMP
+   724→   724→  DISK_IMAGE
+   725→   725→  NETWORK_CAPTURE
+   726→   726→  LOG_FILE
+   727→   727→  SCREENSHOT
+   728→   728→  EMAIL
+   729→   729→  MALWARE_SAMPLE
+   730→   730→  REGISTRY_ENTRY
+   731→   731→  DATABASE_RECORD
+   732→   732→  CLOUD_ARTIFACT
+   733→   733→  MOBILE_DEVICE
+   734→   734→  SIM_CARD
+   735→   735→  CALL_RECORD
+   736→   736→  SMS_RECORD
+   737→   737→  LOCATION_DATA
+   738→   738→  CDR_RECORD          // Call Detail Record
+   739→   739→  SIGNALING_CAPTURE
+   740→   740→  PACKET_CAPTURE
+   741→   741→  PCAP_FILE
+   742→   742→  ETLR_RECORD         // Electronic Transaction Log Record
+   743→   743→  HLR_RECORD
+   744→   744→  VLR_RECORD
+   745→   745→  AUCE_RECORD
+   746→   746→}
+   747→   747→
+   748→   748→enum EvidenceStatus {
+   749→   749→  COLLECTING
+   750→   750→  COLLECTED
+   751→   751→  PROCESSING
+   752→   752→  ANALYZED
+   753→   753→  PRESERVED
+   754→   754→  EXPIRED
+   755→   755→  DESTROYED
+   756→   756→  DISPUTED
+   757→   757→}
+   758→   758→
+   759→   759→// ============= THREAT INTELLIGENCE =============
+   760→   760→
+   761→   761→model ThreatActor {
+   762→   762→  id                  String            @id @default(cuid())
+   763→   763→  name                String            @unique
+   764→   764→  alias               Jsonb?            @db.JsonB // Array of aliases
+   765→   765→  description         String?           @db.Text
+   766→   766→  type                ThreatActorType
+   767→   767→  motivation          ThreatMotivation?
+   768→   768→  capability          CapabilityLevel   @default(INTERMEDIATE)
+   769→   769→  confidence          Float             @default(0.0) // 0.0 to 1.0
+   770→   770→  
+   771→   771→  // Attribution
+   772→   772→  country             String?           // ISO 3166-1 alpha-2
+   773→   773→  region              String?           // Geographic region
+   774→   774→  originConfidence    OriginConfidence? @default(MEDIUM
+   775→   775→  firstSeen           DateTime?         @db.Timestamptz
+   776→   776→  lastSeen           DateTime?          @db.Timestamptz
+   777→   777→  isActive            Boolean           @default(true)
+   778→   778→  
+   779→   779→  // Targeting Focus
+   780→   780→  targetSectors       String[]          @db.Text[]
+   781→   781→  targetCountries     String[]          @db.Text[] // ISO codes
+   782→   782→  targetRegions       String[]          @db.Text[]
+   783→   783→  
+   784→   784→  // TTPs (Tactics, Techniques, Procedures)
+   785→   785→  tactics             Jsonb?            @db.JsonB // MITRE ATT&CK tactics
+   786→   786→  techniques          Jsonb?            @db.JsonB // MITRE ATT&CK techniques
+   787→   787→  
+   788→   788→  // Financial Intelligence
+   789→   789→  financialMotivation String?           @db.Text
+   790→   790→  knownInfrastructure String[]          @db.Text[] // Known infrastructure (domains, IPs)
+   791→   791→  
+   792→   792→  // Relations
+   793→   793→  indicators          Indicator[]
+   794→   794→  campaigns           Campaign[]
+   795→   795→  
+   796→   796→  // Metadata
+   797→   797→  externalRefs        Jsonb?            @db.JsonB
+   798→   798→  notes               String?           @db.Text
+   799→   799→  sourceQuality       SourceQuality?    @default(MEDIUM)
+   800→   800→  
+   801→   801→  // Audit
+   802→   802→  createdBy           String?
+   803→   803→  updatedBy           String?
+   804→   804→  deletedAt           DateTime?         @db.Timestamptz
+   805→   805→  
+   806→   806→  createdAt           DateTime          @default(now()) @db.Timestamptz
+   807→   807→  updatedAt           DateTime          @updatedAt @db.Timestamptz
+   808→   808→
+   809→   809→  @@index([type])
+   810→   810→  @@index([country])
+   811→   811→  @@index([isActive])
+   812→   812→  @@map("threat_actors")
+   813→   813→}
+   814→   814→
+   815→   815→enum OriginConfidence {
+   816→   816→  VERY_HIGH
+   817→   817→  HIGH
+   818→   818→  MEDIUM
+   819→   819→  LOW
+   820→   820→  VERY_LOW
+   821→   821→  UNKNOWN
+   822→   822→}
+   823→   823→
+   824→   824→enum SourceQuality {
+   825→   825→  EXCELLENT
+   826→   826→  GOOD
+   827→   827→  MEDIUM
+   828→   828→  LOW
+   829→   829→  UNVERIFIED
+   830→   830→}
+   831→   831→
+   832→   832→enum ThreatActorType {
+   833→   833→  APT
+   834→   834→  CRIME_SYNDICATE
+   835→   835→  HACKTIVIST
+   836→   836→  INSIDER
+   837→   837→  NATION_STATE
+   838→   838→  TERRORIST
+   839→   839→  UNKNOWN
+   840→   840→  SCRIPT_KIDDIE
+   841→   841→  COMPETITOR
+   842→   842→  TELECOM_FRAUD_RING
+   843→   843→  STATE_SPONSORED
+   844→   844→  MERcenARY
+   845→   845→}
+   846→   846→
+   847→   847→enum ThreatMotivation {
+   848→   848→  ESPIONAGE
+   849→   849→  FINANCIAL_GAIN
+   850→   850→  DESTRUCTION
+   851→   851→  IDEOLOGICAL
+   852→   852→  POLITICAL
+   853→   853→  PERSONAL_GRATIFICATION
+   854→   854→  REPUTATIONAL
+   855→   855→  STRATEGIC_ADVANTAGE
+   856→   856→  TERRORISM
+   857→   857→  TELECOM_REVENUE_FRAUD
+   858→   858→  SUBSCRIPTION_THEFT
+   859→   859→  INTELLIGENCE_GATHERING
+   860→   860→  UNKNOWN
+   861→   861→}
+   862→   862→
+   863→   863→enum CapabilityLevel {
+   864→   864→  NOVICE
+   865→   865→  INTERMEDIATE
+   866→   866→  ADVANCED
+   867→   867→  EXPERT
+   868→   868→  ELITE
+   869→   869→}
+   870→   870→
+   871→   871→model Indicator {
+   872→   872→  id                  String              @id @default(cuid())
+   873→   873→  type                IndicatorType
+   874→   874→  value               String
+   875→   875→  valueNormalized     String?             // Normalized form for matching
+   876→   876→  description         String?             @db.Text
+   877→   877→  
+   878→   878→  // Classification
+   879→   879→  tlp                 TLPLevel            @default(WHITE)
+   880→   880→  confidence          Float               @default(0.0)
+   881→   881→  severity            IndicatorSeverity   @default(UNKNOWN)
+   882→   882→  
+   883→   883→  // Source
+   884→   884→  source              String?             // Where indicator came from
+   885→   885→  sourceUrl           String?
+   886→   886→  sourceDate          DateTime?           @db.Timestamptz
+   887→   887→  threatActorId       String?
+   888→   888→  threatActor         ThreatActor?        @relation(fields: [threatActorId], references: [id])
+   889→   889→  campaignId          String?
+   890→   890→  campaign            Campaign?           @relation(fields: [campaignId], references: [id])
+   891→   891→  
+   892→   892→  // Validity
+   893→   893→  validFrom           DateTime?           @db.Timestamptz
+   894→   894→  validUntil          DateTime?           @db.Timestamptz
+   895→   895→  isActive            Boolean             @default(true)
+   896→   896→  
+   897→   897→  // Enrichment
+   898→   898→  context             Jsonb?              @db.JsonB
+   899→   899→  detectionCount      Int                 @default(0)
+   900→   900→  firstDetected       DateTime?           @db.Timestamptz
+   901→   901→  lastDetected        DateTime?           @db.Timestamptz
+   902→   902→  falsePositiveRate   Float               @default(0.0)
+   903→   903→  truePositiveRate    Float               @default(0.0)
+   904→   904→  
+   905→   905→  // Kill Chain / MITRE
+   906→   906→  killChainPhase      KillChainPhase?
+   907→   907→  mitreTechniqueIds   String[]            @db.Text[]
+   908→   908→  
+   909→   909→  // Actions
+   910→   910→  action              IndicatorAction     @default(ALERT_ONLY)
+   911→   911→  
+   912→   912→  // Tags & Labels
+   913→   913→  tags                String[]            @db.Text[]
+   914→   914→  labels              String[]            @db.Text[]
+   915→   915→  externalRefs        Jsonb?              @db.JsonB
+   916→   916→  
+   917→   917→  // Audit
+   918→   918→  createdBy           String?
+   919→   919→  updatedBy           String?
+   920→   920→  deletedAt           DateTime?           @db.Timestamptz
+   921→   921→  
+   922→   922→  createdAt           DateTime            @default(now()) @db.Timestamptz
+   923→   923→  updatedAt           DateTime            @updatedAt @db.Timestamptz
+   924→   924→
+   925→   925→  @@index([type])
+   926→   926→  @@index([value])
+   927→   927→  @@index([valueNormalized])
+   928→   928→  @@index([isActive])
+   929→   929→  @@index([tlp])
+   930→   930→  @@index([firstDetected])
+   931→   931→  @@index([lastDetected])
+   932→   932→  @@map("indicators")
+   933→   933→}
+   934→   934→
+   935→   935→enum KillChainPhase {
+   936→   936→  RECONNAISSANCE
+   937→   937→  WEAPONIZATION
+   938→   938→  DELIVERY
+   939→   939→  EXPLOITATION
+   940→   940→  INSTALLATION
+   941→   941→  COMMAND_AND_CONTROL
+   942→   942→  ACTIONS_ON_OBJECTIVES
+   943→   943→  EXFILTRATION
+   944→   944→  UNKNOWN
+   945→   945→}
+   946→   946→
+   947→   947→enum IndicatorType {
+   948→   948→  IP_DOMAIN
+   949→   949→  IP_ADDRESS
+   950→   950→  DOMAIN
+   951→   951→  URL
+   952→   952→  URL_PATH
+   953→   953→  EMAIL
+   954→   954→  EMAIL_SUBJECT
+   955→   955→  FILE_HASH_MD5
+   956→   956→  FILE_HASH_SHA1
+   957→   957→  FILE_HASH_SHA256
+   958→   958→  FILE_HASH_SSDEEP
+   959→   959→  CVE
+   960→   960→  MUTANT
+   961→   961→  REGISTRY_KEY
+   962→   962→  USER_AGENT
+   963→   963→  YARA_RULE
+   964→   964→  SIGMA_RULE
+   965→   965→  SURICATA_RULE
+   966→   966→  SNORT_RULE
+   967→   967→  IMEI
+   968→   968→  IMSI
+   969→   969→  MSISDN
+   970→   970→  ICCID
+   971→   971→  PHONE_NUMBER
+   972→   972→  BITCOIN_ADDRESS
+   973→   973→  CIDR_BLOCK
+   974→   974→  JA3_HASH
+   975→   975→  JARM_HASH
+   976→   976→  CERTIFICATE_HASH
+   977→   977→  SSH_KEY_FINGERPRINT
+   978→   978→  MAC_ADDRESS
+   979→   979→  BSSID
+   980→   980→  APN_NAME
+   981→   981→  GTP_TUNNEL_ID
+   982→   982→  SS7_GLOBAL_TITLE
+   983→   983→  DNS_QUERY
+   984→   984→  TLS_SNI
+   985→   985→  HOSTNAME
+   986→   986→  PROCESS_NAME
+   987→   987→  MUTEX
+   988→   988→  NAMED_PIPE
+   989→   989→  SERVICE_NAME
+   990→   990→  DRIVER_NAME
+   991→   991→  Scheduled_TASK
+   992→   992→}
+   993→   993→
+   994→   994→enum TLPLevel {
+   995→   995→  RED
+   996→   996→  AMBER
+   997→   997→  GREEN
+   998→   998→  WHITE
+   999→   999→  CLEAR
+  1000→  1000→  AMBER_STRICT
+  1001→  1001→}
+  1002→  1002→
+  1003→  1003→enum IndicatorSeverity {
+  1004→  1004→  CRITICAL
+  1005→  1005→  HIGH
+  1006→  1006→  MEDIUM
+  1007→  1007→  LOW
+  1008→  1008→  INFO
+  1009→  1009→  UNKNOWN
+  1010→  1010→}
+  1011→  1011→
+  1012→  1012→enum IndicatorAction {
+  1013→  1013→  ALERT_ONLY
+  1014→  1014→  BLOCK
+  1015→  1015→  BLOCK_AND_ALERT
+  1016→  1016→  ALLOW_LIST
+  1017→  1017→  REDIRECT
+  1018→  1018→  RATE_LIMIT
+  1019→  1019→  CAPTCHA_CHALLENGE
+  1020→  1020→  ISOLATE_ENDPOINT
+  1021→  1021→  QUARANTINE_FILE
+  1022→  1022→  DISABLE_ACCOUNT
+  1023→  1023→  NOTIFY_OPERATOR
+  1024→  1024→}
+  1025→  1025→
+  1026→  1026→model Campaign {
+  1027→  1027→  id                  String            @id @default(cuid())
+  1028→  1028→  name                String
+  1029→  1029→  description         String?           @db.Text
+  1030→  1030→  
+  1031→  1031→  // Timeline
+  1032→  1032→  startDate           DateTime?         @db.Timestamptz
+  1033→  1033→  endDate             DateTime?         @db.Timestamptz
+  1034→  1034→  isActive            Boolean           @default(true)
+  1035→  1035→  
+  1036→  1036→  // Targeting
+  1037→  1037→  targetSector        String[]          @db.Text[]
+  1038→  1038→  targetCountry       String[]          @db.Text[] // ISO codes
+  1039→  1039→  targetRegion        String?           // e.g., MENA, North Africa, Maghreb
+  1040→  1040→  
+  1041→  1041→  // Attribution
+  1042→  1042→  threatActorId       String
+  1043→  1043→  threatActor         ThreatActor       @relation(fields: [threatActorId], references: [id])
+  1044→  1044→  
+  1045→  1045→  // Relations
+  1046→  1046→  indicators          Indicator[]
+  1047→  1047→  
+  1048→  1048→  // Intelligence
+  1049→  1049→  objectives          String?           @db.Text
+  1050→  1050→  intendedEffect      String?           @db.Text
+  1051→  1051→  
+  1052→  1052→  // Metadata
+  1053→  1053→  externalRefs        Jsonb?            @db.JsonB
+  1054→  1054→  notes               String?           @db.Text
+  1055→  1055→  
+  1056→  1056→  // Audit
+  1057→  1057→  createdBy           String?
+  1058→  1058→  updatedBy           String?
+  1059→  1059→  deletedAt           DateTime?         @db.Timestamptz
+  1060→  1060→  
+  1061→  1061→  createdAt           DateTime          @default(now()) @db.Timestamptz
+  1062→  1062→  updatedAt           DateTime          @updatedAt @db.Timestamptz
+  1063→  1063→
+  1064→  1064→  @@index([threatActorId])
+  1065→  1065→  @@index([isActive])
+  1066→  1066→  @@map("campaigns")
+  1067→  1067→}
+  1068→  1068→
+  1069→  1069→// ============= ASSET MANAGEMENT (Telecom Infrastructure) =============
+  1070→  1070→
+  1071→  1071→model Asset {
+  1072→  1072→  id                  String            @id @default(cuid())
+  1073→  1073→  assetId             String            @unique // e.g., AST-HLR-001
+  1074→  1074→  name                String
+  1075→  1075→  description         String?           @db.Text
+  1076→  1076→  type                AssetType
+  1077→  1077→  category            AssetCategory
+  1078→  1078→  criticality         AssetCriticality  @default(MEDIUM)
+  1079→  1079→  
+  1080→  1080→  // Location & Network
+  1081→  1081→  location            String?           // Data center/site name
+  1082→  1082→  locationCode        String?           // Site code
+  1083→  1083→  region              String?           // Region code
+  1084→  1084→  zone                String?           // Availability zone
+  1085→  1085→  networkSegment      String?           // VLAN/network segment
+  1086→  1086→  
+  1087→  1087→  // Network Identity
+  1088→  1088→  ipAddress           String?           // Primary IP
+  1089→  1089→  ipAddresses         String[]          @db.Text[] // All IPs
+  1090→  1090→  hostname            String?
+  1091→  1091→  fqdn                String?
+  1092→  1092→  macAddress          String?
+  1093→  1093→  
+  1094→  1094→  // Telecom-Specific Attributes
+  1095→  1095→  vendor              String?           // Equipment vendor (Huawei, Ericsson, Nokia, ZTE)
+  1096→  1096→  model               String?           // Equipment model
+  1097→  1097→  softwareVersion     String?
+  1098→  1098→  serialNumber        String?
+  1099→  1099→  licenseInfo         String?           @db.Text
+  1100→  1100→  
+  1101→  1101→  // Capacity Information
+  1102→  1102→  capacityMax         Int?              // Maximum capacity
+  1103→  1103→  capacityCurrent     Int?              // Current utilization
+  1104→  1104→  capacityUnit        String?           // Unit of measurement
+  1105→  1105→  
+  1106→  1106→  // Operational Status
+  1107→  1107→  operationalStatus   AssetOperationalStatus @default(OPERATIONAL)
+  1108→  1108→  maintenanceWindow   String?           @db.Text
+  1109→  1109→  lastMaintenance     DateTime?         @db.Timestamptz
+  1110→  1110→  nextMaintenance     DateTime?         @db.Timestamptz
+  1111→  1111→  
+  1112→  1112→  // Ownership
+  1113→  1113→  owner               String?           // Team/department owner
+  1114→  1114→  ownerId             String?           // User who manages this asset
+  1115→  1115→  ownerUser           User?             @relation("AssetCreator", fields: [ownerId], references: [id])
+  1116→  1116→  
+  1117→  1117→  // Security
+  1118→  1118→  securityZone        SecurityZone?
+  1119→  1119→  complianceRequired  String[]          @db.Text[] // Required compliance frameworks
+  1120→  1120→  lastVulnerabilityScan DateTime?      @db.Timestamptz
+  1121→  1121→  vulnerabilityScore  Int?              // CVSS score
+  1122→  1122→  openVulnerabilities Int?             @default(0)
+  1123→  1123→  
+  1124→  1124→  // Monitoring
+  1125→  1125→  monitoringEnabled   Boolean           @default(true)
+  1126→  1126→  monitoringTool      String?
+  1127→  1127→  alertingProfile    String?
+  1128→  1128→  
+  1129→  1129→  // Relations
+  1130→  1130→  parentAssetId       String?
+  1131→  1131→  childAssets         Asset[]           @relation("AssetHierarchy")
+  1132→  1132→  incidents           Incident[]        @relation("AssetIncident") // Incidents affecting this asset
+  1133→  1133→  
+  1134→  1134→  // Configuration
+  1135→  1135→  configuration       Jsonb?            @db.JsonB // Current configuration snapshot
+  1136→  1136→  tags                String[]          @db.Text[]
+  1137→  1137→  customFields        Jsonb?            @db.JsonB
+  1138→  1138→  
+  1139→  1139→  // ARPT Compliance
+  1140→  1140→  arptRegistered      Boolean           @default(false)
+  1141→  1141→  arptRegistrationRef String?
+  1142→  1142→  
+  1143→  1143→  // Audit
+  1144→  1144→  createdBy           String?
+  1145→  1145→  updatedBy           String?
+  1146→  1146→  deletedAt           DateTime?         @db.Timestamptz
+  1147→  1147→  
+  1148→  1148→  createdAt           DateTime          @default(now()) @db.Timestamptz
+  1149→  1149→  updatedAt           DateTime          @updatedAt @db.Timestamptz
+  1150→  1150→
+  1151→  1151→  @@index([type])
+  1152→  1152→  @@index([category])
+  1153→  1153→  @@index([criticality])
+  1154→  1154→  @@index([operationalStatus])
+  1155→  1155→  @@index([ipAddress])
+  1156→  1156→  @@index([hostname])
+  1157→  1157→  @@index([location])
+  1158→  1158→  @@index([vendor])
+  1159→  1159→  @@map("assets")
+  1160→  1160→}
+  1161→  1161→
+  1162→  1162→enum AssetType {
+  1163→  1163→  // Core Network Elements
+  1164→  1164→  HLR                 // Home Location Register
+  1165→  1165→  VLR                 // Visitor Location Register
+  1166→  1166→  MSC                 // Mobile Switching Center
+  1167→  1167→  GMSC                // Gateway MSC
+  1168→  1168→  SGSN                // Serving GPRS Support Node
+  1169→  1169→  GGSN                // Gateway GPRS Support Node
+  1170→  1170→  MME                 // Mobility Management Entity (LTE)
+  1171→  1171→  SGW                 // Serving Gateway (EPC)
+  1172→  1172→  PGW                 // PDN Gateway (EPC)
+  1173→  1173→  HSS                 // Home Subscriber Server (LTE/5G)
+  1174→  1174→  PCRF                // Policy and Charging Rules Function
+  1175→  1175→  IMS                 // IP Multimedia Subsystem core
+  1176→  1176→  
+  1177→  1177→  // Radio Access Network
+  1178→  1178→  NODEB               // NodeB (3G)
+  1179→  1179→  ENODEB              // eNodeB (LTE)
+  1180→  1180→  GNODEB              // gNodeB (5G-NR)
+  1181→  1181→  RNC                 // Radio Network Controller
+  1182→  1182→  BSC                 // Base Station Controller
+  1183→  1183→  BTS                 // Base Transceiver Station
+  1184→  1184→  
+  1185→  1185→  // Signaling & Transport
+  1186→  1186→  STP                 // Signaling Transfer Point
+  1187→  1187→  SSP                 // Signaling Switching Point
+  1188→  1188→  SIGTRAN_GATEWAY     // SIGTRAN/SS7 Gateway
+  1189→  1189→  DRA                 // Diameter Routing Agent
+  1190→  1190→  
+  1191→  1191→  // IT Infrastructure
+  1192→  1192→  SERVER
+  1193→  1193→  WORKSTATION
+  1194→  1194→  FIREWALL
+  1195→  1195→  LOAD_BALANCER
+  1196→  1196→  ROUTER
+  1197→  1197→  SWITCH
+  1198→  1198→  ACCESS_POINT
+  1199→  1199→  STORAGE
+  1200→  1200→  BACKUP_SYSTEM
+  1201→  1201→  
+  1202→  1202→  // Security Systems
+  1203→  1203→  SIEM
+  1204→  1204→  IDS_IPS
+  1205→  1205→  EDR
+  1206→  1206→  NAC                 // Network Access Control
+  1207→  1207→  WAF                 // Web Application Firewall
+  1208→  1208→  EMAIL_SECURITY
+  1209→  1209→  DNS_SECURITY
+  1210→  1210→  VPN_CONCENTRATOR
+  1211→  1211→  HSM                 // Hardware Security Module
+  1212→  1212→  
+  1213→  1213→  // Applications
+  1214→  1214→  APPLICATION
+  1215→  1215→  DATABASE
+  1216→  1216→  MESSAGE_QUEUE
+  1217→  1217→  CACHE
+  1218→  1218→  API_GATEWAY
+  1219→  1219→  SERVICE_BUS
+  1220→  1220→  
+  1221→  1221→  // Telecom Specific
+  1222→  1222→  IN Billing System
+  1223→  1223→  CRM_SYSTEM
+  1224→  1224→  PROVISIONING_SYSTEM
+  1225→  1225→  MEDiation_DEVICE
+  1226→  1226→  IN_CPE              // Customer Premises Equipment
+  1227→  1227→  SIM_REGISTRATION
+  1228→  1228→  NUMBER_PORTABILITY
+  1229→  1229→}
+  1230→  1230→
+  1231→  1231→enum AssetCategory {
+  1232→  1232→  CORE_NETWORK
+  1233→  1233→  RADIO_ACCESS_NETWORK
+  1234→  1234→  TRANSPORT_NETWORK
+  1235→  1235→  IT_INFRASTRUCTURE
+  1236→  1236→  SECURITY_SYSTEMS
+  1237→  1237→  APPLICATIONS
+  1238→  1238→  ENDPOINTS
+  1239→  1239→  FACILITIES
+  1240→  1240→  THIRD_PARTY
+  1241→  1241→  CLOUD_SERVICE
+  1242→  1242→  MOBILE_DEVICE
+  1243→  1243→  IOT_DEVICE
+  1244→  1244→  OT_ICS              // Operational Technology / Industrial Control System
+  1245→  1245→}
+  1246→  1246→
+  1247→  1247→enum AssetCriticality {
+  1248→  1248→  MISSION_CRITICAL    // Single point of failure, national impact
+  1249→  1249→  BUSINESS_CRITICAL   // Major business impact
+  1250→  1250→  HIGH                // Significant regional impact
+  1251→  1251→  MEDIUM              // Moderate impact
+  1252→  1252→  LOW                 // Minimal impact
+  1253→  1253→}
+  1254→  1254→
+  1255→  1255→enum AssetOperationalStatus {
+  1256→  1256→  OPERATIONAL
+  1257→  1257→  DEGRADED
+  1258→  1258→  MAINTENANCE
+  1259→  1259→  FAILED
+  1260→  1260→  DECOMMISSIONED
+  1261→  1261→  PROVISIONING
+  1262→  1262→  TESTING
+  1263→  1263→  UNKNOWN
+  1264→  1264→}
+  1265→  1265→
+  1266→  1266→enum SecurityZone {
+  1267→  1267→  DMZ
+  1268→  1268→  INTERNAL
+  1269→  1269→  RESTRICTED
+  1270→  1270→  HIGH_SECURITY
+  1271→  1271→  OPERATIONS
+  1272→  1272→  MANAGEMENT
+  1273→  1273→  EXTERNAL
+  1274→  1274→  ISOLATED
+  1275→  1275→  SCADA_OT
+  1276→  1276→}
+  1277→  1277→
+  1278→  1278→// ============= SYSTEM HEALTH & MONITORING =============
+  1279→  1279→
+  1280→  1280→model SystemComponent {
+  1281→  1281→  id                      String              @id @default(cuid())
+  1282→  1282→  name                    String              @unique
+  1283→  1283→  displayName             String
+  1284→  1284→  category                ComponentCategory
+  1285→  1285→  description             String?             @db.Text
+  1286→  1286→  
+  1287→  1287→  // Status
+  1288→  1288→  status                  ComponentStatus     @default(UNKNOWN)
+  1289→  1289→  healthScore             Int                 @default(0) // 0-100
+  1290→  1290→  
+  1291→  1291→  // Version & Uptime
+  1292→  1292→  version                 String?
+  1293→  1293→  uptimeSeconds           BigInt              @default(0)
+  1294→  1294→  lastCheck               DateTime?           @db.Timestamptz
+  1295→  1295→  
+  1296→  1296→  // Resources
+  1297→  1297→  cpuUsage                Float?              // percentage
+  1298→  1298→  memoryUsage             Float?              // percentage
+  1299→  1299→  diskUsage               Float?              // percentage
+  1300→  1300→  networkIn               BigInt?
+  1301→  1301→  networkOut              BigInt?
+  1302→  1302→  
+  1303→  1303→  // Endpoints
+  1304→  1304→  endpoint                String?
+  1305→  1305→  apiKey                  String?             // encrypted reference
+  1306→  1306→  config                  Jsonb?              @db.JsonB
+  1307→  1307→  
+  1308→  1308→  // Statistics
+  1309→  1309→  eventsToday             BigInt              @default(0)
+  1310→  1310→  alertsToday             Int                 @default(0)
+  1311→  1311→  errorsToday             Int                 @default(0)
+  1312→  1312→  
+  1313→  1313→  // Health Checks
+  1314→  1314→  healthChecks            Jsonb?              @db.JsonB // Array of health check results
+  1315→  1315→  dependencies            String[]            @db.Text[] // Component IDs this depends on
+  1316→  1316→  
+  1317→  1317→  isEnabled               Boolean             @default(true)
+  1318→  1318→  
+  1319→  1319→  // Maintenance
+  1320→  1320→  maintenanceWindowStart  DateTime?           @db.Timestamptz
+  1321→  1321→  maintenanceWindowEnd    DateTime?           @db.Timestamptz
+  1322→  1322→  nextMaintenance         DateTime?           @db.Timestamptz
+  1323→  1323→  
+  1324→  1324→  // SLA
+  1325→  1325→  slaUptimeTarget         Float               @default(99.9) // percentage
+  1326→  1326→  slaUptimeActual         Float?              // percentage
+  1327→  1327→  lastIncidentDate        DateTime?           @db.Timestamptz
+  1328→  1328→  
+  1329→  1329→  // Audit
+  1330→  1330→  createdBy               String?
+  1331→  1331→  updatedBy               String?
+  1332→  1332→  
+  1333→  1333→  createdAt               DateTime            @default(now()) @db.Timestamptz
+  1334→  1334→  updatedAt               DateTime            @updatedAt @db.Timestamptz
+  1335→  1335→
+  1336→  1336→  @@index([category])
+  1337→  1337→  @@index([status])
+  1338→  1338→  @@map("system_components")
+  1339→  1339→}
+  1340→  1340→
+  1341→  1341→enum ComponentCategory {
+  1342→  1342→  SIEM
+  1343→  1343→  SOAR
+  1344→  1344→  EDR
+  1345→  1345→  TIP
+  1346→  1346→  IDS_IPS
+  1347→  1347→  LOGGING
+  1348→  1348→  MONITORING
+  1349→  1349→  SECURITY
+  1350→  1350→  INFRASTRUCTURE
+  1351→  1351→  DATABASE
+  1352→  1352→  CACHE
+  1353→  1353→  MESSAGE_QUEUE
+  1354→  1354→  OBJECT_STORAGE
+  1355→  1355→  IDENTITY
+  1356→  1356→  NETWORK
+  1357→  1357→  BACKUP
+  1358→  1358→  TELECOM_CORE
+  1359→  1359→  TELECOM_RAN
+  1360→  1360→  TELECOM_SIGNALLING
+  1361→  1361→  BILLING
+  1362→  1362→  PROVISIONING
+  1363→  1363→  CUSTOMER_FACING
+  1364→  1364→}
+  1365→  1365→
+  1366→  1366→enum ComponentStatus {
+  1367→  1367→  OPERATIONAL
+  1368→  1368→  DEGRADED
+  1369→  1369→  DOWN
+  1370→  1370→  STARTING
+  1371→  1371→  MAINTENANCE
+  1372→  1372→  ERROR
+  1373→  1373→  UNKNOWN
+  1374→  1374→  PARTIAL_OUTAGE
+  1375→  1375→}
+  1376→  1376→
+  1377→  1377→// ============= AUDIT LOGGING =============
+  1378→  1378→
+  1379→  1379→model AuditLog {
+  1380→  1380→  id                  String          @id @default(cuid())
+  1381→  1381→  userId              String?
+  1382→  1382→  user                User?           @relation(fields: [userId], references: [id])
+  1383→  1383→  userName            String?         // Snapshot of username at time of action
+  1384→  1384→  userRole            UserRole?
+  1385→  1385→  
+  1386→  1386→  action              AuditAction
+  1387→  1387→  resourceType        ResourceType
+  1388→  1388→  resourceId          String
+  1389→  1389→  resourceName        String?
+  1390→  1390→  
+  1391→  1391→  // Request Context
+  1392→  1392→  ipAddress           String?
+  1393→  1393→  userAgent           String?         @db.Text
+  1394→  1394→  sessionId           String?
+  1395→  1395→  requestId           String?         // Correlation ID for distributed tracing
+  1396→  1396→  
+  1397→  1397→  // Change Details
+  1398→  1398→  oldValue            Jsonb?          @db.JsonB // Snapshot of old value
+  1399→  1399→  newValue            Jsonb?          @db.JsonB // Snapshot of new value
+  1400→  1400→  changedFields       String[]        @db.Text[] // List of changed field names
+  1401→  1401→  metadata            Jsonb?          @db.JsonB // Additional context
+  1402→  1402→  
+  1403→  1403→  // Result
+  1404→  1404→  success             Boolean         @default(true)
+  1405→  1405→  errorMessage        String?         @db.Text
+  1406→  1406→  errorCode           String?
+  1407→  1407→  durationMs          Int?            // Operation duration in milliseconds
+  1408→  1408→  
+  1409→  1409→  // Regulatory
+  1410→  1410→  arptRetainUntil     DateTime?       @db.Timestamptz // Mandatory retention period
+  1411→  1411→  complianceTag       String?         // Compliance framework tag
+  1412→  1412→  
+  1413→  1413→  // Timestamp
+  1414→  1414→  timestamp           DateTime        @default(now()) @db.Timestamptz
+  1415→  1415→
+  1416→  1416→  @@index([userId])
+  1417→  1417→  @@index([action])
+  1418→  1418→  @@index([resourceType])
+  1419→  1419→  @@index([resourceId])
+  1420→  1420→  @@index([timestamp])
+  1421→  1421→  @@index([ipAddress])
+  1422→  1422→  @@index([success])
+  1423→  1423→  @@map("audit_logs")
+  1424→  1424→}
+  1425→  1425→
+  1426→  1426→enum AuditAction {
+  1427→  1427→  CREATE
+  1428→  1428→  READ
+  1429→  1429→  UPDATE
+  1430→  1430→  DELETE
+  1431→  1431→  LOGIN
+  1432→  1432→  LOGOUT
+  1433→  1433→  LOGIN_FAILED
+  1434→  1434→  EXPORT
+  1435→  1435→  IMPORT
+  1436→  1436→  CONFIG_CHANGE
+  1437→  1437→  ROLE_CHANGE
+  1438→  1438→  PERMISSION_CHANGE
+  1439→  1439→  PASSWORD_CHANGE
+  1440→  1440→  MFA_ENABLED
+  1441→  1441→  MFA_DISABLED
+  1442→  1442→  API_KEY_CREATED
+  1443→  1443→  API_KEY_REVOKED
+  1444→  1444→  ALERT_ACKNOWLEDGE
+  1445→  1445→  ALERT_ESCALATE
+  1446→  1446→  ALERT_RESOLVE
+  1447→  1447→  ALERT_SUPPRESS
+  1448→  1448→  ALERT_FALSE_POSITIVE
+  1449→  1449→  INCIDENT_CREATE
+  1450→  1450→  INCIDENT_UPDATE
+  1451→  1451→  INCIDENT_ESCALATE
+  1452→  1452→  INCIDENT_CLOSE
+  1453→  1453→  TASK_CREATE
+  1454→  1454→  TASK_UPDATE
+  1455→  1455→  TASK_COMPLETE
+  1456→  1456→  EVIDENCE_UPLOAD
+  1457→  1457→  EVIDENCE_ACCESS
+  1458→  1458→  EVIDENCE_DELETE
+  1459→  1459→  INDICATOR_CREATE
+  1460→  1460→  INDICATOR_UPDATE
+  1461→  1461→  INDICATOR_ACTIVATE
+  1462→  1462→  INDICATOR_DEACTIVATE
+  1463→  1463→  SYSTEM_START
+  1464→  1464→  SYSTEM_STOP
+  1465→  1465→  BACKUP_CREATE
+  1466→  1466→  RESTORE_PERFORM
+  1467→  1467→  INTEGRATION_CONFIGURE
+  1468→  1468→  INTEGRATION_DISABLE
+  1469→  1469→  REPORT_GENERATE
+  1470→  1470→  REPORT_EXPORT
+  1471→  1471→  USER_CREATE
+  1472→  1472→  USER_UPDATE
+  1473→  1473→  USER_DISABLE
+  1474→  1474→  USER_UNLOCK
+  1475→  1475→  ASSET_REGISTER
+  1476→  1476→  ASSET_UPDATE
+  1477→  1477→  ASSET_DECOMMISSION
+  1478→  1478→  PLAYBOOK_EXECUTE
+  1479→  1479→  PLAYBOOK_APPROVE
+  1480→  1480→  DATA_PURGE
+  1481→  1481→  RETENTION_POLICY_CHANGE
+  1482→  1482→}
+  1483→  1483→
+  1484→  1484→enum ResourceType {
+  1485→  1485→  USER
+  1486→  1486→  ALERT
+  1487→  1487→  INCIDENT
+  1488→  1488→  TASK
+  1489→  1489→  EVIDENCE
+  1490→  1490→  INDICATOR
+  1491→  1491→  THREAT_ACTOR
+  1492→  1492→  CAMPAIGN
+  1493→  1493→  SYSTEM_COMPONENT
+  1494→  1494→  CONFIGURATION
+  1495→  1495→  REPORT
+  1496→  1496→  API_KEY
+  1497→  1497→  INTEGRATION
+  1498→  1498→  PLAYBOOK
+  1499→  1499→  RULE
+  1500→  1500→  DASHBOARD
+  1501→  1501→  ASSET
+  1502→  1502→  SESSION
+  1503→  1503→  COMPLIANCE_REPORT
+  1504→  1504→  AUDIT_LOG
+  1505→  1505→  API_TOKEN
+  1506→  1506→  ROLE
+  1507→  1507→  PERMISSION
+  1508→  1508→  TELECOM_EVENT
+  1509→  1509→  SUBSCRIBER_RECORD
+  1510→  1510→}
+  1511→  1511→
+  1512→  1512→// ============= NOTIFICATIONS =============
+  1513→  1513→
+  1514→  1514→model Notification {
+  1515→  1515→  id                  String                @id @default(cuid())
+  1516→  1516→  userId              String
+  1517→  1517→  user                User                  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  1518→  1518→  type                NotificationType
+  1519→  1519→  title               String
+  1520→  1520→  message             String?               @db.Text
+  1521→  1521→  severity            NotificationSeverity  @default(INFO)
+  1522→  1522→  
+  1523→  1523→  // Status
+  1524→  1524→  isRead              Boolean               @default(false)
+  1525→  1525→  readAt              DateTime?             @db.Timestamptz
+  1526→  1526→  
+  1527→  1527→  // Action
+  1528→  1528→  actionUrl           String?
+  1529→  1529→  actionText          String?
+  1530→  1530→  resourceId          String?
+  1531→  1531→  resourceType        String?
+  1532→  1532→  
+  1533→  1533→  // Delivery Channels
+  1534→  1534→  deliveryChannels    NotificationChannel[] @default([IN_APP])
+  1535→  1535→  deliveryStatus      Jsonb?                @db.JsonB // Per-channel delivery status
+  1536→  1536→  emailSent           Boolean               @default(false)
+  1537→  1537→  smsSent             Boolean               @default(false)
+  1538→  1538→  pushSent            Boolean               @default(false)
+  1539→  1539→  webhookSent         Boolean               @default(false)
+  1540→  1540→  slackSent           Boolean               @default(false)
+  1541→  1541→  
+  1542→  1542→  // Timestamps
+  1543→  1543→  sendAt              DateTime              @db.Timestamptz
+  1544→  1544→  deliveredAt         DateTime?             @db.Timestamptz
+  1545→  1545→  expireAt            DateTime?             @db.Timestamptz
+  1546→  1546→  
+  1547→  1547→  // Retry
+  1548→  1548→  retryCount          Int                   @default(0)
+  1549→  1549→  maxRetries          Int                   @default(3)
+  1550→  1550→  lastError           String?               @db.Text
+  1551→  1551→  
+  1552→  1552→  // Audit
+  1553→  1553→  createdBy           String?
+  1554→  1554→  
+  1555→  1555→  createdAt           DateTime              @default(now()) @db.Timestamptz
+  1556→  1556→
+  1557→  1557→  @@index([userId])
+  1558→  1558→  @@index([isRead])
+  1559→  1559→  @@index([type])
+  1560→  1560→  @@index([sendAt])
+  1561→  1561→  @@map("notifications")
+  1562→  1562→}
+  1563→  1563→
+  1564→  1564→enum NotificationChannel {
+  1565→  1565→  IN_APP
+  1566→  1566→  EMAIL
+  1567→  1567→  SMS
+  1568→  1568→  PUSH
+  1569→  1569→  WEBHOOK
+  1570→  1570→  SLACK
+  1571→  1571→  TEAMS
+  1572→  1572→  PAGERDUTY
+  1573→  1573→  TELEGRAM
+  1574→  1574→}
+  1575→  1575→
+  1576→  1576→enum NotificationType {
+  1577→  1577→  ALERT_ASSIGNED
+  1578→  1578→  ALERT_ESCALATED
+  1579→  1579→  ALERT_SLA_WARNING
+  1580→  1580→  ALERT_SLA_BREACH
+  1581→  1581→  INCIDENT_CREATED
+  1582→  1582→  INCIDENT_UPDATED
+  1583→  1583→  INCIDENT_ASSIGNED
+  1584→  1584→  INCIDENT_SLA_WARNING
+  1585→  1585→  INCIDENT_SLA_BREACH
+  1586→  1586→  TASK_ASSIGNED
+  1587→  1587→  TASK_DUE
+  1588→  1588→  TASK_OVERDUE
+  1589→  1589→  THREAT_INTEL_UPDATE
+  1590→  1590→  IOC_MATCH
+  1591→  1591→  SYSTEM_ALERT
+  1592→  1592→  SYSTEM_DOWN
+  1593→  1593→  SYSTEM_DEGRADED
+  1594→  1594→  COMPLIANCE_REMINDER
+  1595→  1595→  REPORT_READY
+  1596→  1596→  MAINTENANCE_SCHEDULED
+  1597→  1597→  ANNOUNCEMENT
+  1598→  1598→  SECURITY_BULLETIN
+  1599→  1599→  PHISHING_SIMULATION
+  1600→  1600→  BACKUP_SUCCESS
+  1601→  1601→  BACKUP_FAILURE
+  1602→  1602→  INTEGRATION_ERROR
+  1603→  1603→  DATA_RETENTION_ALERT
+  1604→  1604→  ARPT_DEADLINE
+  1605→  1605→  LICENSE_EXPIRY
+  1606→  1606→  CAPACITY_THRESHOLD
+  1607→  1607→}
+  1608→  1608→
+  1609→  1609→enum NotificationSeverity {
+  1610→  1610→  CRITICAL
+  1611→  1611→  HIGH
+  1612→  1612→  MEDIUM
+  1613→  1613→  LOW
+  1614→  1614→  INFO
+  1615→  1615→}
+  1616→  1616→
+  1617→  1617→// ============= COMMENTS & COLLABORATION =============
+  1618→  1618→
+  1619→  1619→model Comment {
+  1620→  1620→  id                  String          @id @default(cuid())
+  1621→  1621→  content             String          @db.Text
+  1622→  1622→  userId              String
+  1623→  1623→  user                User            @relation(fields: [userId], references: [id])
+  1624→  1624→  
+  1625→  1625→  // Polymorphic relation
+  1626→  1626→  commentableType     CommentableType
+  1627→  1627→  commentableId       String
+  1628→  1628→  
+  1629→  1629→  // Thread
+  1630→  1630→  parentId            String?
+  1631→  1631→  parent              Comment?        @relation("CommentReplies", fields: [parentId], references: [id])
+  1632→  1632→  replies             Comment[]       @relation("CommentReplies")
+  1633→  1633→  
+  1634→  1634→  // Metadata
+  1635→  1635→  isEdited            Boolean         @default(false)
+  1636→  1636→  editedAt            DateTime?       @db.Timestamptz
+  1637→  1637→  isInternal          Boolean         @default(false) // Internal-only note
+  1638→  1638→  isMentionEnabled    Boolean         @default(true)
+  1639→  1639→  mentions            String[]        @db.Text[] // Mentioned user IDs
+  1640→  1640→  
+  1641→  1641→  // Attachments
+  1642→  1642→  attachments         Jsonb?          @db.JsonB // Array of attachment references
+  1643→  1643→  
+  1644→  1644→  // Audit
+  1645→  1645→  createdBy           String?
+  1646→  1646→  updatedAt           DateTime        @updatedAt @db.Timestamptz
+  1647→  1647→  deletedAt           DateTime?       @db.Timestamptz
+  1648→  1648→  
+  1649→  1649→  createdAt           DateTime        @default(now()) @db.Timestamptz
+  1650→  1650→
+  1651→  1651→  @@index([userId])
+  1652→  1652→  @@index([commentableType])
+  1653→  1653→  @@index([commentableId])
+  1654→  1654→  @@index([parentId])
+  1655→  1655→  @@map("comments")
+  1656→  1656→}
+  1657→  1657→
+  1658→  1658→enum CommentableType {
+  1659→  1659→  ALERT
+  1660→  1660→  INCIDENT
+  1661→  1661→  TASK
+  1662→  1662→  EVIDENCE
+  1663→  1663→  INDICATOR
+  1664→  1664→  THREAT_ACTOR
+  1665→  1665→  CAMPAIGN
+  1666→  1666→  ASSET
+  1667→  1667→  PLAYBOOK
+  1668→  1668→  REPORT
+  1669→  1669→}
+  1670→  1670→
+  1671→  1671→// ============= PLAYBOOKS & AUTOMATION =============
+  1672→  1672→
+  1673→  1673→model Playbook {
+  1674→  1674→  id                  String              @id @default(cuid())
+  1675→  1675→  name                String
+  1676→  1676→  description         String?             @db.Text
+  1677→  1677→  category            PlaybookCategory
+  1678→  1678→  severity            PlaybookSeverity     @default(MEDIUM)
+  1679→  1679→  
+  1680→  1680→  // Content
+  1681→  1681→  content             String              @db.Text // Markdown or structured content
+  1682→  1682→  steps               Jsonb?              @db.JsonB // Array of playbook steps
+  1683→  1683→  
+  1684→  1684→  // Automation
+  1685→  1685→  isAutomated         Boolean             @default(false)
+  1686→  1686→  automationEngine    AutomationEngine?   @default(CUSTOM)
+  1687→  1687→  automationScript    String?             @db.Text
+  1688→  1688→  triggers            Jsonb?              @db.JsonB // Array of trigger conditions
+  1689→  1689→  inputs              Jsonb?              @db.JsonB // Expected input parameters
+  1690→  1690→  outputs             Jsonb?              @db.JsonB // Expected outputs
+  1691→  1691→  
+  1692→  1692→  // Approval Workflow
+  1693→  1693→  approvalRequired    Boolean             @default(false)
+  1694→  1694→  approverRoles       String[]            @db.Text[]
+  1695→  1695→  approvalWorkflow    Jsonb?              @db.JsonB
+  1696→  1696→  
+  1697→  1697→  // Versioning
+  1698→  1698→  version             String              @default("1.0")
+  1699→  1699→  isPublished         Boolean             @default(false)
+  1700→  1700→  parentPlaybookId    String?
+  1701→  1701→  
+  1702→  1702→  // Usage Stats
+  1703→  1703→  executionCount      Int                 @default(0)
+  1704→  1704→  successRate         Float               @default(0.0)
+  1705→  1705→  avgExecutionTime    Int?                // minutes
+  1706→  1706→  lastExecutedAt      DateTime?           @db.Timestamptz
+  1707→  1707→  
+  1708→  1708→  // Testing
+  1709→  1709→  testCases           Jsonb?              @db.JsonB
+  1710→  1710→  lastTestResult      TestResult?
+  1711→  1711→  lastTestedAt        DateTime?           @db.Timestamptz
+  1712→  1712→  
+  1713→  1713→  // Metadata
+  1714→  1714→  authorId            String?
+  1715→  1715→  reviewers           String[]            @db.Text[]
+  1716→  1716→  tags                String[]            @db.Text[]
+  1717→  1717→  externalDocs        Jsonb?              @db.JsonB
+  1718→  1718→  
+  1719→  1719→  // Audit
+  1720→  1720→  createdBy           String?
+  1721→  1721→  updatedBy           String?
+  1722→  1722→  deletedAt           DateTime?           @db.Timestamptz
+  1723→  1723→  
+  1724→  1724→  createdAt           DateTime            @default(now()) @db.Timestamptz
+  1725→  1725→  updatedAt           DateTime            @updatedAt @db.Timestamptz
+  1726→  1726→
+  1727→  1727→  @@index([category])
+  1728→  1728→  @@index([isPublished])
+  1729→  1729→  @@map("playbooks")
+  1730→  1730→}
+  1731→  1731→
+  1732→  1732→enum AutomationEngine {
+  1733→  1733→  CUSTOM
+  1734→  1734→  THEHIVE
+  1735→  1735→  SOCRATIC
+  1736→  1736→  STACKSTORM
+  1737→  1737→  RANSOMWARE
+  1738→  1738→  CALIPSO
+  1739→  1739→  SHUFFLE
+  1740→  1740→  COURIER
+  1741→  1741→  PLAYBOOK_AUTOMATOR
+  1742→  1742→}
+  1743→  1743→
+  1744→  1744→enum TestResult {
+  1745→  1745→  PASSED
+  1746→  1746→  FAILED
+  1747→  1747→  ERROR
+  1748→  1748→  SKIPPED
+  1749→  1749→  NOT_TESTED
+  1750→  1750→}
+  1751→  1751→
+  1752→  1752→enum PlaybookCategory {
+  1753→  1753→  MALWARE_RESPONSE
+  1754→  1754→  PHISHING_RESPONSE
+  1755→  1755→  NETWORK_INTRUSION
+  1756→  1756→  DATA_EXFILTRATION
+  1757→  1757→  DENIAL_OF_SERVICE
+  1758→  1758→  INSIDER_THREAT
+  1759→  1759→  VULNERABILITY_RESPONSE
+  1760→  1760→  PRIVILEGE_ESCALATION
+  1761→  1761→  SUPPLY_CHAIN
+  1762→  1762→  TELECOM_FRAUD
+  1763→  1763→  SIM_SWAP_RESPONSE
+  1764→  1764→  SS7_ATTACK_RESPONSE
+  1765→  1765→  IMSI_CATCHER_RESPONSE
+  1766→  1766→  SIGNALLING_ATTACK_RESPONSE
+  1767→  1767→  DDoS_MITIGATION
+  1768→  1768→  RANSOMWARE_RESPONSE
+  1769→  1769→  DATA_BREACH_RESPONSE
+  1770→  1770→  COMPLIANCE_VIOLATION
+  1771→  1771→  GENERAL_SECURITY
+  1772→  1772→  INCIDENT_TRIAGE
+  1773→  1773→  THREAT_HUNTING
+  1774→  1774→  PEN_TEST_RESPONSE
+  1775→  1775→  PHYSICAL_SECURITY
+  1776→  1776→}
+  1777→  1777→
+  1778→  1778→enum PlaybookSeverity {
+  1779→  1779→  CRITICAL
+  1780→  1780→  HIGH
+  1781→  1781→  MEDIUM
+  1782→  1782→  LOW
+  1783→  1783→}
+  1784→  1784→
+  1785→  1785→// ============= COMPLIANCE & REPORTING =============
+  1786→  1786→
+  1787→  1787→model ComplianceReport {
+  1788→  1788→  id                  String                @id @default(cuid())
+  1789→  1789→  name                String
+  1790→  1790→  framework           ComplianceFramework
+  1791→  1791→  status              ReportStatus          @default(DRAFT)
+  1792→  1792→  
+  1793→  1793→  // Period
+  1794→  1794→  periodStart         DateTime              @db.Timestamptz
+  1795→  1795→  periodEnd           DateTime              @db.Timestamptz
+  1796→  1796→  generatedAt         DateTime?             @db.Timestamptz
+  1797→  1797→  
+  1798→  1798→  // Content
+  1799→  1799→  summary             String?               @db.Text
+  1800→  1800→  findings            Jsonb?                @db.JsonB // Array of findings
+  1801→  1801→  recommendations     Jsonb?                @db.JsonB
+  1802→  1802→  score               Float?                // 0-100 compliance score
+  1803→  1803→  riskScore           Float?                // Risk assessment score
+  1804→  1804→  
+  1805→  1805→  // People
+  1806→  1806→  authorId            String?
+  1807→  1807→  author              User?                 @relation("ReportAuthor", fields: [authorId], references: [id])
+  1808→  1808→  reviewerId          String?
+  1809→  1809→  approvedBy          String?
+  1810→  1810→  approvedAt          DateTime?             @db.Timestamptz
+  1811→  1811→  
+  1812→  1812→  // File
+  1813→  1813→  filePath            String?
+  1814→  1814→  fileSize            BigInt?
+  1815→  1815→  fileHash            String?
+  1816→  1816→  fileFormat          ReportFormat?         @default(PDF)
+  1817→  1817→  
+  1818→  1818→  // Distribution
+  1819→  1819→  distributedTo       Jsonb?                @db.JsonB // Array of recipients
+  1820→  1820→  distributionDate    DateTime?             @db.Timestamptz
+  1821→  1821→  distributionMethod  String?               // Email, Portal, etc.
+  1822→  1822→  
+  1823→  1823→  // ARPT Specific
+  1824→  1824→  arptSubmissionId    String?               // ARPT tracking number
+  1825→  1825→  arptSubmissionDate  DateTime?             @db.Timestamptz
+  1826→  1826→  arptAcknowledged    Boolean               @default(false)
+  1827→  1827→  arptAckDate         DateTime?             @db.Timestamptz
+  1828→  1828→  
+  1829→  1829→  // Retention
+  1830→  1830→  retentionClass      RetentionClass?      @default(STANDARD)
+  1831→  1831→  retainUntil         DateTime?             @db.Timestamptz
+  1832→  1832→  
+  1833→  1833→  // Metadata
+  1834→  1834→  version             String                @default("1.0")
+  1835→  1835→  externalRef         String?
+  1836→  1836→  tags                String[]              @db.Text[]
+  1837→  1837→  
+  1838→  1838→  // Audit
+  1839→  1839→  createdBy           String?
+  1840→  1840→  updatedBy           String?
+  1841→  1841→  deletedAt           DateTime?             @db.Timestamptz
+  1842→  1842→  
+  1843→  1843→  createdAt           DateTime              @default(now()) @db.Timestamptz
+  1844→  1844→  updatedAt           DateTime              @updatedAt @db.Timestamptz
+  1845→  1845→
+  1846→  1846→  @@index([framework])
+  1847→  1847→  @@index([status])
+  1848→  1848→  @@index([periodStart])
+  1849→  1849→  @@index([periodEnd])
+  1850→  1850→  @@map("compliance_reports")
+  1851→  1851→}
+  1852→  1852→
+  1853→  1853→enum ReportFormat {
+  1854→  1854→  PDF
+  1855→  1855→  HTML
+  1856→  1856→  DOCX
+  1857→  1857→  XLSX
+  1858→  1858→  CSV
+  1859→  1859→  JSON
+  1860→  1860→  XML
+  1861→  1861→}
+  1862→  1862→
+  1863→  1863→enum RetentionClass {
+  1864→  1864→  SHORT_TERM          // 90 days
+  1865→  1865→  STANDARD            // 1 year
+  1866→  1866→  EXTENDED            // 3 years
+  1867→  1867→  LONG_TERM           // 7 years
+  1868→  1868→  PERMANENT           // Never delete
+  1869→  1869→  REGULATORY          // As required by regulation
+  1870→  1870→  LEGAL_HOLD          // Until legal hold released
+  1871→  1871→}
+  1872→  1872→
+  1873→  1873→enum ComplianceFramework {
+  1874→  1874→  ISO_27001
+  1875→  1875→  ISO_27035
+  1876→  1876→  ISO_22301
+  1877→  1877→  NIST_CSF
+  1878→  1878→  NIST_800_53
+  1879→  1879→  SOC2
+  1880→  1880→  GDPR
+  1881→  1881→  PCI_DSS
+  1882→  1882→  HIPAA
+  1883→  1883→  ARPT_TELECOM
+  1884→  1884→  NCSA_ALGERIA
+  1885→  1885→  ITU_T_X805
+  1886→  1886→  ETSI_EN303
+  1887→  1887→  GSMA_NAAS
+  1888→  1888→  CUSTOM
+  1889→  1889→}
+  1890→  1890→
+  1891→  1891→enum ReportStatus {
+  1892→  1892→  DRAFT
+  1893→  1893→  GENERATING
+  1894→  1894→  REVIEWING
+  1895→  1895→  APPROVED
+  1896→  1896→  PUBLISHED
+  1897→  1897→  ARCHIVED
+  1898→  1898→  REJECTED
+  1899→  1899→  SCHEDULED
+  1900→  1900→  FAILED
+  1901→  1901→}
+  1902→  1902→
+  1903→  1903→// ============= INTEGRATIONS =============
+  1904→  1904→
+  1905→  1905→model Integration {
+  1906→  1906→  id                  String              @id @default(cuid())
+  1907→  1907→  name                String
+  1908→  1908→  type                IntegrationType
+  1909→  1909→  description         String?             @db.Text
+  1910→  1910→  
+  1911→  1911→  // Connection
+  1912→  1912→  endpoint            String
+  1913→  1913→  apiKey              String?             // Encrypted reference
+  1914→  1914→  apiSecret           String?             // Encrypted reference
+  1915→  1915→  config              Jsonb?              @db.JsonB // Full configuration
+  1916→  1916→  
+  1917→  1917→  // Authentication
+  1918→  1918→  authType            AuthType?           @default(API_KEY)
+  1919→  1919→  oauthConfig         Jsonb?              @db.JsonB // OAuth configuration
+  1920→  1920→  certificatePath    String?
+  1921→  1921→  
+  1922→  1922→  // Status
+  1923→  1923→  status              IntegrationStatus   @default(CONFIGURED)
+  1924→  1924→  lastSync            DateTime?           @db.Timestamptz
+  1925→  1925→  lastError           String?             @db.Text
+  1926→  1926→  lastHealthCheck     DateTime?           @db.Timestamptz
+  1927→  1927→  
+  1928→  1928→  // Statistics
+  1929→  1929→  syncFrequency       String?             // e.g., "5m", "1h", "24h", "cron expression"
+  1930→  1930→  eventsProcessed     BigInt              @default(0)
+  1931→  1931→  errorCount          Int                 @default(0)
+  1932→  1932→  consecutiveErrors   Int                 @default(0)
+  1933→  1933→  
+  1934→  1934→  // Capabilities
+  1935→  1935→  capabilities        String[]            @db.Text[]
+  1936→  1936→  supportedActions    String[]            @db.Text[]
+  1937→  1937→  
+  1938→  1938→  // Health
+  1939→  1939→  healthScore         Int                 @default(0) // 0-100
+  1940→  1940→  responseTimeAvg     Int?                // milliseconds
+  1941→  1941→  responseTimeLast    Int?                // milliseconds
+  1942→  1942→  uptimePercent       Float?              @default(100)
+  1943→  1943→  
+  1944→  1944→  // Rate Limiting
+  1945→  1945→  rateLimit           Int?                // Requests per minute
+  1946→  1946→  rateLimitRemaining  Int?
+  1947→  1947→  rateLimitReset      DateTime?           @db.Timestamptz
+  1948→  1948→  
+  1949→  1949→  isEnabled           Boolean             @default(true)
+  1950→  1950→  
+  1951→  1951→  // Version Info
+  1952→  1952→  runningVersion      String?
+  1953→  1953→  minSupportedVersion String?
+  1954→  1954→  
+  1955→  1955→  // Telecom Operator Config (for Mobilis/Djezzy/Ooredoo integrations)
+  1956→  1956→  operatorConfig      Jsonb?              @db.JsonB // Operator-specific config
+  1957→  1957→  
+  1958→  1958→  // Audit
+  1959→  1959→  createdBy           String?
+  1960→  1960→  updatedBy           String?
+  1961→  1961→  
+  1962→  1962→  createdAt           DateTime            @default(now()) @db.Timestamptz
+  1963→  1963→  updatedAt           DateTime            @updatedAt @db.Timestamptz
+  1964→  1964→
+  1965→  1965→  @@index([type])
+  1966→  1966→  @@index([status])
+  1967→  1967→  @@index([isEnabled])
+  1968→  1968→  @@map("integrations")
+  1969→  1969→}
+  1970→  1970→
+  1971→  1971→enum AuthType {
+  1972→  1972→  API_KEY
+  1973→  1973→  BASIC_AUTH
+  1974→  1974→  OAUTH2
+  1975→  1975→  OAUTH1
+  1976→  1976→  BEARER_TOKEN
+  1977→  1977→  MTLS
+  1978→  1978→  SSH_KEY
+  1979→  1979→  HEADER_AUTH
+  1980→  1980→  NO_AUTH
+  1981→  1981→}
+  1982→  1982→
+  1983→  1983→enum IntegrationType {
+  1984→  1984→  SIEM
+  1985→  1985→  SOAR
+  1986→  1986→  EDR
+  1987→  1987→  TIP
+  1988→  1988→  IDS_IPS
+  1989→  1989→  FIREWALL
+  1990→  1990→  DNS_SECURITY
+  1991→  1991→  EMAIL_SECURITY
+  1992→  1992→  PROXY
+  1993→  1993→  VULN_SCANNER
+  1994→  1994→  ASSET_MANAGEMENT
+  1995→  1995→  TICKETING
+  1996→  1996→  MESSAGING
+  1997→  1997→  DIRECTORY
+  1998→  1998→  CLOUD_PROVIDER
+  1999→  1999→  BACKUP
+  2000→  2000→  MONITORING
+
+[showing lines 1-2000 of 2002; use offset=2001 with limit to continue reading]

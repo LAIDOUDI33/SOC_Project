@@ -1,0 +1,418 @@
+# =============================================================================
+# Monitoring Role - Main Tasks
+# Handles: Prometheus, Grafana, Elasticsearch, AlertManager setup
+# =============================================================================
+---
+
+- name: "MONITORING | Display role start message"
+  debug:
+    msg: "═══ Starting Monitoring Stack Setup ═══"
+
+# ============================================================================
+# SECTION 1: Prometheus Configuration
+# ============================================================================
+- name: "MONITORING | Create Prometheus data directory"
+  file:
+    path: /var/lib/soc/prometheus
+    state: directory
+    mode: '0755'
+  tags: [monitoring-prometheus]
+
+- name: "MONITORING | Create Prometheus configuration directories"
+  file:
+    path: "{{ item }}"
+    state: directory
+    mode: '0755'
+  loop:
+    - /opt/soc-platform/configs/prometheus
+    - /opt/soc-platform/configs/prometheus/alerting
+    - /opt/soc-platform/configs/prometheus/rules
+  tags: [monitoring-prometheus]
+
+- name: "MONITORING | Configure Prometheus main settings"
+  template:
+    src: prometheus.yml.j2
+    dest: /opt/soc-platform/configs/prometheus/prometheus.yml
+    mode: '0644'
+  vars:
+    scrape_interval: "15s"
+    evaluation_interval: "15s"
+  tags: [monitoring-prometheus]
+
+- name: "MONITORING | Define Prometheus alert rules"
+  copy:
+    content: |
+      groups:
+        # SOC Platform Alert Rules
+        - name: soc_platform_alerts
+          interval: 30s
+          rules:
+            # Instance Down Alerts
+            - alert: InstanceDown
+              expr: up == 0
+              for: 1m
+              labels:
+                severity: critical
+              annotations:
+                summary: "Instance {{ $labels.instance }} down"
+                description: "{{ $labels.instance }} of job {{ $labels.job }} has been down for more than 1 minute."
+            
+            # High CPU Usage
+            - alert: HighCPUUsage
+              expr: 100 - (avg by(instance) (irate(node_cpu_seconds_total{mode="idle"}[5m])) * 100) > 80
+              for: 5m
+              labels:
+                severity: warning
+              annotations:
+                summary: "High CPU usage on {{ $labels.instance }}"
+                description: "CPU usage is above 80% (current value: {{ $value }}%)"
+            
+            # High Memory Usage
+            - alert: HighMemoryUsage
+              expr: (1 - node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes) * 100 > 85
+              for: 5m
+              labels:
+                severity: warning
+              annotations:
+                summary: "High memory usage on {{ $labels.instance }}"
+                description: "Memory usage is above 85% (current value: {{ $value }}%)"
+            
+            # Disk Space Alert
+            - alert: DiskSpaceWarning
+              expr: (node_filesystem_avail_bytes{fstype!~"tmpfs|overlay"} / node_filesystem_size_bytes{fstype!~"tmpfs|overlay"}) * 100 < 20
+              for: 10m
+              labels:
+                severity: warning
+              annotations:
+                summary: "Low disk space on {{ $labels.instance }}:{{ $labels.mountpoint }}"
+                description: "Disk is almost full (< 20% left) (current value: {{ $value }}%)"
+            
+            - alert: DiskSpaceCritical
+              expr: (node_filesystem_avail_bytes{fstype!~"tmpfs|overlay"} / node_filesystem_size_bytes{fstype!~"tmpfs|overlay"}) * 100 < 10
+              for: 5m
+              labels:
+                severity: critical
+              annotations:
+                summary: "Critical disk space on {{ $labels.instance }}:{{ $labels.mountpoint }}"
+                description: "Disk is critically low (< 10% left) (current value: {{ $value }}%)"
+            
+            # Container Health Alerts
+            - alert: ContainerNotRunning
+              expr: time() - container_last_seen > 60
+              for: 2m
+              labels:
+                severity: warning
+              annotations:
+                summary: "Container stopped: {{ $labels.name }}"
+                description: "Container {{ $labels.name }} has not been running for more than 2 minutes."
+            
+            # Service-Specific Alerts
+            - alert: WazuhManagerDown
+              expr: up{job="wazuh-manager"} == 0
+              for: 2m
+              labels:
+                severity: critical
+                service: wazuh
+              annotations:
+                summary: "Wazuh Manager is down"
+                description: "Wazuh Manager has been unreachable for over 2 minutes."
+            
+            - alert: ElasticsearchClusterRed
+              expr: elasticsearch_cluster_health_status{color="red"} == 1
+              for: 5m
+              labels:
+                severity: critical
+                service: elasticsearch
+              annotations:
+                summary: "Elasticsearch cluster health is RED"
+                description: "Elasticsearch cluster is in RED state. Immediate attention required."
+            
+            - alert: ElasticsearchClusterYellow
+              expr: elasticsearch_cluster_health_status{color="yellow"} == 1
+              for: 15m
+              labels:
+                severity: warning
+                service: elasticsearch
+              annotations:
+                summary: "Elasticsearch cluster health is YELLOW"
+                description: "Elasticsearch cluster has been in YELLOW state for 15+ minutes."
+            
+            - alert: PostgresqlDown
+              expr: up{job="postgres"} == 0
+              for: 1m
+              labels:
+                severity: critical
+                service: postgresql
+              annotations:
+                summary: "PostgreSQL database is down"
+                description: "PostgreSQL has been unreachable for over 1 minute."
+            
+            - alert: RedisDown
+              expr: up{job="redis"} == 0
+              for: 1m
+              labels:
+                severity: critical
+                service: redis
+              annotations:
+                summary: "Redis cache is down"
+                description: "Redis has been unreachable for over 1 minute."
+            
+            # Security Event Rate Alerts
+            - alert: HighSecurityEventRate
+              expr: rate(wazuh_alerts_total[5m]) > 100
+              for: 5m
+              labels:
+                severity: warning
+                category: security
+              annotations:
+                summary: "High security event rate detected"
+                description: "Security event rate exceeds 100 events/second (current: {{ $value }}/sec)"
+            
+            - alert: CriticalSecurityAlertSpike
+              expr: rate(wazuh_alerts_total{level>=10}[5m]) > 10
+              for: 2m
+              labels:
+                severity: critical
+                category: security
+              annotations:
+                summary: "Critical security alert spike detected"
+                description: "Critical security alerts exceeding 10/sec (current: {{ $value }}/sec)"
+            
+            # Network Anomaly Detection
+            - alert: UnusualNetworkTraffic
+              expr: rate(container_network_transmit_bytes_total[10m]) > on(container) group_left() 3 * rate(container_network_transmit_bytes_total[1h] offset 10m)
+              for: 10m
+              labels:
+                severity: warning
+                category: network
+              annotations:
+                summary: "Unusual network traffic from container {{ $labels.container }}"
+                description: "Network traffic from {{ $labels.container }} is 3x higher than average."
+            
+            # Response Time Alerts
+            - alert: HighResponseTime
+              expr: histogram_quantile(0.95, rate(http_request_duration_seconds_bucket[5m])) > 2
+              for: 5m
+              labels:
+                severity: warning
+              annotations:
+                summary: "High API response time"
+                description: "95th percentile response time is above 2 seconds (current: {{ $value }}s)"
+            
+            - alert: VeryHighResponseTime
+              expr: histogram_quantile(0.95, rate(http_request_duration_seconds_bucket[5m])) > 5
+              for: 2m
+              labels:
+                severity: critical
+              annotations:
+                summary: "Very high API response time"
+                description: "95th percentile response time is above 5 seconds (current: {{ $value }}s)"
+        
+        # Database Performance Alerts
+        - name: database_performance
+          interval: 60s
+          rules:
+            - alert: PostgreSQLSlowQueries
+              expr: rate(pg_stat_activity_calls_total{query=~".*"}[5m]) > 10
+              for: 10m
+              labels:
+                severity: warning
+              annotations:
+                summary: "PostgreSQL slow queries detected"
+                description: "Query rate is unusually high: {{ $value }} queries/sec"
+            
+            - alert: PostgreSQLConnectionPoolExhaustion
+              expr: pg_stat_activity_count / pg_settings_max_connections * 100 > 85
+              for: 5m
+              labels:
+                severity: warning
+              annotations:
+                summary: "PostgreSQL connection pool nearly exhausted"
+                description: "{{ $value }}% of connections in use"
+            
+            - alert: RedisMemoryHigh
+              expr: redis_memory_used_bytes / redis_memory_max_bytes * 100 > 80
+              for: 5m
+              labels:
+                severity: warning
+              annotations:
+                summary: "Redis memory usage high"
+                description: "Redis is using {{ $value }}% of max memory"
+    dest: /opt/soc-platform/configs/prometheus/rules/soc-alerts.yml
+    mode: '0644'
+  tags: [monitoring-prometheus]
+
+# ============================================================================
+# SECTION 2: Grafana Configuration
+# ============================================================================
+- name: "MONITORING | Create Grafana data directory"
+  file:
+    path: /var/lib/soc/grafana
+    state: directory
+    owner: "472"
+    group: "472"
+  tags: [monitoring-grafana]
+
+- name: "MONITORING | Create Grafana provisioning directories"
+  file:
+    path: "{{ item }}"
+    state: directory
+    mode: '0755'
+  loop:
+    - /opt/soc-platform/configs/grafana/provisioning/datasources
+    - /opt/soc-platform/configs/grafana/provisioning/dashboards
+    - /opt/soc-platform/configs/grafana/dashboards
+  tags: [monitoring-grafana]
+
+- name: "MONITORING | Configure Grafana datasources"
+  template:
+    src: grafana-datasources.yml.j2
+    dest: /opt/soc-platform/configs/grafana/provisioning/datasources/datasources.yml
+    mode: '0644'
+  tags: [monitoring-grafana]
+
+- name: "MONITORING | Configure Grafana dashboard provider"
+  copy:
+    content: |
+      apiVersion: 1
+      providers:
+        - name: 'SOC Platform Dashboards'
+          orgId: 1
+          folder: ''
+          type: file
+          disableDeletion: false
+          editable: true
+          options:
+            path: /var/lib/grafana/dashboards
+            foldersFromFilesStructure: false
+    dest: /opt/soc-platform/configs/grafana/provisioning/dashboards/dashboard.yml
+    mode: '0644'
+  tags: [monitoring-grafana]
+
+- name: "MONITORING | Copy pre-built Grafana dashboards"
+  copy:
+    src: "{{ item }}"
+    dest: "/opt/soc-platform/configs/grafana/dashboards/{{ item | basename }}"
+    mode: '0644'
+  with_fileglob:
+    - ../../../grafana/dashboards/*.json
+  ignore_errors: yes
+  tags: [monitoring-grafana]
+
+# ============================================================================
+# SECTION 3: AlertManager Configuration
+# ============================================================================
+- name: "MONITORING | Create AlertManager configuration directory"
+  file:
+    path: /opt/soc-platform/configs/alertmanager
+    state: directory
+    mode: '0755'
+  tags: [monitoring-alertmanager]
+
+- name: "MONITORING | Configure AlertManager routing and receivers"
+  template:
+    src: alertmanager.yml.j2
+    dest: /opt/soc-platform/configs/alertmanager/alertmanager.yml
+    mode: '0644'
+  vars:
+    slack_webhook_url: "{{ lookup('env', 'SLACK_WEBHOOK_URL') | default('', true) }}"
+    pagerduty_key: "{{ lookup('env', 'PAGERDUTY_KEY') | default('', true) }}"
+    smtp_host: "{{ lookup('env', 'SMTP_HOST') | default('localhost', true) }}"
+    smtp_port: "{{ lookup('env', 'SMTP_PORT') | default('587', true) }}"
+    email_from: "{{ lookup('env', 'EMAIL_FROM') | default('alerts@soc.dz', true) }}"
+    email_to: "{{ lookup('env', 'EMAIL_TO') | default('soc-team@dz', true) }}"
+  tags: [monitoring-alertmanager]
+
+- name: "MONITORING | Create AlertManager notification templates"
+  copy:
+    content: |
+      {{ define "__subject" }}
+      [{{ .Status | toUpper }}] {{ .CommonLabels.alertname }}
+      {{ end }}
+      
+      {{ define "__text" }}
+      {{ range .Alerts }}
+      **Alert:** {{ .Labels.alertname }}
+      **Severity:** {{ .Labels.severity }}
+      **Description:** {{ .Annotations.description }}
+      **Details:**
+      {{ range .Labels.SortedPairs }} • **{{ .Name }}:** {{ .Value }}
+      {{ end }}
+      {{ end }}
+      {{ end }}
+    dest: /opt/soc-platform/configs/alertmanager/templates/default.tmpl
+    mode: '0644'
+  tags: [monitoring-alertmanager]
+
+# ============================================================================
+# SECTION 4: Logging Infrastructure (ELK Stack)
+# ============================================================================
+- name: "MONITORING | Create Kibana configuration"
+  file:
+    path: /opt/soc-platform/configs/kibana
+    state: directory
+    mode: '0755'
+  tags: [monitoring-kibana]
+
+- name: "MONITORING | Configure Kibana"
+  template:
+    src: kibana.yml.j2
+    dest: /opt/soc-platform/configs/kibana/kibana.yml
+    mode: '0644'
+  tags: [monitoring-kibana]
+
+- name: "MONITORING | Create log shipping configuration"
+  template:
+    src: filebeat.yml.j2
+    dest: /opt/soc-platform/configs/filebeat/filebeat.yml
+    mode: '0644'
+  tags: [monitoring-filebeat]
+  ignore_errors: yes
+
+# ============================================================================
+# SECTION 5: Exporter Configuration
+# ============================================================================
+- name: "MONITORING | Configure Node Exporter systemd service"
+  copy:
+    content: |
+      [Unit]
+      Description=Node Exporter
+      After=network.target
+      
+      [Service]
+      Type=simple
+      User=prometheus
+      ExecStart=/usr/local/bin/node_exporter \
+        --collector.filesystem.mount-points-exclude='^/(sys|proc|dev|host|etc)($$|/)' \
+        --collector.netclass.ignored-devices='^(veth.*|docker.*)$$' \
+        --web.listen-address=:9100
+      
+      [Install]
+      WantedBy=multi-user.target
+    dest: /etc/systemd/system/node-exporter.service
+    mode: '0644'
+  when: "'node-exporter' not in docker_services | default([])"
+  tags: [monitoring-exporters]
+
+# ============================================================================
+# SECTION 6: Verification
+# ============================================================================
+- name: "MONITORING | Display monitoring stack information"
+  debug:
+    msg: |
+      ┌─────────────────────────────────────────────┐
+      │       MONITORING STACK CONFIGURED           │
+      ├─────────────────────────────────────────────┤
+      │  Prometheus:   http://localhost:9090         │
+      │  Grafana:      http://localhost:3000         │
+      │  AlertManager: http://localhost:9093         │
+      │  Kibana:       http://localhost:5601         │
+      │                                             │
+      │  Default Credentials:                        │
+      │  Grafana: admin / <configured password>     │
+      └─────────────────────────────────────────────┘
+  tags: [monitoring-info]
+
+- name: "MONITORING | Display role completion message"
+  debug:
+    msg: "═══ Monitoring Stack Setup Complete ═══"

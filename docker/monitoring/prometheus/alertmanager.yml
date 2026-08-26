@@ -1,0 +1,251 @@
+# ===========================================
+# National SOC Platform - Alertmanager Configuration
+# Algeria 2026-2030 | Telecom Operator Scale
+#
+# Alert Routing:
+# 1. Critical alerts → PagerDuty + Slack + SMS (immediate)
+# 2. Warning alerts → Slack + Email (5 min delay)
+# 3. Info alerts → Email only (batched hourly)
+#
+# Channels:
+# - Slack (SOC Operations channel)
+# - Email (NOC team)
+# - Webhook (ARPT notification system)
+# ===========================================
+
+global:
+  resolve_timeout: 5m
+  smtp_smarthost: '${SMTP_HOST}:${SMTP_PORT:-587}'
+  smtp_from: '${SMTP_FROM_EMAIL:-noc@arpt.gov.dz}'
+  smtp_auth_username: '${SMTP_USER:-noc@arpt.gov.dz}'
+  smtp_auth_password: '${SMTP_PASSWORD}'
+  smtp_require_tls: true
+
+# ============= TEMPLATES =============
+
+templates:
+  - '/etc/alertmanager/templates/*.tmpl'
+
+# ============= INHIBITION RULES =============
+# Prevent alert storms during known outages
+
+inhibit_rules:
+  # If critical CPU is firing, suppress warning CPU
+  - source_match:
+      severity: 'critical'
+    target_match:
+      severity: 'warning'
+    equal: ['alertname', 'instance']
+  
+  # If app is down, suppress all app-related warnings
+  - source_match:
+      alertname: 'ApplicationDown'
+    target_match_re:
+      severity: 'warning|info'
+  
+  # If DB is down, suppress DB-related warnings
+  - source_match:
+      alertname: 'PostgreSQLDown'
+    target_match_re:
+      severity: 'warning|info'
+
+# ============= ROUTING RULES =============
+
+route:
+  # Default receiver
+  receiver: 'default-receiver'
+  
+  # Grouping settings
+  group_by: ['alertname', 'severity', 'team']
+  group_wait: 30s
+  group_interval: 5m
+  repeat_interval: 4h
+  
+  # Child routes for different severity levels
+  routes:
+    # Critical alerts - immediate notification
+    - match:
+        severity: critical
+      receiver: 'critical-alerts'
+      group_wait: 10s
+      group_interval: 1m
+      repeat_interval: 1h
+      continue: true
+      
+      # PagerDuty for on-call
+      routes:
+        - match:
+            pager: 'true'
+          receiver: 'pagerduty-critical'
+    
+    # Warning alerts - delayed to reduce noise
+    - match:
+        severity: warning
+      receiver: 'warning-alerts'
+      group_wait: 2m
+      group_interval: 10m
+      repeat_interval: 4h
+    
+    # Security alerts - special handling
+    - match:
+        team: security
+      receiver: 'security-alerts'
+      group_wait: 15s
+      group_interval: 2m
+      repeat_interval: 2h
+    
+    # Telecom-specific alerts
+    - match:
+        team: telecom
+      receiver: 'telecom-alerts'
+      group_wait: 10s
+      group_interval: 2m
+      repeat_interval: 1h
+    
+    # Compliance alerts (ARPT)
+    - match:
+        team: compliance
+      receiver: 'compliance-alerts'
+      group_wait: 5m
+      group_interval: 30m
+      repeat_interval: 24h
+
+# ============= RECEIVERS =============
+
+receivers:
+  # Default receiver (logs only)
+  - name: 'default-receiver'
+    webhook_configs:
+      - url: 'http://soc-app:3000/api/webhooks/alerts'
+        send_resolved: true
+        http_config:
+          follow_redirects: true
+
+  # Critical alerts - Multiple channels
+  - name: 'critical-alerts'
+    slack_configs:
+      - channel: '#soc-critical'
+        send_resolved: true
+        title: '🚨 [CRITICAL] {{ .GroupLabels.alertname }}'
+        text: |
+          *Alert:* {{ .CommonLabels.alertname }}
+          *Severity:* {{ .CommonLabels.severity }}
+          *Team:* {{ .CommonLabels.team }}
+          *Instance:* {{ .CommonLabels.instance }}
+          
+          *Description:* {{ .Annotations.description }}
+          
+          *Impact:* {{ .Annotations.impact | default "Platform degradation" }}
+          *Urgency:* {{ .Annotations.urgency | default "High" }}
+          *Runbook:* {{ .Annotations.runbook | default "Check dashboard" }}
+          
+          *Labels:*
+          {{ range .Labels.SortedPairs }}• {{ .Name }}: {{ .Value }}{{ end }}
+        color: 'danger'
+        username: 'SOC-AlertManager'
+        icon_emoji: ':rotating_light:'
+        
+    email_configs:
+      - to: 'noc@arpt.gov.dz,soc-leads@arpt.gov.dz'
+        send_resolved: true
+        html: |
+          <h2>🚨 CRITICAL ALERT: {{ .CommonLabels.alertname }}</h2>
+          <p><strong>Severity:</strong> {{ .CommonLabels.severity }}</p>
+          <p><strong>Description:</strong> {{ .Annotations.description }}</p>
+          <p><strong>Impact:</strong> {{ .Annotations.impact }}</p>
+          <hr>
+          <p><em>Sent by National SOC Platform - Algeria</em></p>
+
+  # PagerDuty integration for on-call rotation
+  - name: 'pagerduty-critical'
+    pagerduty_configs:
+      - service_key: '${PAGERDUTY_SERVICE_KEY:-CHANGE_ME}'
+        severity: critical
+        description: '{{ .CommonLabels.alertname }}: {{ .Annotations.description }}'
+        details:
+          alertname: '{{ .CommonLabels.alertname }}'
+          severity: '{{ .CommonLabels.severity }}'
+          team: '{{ .CommonLabels.team }}'
+          instance: '{{ .CommonLabels.instance }}'
+          runbook: '{{ .Annotations.runbook }}'
+
+  # Warning alerts - Slack + Email
+  - name: 'warning-alerts'
+    slack_configs:
+      - channel: '#soc-warnings'
+        send_resolved: true
+        title: '⚠️ [WARNING] {{ .GroupLabels.alertname }}'
+        text: |
+          *Alert:* {{ .CommonLabels.alertname }}
+          *Description:* {{ .Annotations.description }}
+        color: 'warning'
+        username: 'SOC-AlertManager'
+        icon_emoji: ':warning:'
+        
+    email_configs:
+      - to: 'soc-team@arpt.gov.dz'
+        send_resolved: true
+
+  # Security alerts - Special channel
+  - name: 'security-alerts'
+    slack_configs:
+      - channel: '#soc-security'
+        send_resolved: true
+        title: '🔒 [SECURITY] {{ .GroupLabels.alertname }}'
+        text: |
+          *Security Alert:* {{ .CommonLabels.alertname }}
+          *Type:* {{ .CommonLabels.alertname }}
+          *Details:* {{ .Annotations.description }}
+          
+          *Action Required:* Immediate investigation
+        color: '#8B0000'  # Dark red
+        username: 'SOC-Security'
+        icon_emoji: ':lock:'
+        
+    webhook_configs:
+      - url: '${THEHIVE_WEBHOOK_URL:-https://thehive.internal:9000}/connector/webhook}'
+        send_resolved: true
+        http_config:
+          follow_redirects: true
+
+  # Telecom operator alerts
+  - name: 'telecom-alerts'
+    slack_configs:
+      - channel: '#soc-telecom'
+        send_resolved: true
+        title: '📡 [TELECOM] {{ .GroupLabels.alertname }}'
+        text: |
+          *Telecom Alert:* {{ .CommonLabels.alertname }}
+          *Protocol:* {{ .Labels.protocol | default "Unknown" }}
+          *Operator:* {{ .Labels.operator_id | default "All" }}
+          *Details:* {{ .Annotations.description }}
+          *Action:* {{ .Annotations.action | default "Monitor" }}
+        color: '#4169E1'  # Royal blue
+        username: 'SOC-Telecom'
+        icon_emoji: ':satellite_antenna:'
+
+  # ARPT Compliance alerts
+  - name: 'compliance-alerts'
+    slack_configs:
+      - channel: '#soc-compliance'
+        send_resolved: true
+        title: '📋 [COMPLIANCE] {{ .GroupLabels.alertname }}'
+        text: |
+          *Compliance Alert:* {{ .CommonLabels.alertname }}
+          *Regulation:* ARPT {{ .Labels.regulation | default "General" }}
+          *Deadline:* {{ .Annotations.deadline | default "Check ASAP" }}
+        color: '#228B22'  # Forest green
+        username: 'SOC-Compliance'
+        icon_emoji: ':scroll:'
+
+# ============= SILENCE CONFIGURATION =============
+
+# Silence example (for maintenance windows):
+# silence:
+#   - matchers:
+#       - name: alertname
+#         value: HighCPUUsage
+#     startsAt: "2024-01-15T22:00:00Z"
+#     endsAt: "2024-01-16T06:00:00Z"
+#     createdBy: admin@arpt.gov.dz
+#     comment: "Scheduled maintenance window"

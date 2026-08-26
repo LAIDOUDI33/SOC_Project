@@ -1,0 +1,491 @@
+# ============================================================
+# National SOC Platform - Security Pipeline
+# Djezzy Telecom - Enterprise SOC Security Scanning
+# Trigger: Schedule (daily) + Manual + PR to main
+# ============================================================
+
+name: 🔒 Security Pipeline
+
+on:
+  schedule:
+    # Run daily at 2 AM UTC (3 AM Algeria time)
+    - cron: '0 2 * * *'
+  push:
+    branches: [main]
+    paths:
+      - 'src/**'
+      - 'prisma/**'
+      - 'package.json'
+      - 'pnpm-lock.yaml'
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened]
+  workflow_dispatch:
+    inputs:
+      full_scan:
+        description: 'Run comprehensive security scan'
+        required: false
+        default: 'true'
+        type: boolean
+      scan_type:
+        description: 'Type of scan to run'
+        required: false
+        default: 'all'
+        type: choice
+        options:
+          - all
+          - sast
+          - sca
+          - secrets
+          - container
+
+concurrency:
+  group: security-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name != 'workflow_dispatch' }}
+
+env:
+  NODE_VERSION: '20'
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+  # ============================================================
+  # JOB 1: SAST - CodeQL Static Analysis
+  # ============================================================
+  codeql-sast:
+    name: 🔍 SAST Analysis (CodeQL)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      actions: read
+      contents: read
+      security-events: write
+    
+    strategy:
+      fail-fast: false
+      matrix:
+        language: ['javascript', 'typescript']
+    
+    steps:
+      - name: 📥 Checkout Repository
+        uses: actions/checkout@v4
+      
+      - name: 🟢 Initialize CodeQL
+        uses: github/codeql-action/init@v3
+        with:
+          languages: ${{ matrix.language }}
+          queries: security-extended,security-and-quality
+          config-file: .github/codeql/codeql-config.yml
+        continue-on-error: true
+      
+      - name: 🔍 Perform CodeQL Analysis
+        uses: github/codeql-action/analyze@v3
+        with:
+          category: '/language:${{ matrix.language }}'
+          output: sarif-results
+          wait-for-processing: true
+      
+      - name: 📊 Upload SARIF Results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: codeql-sarif-${{ matrix.language }}
+          path: sarif-results/
+          retention-days: 30
+
+  # ============================================================
+  # JOB 2: SCA - Dependency Vulnerability Scan
+  # ============================================================
+  dependency-audit:
+    name: 📦 Dependency Audit (SCA)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      security-events: write
+    
+    steps:
+      - name: 📥 Checkout Repository
+        uses: actions/checkout@v4
+      
+      - name: 🟢 Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: '9'
+      
+      - name: 🟢 Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'pnpm'
+      
+      - name: 📦 Install Dependencies
+        run: pnpm install --frozen-lockfile
+      
+      - name: 🔍 npm Audit (Vulnerabilities)
+        id: npm-audit
+        run: |
+          echo "::group::NPM Audit Results"
+          pnpm audit --json > npm-audit.json || true
+          
+          # Parse and display results
+          if command -v jq &> /dev/null; then
+            CRITICAL=$(jq '[.advisories[] | select(.severity == "critical")] | length' npm-audit.json 2>/dev/null || echo "0")
+            HIGH=$(jq '[.advisories[] | select(.severity == "high")] | length' npm-audit.json 2>/dev/null || echo "0")
+            MODERATE=$(jq '[.advisories[] | select(.severity == "moderate")] | length' npm-audit.json 2>/dev/null || echo "0")
+            LOW=$(jq '[.advisories[] | select(.severity == "low")] | length' npm-audit.json 2>/dev/null || echo "0")
+            
+            echo "## 📦 Dependency Vulnerability Report" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "| Severity | Count |" >> $GITHUB_STEP_SUMMARY
+            echo "|----------|-------|" >> $GITHUB_STEP_SUMMARY
+            echo "| 🔴 Critical | $CRITICAL |" >> $GITHUB_STEP_SUMMARY
+            echo "| 🟠 High | $HIGH |" >> $GITHUB_STEP_SUMMARY
+            echo "| 🟡 Moderate | $MODERATE |" >> $GITHUB_STEP_SUMMARY
+            echo "| 🟢 Low | $LOW |" >> $GITHUB_STEP_SUMMARY
+            
+            # Fail on critical/high in production
+            if [[ "$CRITICAL" -gt 0 ]] || [[ "$HIGH" -gt 10 ]]; then
+              echo "::warning::Critical or excessive high vulnerabilities found"
+            fi
+          fi
+          echo "::endgroup::"
+      
+      - name: 🔍 pnpm Audit (Alternative)
+        continue-on-error: true
+        run: |
+          pnpm audit --audit-level=moderate 2>&1 | head -100
+      
+      - name: 📊 Upload Audit Reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dependency-audit-reports
+          path: |
+            ./npm-audit.json
+          retention-days: 30
+      
+      - name: 🐛 Dependabot Alert Summary
+        if: github.event_name == 'workflow_dispatch'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const alerts = await github.rest.dependabot.listAlertsForRepo({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: 'open',
+              severity: 'critical'
+            });
+            
+            console.log(`Found ${alerts.data.length} open critical Dependabot alerts`);
+            
+            core.summary
+              .heading('🚨 Open Critical Dependabot Alerts')
+              .table([
+                [{data: 'Package', header: true}, {data: 'Severity', header: true}, {data: 'Advisory', header: true}],
+                ...alerts.data.slice(0, 10).map(alert => [
+                  alert.security_advisory.package.name,
+                  alert.security_vulnerability.severity,
+                  alert.security_advisory.cve_id || 'GHSA-' + alert.security_advisory.ghsa_id
+                ])
+              ])
+              .write()
+
+  # ============================================================
+  # JOB 3: Secrets Detection (TruffleHog + Gitleaks)
+  # ============================================================
+  secrets-scan:
+    name: 🔑 Secrets Detection
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    
+    steps:
+      - name: 📥 Checkout Repository (Full History)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Full history for secrets scanning
+      
+      - name: 🐗 TruffleHog Secrets Scan
+        id: trufflehog
+        uses: trufflesecurity/trufflehog@main
+        with:
+          path: ./
+          base: ${{ github.event.before }}
+          head: HEAD
+          extra_args: --only-verified --fail
+        continue-on-error: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      
+      - name: 🔍 Gitleaks Secrets Scan
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITLEAKS_LICENSE: ${{ secrets.GITLEAKS_LICENSE }}
+        continue-on-error: true
+      
+      - name: 📊 Generate Secrets Report
+        if: always()
+        run: |
+          echo "## 🔑 Secrets Scan Report" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Scan Status:** ${{ steps.trufflehog.outcome }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Scanned:** Full git history" >> $GITHUB_STEP_SUMMARY
+          echo "**Detectors:** TruffleHog + Gitleaks" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "> ⚠️ If secrets were detected, rotate them immediately!" >> $GITHUB_STEP_SUMMARY
+
+  # ============================================================
+  # JOB 4: Container Security (Trivy Deep Scan)
+  # ============================================================
+  container-security:
+    name: 🐳 Container Security
+    runs-on: ubuntu-latest
+    needs: dependency-audit
+    timeout-minutes: 25
+    permissions:
+      contents: read
+      packages: write
+      security-events: write
+    
+    steps:
+      - name: 📥 Checkout Repository
+        uses: actions/checkout@v4
+      
+      - name: 🐳 Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+      
+      - name: 🔐 Login to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      
+      - name: 🏷️ Extract Docker Metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: type=sha,prefix=sec-
+      
+      - name: 🐳 Build Docker Image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./Dockerfile
+          push: false
+          load: true
+          tags: ${{ steps.meta.outputs.tags }}
+          cache-from: type=gha
+      
+      - name: 🔍 Run Trivy Vulnerability Scanner (Full)
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: ${{ steps.meta.outputs.tags }}
+          format: 'sarif'
+          output: 'trivy-results.sarif'
+          exit-code: '1'
+          severity: 'CRITICAL,HIGH,MEDIUM'
+          ignore-unfixed: false
+          vuln-type: 'os,library'
+      
+      - name: 📊 Upload Trivy SARIF to GitHub Security
+        if: always()
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: 'trivy-results.sarif'
+          category: container-security
+      
+      - name: 📈 Container Security Summary
+        if: always()
+        run: |
+          echo "## 🐳 Container Security Scan" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Image:** \`${{ steps.meta.outputs.tags }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "**Scanner:** Trivy (Full)" >> $GITHUB_STEP_SUMMARY
+          echo "**Scanned:** OS packages + Dependencies" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "📋 **SARIF report uploaded to GitHub Security tab**" >> $GITHUB_STEP_SUMMARY
+
+  # ============================================================
+  # JOB 5: OWASP ZAP Dynamic Scan (DAST)
+  # ============================================================
+  dast-scan:
+    name: 🌐 DAST Scan (OWASP ZAP)
+    runs-on: ubuntu-latest
+    needs: build
+    if: github.event_name == 'workflow_dispatch' && github.event.inputs.scan_type != 'sast'
+    timeout-minutes: 30
+    
+    services:
+      app:
+        image: node:20-alpine
+        ports:
+          - 3000:3000
+        options: >-
+          --health-cmd="curl -f http://localhost:3000/api/health"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=5
+    
+    steps:
+      - name: 📥 Checkout Repository
+        uses: actions/checkout@v4
+      
+      - name: 🟢 Setup Node.js & Start App
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      
+      - name: 📦 Install & Build
+        run: |
+          npm ci --prefer-offline
+          npm run build
+          npm start &
+          sleep 15
+      
+      - name: 🕷️ Run OWASP ZAP Baseline Scan
+        uses: zaproxy/action-full-scan@v0.7.0
+        with:
+          target: 'http://localhost:3000'
+          rules_file_name: '.zap/rules.tsv'
+          cmd_options: '-a'
+        continue-on-error: true
+      
+      - name: 📊 Upload ZAP Report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: zap-dast-report
+          path: report_html.html
+          retention-days: 14
+
+  # ============================================================
+  # JOB 6: Security Scorecard
+  # ============================================================
+  scorecard:
+    name: 📊 OSS Security Scorecard
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      security-events: write
+      id-token: write
+      actions: read
+      contents: read
+    
+    steps:
+      - name: 📥 Checkout Code
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      
+      - name: 📊 Run Scorecard Analysis
+        uses: ossf/scorecard-action@v2.3.1
+        with:
+          results_file: results.sarif
+          results_format: sarif
+          publish_results: true
+        continue-on-error: true
+      
+      - name: 📤 Upload Scorecard Results
+        if: always()
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: results.sarif
+          category: oss-scorecard
+      
+      - name: 📈 Scorecard Summary
+        if: always()
+        run: |
+          echo "## 📊 OSSF Security Scorecard" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Repository:** ${{ github.repository }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Analysis:** Supply chain security best practices" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "View detailed results in the **Security → Supply chain** tab." >> $GITHUB_STEP_SUMMARY
+
+  # ============================================================
+  # JOB 7: Security Gate - Final Decision
+  # ============================================================
+  security-gate:
+    name: ✅ Security Gate
+    runs-on: ubuntu-latest
+    needs: [codeql-sast, dependency-audit, secrets-scan, container-security]
+    if: always()
+    
+    steps:
+      - name: 🛡️ Evaluate Security Posture
+        run: |
+          echo "## 🛡️ Security Pipeline Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Check | Status | Action Required |" >> $GITHUB_STEP_SUMMARY
+          echo "|-------|--------|----------------|" >> $GITHUB_STEP_SUMMARY
+          echo "| SAST (CodeQL) | ${{ needs.codeql-sast.result == 'success' && '✅ Pass' || '⚠️ Review' }} | ${{ needs.codeql-sat.result == 'failure' && 'Fix critical findings' || 'None' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| SCA (Dependencies) | ${{ needs.dependency-audit.result == 'success' && '✅ Pass' || '⚠️ Review' }} | Update vulnerable packages |" >> $GITHUB_STEP_SUMMARY
+          echo "| Secrets Detection | ${{ needs.secrets-scan.result == 'success' && '✅ Clean' || '🚨 Rotate!' }} | Rotate any found secrets |" >> $GITHUB_STEP_SUMMARY
+          echo "| Container Security | ${{ needs.container-security.result == 'success' && '✅ Pass' || '⚠️ Review' }} | Patch base image |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          # Determine overall status
+          SECRETS_OK="${{ needs.secrets-scan.result }}"
+          
+          if [[ "$SECRETS_OK" == "failure" ]]; then
+            echo "::error::SECURITY GATE FAILED - Secrets detected! Immediate action required."
+            exit 1
+          fi
+          
+          echo "✅ **Security pipeline completed**" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "---" >> $GITHUB_STEP_SUMMARY
+          echo "*Generated by Djezzy SOC Security Pipeline*" >> $GITHUB_STEP_SUMMARY
+
+  # ============================================================
+  # NOTIFICATIONS
+  # ============================================================
+  notify-security-team:
+    name: 📢 Notify Security Team
+    runs-on: ubuntu-latest
+    needs: [security-gate]
+    if: failure() && github.ref == 'refs/heads/main'
+    
+    steps:
+      - name: 📧 Send Slack Alert
+        uses: slackapi/slack-github-action@v1.26.0
+        with:
+          payload: |
+            {
+              "text": "🚨 Security Pipeline Failed",
+              "blocks": [
+                {
+                  "type": "header",
+                  "text": {
+                    "type": "plain_text",
+                    "text": "🚨 Djezzy SOC Platform - Security Alert"
+                  }
+                },
+                {
+                  "type": "section",
+                  "fields": [
+                    {"type": "mrkdwn", "text": "*Repository:*\n${{ github.repository }}"},
+                    {"type": "mrkdwn", "text": "*Branch:*\n${{ github.ref_name }}"},
+                    {"type": "mrkdwn", "text": "*Commit:*\n`${{ github.sha }}`"},
+                    {"type": "mrkdwn", "text": "*Actor:*\n${{ github.actor }}"}
+                  ]
+                },
+                {
+                  "type": "actions",
+                  "elements": [
+                    {
+                      "type": "button",
+                      "text": {"type": "plain_text", "text": "View Workflow"},
+                      "url": "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+                    }
+                  ]
+                }
+              ]
+            }
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_SECURITY }}
+          SLACK_WEBHOOK_TYPE: INCOMING_WEBHOOK

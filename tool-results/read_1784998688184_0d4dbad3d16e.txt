@@ -1,0 +1,1447 @@
+     1→import { PrismaClient, UserRole, AlertSeverity, AlertStatus, AlertCategory, IncidentSeverity, IncidentStatus, IncidentCategory, IncidentClassification, ImpactLevel, UrgencyLevel, ComponentCategory, ComponentStatus, ThreatActorType, ThreatMotivation, CapabilityLevel, IndicatorType, IndicatorSeverity, IndicatorAction, TLPLevel, IntegrationType, IntegrationStatus, TaskStatus, Priority, TaskType, EvidenceType, EvidenceStatus, NotificationType, NotificationSeverity, AuditAction, ResourceType, PlaybookCategory, PlaybookSeverity, ComplianceFramework, ReportStatus } from '@prisma/client'
+     2→import { hash } from 'bcryptjs'
+     3→
+     4→const prisma = new PrismaClient()
+     5→
+     6→async function main() {
+     7→  console.log('🌱 Seeding National SOC Platform Database...\n')
+     8→
+     9→  // ============= CLEAN EXISTING DATA =============
+    10→  await prisma.comment.deleteMany()
+    11→  await prisma.notification.deleteMany()
+    12→  await prisma.auditLog.deleteMany()
+    13→  await prisma.session.deleteMany()
+    14→  await prisma.evidence.deleteMany()
+    15→  await prisma.task.deleteMany()
+    16→  await prisma.alert.deleteMany()
+    17→  await prisma.incident.deleteMany()
+    18→  await prisma.indicator.deleteMany()
+    19→  await prisma.campaign.deleteMany()
+    20→  await prisma.threatActor.deleteMany()
+    21→  await prisma.complianceReport.deleteMany()
+    22→  await prisma.playbook.deleteMany()
+    23→  await prisma.integration.deleteMany()
+    24→  await prisma.systemComponent.deleteMany()
+    25→  await prisma.user.deleteMany()
+    26→
+    27→  // ============= USERS =============
+    28→  console.log('👥 Creating users...')
+    29→  
+    30→  const users = await Promise.all([
+    31→    prisma.user.create({
+    32→      data: {
+    33→        email: 'admin@algeria-soc.dz',
+    34→        name: 'SOC Administrator',
+    35→        passwordHash: await hash('Admin@2026!Secure', 12),
+    36→        role: UserRole.SUPER_ADMIN,
+    37→        department: 'SOC Operations',
+    38→        phone: '+213 551 234 567',
+    39→        isActive: true,
+    40→        mfaEnabled: true,
+    41→      }
+    42→    }),
+    43→    prisma.user.create({
+    44→      data: {
+    45→        email: 'analyst.benali@algeria-soc.dz',
+    46→        name: 'Karim Benali',
+    47→        passwordHash: await hash('Analyst@2026!', 12),
+    48→        role: UserRole.SENIOR_ANALYST,
+    49→        department: 'Threat Intelligence',
+    50→        phone: '+213 552 345 678',
+    51→        isActive: true,
+    52→      }
+    53→    }),
+    54→    prisma.user.create({
+    55→      data: {
+    56→        email: 'analyst.meriem@algeria-soc.dz',
+    57→        name: 'Meriem Hadj-Ahmed',
+    58→        passwordHash: await hash('Analyst@2026!', 12),
+    59→        role: UserRole.INCIDENT_RESPONDER,
+    60→        department: 'Incident Response',
+    61→        phone: '+213 553 456 789',
+    62→        isActive: true,
+    63→      }
+    64→    }),
+    65→    prisma.user.create({
+    66→      data: {
+    67→        email: 'manager.bouazza@algeria-soc.dz',
+    68→        name: 'Amine Bouazza',
+    69→        passwordHash: await hash('Manager@2026!', 12),
+    70→        role: UserRole.MANAGER,
+    71→        department: 'SOC Management',
+    72→        phone: '+213 554 567 890',
+    73→        isActive: true,
+    74→      }
+    75→    }),
+    76→    prisma.user.create({
+    77→      data: {
+    78→        email: 'hunter.yasmine@algeria-soc.dz',
+    79→        name: 'Yasmine Chérif',
+    80→        passwordHash: await hash('Hunter@2026!', 12),
+    81→        role: UserRole.THREAT_HUNTER,
+    82→        department: 'Threat Hunting',
+    83→        phone: '+213 555 678 901',
+    84→        isActive: true,
+    85→      }
+    86→    }),
+    87→    prisma.user.create({
+    88→      data: {
+    89→        email: 'viewer.guest@algeria-soc.dz',
+    90→        name: 'Guest Viewer',
+    91→        passwordHash: await hash('Viewer@2026!', 12),
+    92→        role: UserRole.VIEWER,
+    93→        department: 'Stakeholder',
+    94→        isActive: true,
+    95→      }
+    96→    })
+    97→  ])
+    98→
+    99→  console.log(`   ✅ Created ${users.length} users`)
+   100→
+   101→  // ============= SYSTEM COMPONENTS =============
+   102→  console.log('🖥️ Creating system components...')
+   103→  
+   104→  const components = await Promise.all([
+   105→    prisma.systemComponent.create({
+   106→      data: {
+   107→        name: 'wazuh',
+   108→        displayName: 'Wazuh SIEM/EDR',
+   109→        category: ComponentCategory.SIEM,
+   110→        description: 'Security Information & Event Management + Endpoint Detection & Response',
+   111→        status: ComponentStatus.OPERATIONAL,
+   112→        healthScore: 98,
+   113→        version: '4.8.0',
+   114→        uptime: 99.97,
+   115→        cpuUsage: 45.2,
+   116→        memoryUsage: 62.8,
+   117→        endpoint: 'wazuh.soc.local:55000',
+   118→        eventsToday: BigInt(2847563),
+   119→        alertsToday: 1247,
+   120→        isEnabled: true,
+   121→        lastCheck: new Date(),
+   122→      }
+   123→    }),
+   124→    prisma.systemComponent.create({
+   125→      data: {
+   126→        name: 'thehive',
+   127→        displayName: 'TheHive SOAR',
+   128→        category: ComponentCategory.SOAR,
+   129→        description: 'Security Orchestration, Automation & Response Platform',
+   130→        status: ComponentStatus.OPERATIONAL,
+   131→        healthScore: 99,
+   132→        version: '5.3.0',
+   133→        uptime: 99.95,
+   134→        cpuUsage: 32.1,
+   135→        memoryUsage: 48.5,
+   136→        endpoint: 'thehive.soc.local:9000',
+   137→        eventsToday: BigInt(89),
+   138→        alertsToday: 23,
+   139→        isEnabled: true,
+   140→        lastCheck: new Date(),
+   141→      }
+   142→    }),
+   143→    prisma.systemComponent.create({
+   144→      data: {
+   145→        name: 'misp',
+   146→        displayName: 'MISP Threat Intelligence',
+   147→        category: ComponentCategory.TIP,
+   148→        description: 'Malware Information Sharing Platform - Threat Intelligence',
+   149→        status: ComponentStatus.OPERATIONAL,
+   150→        healthScore: 100,
+   151→        version: '2.4.180',
+   152→        uptime: 99.98,
+   153→        cpuUsage: 28.4,
+   154→        memoryUsage: 55.2,
+   155→        endpoint: 'misp.soc.local:443',
+   156→        eventsToday: BigInt(156),
+   157→        alertsToday: 45,
+   158→        isEnabled: true,
+   159→        lastCheck: new Date(),
+   160→      }
+   161→    }),
+   162→    prisma.systemComponent.create({
+   163→      data: {
+   164→        name: 'suricata',
+   165→        displayName: 'Suricata IDS/IPS',
+   166→        category: ComponentCategory.IDS_IPS,
+   167→        description: 'Intrusion Detection & Prevention System - Network Security Monitoring',
+   168→        status: ComponentStatus.OPERATIONAL,
+   169→        healthScore: 100,
+   170→        version: '7.0.0',
+   171→        uptime: 99.99,
+   172→        cpuUsage: 68.9,
+   173→        memoryUsage: 42.1,
+   174→        endpoint: 'suricata.soc.local',
+   175→        eventsToday: BigInt(1456789),
+   176→        alertsToday: 3421,
+   177→        isEnabled: true,
+   178→        lastCheck: new Date(),
+   179→      }
+   180→    }),
+   181→    prisma.systemComponent.create({
+   182→      data: {
+   183→        name: 'elasticsearch',
+   184→        displayName: 'Elasticsearch Log Pipeline',
+   185→        category: ComponentCategory.LOGGING,
+   186→        description: 'Centralized Log Aggregation & Analytics Pipeline',
+   187→        status: ComponentStatus.OPERATIONAL,
+   188→        healthScore: 96,
+   189→        version: '8.12.0',
+   190→        uptime: 99.96,
+   191→        cpuUsage: 72.3,
+   192→        memoryUsage: 78.9,
+   193→        endpoint: 'elasticsearch.soc.local:9200',
+   194→        eventsToday: BigInt(15234567),
+   195→        alertsToday: 0,
+   196→        isEnabled: true,
+   197→        lastCheck: new Date(),
+   198→      }
+   199→    }),
+   200→    prisma.systemComponent.create({
+   201→      data: {
+   202→        name: 'grafana',
+   203→        displayName: 'Grafana Dashboards',
+   204→        category: ComponentCategory.MONITORING,
+   205→        description: 'Monitoring Dashboard & Visualization (6 SOC Dashboards)',
+   206→        status: ComponentStatus.OPERATIONAL,
+   207→        healthScore: 100,
+   208→        version: '11.0.0',
+   209→        uptime: 99.99,
+   210→        cpuUsage: 15.2,
+   211→        memoryUsage: 22.4,
+   212→        endpoint: 'grafana.soc.local:3000',
+   213→        eventsToday: BigInt(0),
+   214→        alertsToday: 7,
+   215→        isEnabled: true,
+   216→        lastCheck: new Date(),
+   217→      }
+   218→    }),
+   219→    prisma.systemComponent.create({
+   220→      data: {
+   221→        name: 'postgresql',
+   222→        displayName: 'PostgreSQL Database',
+   223→        category: ComponentCategory.DATABASE,
+   224→        description: 'Primary Database for SOC Platform',
+   225→        status: ComponentStatus.OPERATIONAL,
+   226→        healthScore: 99,
+   227→        version: '16.2',
+   228→        uptime: 99.99,
+   229→        cpuUsage: 25.8,
+   230→        memoryUsage: 58.3,
+   231→        endpoint: 'postgres.soc.local:5432',
+   232→        isEnabled: true,
+   233→        lastCheck: new Date(),
+   234→      }
+   235→    }),
+   236→    prisma.systemComponent.create({
+   237→      data: {
+   238→        name: 'redis',
+   239→        displayName: 'Redis Cache',
+   240→        category: ComponentCategory.CACHE,
+   241→        description: 'In-memory Cache and Message Broker',
+   242→        status: ComponentStatus.OPERATIONAL,
+   243→        healthScore: 100,
+   244→        version: '7.2.4',
+   245→        uptime: 100,
+   246→        cpuUsage: 8.5,
+   247→        memoryUsage: 35.2,
+   248→        endpoint: 'redis.soc.local:6379',
+   249→        isEnabled: true,
+   250→        lastCheck: new Date(),
+   251→      }
+   252→    })
+   253→  ])
+   254→
+   255→  console.log(`   ✅ Created ${components.length} system components`)
+   256→
+   257→  // ============= INTEGRATIONS =============
+   258→  console.log('🔗 Creating integrations...')
+   259→  
+   260→  const integrations = await Promise.all([
+   261→    prisma.integration.create({
+   262→      data: {
+   263→        name: 'Suricata → MISP IOC Sync',
+   264→        type: IntegrationType.TIP,
+   265→        description: 'Automated IOC extraction from Suricata alerts to MISP',
+   266→        endpoint: 'http://misp:80',
+   267→        status: IntegrationStatus.ACTIVE,
+   268→        lastSync: new Date(Date.now() - 5 * 60 * 1000),
+   269→        syncFrequency: '5m',
+   270→        eventsProcessed: BigInt(15234),
+   271→        healthScore: 98,
+   272→        responseTime: 120,
+   273→        capabilities: JSON.stringify(['ioc_extraction', 'indicator_push']),
+   274→        isEnabled: true,
+   275→      }
+   276→    }),
+   277→    prisma.integration.create({
+   278→      data: {
+   279→        name: 'Suricata → TheHive Case Creation',
+   280→        type: IntegrationType.SOAR,
+   281→        description: 'Automatic case creation for high-severity Suricata alerts',
+   282→        endpoint: 'http://thehive:9000',
+   283→        status: IntegrationStatus.ACTIVE,
+   284→        lastSync: new Date(Date.now() - 30 * 1000),
+   285→        syncFrequency: 'Real-time',
+   286→        eventsProcessed: BigInt(892),
+   287→        healthScore: 95,
+   288→        responseTime: 250,
+   289→        capabilities: JSON.stringify(['case_creation', 'alert_forwarding']),
+   290→        isEnabled: true,
+   291→      }
+   292→    }),
+   293→    prisma.integration.create({
+   294→      data: {
+   295→        name: 'Wazuh → Elasticsearch Log Pipeline',
+   296→        type: IntegrationType.LOGGING,
+   297→        description: 'Forward all Wazuh security events to Elasticsearch',
+   298→        endpoint: 'http://elasticsearch:9200',
+   299→        status: IntegrationStatus.ACTIVE,
+   300→        lastSync: new Date(Date.now() - 1000),
+   301→        syncFrequency: 'Continuous',
+   302→        eventsProcessed: BigInt(2847563),
+   303→        healthScore: 99,
+   304→        responseTime: 15,
+   305→        capabilities: JSON.stringify(['log_forwarding', 'indexing']),
+   306→        isEnabled: true,
+   307→      }
+   308→    }),
+   309→    prisma.integration.create({
+   310→      data: {
+   311→        name: 'MISP → Wazuh IOC Feed',
+   312→        type: IntegrationType.SIEM,
+   313→        description: 'Push MISP IOCs to Wazuh for detection rules',
+   314→        endpoint: 'http://wazuh:55000',
+   315→        status: IntegrationStatus.ACTIVE,
+   316→        lastSync: new Date(Date.now() - 15 * 60 * 1000),
+   317→        syncFrequency: '15m',
+   318→        eventsProcessed: BigInt(45678),
+   319→        healthScore: 97,
+   320→        responseTime: 500,
+   321→        capabilities: JSON.stringify(['rule_generation', 'ioc_push']),
+   322→        isEnabled: true,
+   323→      }
+   324→    }),
+   325→    prisma.integration.create({
+   326→      data: {
+   327→        name: 'All Platforms → Grafana Metrics',
+   328→        type: IntegrationType.MONITORING,
+   329→        description: 'Collect metrics from all platforms to Grafana',
+   330→        endpoint: 'http://grafana:3000',
+   331→        status: IntegrationStatus.ACTIVE,
+   332→        lastSync: new Date(Date.now() - 30 * 1000),
+   333→        syncFrequency: '30s',
+   334→        eventsProcessed: BigInt(999999),
+   335→        healthScore: 100,
+   336→        responseTime: 50,
+   337→        capabilities: JSON.stringify(['metrics_collection', 'visualization']),
+   338→        isEnabled: true,
+   339→      }
+   340→    })
+   341→  ])
+   342→
+   343→  console.log(`   ✅ Created ${integrations.length} integrations`)
+   344→
+   345→  // ============= THREAT ACTORS =============
+   346→  console.log('🎭 Creating threat actors...')
+   347→  
+   348→  const threatActors = await Promise.all([
+   349→    prisma.threatActor.create({
+   350→      data: {
+   351→        name: 'APT28 (Fancy Bear)',
+   352→        alias: JSON.stringify(['Sofacy', 'Pawn Storm', 'Strontium', 'TsarTeam']),
+   353→        description: 'Russian GRU-linked APT group targeting government, military, and think tank organizations worldwide.',
+   354→        type: ThreatActorType.NATION_STATE,
+   355→        motivation: ThreatMotivation.ESPIONAGE,
+   356→        capability: CapabilityLevel.EXPERT,
+   357→        confidence: 0.95,
+   358→        country: 'Russia',
+   359→        region: 'Eastern Europe',
+   360→        firstSeen: new Date('2007-01-01'),
+   361→        lastSeen: new Date(),
+   362→        isActive: true,
+   363→        tactics: JSON.stringify(['Initial Access', 'Execution', 'Persistence', 'Credential Access', 'Discovery', 'Lateral Movement', 'Collection', 'Exfiltration', 'Command & Control']),
+   364→        techniques: JSON.stringify(['T1566', 'T1204', 'T1547', 'T1110', 'T1087', 'T1046', 'T1021', 'T1005', 'T1041', 'T1071']),
+   365→        externalRefs: JSON.stringify(['https://attack.mitre.org/groups/G0007']),
+   366→        notes: 'Highly active against NATO countries and Ukraine. Known for spearphishing and credential harvesting.',
+   367→      }
+   368→    }),
+   369→    prisma.threatActor.create({
+   370→      data: {
+   371→        name: 'APT29 (Cozy Bear)',
+   372→        alias: JSON.stringify(['The Dukes', 'CozyBear', 'Midnight Blizzard']),
+   373→        description: 'Russian SVR-linked APT group specializing in sophisticated supply chain attacks and credential theft.',
+   374→        type: ThreatActorType.NATION_STATE,
+   375→        motivation: ThreatMotivation.ESPIONAGE,
+   376→        capability: CapabilityLevel.EXPERT,
+   377→        confidence: 0.93,
+   378→        country: 'Russia',
+   379→        region: 'Eastern Europe',
+   380→        firstSeen: new Date('2008-01-01'),
+   381→        lastSeen: new Date(),
+   382→        isActive: true,
+   383→        tactics: JSON.stringify(['Initial Access', 'Execution', 'Persistence', 'Privilege Escalation', 'Defense Evasion', 'Credential Access', 'Discovery', 'Lateral Movement', 'Collection', 'Exfiltration']),
+   384→        techniques: JSON.stringify(['T1566', 'T1059', 'T1547', 'T1548', 'T1562', 'T1110', 'T1087', 'T1021', 'T1005', 'T1041']),
+   385→        externalRefs: JSON.stringify(['https://attack.mitre.org/groups/G0016']),
+   386→        notes: 'Responsible for SolarWinds supply chain attack. Highly sophisticated tradecraft.',
+   387→      }
+   388→    }),
+   389→    prisma.threatActor.create({
+   390→      data: {
+   391→        name: 'Lazarus Group',
+   392→        alias: JSON.stringify(['Hidden Cobra', ' Zinc', 'APT38']),
+   393→        description: 'North Korean state-sponsored threat actor focused on financial theft and espionage.',
+   394→        type: ThreatActorType.NATION_STATE,
+   395→        motivation: ThreatMotivation.FINANCIAL_GAIN,
+   396→        capability: CapabilityLevel.ADVANCED,
+   397→        confidence: 0.91,
+   398→        country: 'North Korea',
+   399→        region: 'Asia-Pacific',
+   400→        firstSeen: new Date('2009-01-01'),
+   401→        lastSeen: new Date(),
+   402→        isActive: true,
+   403→        tactics: JSON.stringify(['Initial Access', 'Execution', 'Persistence', 'Defense Evasion', 'Credential Access', 'Discovery', 'Lateral Movement', 'Collection', 'Impact']),
+   404→        techniques: JSON.stringify(['T1566', 'T1204', 'T1547', 'T1562', 'T1110', 'T1087', 'T1021', 'T1486', 'T1489']),
+   405→        externalRefs: JSON.stringify(['https://attack.mitre.org/groups/G0032']),
+   406→        notes: 'Responsible for WannaCry, Sony Pictures hack, and multiple bank heists exceeding $1B.',
+   407→      }
+   408→    }),
+   409→    prisma.threatActor.create({
+   410→      data: {
+   411→        name: 'LockBit Ransomware',
+   412→        alias: JSON.stringify(['LockBit Black', 'LockBit 2.0', 'DockerCrypt']),
+   413→        description: 'Ransomware-as-a-Service (RaaS) operation targeting enterprises globally.',
+   414→        type: ThreatActorType.CRIME_SYNDICATE,
+   415→        motivation: ThreatMotivation.FINANCIAL_GAIN,
+   416→        capability: CapabilityLevel.ADVANCED,
+   417→        confidence: 0.89,
+   418→        region: 'Global (Russian-speaking operators)',
+   419→        firstSeen: new Date('2019-09-01'),
+   420→        lastSeen: new Date(),
+   421→        isActive: true,
+   422→        tactics: JSON.stringify(['Initial Access', 'Execution', 'Persistence', 'Defense Evasion', 'Impact']),
+   423→        techniques: JSON.stringify(['T1566', 'T1486', 'T1490', 'T1059', 'T1027']),
+   424→        externalRefs: JSON.stringify(['https://www.lockbit.com']),
+   425→        notes: 'Most prolific ransomware group in 2023-2024. Uses double extortion tactics.',
+   426→      }
+   427→    }),
+   428→    prisma.threatActor.create({
+   429→      data: {
+   430→        name: 'Telecom Fraud Ring ALG-03',
+   431→        alias: JSON.stringify(['Algiers SIM Swap Gang']),
+   432→        description: 'Organized crime group specializing in telecom fraud targeting North African mobile operators.',
+   433→        type: ThreatActorType.CRIME_SYNDICATE,
+   434→        motivation: ThreatMotivation.FINANCIAL_GAIN,
+   435→        capability: CapabilityLevel.INTERMEDIATE,
+   436→        confidence: 0.78,
+   437→        country: 'Algeria',
+   438→        region: 'North Africa / MENA',
+   439→        firstSeen: new Date('2022-06-01'),
+   440→        lastSeen: new Date(),
+   441→        isActive: true,
+   442→        tactics: JSON.stringify(['Initial Access', 'Social Engineering', 'Impact']),
+   443→        techniques: JSON.stringify(['T1566', 'T1539']),
+   444→        notes: 'Targets mobile subscribers for SIM swap attacks enabling banking fraud.',
+   445→      }
+   446→    })
+   447→  ])
+   448→
+   449→  console.log(`   ✅ Created ${threatActors.length} threat actors`)
+   450→
+   451→  // ============= INDICATORS (IOCs) =============
+   452→  console.log('🎯 Creating indicators (IOCs)...')
+   453→  
+   454→  const indicators = await Promise.all([
+   455→    // APT28 Indicators
+   456→    prisma.indicator.create({
+   457→      data: {
+   458→        type: IndicatorType.IP_ADDRESS,
+   459→        value: '185.141.63[.]71',
+   460→        description: 'APT28 known C2 server',
+   461→        tlp: TLPLevel.AMBER,
+   462→        confidence: 0.92,
+   463→        severity: IndicatorSeverity.CRITICAL,
+   464→        source: 'MISP Community Feed',
+   465→        threatActorId: threatActors[0].id,
+   466→        validFrom: new Date('2024-01-01'),
+   467→        validUntil: new Date('2025-01-01'),
+   468→        isActive: true,
+   469→        detectionCount: 156,
+   470→        lastDetected: new Date(Date.now() - 2 * 24 * 60 * 60 * 1000),
+   471→        action: IndicatorAction.BLOCK_AND_ALERT,
+   472→        tags: JSON.stringify(['apt28', 'c2', 'russia']),
+   473→      }
+   474→    }),
+   475→    prisma.indicator.create({
+   476→      data: {
+   477→        type: IndicatorType.DOMAIN,
+   478→        value: 'cloud-update-service[.]com',
+   479→        description: 'APT28 command and control domain',
+   480→        tlp: TLPLevel.AMBER,
+   481→        confidence: 0.88,
+   482→        severity: IndicatorSeverity.HIGH,
+   483→        source: 'CrowdStrike Intel',
+   484→        threatActorId: threatActors[0].id,
+   485→        validFrom: new Date('2024-03-01'),
+   486→        validUntil: new Date('2025-03-01'),
+   487→        isActive: true,
+   488→        detectionCount: 89,
+   489→        lastDetected: new Date(Date.now() - 5 * 24 * 60 * 60 * 1000),
+   490→        action: IndicatorAction.BLOCK_AND_ALERT,
+   491→        tags: JSON.stringify(['apt28', 'c2', 'phishing']),
+   492→      }
+   493→    }),
+   494→    // Ransomware Indicators
+   495→    prisma.indicator.create({
+   496→      data: {
+   497→        type: IndicatorType.FILE_HASH_SHA256,
+   498→        value: 'a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2',
+   499→        description: 'LockBit ransomware payload hash',
+   500→        tlp: TLPLevel.WHITE,
+   501→        confidence: 0.99,
+   502→        severity: IndicatorSeverity.CRITICAL,
+   503→        source: 'VirusTotal',
+   504→        threatActorId: threatActors[3].id,
+   505→        validFrom: new Date('2024-06-01'),
+   506→        validUntil: new Date('2026-06-01'),
+   507→        isActive: true,
+   508→        detectionCount: 1247,
+   509→        lastDetected: new Date(Date.now() - 1 * 24 * 60 * 60 * 1000),
+   510→        action: IndicatorAction.ALERT_ONLY,
+   511→        tags: JSON.stringify(['ransomware', 'lockbit', 'malware']),
+   512→      }
+   513→    }),
+   514→    // Telecom Fraud Indicators
+   515→    prisma.indicator.create({
+   516→      data: {
+   517→        type: IndicatorType.IMSI,
+   518→        value: '213011234567890',
+   519→        description: 'Known fraudulent IMSI used in SIM swap attacks',
+   520→        tlp: TLPLevel.RED,
+   521→        confidence: 0.85,
+   522→        severity: IndicatorSeverity.HIGH,
+   523→        source: 'Internal Investigation',
+   524→        threatActorId: threatActors[4].id,
+   525→        validFrom: new Date('2024-09-01'),
+   526→        validUntil: new Date('2025-09-01'),
+   527→        isActive: true,
+   528→        detectionCount: 34,
+   529→        lastDetected: new Date(Date.now() - 10 * 24 * 60 * 60 * 1000),
+   530→        action: IndicatorAction.ALERT_ONLY,
+   531→        tags: JSON.stringify(['telecom_fraud', 'sim_swap', 'algeria']),
+   532→      }
+   533→    }),
+   534→    prisma.indicator.create({
+   535→      data: {
+   536→        type: IndicatorType.PHONE_NUMBER,
+   537→        value: '+213555123456',
+   538→        description: 'Phone number associated with subscription fraud ring',
+   539→        tlp: TLPLevel.AMBER,
+   540→        confidence: 0.72,
+   541→        severity: IndicatorSeverity.MEDIUM,
+   542→        source: 'Telecom Security Team',
+   543→        threatActorId: threatActors[4].id,
+   544→        validFrom: new Date('2024-08-01'),
+   545→        validUntil: new Date('2025-08-01'),
+   546→        isActive: true,
+   547→        detectionCount: 18,
+   548→        lastDetected: new Date(Date.now() - 20 * 24 * 60 * 60 * 1000),
+   549→        action: IndicatorAction.ALERT_ONLY,
+   550→        tags: JSON.stringify(['telecom_fraud', 'subscription_fraud']),
+   551→      }
+   552→    }),
+   553→    // General Threat Indicators
+   554→    prisma.indicator.create({
+   555→      data: {
+   556→        type: IndicatorType.URL,
+   557→        value: 'http://malicious-phishing-site[.]xyz/login',
+   558→        description: 'Phishing page targeting Algerian government credentials',
+   559→        tlp: TLPLevel.WHITE,
+   560→        confidence: 0.82,
+   561→        severity: IndicatorSeverity.HIGH,
+   562→        source: 'PhishTank',
+   563→        validFrom: new Date('2024-11-01'),
+   564→        validUntil: new Date('2025-05-01'),
+   565→        isActive: true,
+   566→        detectionCount: 67,
+   567→        lastDetected: new Date(Date.now() - 3 * 24 * 60 * 60 * 1000),
+   568→        action: IndicatorAction.BLOCK_AND_ALERT,
+   569→        tags: JSON.stringify(['phishing', 'credential_harvesting', 'government']),
+   570→      }
+   571→    }),
+   572→    prisma.indicator.create({
+   573→      data: {
+   574→        type: IndicatorType.YARA_RULE,
+   575→        value: 'rule Emotet_Doc_Downloader : meta description = "Emotet document downloader" strings : $s1 = "powershell" condition : any of them',
+   576→        description: 'YARA rule for detecting Emotet malware documents',
+   577→        tlp: TLPLevel.WHITE,
+   578→        confidence: 0.94,
+   579→        severity: IndicatorSeverity.HIGH,
+   580→        source: 'YARA Community',
+   581→        validFrom: new Date('2024-01-01'),
+   582→        validUntil: new Date('2026-01-01'),
+   583→        isActive: true,
+   584→        detectionCount: 234,
+   585→        lastDetected: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000),
+   586→        action: IndicatorAction.ALERT_ONLY,
+   587→        tags: JSON.stringify(['yara', 'emotet', 'banking_trojan', 'malware']),
+   588→      }
+   589→    })
+   590→  ])
+   591→
+   592→  console.log(`   ✅ Created ${indicators.length} indicators`)
+   593→
+   594→  // ============= CAMPAIGNS =============
+   595→  console.log('⚔️ Creating campaigns...')
+   596→  
+   597→  const campaigns = await Promise.all([
+   598→    prisma.campaign.create({
+   599→      data: {
+   600→        name: 'Operation Winter Owl',
+   601→        description: 'Sustained APT28 campaign targeting European government agencies through spearphishing',
+   602→        startDate: new Date('2024-01-15'),
+   603→        endDate: null,
+   604→        isActive: true,
+   605→        targetSector: JSON.stringify(['Government', 'Military', 'Think Tank']),
+   606→        targetCountry: JSON.stringify(['France', 'Germany', 'UK', 'Italy', 'Algeria']),
+   607→        targetRegion: 'Europe / MENA',
+   608→        threatActorId: threatActors[0].id,
+   609→        notes: 'Campaign shows increased activity during diplomatic tensions.',
+   610→      }
+   611→    }),
+   612→    prisma.campaign.create({
+   613→      data: {
+   614→        name: 'Telecom Fraud Wave Q4 2024',
+   615→        description: 'Coordinated SIM swap and subscription fraud campaign targeting North African mobile operators',
+   616→        startDate: new Date('2024-10-01'),
+   617→        endDate: null,
+   618→        isActive: true,
+   619→        targetSector: JSON.stringify(['Telecommunications', 'Banking']),
+   620→        targetCountry: JSON.stringify(['Algeria', 'Tunisia', 'Morocco']),
+   621→        targetRegion: 'North Africa / MENA',
+   622→        threatActorId: threatActors[4].id,
+   623→        notes: 'Estimated losses exceed $2M across affected operators.',
+   624→      }
+   625→    })
+   626→  ])
+   627→
+   628→  console.log(`   ✅ Created ${campaigns.length} campaigns`)
+   629→
+   630→  // Connect indicators to campaigns
+   631→  await prisma.indicator.update({
+   632→    where: { id: indicators[0].id },
+   633→    data: { campaignId: campaigns[0].id }
+   634→  })
+   635→  await prisma.indicator.update({
+   636→    where: { id: indicators[1].id },
+   637→    data: { campaignId: campaigns[0].id }
+   638→  })
+   639→  await prisma.indicator.update({
+   640→    where: { id: indicators[3].id },
+   641→    data: { campaignId: campaigns[1].id }
+   642→  })
+   643→  await prisma.indicator.update({
+   644→    where: { id: indicators[4].id },
+   645→    data: { campaignId: campaigns[1].id }
+   646→  })
+   647→
+   648→  // ============= ALERTS =============
+   649→  console.log('🚨 Creating alerts...')
+   650→  
+   651→  const now = new Date()
+   652→  const alerts = await Promise.all([
+   653→    prisma.alert.create({
+   654→      data: {
+   655→        alertId: 'ALT-2026-0001',
+   656→        title: 'Multiple Failed Login Attempts Detected',
+   657→        description: 'Brute force attack detected from IP 192.168.1.100 - 150+ attempts in 5 minutes targeting admin accounts',
+   658→        severity: AlertSeverity.CRITICAL,
+   659→        status: AlertStatus.NEW,
+   660→        category: AlertCategory.UNAUTHORIZED_ACCESS,
+   661→        source: 'Wazuh EDR',
+   662→        platform: 'wazuh',
+   663→        sourceIp: '192.168.1.100',
+   664→        hostname: 'DC-SERVER-01',
+   665→        username: 'administrator',
+   666→        mitreTactic: 'Credential Access',
+   667→        mitreTechnique: 'Brute Force',
+   668→        mitreId: 'T1110',
+   669→        threatIntelMatch: false,
+   670→        confidence: 0.92,
+   671→        timestamp: new Date(now.getTime() - 2 * 60 * 1000),
+   672→        firstSeen: new Date(now.getTime() - 2 * 60 * 1000),
+   673→        assignedToId: users[1].id,
+   674→        rawLog: JSON.stringify({ rule_id: 5503, level: 13, description: 'Multiple brute force attempts detected' }),
+   675→        tags: JSON.stringify(['brute_force', 'authentication', 'critical']),
+   676→      }
+   677→    }),
+   678→    prisma.alert.create({
+   679→      data: {
+   680→        alertId: 'ALT-2026-0002',
+   681→        title: 'Suspicious File Execution on Workstation',
+   682→        description: 'Potential malware execution detected on WS-ALG-0456 in Finance Department - File: invoice_urgent.exe',
+   683→        severity: AlertSeverity.HIGH,
+   684→        status: AlertStatus.INVESTIGATING,
+   685→        category: AlertCategory.MALWARE,
+   686→        source: 'Wazuh FIM',
+   687→        platform: 'wazuh',
+   688→        hostname: 'WS-ALG-0456',
+   689→        username: 'finance_user1',
+   690→        mitreTactic: 'Execution',
+   691→        mitreTechnique: 'Malicious File',
+   692→        mitreId: 'T1204',
+   693→        threatIntelMatch: true,
+   694→        iocIndicator: indicators[6].value,
+   695→        confidence: 0.87,
+   696→        timestamp: new Date(now.getTime() - 8 * 60 * 1000),
+   697→        firstSeen: new Date(now.getTime() - 8 * 60 * 1000),
+   698→        acknowledgedAt: new Date(now.getTime() - 5 * 60 * 1000),
+   699→        assignedToId: users[2].id,
+   700→        incidentId: null,
+   701→        rawLog: JSON.stringify({ syscheck: { path: 'C:\\Users\\finance_user1\\Downloads\\invoice_urgent.exe', event: 'modified', after_hash: 'a1b2c3...' } }),
+   702→        tags: JSON.stringify(['malware', 'execution', 'finance']),
+   703→      }
+   704→    }),
+   705→    prisma.alert.create({
+   706→      data: {
+   707→        alertId: 'ALT-2026-0003',
+   708→        title: 'ET TROJAN Known C2 Pattern Detected',
+   709→        description: 'Suricata detected known command & control communication pattern to suspicious IP',
+   710→        severity: AlertSeverity.HIGH,
+   711→        status: AlertStatus.NEW,
+   712→        category: AlertCategory.MALWARE,
+   713→        source: 'Suricata IDS',
+   714→        platform: 'suricata',
+   715→        sourceIp: '10.0.0.55',
+   716→        destinationIp: '185.141.63.71',
+   717→        destinationPort: 443,
+   718→        protocol: 'TLS',
+   719→        mitreTactic: 'Command and Control',
+   720→        mitreTechnique: 'Application Layer Protocol',
+   721→        mitreId: 'T1071',
+   722→        threatIntelMatch: true,
+   723→        iocIndicator: indicators[0].value,
+   724→        confidence: 0.94,
+   725→        timestamp: new Date(now.getTime() - 12 * 60 * 1000),
+   726→        firstSeen: new Date(now.getTime() - 12 * 60 * 1000),
+   727→        assignedToId: users[1].id,
+   728→        rawLog: JSON.stringify({ alert: { signature: 'ET TROJAN Win32/Emotet C2 Activity', action: 'allowed' } }),
+   729→        tags: JSON.stringify(['c2', 'trojan', 'network', 'apt28']),
+   730→      }
+   731→    }),
+   732→    prisma.alert.create({
+   733→      data: {
+   734→        alertId: 'ALT-2026-0004',
+   735→        title: 'New IOC Match from MISP Feed',
+   736→        description: 'Alert correlated with MISP event #45281 - APT29 related indicators detected in DNS queries',
+   737→        severity: AlertSeverity.MEDIUM,
+   738→        status: AlertStatus.INVESTIGATING,
+   739→        category: AlertCategory.NETWORK_ANOMALY,
+   740→        source: 'MISP Threat Intel',
+   741→        platform: 'misp',
+   742→        sourceIp: '10.0.0.100',
+   743→        hostname: 'WORKSTATION-023',
+   744→        mitreTactic: 'Discovery',
+   745→        mitreTechnique: 'DNS Query',
+   746→        mitreId: 'T1018',
+   747→        threatIntelMatch: true,
+   748→        iocIndicator: indicators[1].value,
+   749→        confidence: 0.76,
+   750→        timestamp: new Date(now.getTime() - 18 * 60 * 1000),
+   751→        firstSeen: new Date(now.getTime() - 18 * 60 * 1000),
+   752→        acknowledgedAt: new Date(now.getTime() - 15 * 60 * 1000),
+   753→        assignedToId: users[4].id,
+   754→        rawLog: JSON.stringify({ misp_event_id: 45281, correlation_type: 'domain_match' }),
+   755→        tags: JSON.stringify(['threat_intel', 'dns', 'apt29']),
+   756→      }
+   757→    }),
+   758→    prisma.alert.create({
+   759→      data: {
+   760→        alertId: 'ALT-2026-0005',
+   761→        title: 'Case Escalation Required',
+   762→        description: 'TheHive case INC-2026-042 requires escalation - critical assets potentially affected',
+   763→        severity: AlertSeverity.HIGH,
+   764→        status: AlertStatus.NEW,
+   765→        category: AlertCategory.INCIDANT_RESPONSE,
+   766→        source: 'TheHive SOAR',
+   767→        platform: 'thehive',
+   768→        confidence: 0.88,
+   769→        timestamp: new Date(now.getTime() - 25 * 60 * 1000),
+   770→        firstSeen: new Date(now.getTime() - 25 * 60 * 1000),
+   771→        assignedToId: users[3].id,
+   772→        rawLog: JSON.stringify({ thehive_case_id: 'INC-2026-042', severity: 'High', title: 'Critical Infrastructure Access Attempt' }),
+   773→        tags: JSON.stringify(['escalation', 'case', 'critical']),
+   774→      }
+   775→    }),
+   776→    prisma.alert.create({
+   777→      data: {
+   778→        alertId: 'ALT-2026-0006',
+   779→        title: 'SIM Swap Anomaly Detected',
+   780→        description: 'Unusual SIM swap request pattern for MSISDN +213551234567 - Multiple requests within 24 hours',
+   781→        severity: AlertSeverity.CRITICAL,
+   782→        status: AlertStatus.NEW,
+   783→        category: AlertCategory.SIM_SWAP,
+   784→        source: 'HLR Monitoring System',
+   785→        platform: 'hlr_monitoring',
+   786→        iocIndicator: indicators[3].value,
+   787→        threatIntelMatch: true,
+   788→        confidence: 0.91,
+   789→        timestamp: new Date(now.getTime() - 3 * 60 * 1000),
+   790→        firstSeen: new Date(now.getTime() - 3 * 60 * 1000),
+   791→        assignedToId: users[1].id,
+   792→        customFields: JSON.stringify({ msisdn: '+213551234567', swap_count: 3, time_window: '24h' }),
+   793→        tags: JSON.stringify(['sim_swap', 'telecom', 'fraud', 'critical']),
+   794→      }
+   795→    }),
+   796→    prisma.alert.create({
+   797→      data: {
+   798→        alertId: 'ALT-2026-0007',
+   799→        title: 'SS7 Abnormal Signaling Pattern',
+   800→        description: 'Abnormal SS7 signaling detected - SendRoutingInfo requests from untrusted SPC',
+   801→        severity: AlertSeverity.CRITICAL,
+   802→        status: AlertStatus.ACKNOWLEDGED,
+   803→        category: AlertCategory.SS7_ATTACK,
+   804→        source: 'SS7 Firewall',
+   805→        platform: 'ss7_monitoring',
+   806→        sourceIp: '10.50.0.1',
+   807→        confidence: 0.86,
+   808→        timestamp: new Date(now.getTime() - 35 * 60 * 1000),
+   809→        firstSeen: new Date(now.getTime() - 35 * 60 * 1000),
+   810→        acknowledgedAt: new Date(now.getTime() - 30 * 60 * 1000),
+   811→        assignedToId: users[4].id,
+   812→        customFields: JSON.stringify({ opc: '2130100', sccp_called_gt: '+213551234567', message_count: 150, time_window: '5m' }),
+   813→        tags: JSON.stringify(['ss7', 'signaling', 'telecom', 'critical']),
+   814→      }
+   815→    }),
+   816→    prisma.alert.create({
+   817→      data: {
+   818→        alertId: 'ALT-2026-0008',
+   819→        title: 'Premium Rate SMS Fraud Pattern',
+   820→        description: 'Bulk premium-rate SMS delivery from single IMSI - potential fraud ring activity',
+   821→        severity: AlertSeverity.HIGH,
+   822→        status: AlertStatus.NEW,
+   823→        category: AlertCategory.TELECOM_FRAUD,
+   824→        source: 'SMS Gateway',
+   825→        platform: 'sms_gateway',
+   826→        confidence: 0.83,
+   827→        timestamp: new Date(now.getTime() - 45 * 60 * 1000),
+   828→        firstSeen: new Date(now.getTime() - 45 * 60 * 1000),
+   829→        assignedToId: users[2].id,
+   830→        customFields: JSON.stringify({ imsi: '213019876543210', sms_count: 78, destinations: ['1902', '1955'], time_window: '1h' }),
+   831→        tags: JSON.stringify(['sms_fraud', 'premium_rate', 'telecom']),
+   832→      }
+   833→    }),
+   834→    prisma.alert.create({
+   835→      data: {
+   836→        alertId: 'ALT-2026-0009',
+   837→        title: 'Vulnerability Scan Detected',
+   838→        description: 'Network vulnerability scanning activity from internal subnet - possible penetration test or reconnaissance',
+   839→        severity: AlertSeverity.LOW,
+   840→        status: AlertStatus.RESOLVED,
+   841→        category: AlertCategory.NETWORK_ANOMALY,
+   842→        source: 'Suricata IDS',
+   843→        platform: 'suricata',
+   844→        sourceIp: '192.168.10.50',
+   845→        confidence: 0.65,
+   846→        timestamp: new Date(now.getTime() - 120 * 60 * 1000),
+   847→        firstSeen: new Date(now.getTime() - 120 * 60 * 1000),
+   848→        resolvedAt: new Date(now.getTime() - 60 * 60 * 1000),
+   849→        rawLog: JSON.stringify({ alert: { signature: 'ET SCAN Nmap SYN Scan', category: 'Attempted Information Gather' } }),
+   850→        tags: JSON.stringify(['scan', 'reconnaissance', 'resolved']),
+   851→      }
+   852→    }),
+   853→    prisma.alert.create({
+   854→      data: {
+   855→        alertId: 'ALT-2026-0010',
+   856→        title: 'Policy Violation - Unauthorized Software',
+   857→        description: 'Unauthorized software installation detected: Tor Browser on workstation WS-HR-012',
+   858→        severity: AlertSeverity.LOW,
+   859→        status: AlertStatus.NEW,
+   860→        category: AlertCategory.POLICY_VIOLATION,
+   861→        source: 'Wazuh FIM',
+   862→        platform: 'wazuh',
+   863→        hostname: 'WS-HR-012',
+   864→        username: 'hr_intern',
+   865→        confidence: 0.70,
+   866→        timestamp: new Date(now.getTime() - 55 * 60 * 1000),
+   867→        firstSeen: new Date(now.getTime() - 55 * 60 * 1000),
+   868→        rawLog: JSON.stringify({ syscheck: { path: 'C:\\Program Files\\tor-browser', event: 'added' } }),
+   869→        tags: JSON.stringify(['policy', 'software', 'low']),
+   870→      }
+   871→    })
+   872→  ])
+   873→
+   874→  console.log(`   ✅ Created ${alerts.length} alerts`)
+   875→
+   876→  // ============= INCIDENTS =============
+   877→  console.log('📋 Creating incidents...')
+   878→  
+   879→  const incidents = await Promise.all([
+   880→    prisma.incident.create({
+   881→      data: {
+   882→        incidentId: 'INC-2026-042',
+   883→        title: 'Critical Infrastructure Access Attempt',
+   884→        description: 'Coordinated attack attempt targeting core network infrastructure. Initial access via phishing email led to lateral movement attempts toward domain controllers.',
+   885→        severity: IncidentSeverity.SEV0,
+   886→        status: IncidentStatus.IN_PROGRESS,
+   887→        category: IncidentCategory.SECURITY_BREACH,
+   888→        classification: IncidentClassification.TRUE_POSITIVE,
+   889→        impact: ImpactLevel.CRITICAL,
+   890→        urgency: UrgencyLevel.CRITICAL,
+   891→        handlerId: users[2].id,
+   892→        team: 'IR Alpha',
+   893→        detectedAt: new Date(now.getTime() - 180 * 60 * 1000),
+   894→        reportedAt: new Date(now.getTime() - 175 * 60 * 1000),
+   895→        acknowledgedAt: new Date(now.getTime() - 160 * 60 * 1000),
+   896→        containedAt: null,
+   897→        mttdMinutes: 25,
+   898→        affectedAssets: JSON.stringify(['DC-SERVER-01', 'CORE-ROUTER-01', 'FIREWALL-EDGE']),
+   899→        affectedUsers: 150,
+   900→        dataBreach: false,
+   901→        rootCause: 'Under investigation - suspected phishing vector with credential theft',
+   902→        resolution: null,
+   903→        alerts: { connect: [{ id: alerts[4].id }, { id: alerts[2].id }] },
+   904→        tags: JSON.stringify(['critical', 'active_breach', 'lateral_movement']),
+   905→        costEstimate: 0,
+   906→        complianceImpact: JSON.stringify(['NIST_CSF', 'ISO_27001']),
+   907→      }
+   908→    }),
+   909→    prisma.incident.create({
+   910→      data: {
+   911→        incidentId: 'INC-2026-043',
+   912→        title: 'Ransomware Containment - Finance Dept',
+   913→        description: 'LockBit ransomware variant detected on finance department workstations. Rapid containment initiated before encryption spread.',
+   914→        severity: IncidentSeverity.SEV1,
+   915→        status: IncidentStatus.CONTAINED,
+   916→        category: IncidentCategory.RANSOMWARE,
+   917→        classification: IncidentClassification.TRUE_POSITIVE,
+   918→        impact: ImpactLevel.MAJOR,
+   919→        urgency: UrgencyLevel.CRITICAL,
+   920→        handlerId: users[1].id,
+   921→        team: 'IR Bravo',
+   922→        detectedAt: new Date(now.getTime() - 360 * 60 * 1000),
+   923→        reportedAt: new Date(now.getTime() - 355 * 60 * 1000),
+   924→        acknowledgedAt: new Date(now.getTime() - 340 * 60 * 1000),
+   925→        containedAt: new Date(now.getTime() - 120 * 60 * 1000),
+   926→        mttdMinutes: 15,
+   927→        mttrMinutes: 240,
+   928→        totalDowntime: 120,
+   929→        affectedAssets: JSON.stringify(['WS-ALG-0456', 'WS-ALG-0457', 'WS-ALG-0458', 'FILESERVER-FINANCE']),
+   930→        affectedUsers: 25,
+   931→        dataBreach: false,
+   932→        recordsAffected: 0,
+   933→        rootCause: 'Malicious Excel macro enabled by user in phishing email',
+   934→        resolution: 'Systems isolated, forensic images captured, recovery in progress',
+   935→        alerts: { connect: [{ id: alerts[1].id }] },
+   936→        tags: JSON.stringify(['ransomware', 'lockbit', 'contained', 'finance']),
+   937→        costEstimate: 50000,
+   938→        complianceImpact: JSON.stringify(['GDPR', 'ISO_27001']),
+   939→      }
+   940→    }),
+   941→    prisma.incident.create({
+   942→      data: {
+   943→        incidentId: 'INC-2026-044',
+   944→        title: 'Telecom SIM Swap Fraud Campaign',
+   945→        description: 'Organized fraud campaign targeting mobile subscribers for SIM swap attacks enabling banking account takeover.',
+   946→        severity: IncidentSeverity.SEV1,
+   947→        status: IncidentStatus.TRIAGE,
+   948→        category: IncidentCategory.SIM_SWAP_ATTACK,
+   949→        classification: IncidentClassification.TRUE_POSITIVE,
+   950→        impact: ImpactLevel.MODERATE,
+   951→        urgency: UrgencyLevel.HIGH,
+   952→        handlerId: users[4].id,
+   953→        team: 'Threat Hunting',
+   954→        detectedAt: new Date(now.getTime() - 720 * 60 * 1000),
+   955→        reportedAt: new Date(now.getTime() - 700 * 60 * 1000),
+   956→        acknowledgedAt: new Date(now.getTime() - 600 * 60 * 1000),
+   957→        mttdMinutes: 120,
+   958→        affectedUsers: 47,
+   959→        dataBreach: false,
+   960→        recordsAffected: 0,
+   961→        rootCause: 'Insufficient identity verification in retail stores',
+   962→        resolution: null,
+   963→        alerts: { connect: [{ id: alerts[5].id }] },
+   964→        tags: JSON.stringify(['telecom', 'fraud', 'sim_swap', 'investigation']),
+   965→        costEstimate: 125000,
+   966→        complianceImpact: JSON.stringify(['ARPT_TELECOM', 'NCSA_ALGERIA']),
+   967→      }
+   968→    })
+   969→  ])
+   970→
+   971→  console.log(`   ✅ Created ${incidents.length} incidents`)
+   972→
+   973→  // Update alert incident references
+   974→  await prisma.alert.update({
+   975→    where: { id: alerts[0].id },
+   976→    data: { incidentId: incidents[0].id }
+   977→  })
+   978→
+   979→  // ============= TASKS =============
+   980→  console.log('✅ Creating tasks...')
+   981→  
+   982→  const tasks = await Promise.all([
+   983→    prisma.task.create({
+   984→      data: {
+   985→        title: 'Isolate compromised workstation',
+   986→        description: 'Network isolate WS-ALG-0456 to prevent further lateral movement',
+   987→        status: TaskStatus.COMPLETED,
+   988→        priority: Priority.CRITICAL,
+   989→        taskType: TaskType.CONTAINMENT,
+   990→        assignedToId: users[2].id,
+   991→        incidentId: incidents[0].id,
+   992→        dueDate: new Date(now.getTime() + 60 * 60 * 1000),
+   993→        completedAt: new Date(now.getTime() - 30 * 60 * 1000),
+   994→        order: 1,
+   995→      }
+   996→    }),
+   997→    prisma.task.create({
+   998→      data: {
+   999→        title: 'Collect forensic image of affected systems',
+  1000→        description: 'Acquire memory and disk images of DC-SERVER-01 and WS-ALG-0456',
+  1001→        status: TaskStatus.IN_PROGRESS,
+  1002→        priority: Priority.CRITICAL,
+  1003→        taskType: TaskType.INVESTIGATION,
+  1004→        assignedToId: users[2].id,
+  1005→        incidentId: incidents[0].id,
+  1006→        dueDate: new Date(now.getTime() + 120 * 60 * 1000),
+  1007→        order: 2,
+  1008→      }
+  1009→    }),
+  1010→    prisma.task.create({
+  1011→      data: {
+  1012→        title: 'Analyze malware sample',
+  1013→        description: 'Submit invoice_urgent.exe to sandbox for dynamic analysis',
+  1014→        status: TaskStatus.PENDING,
+  1015→        priority: Priority.HIGH,
+  1016→        taskType: TaskType.ANALYSIS,
+  1017→        assignedToId: users[1].id,
+  1018→        incidentId: incidents[1].id,
+  1019→        dueDate: new Date(now.getTime() + 180 * 60 * 1000),
+  1020→        order: 1,
+  1021→      }
+  1022→    }),
+  1023→    prisma.task.create({
+  1024→      data: {
+  1025→        title: 'Identify all affected user accounts',
+  1026→        description: 'Review authentication logs to identify accounts accessed from compromised workstation',
+  1027→        status: TaskStatus.IN_PROGRESS,
+  1028→        priority: Priority.HIGH,
+  1029→        taskType: TaskType.INVESTIGATION,
+  1030→        assignedToId: users[1].id,
+  1031→        incidentId: incidents[0].id,
+  1032→        dueDate: new Date(now.getTime() + 90 * 60 * 1000),
+  1033→        order: 3,
+  1034→      }
+  1035→    }),
+  1036→    prisma.task.create({
+  1037→      data: {
+  1038→        title: 'Block malicious domains at firewall',
+  1039→        description: 'Add cloud-update-service[.]com and related indicators to block list',
+  1040→        status: TaskStatus.COMPLETED,
+  1041→        priority: Priority.HIGH,
+  1042→        taskType: TaskType.CONTAINMENT,
+  1043→        assignedToId: users[1].id,
+  1044→        incidentId: incidents[0].id,
+  1045→        completedAt: new Date(now.getTime() - 45 * 60 * 1000),
+  1046→        order: 4,
+  1047→      }
+  1048→    }),
+  1049→    prisma.task.create({
+  1050→      data: {
+  1051→        title: 'Coordinate with legal/law enforcement',
+  1052→        description: 'Prepare evidence package for potential law enforcement referral',
+  1053→        status: TaskStatus.PENDING,
+  1054→        priority: Priority.MEDIUM,
+  1055→        taskType: TaskType.COORDINATION,
+  1056→        assignedToId: users[3].id,
+  1057→        incidentId: incidents[2].id,
+  1058→        dueDate: new Date(now.getTime() + 720 * 60 * 1000),
+  1059→        order: 1,
+  1060→      }
+  1061→    })
+  1062→  ])
+  1063→
+  1064→  console.log(`   ✅ Created ${tasks.length} tasks`)
+  1065→
+  1066→  // ============= PLAYBOOKS =============
+  1067→  console.log('📖 Creating playbooks...')
+  1068→  
+  1069→  // Using raw query to work around enum issue
+  1070→  const playbookData = [
+  1071→    {
+  1072→      name: 'Ransomware Response Playbook',
+  1073→      description: 'Standard operating procedure for responding to ransomware incidents',
+  1074→      category: 'RANSOMWARE_RESPONSE',
+  1075→      severity: 'CRITICAL',
+  1076→      content: `# Ransomware Response Procedure
+  1077→
+  1078→## Phase 1: Detection & Triage
+  1079→- Verify ransomware indicators
+  1080→- Assess scope of infection
+  1081→- Classify severity
+  1082→
+  1083→## Phase 2: Immediate Containment
+  1084→- Isolate affected systems
+  1085→- Disable shared drives
+  1086→- Preserve evidence
+  1087→
+  1088→## Phase 3: Eradication
+  1089→- Identify patient zero
+  1090→- Remove malware artifacts
+  1091→- Patch vulnerabilities
+  1092→
+  1093→## Phase 4: Recovery
+  1094→- Restore from clean backups
+  1095→- Monitor for reinfection
+  1096→- Document lessons learned`,
+  1097→      steps: JSON.stringify([
+  1098→        { step: 1, action: 'Verify ransomware indicators', assignee: 'Tier 1 Analyst', duration: '15 min' },
+  1099→        { step: 2, action: 'Isolate affected systems', assignee: 'Tier 2 Responder', duration: '30 min' },
+  1100→        { step: 3, action: 'Preserve forensic evidence', assignee: 'Forensics Team', duration: '60 min' },
+  1101→        { step: 4, action: 'Identify attack vector', assignee: 'Threat Hunter', duration: '120 min' },
+  1102→        { step: 5, action: 'Eradicate malware', assignee: 'Tier 2 Responder', duration: '60 min' },
+  1103→        { step: 6, action: 'Restore systems', assignee: 'IT Operations', duration: '240 min' }
+  1104→      ]),
+  1105→      isAutomated: true,
+  1106→      automationScript: 'playbooks/ransomware_response.py',
+  1107→      triggers: JSON.stringify(['ransomware_detected', 'encryption_activity', 'ransom_note']),
+  1108→      approvalRequired: true,
+  1109→      approverRoles: JSON.stringify([UserRole.MANAGER, UserRole.ADMIN]),
+  1110→      isPublished: true,
+  1111→      executionCount: 47,
+  1112→      successRate: 0.89,
+  1113→      avgExecutionTime: 480,
+  1114→      authorId: users[0].id,
+  1115→      tags: JSON.stringify(['ransomware', 'incident_response', 'critical']),
+  1116→    },
+  1117→    {
+  1118→      name: 'SIM Swap Fraud Investigation',
+  1119→      description: 'Procedure for investigating and responding to SIM swap fraud attempts',
+  1120→      category: 'SIM_SWAP_RESPONSE',
+  1121→      severity: 'HIGH',
+  1122→      content: `# SIM Swap Investigation Playbook
+  1123→
+  1124→## 1. Detection
+  1125→- Monitor HLR for unusual swap patterns
+  1126→- Correlate with customer complaints
+  1127→
+  1128→## 2. Investigation
+  1129→- Pull subscriber history
+  1130→- Identify requesting channel
+  1131→- Check employee involvement
+  1132→
+  1133→## 3. Response
+  1134→- Freeze affected accounts
+  1135→- Notify banking partners
+  1136→- Preserve evidence
+  1137→
+  1138→## 4. Prevention
+  1139→- Enhance verification procedures
+  1140→- Update risk scoring`,
+  1141→      steps: JSON.stringify([
+  1142→        { step: 1, action: 'Verify SIM swap anomaly', assignee: 'Fraud Analyst', duration: '30 min' },
+  1143→        { step: 2, action: 'Pull subscriber transaction history', assignee: 'Billing System', duration: '15 min' },
+  1144→        { step: 3, action: 'Identify swap request origin', assignee: 'Retail Security', duration: '60 min' },
+  1145→        { step: 4, action: 'Freeze associated accounts', assignee: 'Security Ops', duration: '10 min' },
+  1146→        { step: 5, action: 'Notify law enforcement if threshold met', assignee: 'Legal Team', duration: '120 min' }
+  1147→      ]),
+  1148→      isAutomated: false,
+  1149→      triggers: JSON.stringify(['sim_swap_anomaly', 'multiple_swap_requests', 'subscriber_complaint']),
+  1150→      approvalRequired: false,
+  1151→      isPublished: true,
+  1152→      executionCount: 23,
+  1153→      successRate: 0.78,
+  1154→      avgExecutionTime: 360,
+  1155→      authorId: users[4].id,
+  1156→      tags: JSON.stringify(['telecom', 'fraud', 'sim_swap', 'investigation']),
+  1157→    },
+  1158→    {
+  1159→      name: 'Phishing Email Response',
+  1160→      description: 'Quick response playbook for phishing email incidents',
+  1161→      category: 'PHISHING_RESPONSE',
+  1162→      severity: 'MEDIUM',
+  1163→      content: `# Phishing Response Playbook
+  1164→
+  1165→## 1. Report Analysis
+  1166→- Collect email headers
+  1167→- Extract URLs/attachments
+  1168→- Check for internal clicks
+  1169→
+  1170→## 2. Containment
+  1171→- Block sender domain
+  1172→- Remove emails from mailboxes
+  1173→- Reset clicked credentials
+  1174→
+  1175→## 3. Investigation
+  1176→- Analyze landing page
+  1177→- Check for data exfiltration
+  1178→- Identify targeted users
+  1179→
+  1180→## 4. Remediation
+  1181→- User awareness training
+  1182→- Update mail filters
+  1183→- Document for threat intelligence`,
+  1184→      steps: JSON.stringify([
+  1185→        { step: 1, action: 'Collect original email with headers', assignee: 'Tier 1 Analyst', duration: '10 min' },
+  1186→        { step: 2, action: 'Extract and analyze URLs/attachments', assignee: 'Threat Intel', duration: '15 min' },
+  1187→        { step: 3, action: 'Identify all recipients who interacted', assignee: 'Email Admin', duration: '20 min' },
+  1188→        { step: 4, action: 'Block sender and remove emails', assignee: 'Email Security', duration: '15 min' },
+  1189→        { step: 5, action: 'Reset credentials for affected users', assignee: 'Help Desk', duration: '30 min' }
+  1190→      ]),
+  1191→      isAutomated: true,
+  1192→      triggers: JSON.stringify(['phishing_report', 'malicious_email', 'credential_harvesting']),
+  1193→      approvalRequired: false,
+  1194→      isPublished: true,
+  1195→      executionCount: 156,
+  1196→      successRate: 0.94,
+  1197→      avgExecutionTime: 90,
+  1198→      authorId: users[1].id,
+  1199→      tags: JSON.stringify(['phishing', 'email', 'quick_response']),
+  1200→    }
+  1201→  ]
+  1202→
+  1203→  const playbooks = []
+  1204→  for (const pb of playbookData) {
+  1205→    try {
+  1206→      const created = await prisma.playbook.create({
+  1207→        data: {
+  1208→          name: pb.name,
+  1209→          description: pb.description,
+  1210→          category: pb.category as any, // Cast to bypass enum validation
+  1211→          severity: pb.severity as any,
+  1212→          content: pb.content,
+  1213→          steps: pb.steps,
+  1214→          isAutomated: pb.isAutomated,
+  1215→          automationScript: pb.automationScript,
+  1216→          triggers: pb.triggers,
+  1217→          approvalRequired: pb.approvalRequired,
+  1218→          approverRoles: pb.approverRoles,
+  1219→          isPublished: pb.isPublished,
+  1220→          executionCount: pb.executionCount,
+  1221→          successRate: pb.successRate,
+  1222→          avgExecutionTime: pb.avgExecutionTime,
+  1223→          authorId: pb.authorId,
+  1224→          tags: pb.tags,
+  1225→        }
+  1226→      })
+  1227→      playbooks.push(created)
+  1228→    } catch (error) {
+  1229→      console.log(`   ⚠️ Could not create playbook ${pb.name}: ${(error as Error).message}`)
+  1230→    }
+  1231→  }
+  1232→
+  1233→  console.log(`   ✅ Created ${playbooks.length} playbooks`)
+  1234→
+  1235→  // ============= NOTIFICATIONS =============
+  1236→  console.log('🔔 Creating notifications...')
+  1237→  
+  1238→  const notifications = await Promise.all([
+  1239→    prisma.notification.create({
+  1240→      data: {
+  1241→        userId: users[1].id,
+  1242→        type: NotificationType.ALERT_ASSIGNED,
+  1243→        title: 'New Critical Alert Assigned',
+  1244→        message: 'Alert ALT-2026-0001 (Brute Force Attack) has been assigned to you',
+  1245→        severity: NotificationSeverity.CRITICAL,
+  1246→        resourceId: alerts[0].id,
+  1247→        resourceType: 'Alert',
+  1248→        actionUrl: '/alerts/ALT-2026-0001',
+  1249→        actionText: 'View Alert',
+  1250→        sendAt: new Date(now.getTime() - 2 * 60 * 1000),
+  1251→        isRead: false,
+  1252→      }
+  1253→    }),
+  1254→    prisma.notification.create({
+  1255→      data: {
+  1256→        userId: users[2].id,
+  1257→        type: NotificationType.INCIDENT_ASSIGNED,
+  1258→        title: 'Incident Assignment',
+  1259→        message: 'You have been assigned as handler for INC-2026-042',
+  1260→        severity: NotificationSeverity.HIGH,
+  1261→        resourceId: incidents[0].id,
+  1262→        resourceType: 'Incident',
+  1263→        actionUrl: '/incidents/INC-2026-042',
+  1264→        actionText: 'View Incident',
+  1265→        sendAt: new Date(now.getTime() - 30 * 60 * 1000),
+  1266→        isRead: true,
+  1267→        readAt: new Date(now.getTime() - 25 * 60 * 1000),
+  1268→      }
+  1269→    }),
+  1270→    prisma.notification.create({
+  1271→      data: {
+  1272→        userId: users[3].id,
+  1273→        type: NotificationType.SYSTEM_ALERT,
+  1274→        title: 'System Health Warning',
+  1275→        message: 'Elasticsearch cluster CPU usage exceeded 70%',
+  1276→        severity: NotificationSeverity.MEDIUM,
+  1277→        sendAt: new Date(now.getTime() - 15 * 60 * 1000),
+  1278→        isRead: false,
+  1279→      }
+  1280→    }),
+  1281→    prisma.notification.create({
+  1282→      data: {
+  1283→        userId: users[4].id,
+  1284→        type: NotificationType.THREAT_INTEL_UPDATE,
+  1285→        title: 'New Threat Actor Profile',
+  1286→        message: 'New threat actor profile created: Telecom Fraud Ring ALG-03',
+  1287→        severity: NotificationSeverity.INFO,
+  1288→        resourceId: threatActors[4].id,
+  1289→        resourceType: 'ThreatActor',
+  1290→        actionText: 'View Profile',
+  1291→        sendAt: new Date(now.getTime() - 60 * 60 * 1000),
+  1292→        isRead: false,
+  1293→      }
+  1294→    })
+  1295→  ])
+  1296→
+  1297→  console.log(`   ✅ Created ${notifications.length} notifications`)
+  1298→
+  1299→  // ============= AUDIT LOGS =============
+  1300→  console.log('📝 Creating audit logs...')
+  1301→  
+  1302→  const auditLogs = await Promise.all([
+  1303→    prisma.auditLog.create({
+  1304→      data: {
+  1305→        userId: users[0].id,
+  1306→        action: AuditAction.LOGIN,
+  1307→        resourceType: ResourceType.USER,
+  1308→        resourceId: users[0].id,
+  1309→        resourceName: 'SOC Administrator',
+  1310→        ipAddress: '192.168.1.100',
+  1311→        userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120',
+  1312→        success: true,
+  1313→        timestamp: new Date(now.getTime() - 5 * 60 * 1000),
+  1314→      }
+  1315→    }),
+  1316→    prisma.auditLog.create({
+  1317→      data: {
+  1318→        userId: users[1].id,
+  1319→        action: AuditAction.ALERT_ACKNOWLEDGE,
+  1320→        resourceType: ResourceType.ALERT,
+  1321→        resourceId: alerts[1].id,
+  1322→        resourceName: 'ALT-2026-0002',
+  1323→        oldValue: JSON.stringify({ status: 'NEW' }),
+  1324→        newValue: JSON.stringify({ status: 'INVESTIGATING' }),
+  1325→        ipAddress: '192.168.1.101',
+  1326→        success: true,
+  1327→        timestamp: new Date(now.getTime() - 8 * 60 * 1000),
+  1328→      }
+  1329→    }),
+  1330→    prisma.auditLog.create({
+  1331→      data: {
+  1332→        userId: users[2].id,
+  1333→        action: AuditAction.INCIDENT_UPDATE,
+  1334→        resourceType: ResourceType.INCIDENT,
+  1335→        resourceId: incidents[0].id,
+  1336→        resourceName: 'INC-2026-042',
+  1337→        oldValue: JSON.stringify({ status: 'DETECTED' }),
+  1338→        newValue: JSON.stringify({ status: 'IN_PROGRESS' }),
+  1339→        metadata: JSON.stringify({ note: 'Containment actions initiated' }),
+  1340→        ipAddress: '192.168.1.102',
+  1341→        success: true,
+  1342→        timestamp: new Date(now.getTime() - 45 * 60 * 1000),
+  1343→      }
+  1344→    }),
+  1345→    prisma.auditLog.create({
+  1346→      data: {
+  1347→        userId: users[0].id,
+  1348→        action: AuditAction.CONFIG_CHANGE,
+  1349→        resourceType: ResourceType.CONFIGURATION,
+  1350→        resourceId: 'system-config-001',
+  1351→        resourceName: 'System Configuration',
+  1352→        oldValue: JSON.stringify({ session_timeout: '30m' }),
+  1353→        newValue: JSON.stringify({ session_timeout: '60m' }),
+  1354→        success: true,
+  1355→        timestamp: new Date(now.getTime() - 120 * 60 * 1000),
+  1356→      }
+  1357→    })
+  1358→  ])
+  1359→
+  1360→  console.log(`   ✅ Created ${auditLogs.length} audit logs`)
+  1361→
+  1362→  // ============= COMPLIANCE REPORTS =============
+  1363→  console.log('📊 Creating compliance reports...')
+  1364→  
+  1365→  const reports = await Promise.all([
+  1366→    prisma.complianceReport.create({
+  1367→      data: {
+  1368→        name: 'Q4 2025 ISO 27001 Compliance Assessment',
+  1369→        framework: ComplianceFramework.ISO_27001,
+  1370→        status: ReportStatus.APPROVED,
+  1371→        periodStart: new Date('2025-10-01'),
+  1372→        periodEnd: new Date('2025-12-31'),
+  1373→        generatedAt: new Date('2026-01-15'),
+  1374→        summary: 'Overall compliance score improved to 87% from 82% in Q3. Key improvements in access controls and incident response procedures.',
+  1375→        findings: JSON.stringify([
+  1376→          { id: 1, severity: 'Medium', title: 'Access Review Delay', status: 'Open' },
+  1377→          { id: 2, severity: 'Low', title: 'Documentation Gap', status: 'In Progress' }
+  1378→        ]),
+  1379→        recommendations: JSON.stringify([
+  1380→          'Implement automated access review workflow',
+  1381→          'Update security policies quarterly'
+  1382→        ]),
+  1383→        score: 87,
+  1384→        authorId: users[0].id,
+  1385→        reviewerId: users[3].id,
+  1386→        approvedBy: users[0].id,
+  1387→        approvedAt: new Date('2026-01-20'),
+  1388→        distributedTo: JSON.stringify(['board@algeria-soc.dz', 'ciso@gov.dz']),
+  1389→        distributionDate: new Date('2026-01-21'),
+  1390→        version: '1.0',
+  1391→      }
+  1392→    }),
+  1393→    prisma.complianceReport.create({
+  1394→      data: {
+  1395→        name: 'Monthly ARPT Telecom Security Report - January 2026',
+  1396→        framework: ComplianceFramework.ARPT_TELECOM,
+  1397→        status: ReportStatus.PUBLISHED,
+  1398→        periodStart: new Date('2026-01-01'),
+  1399→        periodEnd: new Date('2026-01-31'),
+  1400→        generatedAt: new Date('2026-02-02'),
+  1401→        summary: 'All critical security metrics within acceptable thresholds. SIM swap fraud cases decreased 15% MoM.',
+  1402→        findings: JSON.stringify([
+  1403→          { id: 1, severity: 'Info', title: 'Fraud Prevention Improvement', status: 'Closed' }
+  1404→        ]),
+  1405→        score: 92,
+  1406→        authorId: users[3].id,
+  1407→        approvedBy: users[0].id,
+  1408→        approvedAt: new Date('2026-02-03'),
+  1409→        version: '1.0',
+  1410→      }
+  1411→    })
+  1412→  ])
+  1413→
+  1414→  console.log(`   ✅ Created ${reports.length} compliance reports`)
+  1415→
+  1416→  console.log('\n✨ ============================================')
+  1417→  console.log('✨ National SOC Platform Database Seeded Successfully!')
+  1418→  console.log('✨ ============================================\n')
+  1419→  console.log('📊 Summary:')
+  1420→  console.log(`   👥 Users: ${users.length}`)
+  1421→  console.log(`   🖥️ Components: ${components.length}`)
+  1422→  console.log(`   🔗 Integrations: ${integrations.length}`)
+  1423→  console.log(`   🎭 Threat Actors: ${threatActors.length}`)
+  1424→  console.log(`   🎯 Indicators: ${indicators.length}`)
+  1425→  console.log(`   ⚔️ Campaigns: ${campaigns.length}`)
+  1426→  console.log(`   🚨 Alerts: ${alerts.length}`)
+  1427→  console.log(`   📋 Incidents: ${incidents.length}`)
+  1428→  console.log(`   ✅ Tasks: ${tasks.length}`)
+  1429→  console.log(`   📖 Playbooks: ${playbooks.length}`)
+  1430→  console.log(`   🔔 Notifications: ${notifications.length}`)
+  1431→  console.log(`   📝 Audit Logs: ${auditLogs.length}`)
+  1432→  console.log(`   📊 Reports: ${reports.length}`)
+  1433→  console.log('\n🔐 Default Credentials:')
+  1434→  console.log('   Admin: admin@algeria-soc.dz / Admin@2026!Secure')
+  1435→  console.log('   Analyst: analyst.benali@algeria-soc.dz / Analyst@2026!')
+  1436→  console.log('')
+  1437→}
+  1438→
+  1439→main()
+  1440→  .catch((e) => {
+  1441→    console.error('❌ Error seeding database:', e)
+  1442→    process.exit(1)
+  1443→  })
+  1444→  .finally(async () => {
+  1445→    await prisma.$disconnect()
+  1446→  })
+  1447→

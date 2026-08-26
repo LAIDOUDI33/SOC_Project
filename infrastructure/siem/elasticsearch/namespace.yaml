@@ -1,0 +1,132 @@
+# =============================================================================
+# Djezzy National SOC Platform - Phase 5: SIEM Integration
+# Elasticsearch Namespace & Base Configuration
+# =============================================================================
+# Production-ready Elasticsearch cluster for security log aggregation
+# ARTP/ANSSI compliant log retention and encryption
+# =============================================================================
+
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: siem
+  labels:
+    app.kubernetes.io/name: soc-platform
+    app.kubernetes.io/component: siem
+    app.kubernetes.io/part-of: djezzy-soc
+    security.djezzy.dz/classification: confidential
+    environment: production
+  annotations:
+    description: "SIEM Stack - Security Information and Event Management"
+    contact: soc-admin@djezzy.dz
+---
+apiVersion: v1
+kind: LimitRange
+metadata:
+  name: siem-resource-limits
+  namespace: siem
+spec:
+  limits:
+    - type: Container
+      default:
+        cpu: "2"
+        memory: "4Gi"
+      defaultRequest:
+        cpu: "100m"
+        memory: "512Mi"
+      max:
+        cpu: "8"
+        memory: "16Gi"
+    - type: PersistentVolumeClaim
+      min:
+        storage: "10Gi"
+      max:
+        storage: "1Ti"
+---
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: siem-quota
+  namespace: siem
+spec:
+  hard:
+    requests.cpu: "20"
+    requests.memory: "40Gi"
+    limits.cpu: "50"
+    limits.memory: "100Gi"
+    persistentvolumeclaims: "20"
+    requests.storage: "500Gi"
+    pods: "30"
+    services: "15"
+    secrets: "50"
+    configmaps: "30"
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: siem-network-policy
+  namespace: siem
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    # Allow from within namespace
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              name: siem
+      ports:
+        - protocol: TCP
+          port: 9200  # Elasticsearch HTTP
+        - protocol: TCP
+          port: 9300  # Elasticsearch Transport
+        - protocol: TCP
+          port: 5044  # Logstash Beats input
+        - protocol: TCP
+          port: 5601  # Kibana
+    # Allow from monitoring
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              name: monitoring
+      ports:
+        - protocol: TCP
+          port: 9200
+        - protocol: TCP
+          port: 9115  # Prometheus exporter
+    # Allow from SOC platform
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              name: soc-platform
+      ports:
+        - protocol: TCP
+          port: 9200
+        - protocol: TCP
+          port: 5044
+  egress:
+    - to:
+        - namespaceSelector: {}  # Allow all internal egress
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              - 10.0.0.0/8
+              - 172.16.0.0/12
+              - 192.168.0.0/16
+      ports:
+        - protocol: TCP
+          port: 443  # External APIs (threat intel, etc.)
+---
+# Elasticsearch Service Account for RBAC
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: elasticsearch
+  namespace: siem
+  labels:
+    app.kubernetes.io/name: elasticsearch
+    app.kubernetes.io/component: siem-storage
+automountServiceAccountToken: true

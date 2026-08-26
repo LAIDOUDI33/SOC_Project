@@ -1,0 +1,197 @@
+# Djezzy SOC - SS7 Detection Rules
+# Location Tracking & Privacy Violation Detection Rules
+# Version: 1.0.0
+# Last Updated: 2025-08-03
+
+# ============================================================
+# RULE 1: Excessive SRI Requests (Location Tracking)
+# Detects potential subscriber location tracking via excessive 
+# sendRoutingInfoForSM (SRI) requests to the same subscriber
+# ============================================================
+- name: SS7_LOCATION_TRACKING_SUSPICIOUS
+  description: "Detect potential subscriber location tracking via excessive SRI requests"
+  severity: HIGH
+  enabled: true
+  
+  condition:
+    op: and
+    conditions:
+      - field: message_type
+        operator: equals
+        value: sendRoutingInfoForSM
+      
+      - # Custom rate check (handled by analyzer's sliding window)
+        field: _rate_check_sri_per_subscriber
+        operator: greater_than
+        value: 10  # More than 10 requests per minute per IMSI
+  
+  action:
+    - create_thehive_case
+    - send_alert_wazuh
+    - log_for_investigation
+    - flag_source_global_title
+  
+  tags:
+    - privacy
+    - location_tracking
+    - subscriber_tracking
+    - high_risk
+  
+  mitre_technique: T1419
+  mitre_tactic: Reconnaissance
+
+# ============================================================
+# RULE 2: SRI from Unusual Source GT
+# Detects SRI requests from Global Titles not normally 
+# authorized for location queries (e.g., foreign operators, unknown SMSCs)
+# ============================================================
+- name: SS7_SRI_FROM_UNUSUAL_SOURCE
+  description: "Detect SRI location requests from unauthorized or unusual source Global Titles"
+  severity: MEDIUM
+  enabled: true
+  
+  condition:
+    op: and
+    conditions:
+      - field: message_type
+        operator: equals
+        value: sendRoutingInfoForSM
+      
+      - field: calling_party_gt.address
+        operator: matches
+        value: "^\\+?[0-9]{8,15}$"  # Must be valid GT format
+      
+      - # Check against known authorized sources (analyzer maintains allowlist)
+        field: _source_gt_authorized
+        operator: not_equals
+        value: true
+  
+  action:
+    - log_warning
+    - increment_risk_score
+    - alert_if_repeated(threshold: 5/hour)
+  
+  tags:
+    - authorization
+    - source_validation
+    - policy_violation
+  
+  mitre_technique: T1078
+  mitre_tactic: Initial Access
+
+# ============================================================
+# RULE 3: Provide Roaming Number Anomaly
+# Detects unusual patterns in provideRoamingNumber requests,
+# which can indicate roaming fraud or SIM swap attempts
+# ============================================================
+- name: SS7_ROAMING_NUMBER_ANOMALY
+  description: "Detect suspicious provideRoamingNumber request patterns indicating roaming fraud or SIM swap"
+  severity: HIGH
+  enabled: true
+  
+  condition:
+    op: and
+    conditions:
+      - field: message_type
+        operator: equals
+        value: provideRoamingNumber
+      
+      - # Multiple PRN requests for same subscriber in short window
+        field: _prn_rate_per_imsi
+        operator: greater_than
+        value: 5  # >5 PRN requests per hour per subscriber
+      
+      - # From different source GTs (roaming scenario)
+        field: _unique_source_gts_count
+        operator: greater_than
+        value: 2  # From more than 2 different GTs
+  
+  action:
+    - create_thehive_case
+    - trigger_sim_swap_check
+    - notify_fraud_team
+    - block_temporary(source_gt)
+  
+  tags:
+    - roaming_fraud
+    - sim_swap
+    - fraud_detection
+    - critical
+  
+  mitre_technique: T1419
+  mitre_tactic: Persistence
+
+# ============================================================
+# RULE 4: Any Time Interrogation Abuse
+# Detects excessive ATI queries which can reveal subscriber
+# status and location information
+# ============================================================
+- name: SS7_ATI_ABUSE_DETECTED
+  description: "Detect abuse of AnyTimeInterrogation (ATI) for subscriber status/location harvesting"
+  severity: MEDIUM
+  enabled: true
+  
+  condition:
+    op: and
+    conditions:
+      - field: message_type
+        operator: equals
+        value: anyTimeInterrogation
+      
+      - field: _ati_rate_per_target
+        operator: greater_than
+        value: 20  # >20 ATI requests per minute per target MSISDN
+  
+  action:
+    - create_thehive_case(severity: medium)
+    - rate_limit_source
+    - log_for_compliance
+  
+  tags:
+    - privacy
+    - ati_abuse
+    - data_harvesting
+  
+  mitre_technique: T1119
+  mitre_tactic: Collection
+
+# ============================================================
+# RULE 5: Update Location Storm
+# Detects abnormal frequency of updateLocation messages,
+# which may indicate device cloning or network probing
+# ============================================================
+- name: SS7_UPDATE_LOCATION_STORM
+  description: "Detect abnormally frequent updateLocation messages indicating device cloning or network probing"
+  severity: CRITICAL
+  enabled: true
+  
+  condition:
+    op: and
+    conditions:
+      - field: message_type
+        operator: equals
+        value: updateLocation
+      
+      - field: _ul_rate_per_imsi
+        operator: greater_than
+        value: 30  # >30 updates per hour per IMSI
+      
+      - # Rapid location changes (different VLRs)
+        field: _vlr_change_count
+        operator: greater_than
+        value: 3  # Changed VLR >3 times in window
+  
+  action:
+    - create_thehive_case(priority: P1)
+    - flag_device_cloning
+    - notify_security_ops
+    - recommend_immediate_action
+  
+  tags:
+    - anomaly
+    - device_cloning
+    - storm_detection
+    - critical_alert
+  
+  mitre_technique: T1489
+  mitre_tactic: Persistence

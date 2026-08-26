@@ -1,0 +1,1447 @@
+     1→# =============================================================================
+     2→# DJEZZY NATIONAL SOC PLATFORM - PRODUCTION DOCKER COMPOSE
+     3→# =============================================================================
+     4→# Phase 11: Complete Open-Source Security Tools Integration
+     5→#
+     6→# This compose file orchestrates all 15+ security tools for the SOC platform:
+     7→# - SIEM: Wazuh + Elasticsearch + Kibana
+     8→# - EDR: GRR Rapid Response + Osquery Fleet
+     9→# - SOAR: TheHive + Cortex
+    10→# - Threat Intel: MISP + OpenCTI
+    11→# - NSM: Suricata + Zeek + Arkime
+    12→# - Vulnerability: OpenVAS + DefectDojo
+    13→# - Event Pipeline: Kafka + Zookeeper + Schema Registry
+    14→# - Infrastructure: PostgreSQL + Redis + Kong API Gateway
+    15→# - Monitoring: Prometheus + Grafana
+    16→#
+    17→# Usage:
+    18→#   docker-compose -f docker-compose.prod.yml up -d
+    19→#   docker-compose -f docker-compose.prod.yml logs -f soc-platform
+    20→#
+    21→# Scale Targets (Production):
+    22→#   - 50K+ EPS event ingestion
+    23→#   - 100Gbps network monitoring
+    24→#   - 50B+ events/year retention
+    25→#   - 15M+ subscriber capacity
+    26→#
+    27→# @version 11.1.0
+    28→# =============================================================================
+    29→
+    30→version: '3.8'
+    31→
+    32→services:
+    33→
+    34→  # =============================================================================
+    35→  # DJEZZY SOC PLATFORM (Main Application)
+    36→  # =============================================================================
+    37→  soc-platform:
+    38→    build:
+    39→      context: .
+    40→      dockerfile: Dockerfile.production
+    41→      target: production
+    42→    container_name: djezzy-soc-platform
+    43→    image: djezzy/soc-platform:11.1.0
+    44→    restart: unless-stopped
+    45→    ports:
+    46→      - "3000:3000"
+    47→    environment:
+    48→      - NODE_ENV=production
+    49→      - PORT=3000
+    50→      # Load all environment from .env.production.filled
+    51→      - DATABASE_URL=${DATABASE_URL}
+    52→      # REMEDIATION CRIT-001: Force enterprise production schema (PostgreSQL)
+    53→      - PRISMA_SCHEMA_PATH=./prisma/schema-enterprise-production.prisma
+    54→      - REDIS_HOST=redis-master
+    55→      - REDIS_PORT=6379
+    56→      - REDIS_PASSWORD=${REDIS_PASSWORD}
+    57→      # SIEM
+    58→      - WAZUH_API_URL=http://wazuh-manager:55000
+    59→      - WAZUH_USERNAME=${WAZUH_USERNAME}
+    60→      - WAZUH_PASSWORD=${WAZUH_PASSWORD}
+    61→      - WAZUH_ES_NODES=https://elasticsearch-node-1:9200,https://elasticsearch-node-2:9200
+    62→      - WAZUH_ES_USERNAME=${WAZUH_ES_USERNAME}
+    63→      - WAZUH_ES_PASSWORD=${WAZUH_ES_PASSWORD}
+    64→      # EDR
+    65→      - GRR_API_URL=http://grr-server:8000
+    66→      - GRR_USERNAME=${GRR_USERNAME}
+    67→      - GRR_PASSWORD=${GRR_PASSWORD}
+    68→      - OSQUERY_FLEET_API_URL=http://fleet:8080
+    69→      - OSQUERY_ENROLLMENT_SECRET=${OSQUERY_ENROLLMENT_SECRET}
+    70→      # SOAR
+    71→      - THEHIVE_API_URL=http://thehive:9000
+    72→      - THEHIVE_API_KEY=${THEHIVE_API_KEY}
+    73→      - CORTEX_API_URL=http://cortex:9001
+    74→      - CORTEX_API_KEY=${CORTEX_API_KEY}
+    75→      # Threat Intel
+    76→      - MISP_API_URL=http://misp:80
+    77→      - MISP_API_KEY=${MISP_API_KEY}
+    78→      - OPENCTI_API_URL=http://opencti:8080
+    79→      - OPENCTI_API_KEY=${OPENCTI_API_KEY}
+    80→      # NSM
+    81→      - SURICATA_API_URL=http://suricata:9340
+    82→      - ZEEK_CONTROLLER_URL=http://zeek-controller:5000
+    83→      - ARKIME_API_URL=http://arkime:8005
+    84→      - ARKIME_API_KEY=${ARKIME_API_KEY}
+    85→      # Vulnerability
+    86→      - OPENVAS_API_URL=https://openvas:9392
+    87→      - OPENVAS_USERNAME=${OPENVAS_USERNAME}
+    88→      - OPENVAS_PASSWORD=${OPENVAS_PASSWORD}
+    89→      - DEFECTDOJO_API_URL=http://defectdojo:8080
+    90→      - DEFECTDOJO_API_KEY=${DEFECTDOJO_API_KEY}
+    91→      # Kafka
+    92→      - KAFKA_BROKERS=kafka-0:9092,kafka-1:9092,kafka-2:9092
+    93→      - KAFKA_SASL_USERNAME=${KAFKA_SASL_USERNAME}
+    94→      - KAFKA_SASL_PASSWORD=${KAFKA_SASL_PASSWORD}
+    95→      # Monitoring
+    96→      - PROMETHEUS_ENABLED=true
+    97→      - GRAFANA_URL=http://grafana:3000
+    98→    volumes:
+    99→      - ./logs:/app/logs
+   100→      - ./uploads:/app/uploads
+   101→      - /etc/localtime:/etc/localtime:ro
+   102→    networks:
+   103→      - soc-frontend
+   104→      - soc-backend
+   105→      - soc-monitoring
+   106→    depends_on:
+   107→      - postgresql
+   108→      - redis-master
+   109→      - elasticsearch-node-1
+   110→      - kafka-0
+   111→    healthcheck:
+   112→      test: ["CMD", "curl", "-f", "http://localhost:3000/api/health"]
+   113→      interval: 30s
+   114→      timeout: 10s
+   115→      retries: 3
+   116→      start_period: 60s
+   117→    deploy:
+   118→      resources:
+   119→        limits:
+   120→          cpus: '4'
+   121→          memory: 8G
+   122→        reservations:
+   123→          cpus: '2'
+   124→          memory: 4G
+   125→
+   126→  # =============================================================================
+   127→  # DATABASE LAYER (PostgreSQL 16 with PgBouncer)
+   128→  # =============================================================================
+   129→  postgresql:
+   130→    image: postgres:16-alpine
+   131→    container_name: djezzy-postgresql
+   132→    restart: unless-stopped
+   133→    ports:
+   134→      - "5432:5432"
+   135→    environment:
+   136→      - POSTGRES_DB=soc_production
+   137→      - POSTGRES_USER=soc_user
+   138→      - POSTGRES_PASSWORD=${DATABASE_URL_PASSWORD:-changeme}
+   139→      - PGDATA=/var/lib/postgresql/data/pgdata
+   140→    volumes:
+   141→      - postgresql_data:/var/lib/postgresql/data
+   142→      - ./scripts/database:/docker-entrypoint-initdb.d
+   143→      - /etc/localtime:/etc/localtime:ro
+   144→    command: >
+   145→      postgres
+   146→      -c shared_buffers=2GB
+   147→      -c effective_cache_size=6GB
+   148→      -c maintenance_work_mem=512MB
+   149→      -c work_mem=64MB
+   150→      -c max_connections=500
+   151→      -c random_page_cost=1.1
+   152→      -c effective_io_concurrency=200
+   153→      -c wal_level=replica
+   154→      -c max_wal_senders=10
+   155→      -c hot_standby=on
+   156→    networks:
+   157→      - soc-backend
+   158→    healthcheck:
+   159→      test: ["CMD-SHELL", "pg_isready -U soc_user -d soc_production"]
+   160→      interval: 10s
+   161→      timeout: 5s
+   162→      retries: 5
+   163→    deploy:
+   164→      resources:
+   165→        limits:
+   166→          cpus: '4'
+   167→          memory: 8G
+   168→
+   169→  pgbouncer:
+   170→    image: edoburu/pgbouncer:latest
+   171→    container_name: djezzy-pgbouncer
+   172→    restart: unless-stopped
+   173→    ports:
+   174→      - "6432:6432"
+   175→    environment:
+   176→      - DATABASES_HOST=postgresql
+   177→      - DATABASES_PORT=5432
+   178→      - DATABASES_USER=soc_user
+   179→      - DATABASES_PASSWORD=${DATABASE_URL_PASSWORD:-changeme}
+   180→      - DATABASES_DBNAME=soc_production
+   181→      - PGBOUNCER_POOL_MODE=transaction
+   182→      - PGBOUNCER_DEFAULT_POOL_SIZE=25
+   183→      - PGBOUNCER_MAX_CLIENT_CONN=2000
+   184→      - ADMIN_USERS=admin,soc_admin
+   185→      - ADMIN_PASSWORDS=${PGBOUNCER_ADMIN_PASSWORD:-adminpass}
+   186→    volumes:
+   187→      - ./config/pgbouncer:/etc/pgbouncer
+   188→      - /etc/localtime:/etc/localtime:ro
+   189→    networks:
+   190→      - soc-backend
+   191→    depends_on:
+   192→      - postgresql
+   193→    deploy:
+   194→      resources:
+   195→        limits:
+   196→          cpus: '1'
+   197→          memory: 512M
+   198→
+   199→  # =============================================================================
+   200→  # CACHE LAYER (Redis 7 with Sentinel)
+   201→  # =============================================================================
+   202→  redis-master:
+   203→    image: redis:7-alpine
+   204→    container_name: djezzy-redis-master
+   205→    restart: unless-stopped
+   206→    ports:
+   207→      - "6379:6379"
+   208→    command: >
+   209→      redis-server
+   210→      --appendonly yes
+   211→      --appendfsync everysec
+   212→      --maxmemory 4gb
+   213→      --maxmemory-policy allkeys-lru
+   214→      --requirepass ${REDIS_PASSWORD:-changeme}
+   215→    volumes:
+   216→      - redis_master_data:/data
+   217→      - /etc/localtime:/etc/localtime:ro
+   218→    networks:
+   219→      - soc-backend
+   220→    healthcheck:
+   221→      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD:-changeme}", "ping"]
+   222→      interval: 10s
+   223→      timeout: 5s
+   224→      retries: 5
+   225→    deploy:
+   226→      resources:
+   227→        limits:
+   228→          cpus: '2'
+   229→          memory: 4G
+   230→
+   231→  redis-replica:
+   232→    image: redis:7-alpine
+   233→    container_name: djezzy-redis-replica
+   234→    restart: unless-stopped
+   235→    ports:
+   236→      - "6380:6379"
+   237→    command: >
+   238→      redis-server
+   239→      --appendonly yes
+   240→      --slaveof redis-master 6379
+   241→      --masterauth ${REDIS_PASSWORD:-changeme}
+   242→      --requirepass ${REDIS_PASSWORD:-changeme}
+   243→      --maxmemory 4gb
+   244→      --maxmemory-policy allkeys-lru
+   245→    volumes:
+   246→      - redis_replica_data:/data
+   247→      - /etc/localtime:/etc/localtime:ro
+   248→    networks:
+   249→      - soc-backend
+   250→    depends_on:
+   251→      - redis-master
+   252→    deploy:
+   253→      replicas: 2
+   254→
+   255→  # =============================================================================
+   256→  # SIEM STACK (Wazuh + Elasticsearch + Kibana)
+   257→  # =============================================================================
+   258→  wazuh-manager:
+   259→    image: wazuh/wazuh-manager:4.7.0
+   260→    container_name: djezzy-wazuh-manager
+   261→    restart: unless-stopped
+   262→    ports:
+   263→      - "55000:55000"  # API
+   264→      - "1514:1514"    # Events
+   265→      - "1515:1515"    # Syslog
+   266→    environment:
+   267→      - INDEXER_URL=https://elasticsearch-node-1:9200
+   268→      - INDEXER_USERNAME=${WAZUH_ES_USERNAME:-wazuh}
+   269→      - INDEXER_PASSWORD=${WAZUH_ES_PASSWORD:-changeme}
+   270→      - FILEBEAT_SSL_VERIFICATION_MODE=none
+   271→      - API_USERNAME=${WAZUH_USERNAME:-soc_integration}
+   272→      - API_PASSWORD=${WAZUH_PASSWORD:-changeme}
+   273→      - NETWORK_TLS=no
+   274→    volumes:
+   275→      - wazuh_manager_data:/var/ossec/data
+   276→      - ./config/wazuh:/var/ossec/etc/custom_config
+   277→      - /etc/localtime:/etc/localtime:ro
+   278→    networks:
+   279→      - soc-backend
+   280→    depends_on:
+   281→      - elasticsearch-node-1
+   282→    deploy:
+   283→      resources:
+   284→        limits:
+   285→          cpus: '4'
+   286→          memory: 4G
+   287→
+   288→  elasticsearch-node-1:
+   289→    image: docker.elastic.co/elasticsearch/elasticsearch:8.11.0
+   290→    container_name: djezzy-elasticsearch-1
+   291→    restart: unless-stopped
+   292→    environment:
+   293→      - node.name=es-node-1
+   294→      - cluster.name=djezzy-soc-cluster
+   295→      - discovery.seed_hosts=elasticsearch-node-2,elasticsearch-node-3
+   296→      - cluster.initial_master_nodes=es-node-1,es-node-2,es-node-3
+   297→      - bootstrap.memory_lock=true
+   298→      - xpack.security.enabled=true
+   299→      - xpack.security.http.ssl.enabled=false
+   300→      - xpack.security.transport.ssl.enabled=false
+   301→      - ES_JAVA_OPTS=-Xms4g -Xmx4g
+   302→    ulimits:
+   303→      memlock:
+   304→        soft: -1
+   305→        hard: -1
+   306→    volumes:
+   307→      - es_node_1_data:/usr/share/elasticsearch/data
+   308→      - /etc/localtime:/etc/localtime:ro
+   309→    networks:
+   310→      - soc-backend
+   311→    deploy:
+   312→      resources:
+   313→        limits:
+   314→          cpus: '8'
+   315→          memory: 8G
+   316→
+   317→  elasticsearch-node-2:
+   318→    image: docker.elastic.co/elasticsearch/elasticsearch:8.11.0
+   319→    container_name: djezzy-elasticsearch-2
+   320→    restart: unless-stopped
+   321→    environment:
+   322→      - node.name=es-node-2
+   323→      - cluster.name=djezzy-soc-cluster
+   324→      - discovery.seed_hosts=elasticsearch-node-1,elasticsearch-node-3
+   325→      - cluster.initial_master_nodes=es-node-1,es-node-2,es-node-3
+   326→      - bootstrap.memory_lock=true
+   327→      - xpack.security.enabled=true
+   328→      - xpack.security.http.ssl.enabled=false
+   329→      - xpack.security.transport.ssl.enabled=false
+   330→      - ES_JAVA_OPTS=-Xms4g -Xmx4g
+   331→    ulimits:
+   332→      memlock:
+   333→        soft: -1
+   334→        hard: -1
+   335→    volumes:
+   336→      - es_node_2_data:/usr/share/elasticsearch/data
+   337→      - /etc/localtime:/etc/localtime:ro
+   338→    networks:
+   339→      - soc-backend
+   340→    depends_on:
+   341→      - elasticsearch-node-1
+   342→    deploy:
+   343→      resources:
+   344→        limits:
+   345→          cpus: '8'
+   346→          memory: 8G
+   347→
+   348→  kibana:
+   349→    image: docker.elastic.co/kibana/kibana:8.11.0
+   350→    container_name: djezzy-kibana
+   351→    restart: unless-stopped
+   352→    ports:
+   353→      - "5601:5601"
+   354→    environment:
+   355→      - ELASTICSEARCH_HOSTS=https://elasticsearch-node-1:9200,https://elasticsearch-node-2:9200
+   356→      - ELASTICSEARCH_USERNAME=${WAZUH_ES_USERNAME:-wazuh}
+   357→      - ELASTICSEARCH_PASSWORD=${WAZUH_ES_PASSWORD:-changeme}
+   358→      - XPACK_SECURITY_ENABLED=true
+   359→      - XPACK_ENCRYPTEDSAVEDOBJECTS_KEYS=[]
+   360→      - XPACK_REPORTING_ENCRYPTIONKEY=${KIBANA_ENCRYPTION_KEY:-min32chars}
+   361→    volumes:
+   362→      - kibana_data:/usr/share/kibana/data
+   363→      - /etc/localtime:/etc/localtime:ro
+   364→    networks:
+   365→      - soc-frontend
+   366→      - soc-backend
+   367→    depends_on:
+   368→      - elasticsearch-node-1
+   369→      - elasticsearch-node-2
+   370→    deploy:
+   371→      resources:
+   372→        limits:
+   373→          cpus: '2'
+   374→          memory: 4G
+   375→
+   376→  # =============================================================================
+   377→  # EDR STACK (GRR + Osquery Fleet)
+   378→  # =============================================================================
+   379→  grr-server:
+   380→    image: grr/grr:latest
+   381→    container_name: djezzy-grr-server
+   382→    restart: unless-stopped
+   383→    ports:
+   384→      - "8000:8000"  # GRR Admin UI
+   385→      - "8080:8080"  # GRR API
+   386→    environment:
+   387→      - GRR_ADMIN_USERNAME=${GRR_USERNAME:-admin}
+   388→      - GRR_ADMIN_PASSWORD=${GRR_ADMIN_PASSWORD:-changeme}
+   389→    volumes:
+   390→      - grr_server_data:/var/grr
+   391→      - /etc/localtime:/etc/localtime:ro
+   392→    networks:
+   393→      - soc-backend
+   394→    deploy:
+   395→      resources:
+   396→        limits:
+   397→          cpus: '4'
+   398→          memory: 8G
+   399→
+   400→  fleet:
+   401→    image: fleetdm/fleet:latest
+   402→    container_name: djezzy-fleet
+   403→    restart: unless-stopped
+   404→    ports:
+   405→      - "8080:8080"
+   406→    environment:
+   407→      - FLEET_DATABASE_DRIVER=postgres
+   408→      - FLEET_POSTGRES_ADDR=postgresql:5432
+   409→      - FLEET_POSTGRES_DATABASE=fleet
+   410→      - FLEET_POSTGRES_USER=soc_user
+   411→      - FLENT_POSTGRES_PASSWORD=${DATABASE_URL_PASSWORD:-changeme}
+   412→      - FLEET_REDIS_ADDRESS=redis-master:6379
+   413→      - FLEET_SERVER_CERT=/etc/fleet/server.cert
+   414→      - FLEET_SERVER_KEY=/etc/fleet/server.key
+   415→      - FLEET_OSQUERY_SERVICE_UNIX_SOCKET=/var/run/osquery.sock
+   416→      - FLEET_ENROLL_SECRET=${OSQUERY_ENROLLMENT_SECRET:-changeme}
+   417→    volumes:
+   418→      - fleet_data:/var/lib/fleet
+   419→      - ./config/fleet/certs:/etc/fleet
+   420→      - /etc/localtime:/etc/localtime:ro
+   421→    networks:
+   422→      - soc-backend
+   423→    depends_on:
+   424→      - postgresql
+   425→      - redis-master
+   426→    deploy:
+   427→      resources:
+   428→        limits:
+   429→          cpus: '2'
+   430→          memory: 4G
+   431→
+   432→  # =============================================================================
+   433→  # SOAR STACK (TheHive + Cortex)
+   434→  # =============================================================================
+   435→  thehive:
+   436→    image: thehiveproject/thehive:5.1
+   437→    container_name: djezzy-thehive
+   438→    restart: unless-stopped
+   439→    ports:
+   440→      - "9000:9000"
+   441→    environment:
+   442→      - JVM_OPTS=-Xmx4g
+   443→    volumes:
+   444→      - thehive_data:/opt/thehive/data
+   445→      - ./config/thehive:/opt/thehive/conf
+   446→      - /etc/localtime:/etc/localtime:ro
+   447→    networks:
+   448→      - soc-backend
+   449→    depends_on:
+   450→      - elasticsearch-node-1
+   451→      - cortex
+   452→    deploy:
+   453→      resources:
+   454→        limits:
+   455→          cpus: '4'
+   456→          memory: 6G
+   457→
+   458→  cortex:
+   459→    image: thehiveproject/cortex:3.1
+   460→    container_name: djezzy-cortex
+   461→    restart: unless-stopped
+   462→    ports:
+   463→      - "9001:9001"
+   464→    environment:
+   465→      - JOB_DIRECTORY=/var/cortex/jobs
+   466→      - CORTEX_CONFIGURATION_PATH=/etc/cortex/application.conf
+   467→    volumes:
+   468→      - cortex_data:/var/cortex/data
+   469→      - cortex_jobs:/var/cortex/jobs
+   470→      - ./config/cortex:/etc/cortex
+   471→      - /etc/localtime:/etc/localtime:ro
+   472→    networks:
+   473→      - soc-backend
+   474→    depends_on:
+   475→      - elasticsearch-node-1
+   476→    deploy:
+   477→      resources:
+   478→        limits:
+   479→          cpus: '4'
+   480→          memory: 6G
+   481→
+   482→  # =============================================================================
+   483→  # THREAT INTELLIGENCE (MISP + OpenCTI)
+   484→  # =============================================================================
+   485→  misp:
+   486→    image: misp/misp:2.4
+   487→    container_name: djezzy-misp
+   488→    restart: unless-stopped
+   489→    ports:
+   490→      - "80:80"
+   491→      - "443:443"
+   492→    environment:
+   493→      - MYSQL_HOST=mariadb-misp
+   494→      - MYSQL_USER=misp
+   495→      - MYSQL_PASSWORD=${MISP_MYSQL_PASSWORD:-changeme}
+   496→      - MYSQL_DATABASE=misp
+   497→      - BASE_URL=https://misp.djezzy.dz
+   498→      - MISP_ADMIN_EMAIL=admin@djezzy.dz
+   499→      - MISP_ADMIN_PASSPHRASE=${MISP_ADMIN_PASSPHRASE:-changeme}
+   500→      - MISP_API_KEY=${MISP_API_KEY:-changeme}
+   501→      - POSTFIX_RELAY_HOST=${SMTP_HOST:-mailrelay.djezzy.corp}
+   502→    volumes:
+   503→      - misp_data:/var/www/html/MISP/app/files
+   504→      - misp_logs:/var/www/html/MISP/app/tmp/logs
+   505→      - ./config/misp:/var/www/html/MISP/app/Config
+   506→      - /etc/localtime:/etc/localtime:ro
+   507→    networks:
+   508→      - soc-backend
+   509→      - soc-frontend
+   510→    depends_on:
+   511→      - mariadb-misp
+   512→      - redis-misp
+   513→    deploy:
+   514→      resources:
+   515→        limits:
+   516→          cpus: '4'
+   517→          memory: 4G
+   518→
+   519→  mariadb-misp:
+   520→    image: mariadb:10.11
+   521→    container_name: djezzy-mariadb-misp
+   522→    restart: unless-stopped
+   523→    environment:
+   524→      - MYSQL_ROOT_PASSWORD=${MISP_MYSQL_ROOT_PASSWORD:-rootpassword}
+   525→      - MYSQL_USER=misp
+   526→      - MYSQL_PASSWORD=${MISP_MYSQL_PASSWORD:-changeme}
+   527→      - MYSQL_DATABASE=misp
+   528→    volumes:
+   529→      - mariadb_misp_data:/var/lib/mysql
+   530→      - /etc/localtime:/etc/localtime:ro
+   531→    networks:
+   532→      - soc-backend
+   533→    deploy:
+   534→      resources:
+   535→        limits:
+   536→          cpus: '2'
+   537→          memory: 4G
+   538→
+   539→  redis-misp:
+   540→    image: redis:7-alpine
+   541→    container_name: djezzy-redis-misp
+   542→    restart: unless-stopped
+   543→    volumes:
+   544→      - redis_misp_data:/data
+   545→      - /etc/localtime:/etc/localtime:ro
+   546→    networks:
+   547→      - soc-backend
+   548→    deploy:
+   549→      resources:
+   550→        limits:
+   551→          cpus: '1'
+   552→          memory: 1G
+   553→
+   554→  opencti:
+   555→    image: opencti/opencti:5.12
+   556→    container_name: djezzy-opencti
+   557→    restart: unless-stopped
+   558→    ports:
+   559→      - "8080:8080"
+   560→    environment:
+   561→      - APP__ADMIN__EMAIL=admin@djezzy.dz
+   562→      - APP__ADMIN__PASSWORD=${OPENCTI_ADMIN_PASSWORD:-changeme}
+   563→      - APP__ADMIN__TOKEN=${OPENCTI_API_KEY:-changeme}
+   564→      - CONNECTORS__LIVE__EXPORT_ID_AUTO=true
+   565→      - Redis__host=redis-opencti
+   566→      - Elasticsearch__url=http://elasticsearch-node-1:9200
+   567→      - Elasticsearch__username=${WAZUH_ES_USERNAME:-wazuh}
+   568→      - Elasticsearch__password=${WAZUH_ES_PASSWORD:-changeme}
+   569→    volumes:
+   570→      - opencti_data:/data/opencti
+   571→      - ./config/opencti:/opencti/config
+   572→      - /etc/localtime:/etc/localtime:ro
+   573→    networks:
+   574→      - soc-backend
+   575→      - soc-frontend
+   576→    depends_on:
+   577→      - elasticsearch-node-1
+   578→      - redis-opencti
+   579→    deploy:
+   580→      resources:
+   581→        limits:
+   582→          cpus: '4'
+   583→          memory: 6G
+   584→
+   585→  redis-opencti:
+   586→    image: redis:7-alpine
+   587→    container_name: djezzy-redis-opencti
+   588→    restart: unless-stopped
+   589→    volumes:
+   590→      - redis_opencti_data:/data
+   591→      - /etc/localtime:/etc/localtime:ro
+   592→    networks:
+   593→      - soc-backend
+   594→    deploy:
+   595→      resources:
+   596→        limits:
+   597→          cpus: '1'
+   598→          memory: 1G
+   599→
+   600→  # =============================================================================
+   601→  # NSM STACK (Suricata + Zeek + Arkime)
+   602→  # =============================================================================
+   603→  suricata:
+   604→    image: jasonish/suricata:latest
+   605→    container_name: djezzy-suricata
+   606→    restart: unless-stopped
+   607→    network_mode: host
+   608→    cap_add:
+   609→      - NET_ADMIN
+   610→      - SYS_NICE
+   611→      - NET_RAW
+   612→    volumes:
+   613→      - suricata_logs:/var/log/suricata
+   614→      - suricata_rules:/etc/suricata/rules
+   615→      - ./config/suricata:/etc/suricata
+   616→      - /etc/localtime:/etc/localtime:ro
+   617→    command: >
+   618→      suricata
+   619→      -i eth0
+   620→      --set classification-file=/etc/suricata/rules/classification.config
+   621→      - --set reference-config.file=/etc/suricata/rules/reference.config
+   622→      - --set rules-file=/etc/suricata/rules/suricata.rules
+   623→      - --set eve-log.outputs.1=file.enabled=yes
+   624→      - --set eve-log.outputs.1.file.filename=/var/log/suricata/eve.json
+   625→      - --set eve-log.outputs.1.file.type=regular
+   626→    deploy:
+   627→      resources:
+   628→        limits:
+   629→          cpus: '8'
+   630→          memory: 8G
+   631→
+   632→  zeek-controller:
+   633→    image: zeek/zeek:latest
+   634→    container_name: djezzy-zeek-controller
+   635→    restart: unless-stopped
+   636→    ports:
+   637→      - "5000:5000"
+   638→    volumes:
+   639→      - zeek_logs:/usr/local/var/log/zeek
+   640→      - zeek_scripts:/usr/local/share/zeek/site
+   641→      - ./config/zeek:/opt/zeek/etc
+   642→      - /etc/localtime:/etc/localtime:ro
+   643→    networks:
+   644→      - soc-backend
+   645→    deploy:
+   646→      resources:
+   647→        limits:
+   648→          cpus: '4'
+   649→          memory: 4G
+   650→
+   651→  arkime:
+   652→    image: arkime/arkime:4.0
+   653→    container_name: djezzy-arkime
+   654→    restart: unless-stopped
+   655→    ports:
+   656→      - "8005:8005"
+   657→    environment:
+   658→      - ARKIME_ELASTICSEARCH=https://elasticsearch-node-1:9200
+   659→      - ARKIME_ELASTICSEARCH_USER=${WAZUH_ES_USERNAME:-wazuh}
+   660→      - ARKIME_ELASTICSEARCH_PASSWORD=${WAZUH_ES_PASSWORD:-changeme}
+   661→      - ARKIME_PASSWORD=${ARKIME_API_KEY:-changeme}
+   662→    volumes:
+   663→      - arkime_pcaps:/opt/arkime/pcap
+   664→      - arkime_logs:/opt/arkime/logs
+   665→      - ./config/arkime:/opt/arkime/etc
+   666→      - /etc/localtime:/etc/localtime:ro
+   667→    network_mode: host
+   668→    cap_add:
+   669→      - NET_ADMIN
+   670→    depends_on:
+   671→      - elasticsearch-node-1
+   672→    deploy:
+   673→      resources:
+   674→        limits:
+   675→          cpus: '8'
+   676→          memory: 16G
+   677→
+   678→  # =============================================================================
+   679→  # VULNERABILITY MANAGEMENT (OpenVAS + DefectDojo)
+   680→  # =============================================================================
+   681→  openvas:
+   682→    image: greenbone/gvm:21.04
+   683→    container_name: djezzy-openvas
+   684→    restart: unless-stopped
+   685→    ports:
+   686→      - "9392:9392"
+   687→      - "8081:80"    # GSAD Web UI
+   688→    environment:
+   689→      - GVMD_USER=${OPENVAS_USERNAME:-soc_scanner}
+   690→      - GVMD_PASSWORD=${OPENVAS_PASSWORD:-changeme}
+   691→      - POSTGRES_HOST=openvas-postgres
+   692→      - POSTGRES_PORT=5432
+   693→      - POSTGRES_USER=gvm
+   694→      - POSTGRES_PASSWORD=${OPENVAS_PG_PASSWORD:-changeme}
+   695→      - POSTGRES_DBNAME=gvm
+   696→      - REDIS_HOST=redis-openvas
+   697→      - REDIS_PORT=6379
+   698→      - SMTP_HOST=${SMTP_HOST:-mailrelay.djezzy.corp}
+   699→      - SMTP_PORT=${SMTP_PORT:-587}
+   700→      - SMTP_FROM_ADDR=noreply-openvas@djezzy.dz
+   701→    volumes:
+   702→      - openvas_data:/var/lib/gvm
+   703→      - openvas_logs:/var/log/gvm
+   704→      - ./config/openvas:/usr/local/etc/openvas
+   705→      - /etc/localtime:/etc/localtime:ro
+   706→    networks:
+   707→      - soc-backend
+   708→      - soc-frontend
+   709→    depends_on:
+   710→      - openvas-postgres
+   711→      - redis-openvas
+   712→    deploy:
+   713→      resources:
+   714→        limits:
+   715→          cpus: '4'
+   716→          memory: 8G
+   717→
+   718→  openvas-postgres:
+   719→    image: postgres:14-alpine
+   720→    container_name: djezzy-openvas-db
+   721→    restart: unless-stopped
+   722→    environment:
+   723→      - POSTGRES_DB=gvm
+   724→      - POSTGRES_USER=gvm
+   725→      - POSTGRES_PASSWORD=${OPENVAS_PG_PASSWORD:-changeme}
+   726→    volumes:
+   727→      - openvas_pg_data:/var/lib/postgresql/data
+   728→      - /etc/localtime:/etc/localtime:ro
+   729→    networks:
+   730→      - soc-backend
+   731→    deploy:
+   732→      resources:
+   733→        limits:
+   734→          cpus: '2'
+   735→          memory: 4G
+   736→
+   737→  redis-openvas:
+   738→    image: redis:7-alpine
+   739→    container_name: djezzy-redis-openvas
+   740→    restart: unless-stopped
+   741→    volumes:
+   742→      - redis_openvas_data:/data
+   743→      - /etc/localtime:/etc/localtime:ro
+   744→    networks:
+   745→      - soc-backend
+   746→    deploy:
+   747→      resources:
+   748→        limits:
+   749→          cpus: '1'
+   750→          memory: 1G
+   751→
+   752→  defectdojo:
+   753→    image: defectdojo/defectdojo:2.30
+   754→    container_name: djezzy-defectdojo
+   755→    restart: unless-stopped
+   756→    ports:
+   757→      - "8080:8080"
+   758→    environment:
+   759→      - DD_DATABASE_URL=postgres://dduser:${DEFECTDOJO_PG_PASSWORD:-changeme}@defectdojo-db:5432/defectdojo
+   760→      - DD_SECRET_KEY=${DEFECTDOJOJO_SECRET_KEY:-min32chars}
+   761→      - DD_CELERY_BROKER_URL=redis://redis-defectdojo:6379/0
+   762→      - DD_CELERY_RESULT_BACKEND=redis://redis-defectdojo:6379/1
+   763→    volumes:
+   764→      - defectdojo_data:/app/media
+   765→      - ./config/defectdojo:/app/config
+   766→      - /etc/localtime:/etc/localtime:ro
+   767→    networks:
+   768→      - soc-backend
+   769→      - soc-frontend
+   770→    depends_on:
+   771→      - defectdojo-db
+   772→      - redis-defectdojo
+   773→    deploy:
+   774→      resources:
+   775→        limits:
+   776→          cpus: '2'
+   777→          memory: 4G
+   778→
+   779→  defectdojo-db:
+   780→    image: postgres:14-alpine
+   781→    container_name: djezzy-defectdojo-db
+   782→    restart: unless-stopped
+   783→    environment:
+   784→      - POSTGRES_DB=defectdojo
+   785→      - POSTGRES_USER=dduser
+   786→      - POSTGRES_PASSWORD=${DEFECTDOJO_PG_PASSWORD:-changeme}
+   787→    volumes:
+   788→      - defectdojo_pg_data:/var/lib/postgresql/data
+   789→      - /etc/localtime:/etc/localtime:ro
+   790→    networks:
+   791→      - soc-backend
+   792→    deploy:
+   793→      resources:
+   794→        limits:
+   795→          cpus: '2'
+   796→          memory: 4G
+   797→
+   798→  redis-defectdojo:
+   799→    image: redis:7-alpine
+   800→    container_name: djezzy-redis-defectdojo
+   801→    restart: unless-stopped
+   802→    volumes:
+   803→      - redis_defectdojo_data:/data
+   804→      - /etc/localtime:/etc/localtime:ro
+   805→    networks:
+   806→      - soc-backend
+   807→    deploy:
+   808→      resources:
+   809→        limits:
+   810→          cpus: '1'
+   811→          memory: 1G
+   812→
+   813→  # =============================================================================
+   814→  # EVENT PIPELINE (Apache Kafka Cluster)
+   815→  # =============================================================================
+   816→  zookeeper:
+   817→    image: confluentinc/cp-zookeeper:7.5.0
+   818→    container_name: djezzy-zookeeper
+   819→    restart: unless-stopped
+   820→    ports:
+   821→      - "2181:2181"
+   822→    environment:
+   823→      - ZOOKEEPER_CLIENT_PORT=2181
+   824→      - ZOOKEEPER_TICK_TIME=2000
+   825→    volumes:
+   826→      - zookeeper_data:/var/lib/zookeeper/data
+   827→      - zookeeper_logs:/var/lib/zookeeper/log
+   828→      - /etc/localtime:/etc/localtime:ro
+   829→    networks:
+   830→      - soc-events
+   831→    deploy:
+   832→      resources:
+   833→        limits:
+   834→          cpus: '1'
+   835→          memory: 2G
+   836→
+   837→  kafka-0:
+   838→    image: confluentinc/cp-kafka:7.5.0
+   839→    container_name: djezzy-kafka-0
+   840→    restart: unless-stopped
+   841→    ports:
+   842→      - "9092:9092"
+   843→      - "9093:9093"   # TLS listener
+   844→    # REMEDIATION CRIT-002/003: Add network capabilities for SS7 packet capture
+   845→    cap_add:
+   846→      - NET_RAW
+   847→      - NET_ADMIN
+   848→      - SYS_NICE
+   849→    environment:
+   850→      - KAFKA_BROKER_ID=0
+   851→      - KAFKA_ZOOKEEPER_CONNECT=zookeeper:2181
+   852→      # REMEDIATION CRIT-002: Enable TLS + SASL authentication
+   853→      - KAFKA_ADVERTISED_LISTENERS=PLAINTEXT://kafka-0:9092,SSL://kafka-0:9093
+   854→      - KAFKA_SECURITY_INTER_BROKER_PROTOCOL=SSL
+   855→      - KAFKA_SECURITY_PROTOCOL=SSL
+   856→      - KAFKA_SSL_KEYSTORE_FILENAME=kafka.kafka-0.keystore.jks
+   857→      - KAFKA_SSL_KEYSTORE_PASSWORD=${KAFKA_KEYSTORE_PASSWORD:-changeme}
+   858→      - KAFKA_SSL_KEY_PASSWORD=${KAFKA_KEY_PASSWORD:-changeme}
+   859→      - KAFKA_SSL_TRUSTSTORE_FILENAME=kafka.truststore.jks
+   860→      - KAFKA_SSL_TRUSTSTORE_PASSWORD=${KAFKA_TRUSTSTORE_PASSWORD:-changeme}
+   861→      - KAFKA_SSL_CLIENT_AUTH=required
+   862→      - KAFKA_SSL_ENDPOINT_IDENTIFICATION_ALGORITHM=
+   863→      - KAFKA_NUM_PARTITIONS=36
+   864→      - KAFKA_DEFAULT_REPLICATION_FACTOR=3
+   865→      - KAFKA_LOG_RETENTION_HOURS=168
+   866→      - KAFKA_LOG_SEGMENT_BYTES=1073741824
+   867→      - KAFKA_LOG_RETENTION_CHECK_INTERVAL_MS=300000
+   868→      - KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR=3
+   869→      - KAFKA_JVM_PERFORMANCE_OPTS=-Xms4g -Xmx4g -XX:MetaspaceSize=96m
+   870→      - KAFKA_HEAP_OPTS=-Xms4g -Xmx4g
+   871→    volumes:
+   872→      - kafka_0_data:/var/lib/kafka/data
+   873→      - /etc/localtime:/etc/localtime:ro
+   874→    networks:
+   875→      - soc-events
+   876→    depends_on:
+   877→      - zookeeper
+   878→    deploy:
+   879→      resources:
+   880→        limits:
+   881→          cpus: '4'
+   882→          memory: 8G
+   883→
+   884→  kafka-1:
+   885→    image: confluentinc/cp-kafka:7.5.0
+   886→    container_name: djezzy-kafka-1
+   887→    restart: unless-stopped
+   888→    ports:
+   889→      - "9094:9092"
+   890→      - "9095:9093"   # TLS listener
+   891→    cap_add:
+   892→      - NET_RAW
+   893→      - NET_ADMIN
+   894→    environment:
+   895→      - KAFKA_BROKER_ID=1
+   896→      - KAFKA_ZOOKEEPER_CONNECT=zookeeper:2181
+   897→      # REMEDIATION CRIT-002: Enable TLS
+   898→      - KAFKA_ADVERTISED_LISTENERS=PLAINTEXT://kafka-1:9094,SSL://kafka-1:9095
+   899→      - KAFKA_SECURITY_INTER_BROKER_PROTOCOL=SSL
+   900→      - KAFKA_SECURITY_PROTOCOL=SSL
+   901→      - KAFKA_SSL_KEYSTORE_FILENAME=kafka.kafka-1.keystore.jks
+   902→      - KAFKA_SSL_KEYSTORE_PASSWORD=${KAFKA_KEYSTORE_PASSWORD:-changeme}
+   903→      - KAFKA_SSL_KEY_PASSWORD=${KAFKA_KEY_PASSWORD:-changeme}
+   904→      - KAFKA_SSL_TRUSTSTORE_FILENAME=kafka.truststore.jks
+   905→      - KAFKA_SSL_TRUSTSTORE_PASSWORD=${KAFKA_TRUSTSTORE_PASSWORD:-changeme}
+   906→      - KAFKA_SSL_CLIENT_AUTH=required
+   907→      - KAFKA_NUM_PARTITIONS=36
+   908→      - KAFKA_DEFAULT_REPLICATION_FACTOR=3
+   909→      - KAFKA_JVM_PERFORMANCE_OPTS=-Xms4g -Xmx4g -XX:MetaspaceSize=96m
+   910→      - KAFKA_HEAP_OPTS=-Xms4g -Xmx4g
+   911→    volumes:
+   912→      - kafka_1_data:/var/lib/kafka/data
+   913→      - /etc/localtime:/etc/localtime:ro
+   914→    networks:
+   915→      - soc-events
+   916→    depends_on:
+   917→      - zookeeper
+   918→      - kafka-0
+   919→    deploy:
+   920→      resources:
+   921→        limits:
+   922→          cpus: '4'
+   923→          memory: 8G
+   924→
+   925→  kafka-2:
+   926→    image: confluentinc/cp-kafka:7.5.0
+   927→    container_name: djezzy-kafka-2
+   928→    restart: unless-stopped
+   929→    ports:
+   930→      - "9096:9092"
+   931→      - "9097:9093"   # TLS listener
+   932→    cap_add:
+   933→      - NET_RAW
+   934→      - NET_ADMIN
+   935→    environment:
+   936→      - KAFKA_BROKER_ID=2
+   937→      - KAFKA_ZOOKEEPER_CONNECT=zookeeper:2181
+   938→      # REMEDIATION CRIT-002: Enable TLS
+   939→      - KAFKA_ADVERTISED_LISTENERS=PLAINTEXT://kafka-2:9096,SSL://kafka-2:9097
+   940→      - KAFKA_SECURITY_INTER_BROKER_PROTOCOL=SSL
+   941→      - KAFKA_SECURITY_PROTOCOL=SSL
+   942→      - KAFKA_SSL_KEYSTORE_FILENAME=kafka.kafka-2.keystore.jks
+   943→      - KAFKA_SSL_KEYSTORE_PASSWORD=${KAFKA_KEYSTORE_PASSWORD:-changeme}
+   944→      - KAFKA_SSL_KEY_PASSWORD=${KAFKA_KEY_PASSWORD:-changeme}
+   945→      - KAFKA_SSL_TRUSTSTORE_FILENAME=kafka.truststore.jks
+   946→      - KAFKA_SSL_TRUSTSTORE_PASSWORD=${KAFKA_TRUSTSTORE_PASSWORD:-changeme}
+   947→      - KAFKA_SSL_CLIENT_AUTH=required
+   948→      - KAFKA_NUM_PARTITIONS=36
+   949→      - KAFKA_DEFAULT_REPLICATION_FACTOR=3
+   950→      - KAFKA_JVM_PERFORMANCE_OPTS=-Xms4g -Xmx4g -XX:MetaspaceSize=96m
+   951→      - KAFKA_HEAP_OPTS=-Xms4g -Xmx4g
+   952→    volumes:
+   953→      - kafka_2_data:/var/lib/kafka/data
+   954→      - /etc/localtime:/etc/localtime:ro
+   955→    networks:
+   956→      - soc-events
+   957→    depends_on:
+   958→      - zookeeper
+   959→      - kafka-0
+   960→      - kafka-1
+   961→    deploy:
+   962→      resources:
+   963→        limits:
+   964→          cpus: '4'
+   965→          memory: 8G
+   966→
+   967→  schema-registry:
+   968→    image: confluentinc/cp-schema-registry:7.5.0
+   969→    container_name: djezzy-schema-registry
+   970→    restart: unless-stopped
+   971→    ports:
+   972→      - "8081:8081"
+   973→    environment:
+   974→      - SCHEMA_REGISTRY_KAFKASTORE_BOOTSTRAP_SERVERS=kafka-0:9092,kafka-1:9093,kafka-2:9094
+   975→      - SCHEMA_REGISTRY_HOST_NAME=schema-registry
+   976→      - SCHEMA_REGISTRY_LISTENERS=http://0.0.0.0:8081
+   977→      - SCHEMA_REGISTRY_AVRO_COMPATIBILITY_LEVEL=backward
+   978→      - SCHEMA_REGISTRY_INTER_INSTANCE_PROTOCOL=http
+   979→      - SCHEMA_REGISTRY_LOG4J_ROOT_LOG_LEVEL=WARN
+   980→    networks:
+   981→      - soc-events
+   982→    depends_on:
+   983→      - kafka-0
+   984→      - kafka-1
+   985→      - kafka-2
+   986→    deploy:
+   987→      resources:
+   988→        limits:
+   989→          cpus: '1'
+   990→          memory: 2G
+   991→
+   992→  # =============================================================================
+   993→  # API GATEWAY (Kong)
+   994→  # =============================================================================
+   995→  kong-database:
+   996→    image: postgres:14-alpine
+   997→    container_name: djezzy-kong-db
+   998→    restart: unless-stopped
+   999→    environment:
+  1000→      - POSTGRES_DB=kong
+  1001→      - POSTGRES_USER=kong
+  1002→      - POSTGRES_PASSWORD=${KONG_PG_PASSWORD:-kongpassword}
+  1003→    volumes:
+  1004→      - kong_db_data:/var/lib/postgresql/data
+  1005→      - /etc/localtime:/etc/localtime:ro
+  1006→    networks:
+  1007→      - soc-backend
+  1008→    deploy:
+  1009→      resources:
+  1010→        limits:
+  1011→          cpus: '1'
+  1012→          memory: 2G
+  1013→
+  1014→  kong-migration:
+  1015→    image: kong:3.4
+  1016→    container_name: djezzy-kong-migration
+  1017→    restart: on-failure
+  1018→    environment:
+  1019→      - KONG_DATABASE=postgres
+  1020→      - KONG_PG_HOST=kong-database
+  1021→      - KONG_PG_USER=kong
+  1022→      - KONG_PG_PASSWORD=${KONG_PG_PASSWORD:-kongpassword}
+  1023→      - KONG_CASSANDRA_CONTACT_POINTS=kong-database
+  1024→    networks:
+  1025→      - soc-backend
+  1026→    depends_on:
+  1027→      - kong-database
+  1028→    deploy:
+  1029→      restart_policy:
+  1030→        condition: on-failure
+  1031→        delay: 5s
+  1032→        max_attempts: 5
+  1033→
+  1034→  kong:
+  1035→    image: kong:3.4
+  1036→    container_name: djezzy-kong-gateway
+  1037→    restart: unless-stopped
+  1038→    ports:
+  1039→      - "8000:8000"   # Proxy
+  1040→      - "8443:8443"   # Proxy SSL
+  1041→      - "8001:8001"   # Admin API
+  1042→    environment:
+  1043→      - KONG_DATABASE=postgres
+  1044→      - KONG_PG_HOST=kong-database
+  1045→      - KONG_PG_USER=kong
+  1046→      - KONG_PG_PASSWORD=${KONG_PG_PASSWORD:-kongpassword}
+  1047→      - KONG_PROXY_ACCESS_LOG=/dev/stdout
+  1048→      - KONG_ADMIN_ACCESS_LOG=/dev/stdout
+  1049→      - KONG_PROXY_ERROR_LOG=/dev/stderr
+  1050→      - KONG_ADMIN_ERROR_LOG=/dev/stderr
+  1051→      - KONG_ADMIN_LISTEN=0.0.0.0:8001
+  1052→      - KONG_PROXY_LISTEN=0.0.0.0:8000
+  1053→      - KONG_ADMIN_GUI_URL=http://localhost:8002
+  1054→    networks:
+  1055→      - soc-frontend
+  1056→      - soc-backend
+  1057→    depends_on:
+  1058→      - kong-database
+  1059→    deploy:
+  1060→      resources:
+  1061→        limits:
+  1062→          cpus: '2'
+  1063→          memory: 2G
+  1064→
+  1065→  # =============================================================================
+  1066→  # MONITORING (Prometheus + Grafana)
+  1067→  # =============================================================================
+  1068→  prometheus:
+  1069→    image: prom/prometheus:v2.47.0
+  1070→    container_name: djezzy-prometheus
+  1071→    restart: unless-stopped
+  1072→    ports:
+  1073→      - "9090:9090"
+  1074→    volumes:
+  1075→      - ./config/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml
+  1076→      - prometheus_data:/prometheus
+  1077→      - /etc/localtime:/etc/localtime:ro
+  1078→    command:
+  1079→      - '--config.file=/etc/prometheus/prometheus.yml'
+  1080→      - '--storage.tsdb.path=/prometheus'
+  1081→      - '--storage.tsdb.retention.time=30d'
+  1082→      - '--web.enable-lifecycle'
+  1083→    networks:
+  1084→      - soc-monitoring
+  1085→    deploy:
+  1086→      resources:
+  1087→        limits:
+  1088→          cpus: '2'
+  1089→          memory: 4G
+  1090→
+  1091→  grafana:
+  1092→    image: grafana/grafana:10.1.0
+  1093→    container_name: djezzy-grafana
+  1094→    restart: unless-stopped
+  1095→    ports:
+  1096→      - "3001:3000"
+  1097→    environment:
+  1098→      - GF_SECURITY_ADMIN_USER=${GRAFANA_ADMIN_USER:-admin}
+  1099→      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD:-changeme}
+  1100→      - GF_INSTALL_PLUGINS=grafana-piechart-panel,grafana-worldmap-panel
+  1101→    volumes:
+  1102→      - grafana_data:/var/lib/grafana
+  1103→      - ./config/grafana/provisioning:/etc/grafana/provisioning
+  1104→      - ./config/grafana/dashboards:/var/lib/grafana/dashboards
+  1105→      - /etc/localtime:/etc/localtime:ro
+  1106→    networks:
+  1107→      - soc-frontend
+  1108→      - soc-monitoring
+  1109→    depends_on:
+  1110→      - prometheus
+  1111→    deploy:
+  1112→      resources:
+  1113→        limits:
+  1114→          cpus: '1'
+  1115→          memory: 2G
+  1116→
+  1117→  # =============================================================================
+  1118→  # LOG AGGREGATION (Fluentd/Loki)
+  1119→  # =============================================================================
+  1120→  loki:
+  1121→    image: grafana/loki:2.8.0
+  1122→    container_name: djezzy-loki
+  1123→    restart: unless-stopped
+  1124→    ports:
+  1125→      - "3100:3100"
+  1126→    volumes:
+  1127→      - loki_data:/loki
+  1128→      - ./config/loki:/etc/loki
+  1129→      - /etc/localtime:/etc/localtime:ro
+  1130→    command: -config.file=/etc/loki/local-config.yaml
+  1131→    networks:
+  1132→      - soc-monitoring
+  1133→    deploy:
+  1134→      resources:
+  1135→        limits:
+  1136→          cpus: '1'
+  1137→          memory: 2G
+  1138→
+  1139→  fluentd:
+  1140→    image: fluent/fluentd:v1.15
+  1141→    container_name: djezzy-fluentd
+  1142→    restart: unless-stopped
+  1143→    volumes:
+  1144→      - ./config/fluentd:/fluentd/etc
+  1145→      - /var/log:/var/log:ro
+  1146→      - /etc/localtime:/etc/localtime:ro
+  1147→    networks:
+  1148→      - soc-backend
+  1149→      - soc-monitoring
+  1150→    deploy:
+  1151→      resources:
+  1152→        limits:
+  1153→          cpus: '1'
+  1154→          memory: 1G
+  1155→
+  1156→# =============================================================================
+  1157→# NETWORKS
+  1158→# =============================================================================
+  1159→networks:
+  1160→  soc-frontend:
+  1161→    name: soc-frontend
+  1162→    driver: bridge
+  1163→    ipam:
+  1164→      config:
+  1165→        - subnet: 172.28.0.0/16
+  1166→  
+  1167→  soc-backend:
+  1168→    name: soc-backend
+  1169→    driver: bridge
+  1170→    internal: true  # No external access to backend services
+  1171→    ipam:
+  1172→      config:
+  1173→        - subnet: 172.29.0.0/16
+  1174→  
+  1175→  soc-events:
+  1176→    name: soc-events
+  1177→    driver: bridge
+  1178→    internal: true
+  1179→    ipam:
+  1180→      config:
+  1181→        - subnet: 172.30.0.0/16
+  1182→  
+  1183→  soc-monitoring:
+  1184→    name: soc-monitoring
+  1185→    driver: bridge
+  1186→    ipam:
+  1187→      config:
+  1188→        - subnet: 172.31.0.0/16
+  1189→
+  1190→# =============================================================================
+  1191→# VOLUMES
+  1192→# =============================================================================
+  1193→volumes:
+  1194→  # Database Volumes
+  1195→  postgresql_data:
+  1196→    driver: local
+  1197→  es_node_1_data:
+  1198→    driver: local
+  1199→  es_node_2_data:
+  1200→    driver: local
+  1201→  kibana_data:
+  1202→    driver: local
+  1203→  
+  1204→  # Cache Volumes
+  1205→  redis_master_data:
+  1206→    driver: local
+  1207→  redis_replica_data:
+  1208→    driver: local
+  1209→  
+  1210→  # SIEM Volumes
+  1211→  wazuh_manager_data:
+  1212→    driver: local
+  1213→  
+  1214→  # EDR Volumes
+  1215→  grr_server_data:
+  1216→    driver: local
+  1217→  fleet_data:
+  1218→    driver: local
+  1219→  
+  1220→  # SOAR Volumes
+  1221→  thehive_data:
+  1222→    driver: local
+  1223→  cortex_data:
+  1224→    driver: local
+  1225→  cortex_jobs:
+  1226→    driver: local
+  1227→  
+  1228→  # Threat Intel Volumes
+  1229→  misp_data:
+  1230→    driver: local
+  1231→  misp_logs:
+  1232→    driver: local
+  1233→  mariadb_misp_data:
+  1234→    driver: local
+  1235→  redis_misp_data:
+  1236→    driver: local
+  1237→  opencti_data:
+  1238→    driver: local
+  1239→  redis_opencti_data:
+  1240→    driver: local
+  1241→  
+  1242→  # NSM Volumes
+  1243→  suricata_logs:
+  1244→    driver: local
+  1245→  suricata_rules:
+  1246→    driver: local
+  1247→  zeek_logs:
+  1248→    driver: local
+  1249→  zeek_scripts:
+  1250→    driver: local
+  1251→  arkime_pcaps:
+  1252→    driver: local
+  1253→  arkime_logs:
+  1254→    driver: local
+  1255→  
+  1256→  # Vulnerability Volumes
+  1257→  openvas_data:
+  1258→    driver: local
+  1259→  openvas_logs:
+  1260→    driver: local
+  1261→  openvas_pg_data:
+  1262→    driver: local
+  1263→  redis_openvas_data:
+  1264→    driver: local
+  1265→  defectdojo_data:
+  1266→    driver: local
+  1267→  defectdojo_pg_data:
+  1268→    driver: local
+  1269→  redis_defectdojo_data:
+  1270→    driver: local
+  1271→  
+  1272→  # Event Pipeline Volumes
+  1273→  zookeeper_data:
+  1274→    driver: local
+  1275→  zookeeper_logs:
+  1276→    driver: local
+  1277→  kafka_0_data:
+  1278→    driver: local
+  1279→  kafka_1_data:
+  1280→    driver: local
+  1281→  kafka_2_data:
+  1282→    driver: local
+  1283→  
+  1284→  # =============================================================================
+  1285→  # SS7 SECURITY MODULE - Telecom Signaling Monitoring
+  1286→  # =============================================================================
+  1287→  ss7-collector:
+  1288→    build:
+  1289→      context: ./services/ss7-collector
+  1290→      dockerfile: Dockerfile
+  1291→    container_name: djezzy-ss7-collector
+  1292→    image: djezzy/ss7-collector:1.0.0
+  1293→    restart: unless-stopped
+  1294→    # REMEDIATION CRIT-003: Linux capabilities for raw socket/SIGTRAN capture
+  1295→    cap_add:
+  1296→      - NET_RAW
+  1297→      - NET_ADMIN
+  1298→      - SYS_TIME
+  1299→    ports:
+  1300→      - "2904:2904"   # M3UA (SIGTRAN)
+  1301→      - "2905:2905"   # SCTP
+  1302→      - "3868:3868"   # Diameter (collector)
+  1303→      - "7000:7000"   # Management API
+  1304→    environment:
+  1305→      - TZ=Africa/Algiers
+  1306→      - SS7_HOST=0.0.0.0
+  1307→      - SS7_PORT=7000
+  1308→      - SS7_M3UA_LISTEN_PORT=2904
+  1309→      - SS7_SCTP_LISTEN_PORT=2905
+  1310→      - SS7_DIAMETER_LISTEN_PORT=3868
+  1311→      - KAFKA_BOOTSTRAP_SERVERS=kafka-0:9092,kafka-1:9092,kafka-2:9092
+  1312→      - OUTPUT_TOPIC=ss7-raw-events
+  1313→      - PCAP_ENABLED=true
+  1314→      - PCAP_DIR=/var/capture/ss7
+  1315→      - PCAP_MAX_SIZE_MB=512
+  1316→      - LOG_LEVEL=INFO
+  1317→    volumes:
+  1318→      - ./config/ss7:/etc/ss7-collector
+  1319→      - ss7_pcaps:/var/capture/ss7
+  1320→      - ss7_logs_collector:/var/log/ss7
+  1321→      - /etc/localtime:/etc/localtime:ro
+  1322→    networks:
+  1323→      - soc-events
+  1324→    deploy:
+  1325→      resources:
+  1326→        limits:
+  1327→          cpus: '8.0'
+  1328→          memory: 16G
+  1329→        reservations:
+  1330→          cpus: '4.0'
+  1331→          memory: 8G
+  1332→    healthcheck:
+  1333→      test: ["CMD", "python", "-c", "import requests; requests.get('http://localhost:7000/health')"]
+  1334→      interval: 30s
+  1335→      timeout: 10s
+  1336→      retries: 3
+  1337→      start_period: 15s
+  1338→
+  1339→  ss7-analyzer:
+  1340→    build:
+  1341→      context: ./services/ss7-analyzer
+  1342→      dockerfile: Dockerfile
+  1343→    container_name: djezzy-ss7-analyzer
+  1344→    image: djezzy/ss7-analyzer:1.0.0
+  1345→    restart: unless-stopped
+  1346→    ports:
+  1347→      - "8000:8000"   # Management API
+  1348→    environment:
+  1349→      - TZ=Africa/Algiers
+  1350→      - HOST=0.0.0.0
+  1351→      - PORT=8000
+  1352→      - KAFKA_BOOTSTRAP_SERVERS=kafka-0:9092,kafka-1:9092,kafka-2:9092
+  1353→      - INPUT_TOPIC=ss7-raw-events
+  1354→      - OUTPUT_TOPIC=ss7-alerts
+  1355→      - CONSUMER_GROUP=ss7-analyzer-group
+  1356→      - THEHIVE_URL=http://thehive:9000
+  1357→      - THEHIVE_API_KEY=${THEHIVE_API_KEY}
+  1358→      - AUTO_CREATE_CASES=true
+  1359→      - RULES_DIR=/etc/ss7-analyzer/rules
+  1360→      - ENABLE_ML_DETECTION=false
+  1361→      - ANOMALY_THRESHOLD=0.85
+  1362→    volumes:
+  1363→      - ./config/ss7/rules:/etc/ss7-analyzer/rules
+  1364→      - ss7_logs_analyzer:/var/log/ss7-analyzer
+  1365→      - /etc/localtime:/etc/localtime:ro
+  1366→    networks:
+  1367→      - soc-backend
+  1368→      - soc-events
+  1369→    depends_on:
+  1370→      - kafka-0
+  1371→      - elasticsearch-node-1
+  1372→      - thehive
+  1373→    deploy:
+  1374→      resources:
+  1375→        limits:
+  1376→          cpus: '6.0'
+  1377→          memory: 12G
+  1378→        reservations:
+  1379→          cpus: '3.0'
+  1380→          memory: 6G
+  1381→    healthcheck:
+  1382→      test: ["CMD", "python", "-c", "import requests; requests.get('http://localhost:8000/health')"]
+  1383→      interval: 30s
+  1384→      timeout: 10s
+  1385→      retries: 3
+  1386→      start_period: 20s
+  1387→
+  1388→  diameter-monitor:
+  1389→    build:
+  1390→      context: ./services/diameter-monitor
+  1391→      dockerfile: Dockerfile
+  1392→    container_name: djezzy-diameter-monitor
+  1393→    image: djezzy/diameter-monitor:1.0.0
+  1394→    restart: unless-stopped
+  1395→    ports:
+  1396→      - "3869:3869"   # Diameter listener
+  1397→      - "8001:8001"   # Management API
+  1398→    environment:
+  1399→      - TZ=Africa/Algiers
+  1400→      - DIAMETER_HOST=0.0.0.0
+  1401→      - DIAMETER_PORT=8001
+  1402→      - DIAMETER_LISTEN_PORT=3869
+  1403→      - DIAMETER_REALM=djezzy.dz
+  1404→      - DIAMETER_HOST_NAME=diameter-monitor.djezzy.dz
+  1405→      - KAFKA_BOOTSTRAP_SERVERS=kafka-0:9092,kafka-1:9092,kafka-2:9092
+  1406→      - INPUT_TOPIC=ss7-raw-events
+  1407→      - OUTPUT_TOPIC=diameter-alerts
+  1408→      - CONSUMER_GROUP=diameter-monitor-group
+  1409→    volumes:
+  1410→      - ./config/diameter:/etc/diameter-monitor
+  1411→      - diameter_logs:/var/log/diameter-monitor
+  1412→      - /etc/localtime:/etc/localtime:ro
+  1413→    networks:
+  1414→      - soc-events
+  1415→    depends_on:
+  1416→      - kafka-0
+  1417→    deploy:
+  1418→      resources:
+  1419→        limits:
+  1420→          cpus: '2.0'
+  1421→          memory: 4G
+  1422→        reservations:
+  1423→          cpus: '1.0'
+  1424→          memory: 2G
+  1425→
+  1426→  # Gateway Volumes
+  1427→  kong_db_data:
+  1428→    driver: local
+  1429→  
+  1430→  # Monitoring Volumes
+  1431→  prometheus_data:
+  1432→    driver: local
+  1433→  grafana_data:
+  1434→    driver: local
+  1435→  loki_data:
+  1436→    driver: local
+  1437→
+  1438→  # SS7 Security Module Volumes
+  1439→  ss7_pcaps:
+  1440→    driver: local
+  1441→  ss7_logs_collector:
+  1442→    driver: local
+  1443→  ss7_logs_analyzer:
+  1444→    driver: local
+  1445→  diameter_logs:
+  1446→    driver: local
+  1447→

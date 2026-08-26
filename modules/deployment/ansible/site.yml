@@ -1,0 +1,185 @@
+# =============================================================================
+# National SOC Platform - Main Ansible Playbook
+# Module 9: Production Deployment Scripts
+#
+# This playbook orchestrates the complete deployment of the National SOC Platform.
+# Usage:
+#   ansible-playbook -i inventory/production site.yml --tags "base,docker"
+#   ansible-playbook -i inventory/production site.yml --tags "all"
+#   ansible-playbook -i inventory/production site.yml --check (dry-run)
+# =============================================================================
+
+---
+- name: Deploy National SOC Platform
+  hosts: all
+  become: yes
+  become_method: sudo
+  gather_facts: yes
+  
+  # ---------------------------------------------------------------------------
+  # Global Variables
+  # ---------------------------------------------------------------------------
+  vars:
+    # Platform Information
+    soc_platform_name: "National SOC Platform Algeria"
+    soc_platform_version: "1.0.0"
+    soc_environment: "{{ lookup('env', 'SOC_ENVIRONMENT') | default('production', true) }}"
+    
+    # Deployment Paths
+    soc_base_dir: "/opt/soc-platform"
+    soc_config_dir: "{{ soc_base_dir }}/configs"
+    soc_data_dir: "/var/lib/soc"
+    soc_log_dir: "/var/log/soc"
+    soc_backup_dir: "/var/backups/soc"
+    soc_scripts_dir: "{{ soc_base_dir }}/scripts"
+    
+    # Docker Configuration
+    docker_compose_version: "2.24.0"
+    docker_engine_version: "24.0"
+    docker_registry: "{{ lookup('env', 'DOCKER_REGISTRY') | default('', true) }}"
+    
+    # Security Settings
+    ssh_port: "{{ lookup('env', 'SSH_PORT') | default(22, true) }}"
+    fail2ban_maxretry: 5
+    fail2ban_bantime: 3600
+    
+    # Monitoring
+    enable_monitoring: true
+    grafana_admin_user: "{{ lookup('env', 'GRAFANA_ADMIN_USER') | default('admin', true) }}"
+    
+  # ---------------------------------------------------------------------------
+  # Pre-Tasks: Validation and Prerequisites
+  # ---------------------------------------------------------------------------
+  pre_tasks:
+    - name: Validate target OS compatibility
+      assert:
+        that:
+          - ansible_distribution in ['Ubuntu', 'Debian', 'CentOS', 'Rocky', 'AlmaLinux']
+          - ansible_distribution_major_version | int >= 20 if ansible_distribution == 'Ubuntu' else true
+          - ansible_distribution_major_version | int >= 8 if ansible_distribution in ['CentOS', 'Rocky', 'AlmaLinux'] else true
+        success_msg: "✓ Compatible OS detected: {{ ansible_distribution }} {{ ansible_distribution_version }}"
+        fail_msg: "✗ Incompatible OS. Requires Ubuntu 20.04+, Debian 11+, or RHEL 8+"
+
+    - name: Check minimum system resources
+      assert:
+        that:
+          - ansible_memtotal_mb >= 16384
+          - ansible_processor_vcpus >= 4
+          - ansible_mounts[0].size_available | int >= 107374182400  # 100GB free
+        success_msg: "✓ System meets minimum requirements ({{ ansible_memtotal_mb }}MB RAM, {{ ansible_processor_vcpus }} CPUs)"
+        fail_msg: "✗ Insufficient system resources. Minimum: 16GB RAM, 4 CPUs, 100GB disk"
+
+    - name: Display deployment information
+      debug:
+        msg: |
+          ╔═══════════════════════════════════════════════════════════╗
+          ║     National SOC Platform - Deployment Playbook           ║
+          ╠═══════════════════════════════════════════════════════════╣
+          ║  Environment:  {{ soc_environment }}                          ║
+          ║  Target Host: {{ inventory_hostname }}                       ║
+          ║  OS:          {{ ansible_distribution }} {{ ansible_distribution_version }}
+          ║  CPU Cores:   {{ ansible_processor_vcpus }}                   ║
+          ║  Memory:      {{ (ansible_memtotal_mb / 1024) | round(1) }} GB              ║
+          ║  Disk Free:   {{ (ansible_mounts[0].size_available / 1073741824) | round(1) }} GB            ║
+          ╚═══════════════════════════════════════════════════════════╝
+
+    - name: Create base directories
+      file:
+        path: "{{ item }}"
+        state: directory
+        mode: '0755'
+        owner: root
+        group: root
+      loop:
+        - "{{ soc_base_dir }}"
+        - "{{ soc_config_dir }}"
+        - "{{ soc_data_dir }}"
+        - "{{ soc_log_dir }}"
+        - "{{ soc_backup_dir }}"
+        - "{{ soc_scripts_dir }}"
+
+  # ---------------------------------------------------------------------------
+  # Roles Execution Order
+  # ---------------------------------------------------------------------------
+  roles:
+    # Phase 1: Base System Configuration
+    - role: base
+      tags: [base, always]
+      when: soc_environment != 'development'
+
+    # Phase 2: Docker Engine Installation
+    - role: docker
+      tags: [docker, infrastructure]
+
+    # Phase 3: Security Hardening
+    - role: security
+      tags: [security, hardening]
+      when: soc_environment == 'production'
+
+    # Phase 4: Database Services
+    - role: database
+      tags: [database, data]
+
+    # Phase 5: SOC Applications (Wazuh, Suricata, MISP, TheHive)
+    - role: soc-apps
+      tags: [soc-apps, applications]
+
+    # Phase 6: Monitoring Stack
+    - role: monitoring
+      tags: [monitoring, observability]
+      when: enable_monitoring | bool
+
+    # Phase 7: Application Deployment
+    - role: deploy
+      tags: [deploy, application]
+
+  # ---------------------------------------------------------------------------
+  # Post-Tasks: Finalization and Verification
+  # ---------------------------------------------------------------------------
+  post_tasks:
+    - name: Generate deployment summary
+      set_fact:
+        deployment_summary:
+          timestamp: "{{ ansible_date_time.iso8601 }}"
+          hostname: "{{ inventory_hostname }}"
+          environment: "{{ soc_environment }}"
+          platform_version: "{{ soc_platform_version }}"
+          services_deployed: "{{ groups['all'] | length }}"
+          total_memory_gb: "{{ (ansible_memtotal_mb / 1024) | round(1) }}"
+          total_cpus: "{{ ansible_processor_vcpans }}"
+
+    - name: Display deployment completion message
+      debug:
+        msg: |
+          ╔═══════════════════════════════════════════════════════════╗
+          ║     ✅ DEPLOYMENT COMPLETED SUCCESSFULLY                 ║
+          ╠═══════════════════════════════════════════════════════════╣
+          ║                                                          ║
+          ║  Next Steps:                                             ║
+          ║  1. Run health check: ./scripts/health-check.sh         ║
+          ║  2. Verify services: docker compose ps                    ║
+          ║  3. Access dashboard: https://{{ ansible_default_ipv4.address }}  ║
+          ║                                                          ║
+          ║  Documentation: docs/deployment-guide.md                 ║
+          ╚═══════════════════════════════════════════════════════════╝
+
+    - name: Save deployment record
+      copy:
+        content: |
+          Deployment Record
+          ==================
+          Timestamp: {{ ansible_date_time.iso8601 }}
+          Hostname: {{ inventory_hostname }}
+          Environment: {{ soc_environment }}
+          Platform Version: {{ soc_platform_version }}
+          User: {{ ansible_user_id }}
+          Ansible Version: {{ ansible_version.full }}
+          
+          System Info:
+            OS: {{ ansible_distribution }} {{ ansible_distribution_version }}
+            Kernel: {{ ansible_kernel }}
+            CPU: {{ ansible_processor_vcpus }} cores
+            Memory: {{ ansible_memtotal_mb }} MB
+            IP: {{ ansible_default_ipv4.address }}
+        dest: "{{ soc_backup_dir }}/deployment-{{ ansible_date_time.date }}.log"
+        mode: '0644'

@@ -1,0 +1,1701 @@
+     1→/**
+     2→ * MISP Threat Intelligence Platform - API Client
+     3→ * Algeria National SOC Platform 2026-2030
+     4→ * 
+     5→ * Complete REST API client for MISP integration including:
+     6→ * - Event management (CRUD, search, publish)
+     7→ * - Attribute/IOC management
+     8→ * - Object handling
+     9→ * - Galaxy/Threat Actor lookup
+    10→ * - Feed synchronization
+    11→ * - YARA rule generation
+    12→ * - Warninglist validation
+    13→ * - Correlation analysis
+    14→ * - Sightings tracking
+    15→ * - Decaying models
+    16→ */
+    17→
+    18→import {
+    19→  MISPEvent,
+    20→  MISPAttribute,
+    21→  MISPObject,
+    22→  MISPTag,
+    23→  MISPGalaxy,
+    24→  Warninglist,
+    25→  MISPFeed,
+    26→  MISPServer,
+    27→  YARARule,
+    28→  MISPSighting,
+    29→  DecayingModel,
+    30→  MISPStatistics,
+    31→  TimelinePoint,
+    32→  CorrelationData,
+    33→  EnrichmentResult,
+    34→  MISPEventSearchParams,
+    35→  MISPEventSearchResponse,
+    36→  MISPAttributeSearchResponse,
+    37→  OverCorrelationBreak,
+    38→  MISPAPIResponse,
+    39→  MISPBulkOperationResult,
+    40→  MISPExportResult,
+    41→  AnalysisStatus,
+    42→  DistributionLevel,
+    43→  AttributeType,
+    44→} from '../types/misp.types';
+    45→
+    46→// ============================================================
+    47→// Configuration & Constants
+    48→// ============================================================
+    49→
+    50→export interface MISPClientConfig {
+    51→  /** MISP instance URL (e.g., https://misp.algeria-soc.dz) */
+    52→  url: string;
+    53→  /** API key for authentication */
+    54→  apiKey: string;
+    55→  /** Request timeout in milliseconds (default: 30000) */
+    56→  timeout?: number;
+    57→  /** Enable debug logging */
+    58→  debug?: boolean;
+    59→  /** Whether to verify SSL certificates */
+    60→  verifyCertificate?: boolean;
+    61→  /** Default organization context */
+    62→  defaultOrg?: string;
+    63→}
+    64→
+    65→/** Default configuration values */
+    66→const DEFAULT_CONFIG: Required<Pick<MISPClientConfig, 'timeout' | 'debug' | 'verifyCertificate'>> = {
+    67→  timeout: 30000,
+    68→  debug: false,
+    69→  verifyCertificate: true,
+    70→};
+    71→
+    72→// ============================================================
+    73→// Error Types
+    74→// ============================================================
+    75→
+    76→export class MISPError extends Error {
+    77→  constructor(
+    78→    message: string,
+    79→    public statusCode?: number,
+    80→    public code?: string,
+    81→    public details?: unknown
+    82→  ) {
+    83→    super(message);
+    84→    this.name = 'MISPError';
+    85→  }
+    86→}
+    87→
+    88→export class MISPRateLimitError extends MISPError {
+    89→  constructor(message: string, public retryAfter: number) {
+    90→    super(message, 429, 'RATE_LIMITED');
+    91→    this.name = 'MISPRateLimitError';
+    92→  }
+    93→}
+    94→
+    95→export class MISPAuthenticationError extends MISPError {
+    96→  constructor() {
+    97→    super('Invalid MISP API key or authentication failed', 401, 'AUTH_FAILED');
+    98→    this.name = 'MISPAuthenticationError';
+    99→  }
+   100→}
+   101→
+   102→// ============================================================
+   103→// Main Client Class
+   104→// ============================================================
+   105→
+   106→class MISPClientInstance {
+   107→  private config: Required<MISPClientConfig> & Pick<MISPClientConfig, 'url' | 'apiKey' | 'defaultOrg'>;
+   108→  private authHeader: string;
+   109→
+   110→  constructor(config: MISPClientConfig) {
+   111→    this.config = { ...DEFAULT_CONFIG, ...config };
+   112→    this.authHeader = this.config.apiKey;
+   113→    
+   114→    if (this.config.debug) {
+   115→      console.log(`[MISP] Initialized client for ${this.config.url}`);
+   116→    }
+   117→  }
+   118→
+   119→  // ============================================================
+   120→  // HTTP Helpers
+   121→  // ============================================================
+   122→
+   123→  private async request<T>(
+   124→    endpoint: string,
+   125→    options: RequestInit = {}
+   126→  ): Promise<T> {
+   127→    const url = `${this.config.url.replace(/\/$/, '')}${endpoint}`;
+   128→    const headers: Record<string, string> = {
+   129→      'Authorization': this.authHeader,
+   130→      'Content-Type': 'application/json',
+   131→      'Accept': 'application/json',
+   132→      ...options.headers as Record<string, string>,
+   133→    };
+   134→
+   135→    const controller = new AbortController();
+   136→    const timeoutId = setTimeout(() => controller.abort(), this.config.timeout);
+   137→
+   138→    try {
+   139→      const response = await fetch(url, {
+   140→        ...options,
+   141→        headers,
+   142→        signal: controller.signal,
+   143→      });
+   144→
+   145→      clearTimeout(timeoutId);
+   146→
+   147→      // Handle rate limiting
+   148→      if (response.status === 429) {
+   149→        const retryAfter = parseInt(response.headers.get('Retry-After') || '60', 10);
+   150→        throw new MISPRateLimitError(
+   151→          `Rate limited. Retry after ${retryAfter}s`,
+   152→          retryAfter
+   153→        );
+   154→      }
+   155→
+   156→      // Handle auth errors
+   157→      if (response.status === 401 || response.status === 403) {
+   158→        throw new MISPAuthenticationError();
+   159→      }
+   160→
+   161→      // Parse response
+   162→      const data = await response.json();
+   163→
+   164→      if (!response.ok) {
+   165→        throw new MISPError(
+   166→          data.message || data.error?.message || `Request failed with status ${response.status}`,
+   167→          response.status,
+   168→          data.error?.code,
+   169→          data.error
+   170→        );
+   171→      }
+   172→
+   173→      return data as T;
+   174→    } catch (error) {
+   175→      clearTimeout(timeoutId);
+   176→      
+   177→      if (error instanceof MISPError) {
+   178→        throw error;
+   179→      }
+   180→      
+   181→      if (error instanceof Error && error.name === 'AbortError') {
+   182→        throw new MISPError(`Request timed out after ${this.config.timeout}ms`, 408, 'TIMEOUT');
+   183→      }
+   184→      
+   185→      throw new MISPError(
+   186→        `Network error: ${error instanceof Error ? error.message : 'Unknown error'}`,
+   187→        0,
+   188→        'NETWORK_ERROR'
+   189→      );
+   190→    }
+   191→  }
+   192→
+   193→  private log(method: string, message: string, data?: unknown): void {
+   194→    if (this.config.debug) {
+   195→      console.log(`[MISP] [${method}] ${message}`, data ?? '');
+   196→    }
+   197→  }
+   198→
+   199→  // ============================================================
+   200→  // Authentication & User Info
+   201→  // ============================================================
+   202→
+   203→  /**
+   204→   * Verify API key and get current user info
+   205→   */
+   206→  async authenticate(): Promise<{
+   207→    id: string;
+   208→    email: string;
+   209→    org_id: string;
+   210→    org_name: string;
+   211→    role: string;
+   212→  }> {
+   213→    this.log('authenticate', 'Verifying API credentials');
+   214→    
+   215→    const response = await this.request<{ 
+   216→      response: Array<{
+   217→        User: { id: string; email: string; org_id: string; Role: { name: string } };
+   218→        Organisation: { id: string; name: string };
+   219→      }>;
+   220→    }>('/users/me');
+   221→
+   222→    const user = response.response[0];
+   223→    return {
+   224→      id: user.User.id,
+   225→      email: user.User.email,
+   226→      org_id: user.User.org_id,
+   227→      org_name: user.Organisation.name,
+   228→      role: user.User.Role.name,
+   229→    };
+   230→  }
+   231→
+   232→  /**
+   233→   * Get API version information
+   234→   */
+   235→  async getVersion(): Promise<string> {
+   236→    const response = await this.request<{ 
+   237→      response: Array<{ version: string; }>;
+   238→    }>('/servers/getVersion');
+   239→    return response.response[0]?.version || 'unknown';
+   240→  }
+   241→
+   242→  /**
+   243→   * Check server health and status
+   244→   */
+   245→  async healthCheck(): Promise<{
+   246→    healthy: boolean;
+   247→    version: string;
+   248→    db_version: string;
+   249→    timezone: string;
+   250→    maintenance_mode: boolean;
+   251→  }> {
+   252→    try {
+   253→      const response = await this.request<{
+   254→        response: Array<{
+   255→          version: string;
+   256→          db_version: string;
+   257→          timezone: string;
+   258→          maintenance_mode: boolean;
+   259→        }>;
+   260→      }>('/servers/getInfo');
+   261→      
+   262→      const info = response.response[0];
+   263→      return {
+   264→        healthy: true,
+   265→        version: info.version,
+   266→        db_version: info.db_version,
+   267→        timezone: info.timezone,
+   268→        maintenance_mode: info.maintenance_mode,
+   269→      };
+   270→    } catch (error) {
+   271→      return {
+   272→        healthy: false,
+   273→        version: 'unknown',
+   274→        db_version: 'unknown',
+   275→        timezone: 'UTC',
+   276→        maintenance_mode: false,
+   277→      };
+   278→    }
+   279→  }
+   280→
+   281→  // ============================================================
+   282→  // Event Management
+   283→  // ============================================================
+   284→
+   285→  /**
+   286→   * Create a new MISP event
+   287→   */
+   288→  async createEvent(params: {
+   289→    info: string;
+   290→    threat_level_id?: number;
+   291→    analysis?: AnalysisStatus;
+   292→    distribution?: DistributionLevel;
+   293→    date?: string;  // YYYY-MM-DD format
+   294→    tags?: string[];
+   295→  }): Promise<MISPEvent> {
+   296→    this.log('createEvent', `Creating event: ${params.info}`);
+   297→
+   298→    const payload: Record<string, unknown> = {
+   299→      info: params.info,
+   300→      threat_level_id: params.threat_level_id || 4,
+   301→      analysis: params.analysis || AnalysisStatus.INITIAL,
+   302→      distribution: params.distribution || DistributionLevel.YOUR_ORG_ONLY,
+   303→    };
+   304→
+   305→    if (params.date) payload.date = params.date;
+   306→    if (params.tags) payload.Tag = params.tags.map(name => ({ name }));
+   307→
+   308→    const response = await this.request<{
+   309→      response: Array<{ Event: MISPEvent }>;
+   310→    }>('/events', {
+   311→      method: 'POST',
+   312→      body: JSON.stringify(payload),
+   313→    });
+   314→
+   315→    return response.response[0].Event;
+   316→  }
+   317→
+   318→  /**
+   319→   * Get event by ID or UUID
+   320→   */
+   321→  async getEvent(eventId: string, options?: {
+   322→    includeAttributes?: boolean;
+   323→    includeObjects?: boolean;
+   324→    includeCorrelations?: boolean;
+   325→    includeNotes?: boolean;
+   326→    includeRelations?: boolean;
+   327→  }): Promise<MISPEvent> {
+   328→    this.log('getEvent', `Fetching event: ${eventId}`);
+   329→
+   330→    let query = '';
+   331→    if (options) {
+   332→      const params: string[] = [];
+   333→      if (options.includeAttributes !== undefined) params.push(`includeAttribute=${Number(options.includeAttributes)}`);
+   334→      if (options.includeObjects !== undefined) params.push(`includeObject=${Number(options.includeObjects)}`);
+   335→      if (options.includeCorrelations) params.push('includeEventCorrelations=1');
+   336→      if (options.includeNotes) params.push('includeEventReports=1');
+   337→      if (options.includeRelations) params.push('includeRelationships=1');
+   338→      query = params.length > 0 ? `?${params.join('&')}` : '';
+   339→    }
+   340→
+   341→    const response = await this.request<{
+   342→      response: Array<{ Event: MISPEvent }>;
+   343→    }>(`/events/${eventId}${query}`);
+   344→
+   345→    return response.response[0].Event;
+   346→  }
+   347→
+   348→  /**
+   349→   * Update an existing event
+   350→   */
+   351→  async updateEvent(eventId: string, updates: Partial<{
+   352→    info: string;
+   353→    published: boolean;
+   354→    threat_level_id: number;
+   355→    analysis: AnalysisStatus;
+   356→    distribution: DistributionLevel;
+   357→    date: string;
+   358→  }>): Promise<MISPEvent> {
+   359→    this.log('updateEvent', `Updating event: ${eventId}`);
+   360→
+   361→    const response = await this.request<{
+   362→      response: Array<{ Event: MISPEvent }>;
+   363→    }>(`/events/${eventId}`, {
+   364→      method: 'PUT',
+   365→      body: JSON.stringify(updates),
+   366→    });
+   367→
+   368→    return response.response[0].Event;
+   369→  }
+   370→
+   371→  /**
+   372→   * Delete an event
+   373→   */
+   374→  async deleteEvent(eventId: string): Promise<boolean> {
+   375→    this.log('deleteEvent', `Deleting event: ${eventId}`);
+   376→
+   377→    await this.request<{ message: string }>(`/events/${eventId}`, {
+   378→      method: 'DELETE',
+   379→    });
+   380→
+   381→    return true;
+   382→  }
+   383→
+   384→  /**
+   385→   * Publish an event (make visible to sharing partners)
+   386→   */
+   387→  async publishEvent(eventId: string, alert: boolean = true): Promise<MISPEvent> {
+   388→    this.log('publishEvent', `Publishing event: ${eventId}`);
+   389→
+   390→    const response = await this.request<{
+   391→      response: Array<{ Event: MISPEvent }>;
+   392→    }>(`/events/publish/${eventId}${alert ? '' : '/0'}`, {
+   393→      method: 'POST',
+   394→    });
+   395→
+   396→    return response.response[0].Event;
+   397→  }
+   398→
+   399→  /**
+   400→   * Search events with comprehensive filtering
+   401→   */
+   402→  async searchEvents(params: MISPEventSearchParams): Promise<MISPEventSearchResponse> {
+   403→    this.log('searchEvents', `Searching events`, params);
+   404→
+   405→    // Build search payload based on MISP REST API format
+   406→    const searchPayload: Record<string, unknown> = {};
+   407→
+   408→    if (params.value) searchPayload.value = params.value;
+   409→    if (params.type) searchPayload.type = params.type;
+   410→    if (params.category) searchPayload.category = params.category;
+   411→    if (params.tag?.length) searchPayload.tags = params.tag.join('&&');
+   412→    if (params.from) searchPayload.from = params.from;
+   413→    if (params.to) searchPayload.to = params.to;
+   414→    if (params.last) searchPayload.last = params.last;
+   415→    if (params.eventid) searchPayload.eventid = params.eventid;
+   416→    if (params.threat_level_id) searchPayload.threat_level_id = params.threat_level_id;
+   417→    if (params.distribution) searchPayload.distribution = params.distribution;
+   418→    if (params.analysis) searchPayload.analysis = params.analysis;
+   419→    if (params.org) searchPayload.org = params.org;
+   420→    if (params.published !== undefined) searchPayload.published = params.published;
+   421→    if (params.date_from) searchPayload.datefrom = params.date_from;
+   422→    if (params.date_to) searchPayload.dateto = params.date_to;
+   423→    if (params.searchall !== undefined) searchPayload.searchall = params.searchall;
+   424→    if (params.metadata) searchPayload.metadata = params.metadata;
+   425→    if (params.include_context) searchPayload.includeContext = true;
+   426→    if (params.include_correlations) searchPayload.includeEventCorrelations = 1;
+   427→    if (params.includeWarnings) searchPayload.includeWarninglistHits = true;
+   428→    if (params.decaying) searchPayload.decaying = true;
+   429→    if (params.exclude_local_tags) searchPayload.excludeLocalTags = true;
+   430→    if (params.enforceWarninglist) searchPayload.enforceWarninglist = true;
+   431→    if (params.returnFormat) searchPayload.returnFormat = params.returnFormat;
+   432→
+   433→    // Pagination
+   434→    if (params.limit) searchPayload.limit = params.limit;
+   435→    if (params.page) searchPayload.page = params.page;
+   436→
+   437→    const response = await this.request<MISPEventSearchResponse>(
+   438→      '/events/restSearch',
+   439→      {
+   440→        method: 'POST',
+   441→        body: JSON.stringify(searchPayload),
+   442→      }
+   443→    );
+   444→
+   445→    return response;
+   446→  }
+   447→
+   448→  /**
+   449→   * Get recent events (last N days)
+   450→   */
+   451→  async getRecentEvents(days: number = 7, limit: number = 50): Promise<MISPEvent[]> {
+   452→    this.log('getRecentEvents', `Getting last ${days} days of events`);
+   453→
+   454→    const result = await this.searchEvents({
+   455→      last: `${days}d`,
+   456→      limit,
+   457→      include_correlations: true,
+   458→    });
+   459→
+   460→    return result.response.MISPEvent || [];
+   461→  }
+   462→
+   463→  /**
+   464→   * Get events by tag
+   465→   */
+   466→  async getEventsByTag(tagName: string, limit: number = 50): Promise<MISPEvent[]> {
+   467→    const result = await this.searchEvents({
+   468→      tag: [tagName],
+   469→      limit,
+   470→    });
+   471→    return result.response.MISPEvent || [];
+   472→  }
+   473→
+   474→  // ============================================================
+   475→  // Attribute / IOC Management
+   476→  // ============================================================
+   477→
+   478→  /**
+   479→   * Add attribute to an event
+   480→   */
+   481→  async addAttribute(eventId: string, attribute: {
+   482→    type: AttributeType;
+   483→    value: string | string[];
+   484→    category?: string;
+   485→    to_ids?: boolean;
+   486→    comment?: string;
+   487→    distribution?: DistributionLevel;
+   488→    tags?: string[];
+   489→    disable_correlation?: boolean;
+   490→  }): Promise<MISPAttribute> {
+   491→    this.log('addAttribute', `Adding ${attribute.type} to event ${eventId}`);
+   492→
+   493→    const payload: Record<string, unknown> = {
+   494→      type: attribute.type,
+   495→      value: attribute.value,
+   496→      category: attribute.category,
+   497→      to_ids: attribute.to_ids !== false,
+   498→    };
+   499→
+   500→    if (attribute.comment) payload.comment = attribute.comment;
+   501→    if (attribute.distribution) payload.distribution = attribute.distribution;
+   502→    if (attribute.tags) payload.Tag = attribute.tags.map(name => ({ name }));
+   503→    if (attribute.disable_correlation) payload.disable_correlation = true;
+   504→
+   505→    const response = await this.request<{
+   506→      response: Array<{ Attribute: MISPAttribute }>;
+   507→    }>(`/attributes/add/${eventId}`, {
+   508→      method: 'POST',
+   509→      body: JSON.stringify(payload),
+   510→    });
+   511→
+   512→    return response.response[0].Attribute;
+   513→  }
+   514→
+   515→  /**
+   516→   * Add multiple attributes in batch
+   517→   */
+   518→  async addAttributesBatch(
+   519→    eventId: string,
+   520→    attributes: Array<{
+   521→      type: AttributeType;
+   522→      value: string;
+   523→      category?: string;
+   524→      to_ids?: boolean;
+   525→      comment?: string;
+   526→    }>
+   527→  ): Promise<MISPBulkOperationResult> {
+   528→    this.log('addAttributesBatch', `Adding ${attributes.length} attributes to event ${eventId}`);
+   529→
+   530→    const results: MISPAttribute[] = [];
+   531→    const errors: Array<{ item: string; reason: string }> = [];
+   532→
+   533→    for (const attr of attributes) {
+   534→      try {
+   535→        const result = await this.addAttribute(eventId, attr);
+   536→        results.push(result);
+   537→      } catch (error) {
+   538→        errors.push({
+   539→          item: attr.value,
+   540→          reason: error instanceof Error ? error.message : 'Unknown error',
+   541→        });
+   542→      }
+   543→    }
+   544→
+   545→    return {
+   546→      success: errors.length === 0,
+   547→      processed: results.length,
+   548→      failed: errors.length,
+   549→      skipped: 0,
+   550→      errors,
+   551→    };
+   552→  }
+   553→
+   554→  /**
+   555→   * Update an existing attribute
+   556→   */
+   557→  async updateAttribute(attributeId: string, updates: Partial<{
+   558→    value: string;
+   559→    comment: string;
+   560→    to_ids: boolean;
+   561→    disable_correlation: boolean;
+   562→    distribution: DistributionLevel;
+   563→  }>): Promise<MISPAttribute> {
+   564→    this.log('updateAttribute', `Updating attribute: ${attributeId}`);
+   565→
+   566→    const response = await this.request<{
+   567→      response: Array<{ Attribute: MISPAttribute }>;
+   568→    }>(`/attributes/edit/${attributeId}`, {
+   569→      method: 'PUT',
+   570→      body: JSON.stringify(updates),
+   571→    });
+   572→
+   573→    return response.response[0].Attribute;
+   574→  }
+   575→
+   576→  /**
+   577→   * Delete an attribute
+   578→   */
+   579→  async deleteAttribute(attributeId: string): Promise<boolean> {
+   580→    this.log('deleteAttribute', `Deleting attribute: ${attributeId}`);
+   581→    
+   582→    await this.request<{ message: string }>(`/attributes/delete/${attributeId}`, {
+   583→      method: 'DELETE',
+   584→    });
+   585→
+   586→    return true;
+   587→  }
+   588→
+   589→  /**
+   590→   * Search attributes across all events
+   591→   */
+   592→  async searchAttributes(params: {
+   593→    value?: string;
+   594→    type?: AttributeType;
+   595→    category?: string;
+   596→    tag?: string[];
+   597→    event_id?: string;
+   598→    from?: string;
+   599→    to?: string;
+   600→    to_ids?: boolean;
+   601→    includeContext?: boolean;
+   602→    includeCorrelations?: boolean;
+   603→    enforceWarninglist?: boolean;
+   604→    limit?: number;
+   605→    page?: number;
+   606→  }): Promise<MISPAttributeSearchResponse> {
+   607→    this.log('searchAttributes', 'Searching attributes', params);
+   608→
+   609→    const searchPayload: Record<string, unknown> = {};
+   610→    
+   611→    if (params.value) searchPayload.value = params.value;
+   612→    if (params.type) searchPayload.type = params.type;
+   613→    if (params.category) searchPayload.category = params.category;
+   614→    if (params.tag?.length) searchPayload.tags = params.tag.join('&&');
+   615→    if (params.event_id) searchPayload.event_id = params.event_id;
+   616→    if (params.from) searchPayload.from = params.from;
+   617→    if (params.to) searchPayload.to = params.to;
+   618→    if (params.to_ids !== undefined) searchPayload.to_ids = params.to_ids;
+   619→    if (params.includeContext) searchPayload.includeContext = true;
+   620→    if (params.includeCorrelations) searchPayload.includeEventCorrelations = 1;
+   621→    if (params.enforceWarninglist) searchPayload.enforceWarninglist = true;
+   622→    if (params.limit) searchPayload.limit = params.limit;
+   623→    if (params.page) searchPayload.page = params.page;
+   624→
+   625→    const response = await this.request<MISPAttributeSearchResponse>(
+   626→      '/attributes/restSearch',
+   627→      {
+   628→        method: 'POST',
+   629→        body: JSON.stringify(searchPayload),
+   630→      }
+   631→    );
+   632→
+   633→    return response;
+   634→  }
+   635→
+   636→  /**
+   637→   * Get IOCs (to_ids=true attributes)
+   638→   */
+   639→  async getIOCs(options?: {
+   640→    type?: AttributeType;
+   641→    event_id?: string;
+   642→    published_only?: boolean;
+   643→    limit?: number;
+   644→  }): Promise<MISPAttribute[]> {
+   645→    const result = await this.searchAttributes({
+   646→      to_ids: true,
+   647→      ...options,
+   648→    });
+   649→    return result.response.Attribute || [];
+   650→  }
+   651→
+   652→  /**
+   653→   * Validate IOCs against warninglists
+   654→   */
+   655→  async validateAgainstWarninglists(values: string[]): Promise<WarninglistHit[]> {
+   656→    this.log('validateAgainstWarninglists', `Validating ${values.length} values`);
+   657→
+   658→    const hits: WarninglistHit[] = [];
+   659→
+   660→    for (const value of values) {
+   661→      try {
+   662→        const response = await this.request<{
+   663→          response: Array<{ hits: WarninglistHit[] }>;
+   664→        }>(`/warninglists/checkValue/${encodeURIComponent(value)}`);
+   665→        
+   666→        if (response.response[0]?.hits?.length > 0) {
+   667→          hits.push(...response.response[0].hits);
+   668→        }
+   669→      } catch (error) {
+   670→        // Continue validation even if one fails
+   671→        this.log('validateAgainstWarninglists', `Failed to validate: ${value}`, error);
+   672→      }
+   673→    }
+   674→
+   675→    return hits;
+   676→  }
+   677→
+   678→  // ============================================================
+   679→  // Object Management
+   680→  // ============================================================
+   681→
+   682→  /**
+   683→   * Add object template to event
+   684→   */
+   685→  async addObject(eventId: string, objectData: {
+   686→    template_id: number;
+   687→    name?: string;
+   688→    meta_category?: string;
+   689→    description?: string;
+   690→    attributes: Array<{
+   691→      object_relation: string;
+   692→      type: AttributeType;
+   693→      value: string;
+   694→      to_ids?: boolean;
+   695→      comment?: string;
+   696→    }>;
+   697→    comment?: string;
+   698→  }): Promise<MISPObject> {
+   699→    this.log('addObject', `Adding ${objectData.name || 'object'} to event ${eventId}`);
+   700→
+   701→    const payload: Record<string, unknown> = {
+   702→      template_id: objectData.template_id,
+   703→      Attribute: objectData.attributes,
+   704→    };
+   705→
+   706→    if (objectData.name) payload.name = objectData.name;
+   707→    if (objectData.meta_category) payload.meta_category = objectData.meta_category;
+   708→    if (objectData.description) payload.description = objectData.description;
+   709→    if (objectData.comment) payload.comment = objectData.comment;
+   710→
+   711→    const response = await this.request<{
+   712→      response: Array<{ Object: MISPObject }>;
+   713→    }>(`/objects/add/${eventId}`, {
+   714→      method: 'POST',
+   715→      body: JSON.stringify(payload),
+   716→    });
+   717→
+   718→    return response.response[0].Object;
+   719→  }
+   720→
+   721→  /**
+   722→   * Get available object templates
+   723→   */
+   724→  async getObjectTemplates(): Promise<Array<{
+   725→    id: string;
+   726→    name: string;
+   727→    uuid: string;
+   728→    meta-category: string;
+   729→    description: string;
+   730→    version: string;
+   731→    requirements: Record<string, AttributeType[]>;
+   732→  }>> {
+   733→    const response = await this.request<{
+   734→      response: Array<{
+   735→        ObjectTemplate: {
+   736→          id: string;
+   737→          name: string;
+   738→          uuid: string;
+   739→          meta_category: string;
+   740→          description: string;
+   741→          version: string;
+   742→          requirements: Record<string, AttributeType[]>;
+   743→        };
+   744→      }>;
+   745→    }>('/objectTemplates');
+   746→
+   747→    return response.response.map(r => r.ObjectTemplate);
+   748→  }
+   749→
+   750→  // ============================================================
+   751→  // Tag Management
+   752→  // ============================================================
+   753→
+   754→  /**
+   755→   * Attach tag to event
+   756→   */
+   757→  async attachTagToEvent(eventId: string, tagName: string): Promise<MISPEvent> {
+   758→    this.log('attachTagToEvent', `Attaching ${tagName} to event ${eventId}`);
+   759→
+   760→    const response = await this.request<{
+   761→      response: Array<{ Event: MISPEvent }>;
+   762→    }>(`/events/addTag`, {
+   763→      method: 'POST',
+   764→      body: JSON.stringify({
+   765→        uuid: eventId,
+   766→        tag: tagName,
+   767→      }),
+   768→    });
+   769→
+   770→    return response.response[0].Event;
+   771→  }
+   772→
+   773→  /**
+   774→   * Remove tag from event
+   775→   */
+   776→  async removeTagFromEvent(eventId: string, tagName: string): Promise<MISPEvent> {
+   777→    this.log('removeTagFromEvent', `Removing ${tagName} from event ${eventId}`);
+   778→
+   779→    const response = await this.request<{
+   780→      response: Array<{ Event: MISPEvent }>;
+   781→    }>(`/events/removeTag`, {
+   782→      method: 'POST',
+   783→      body: JSON.stringify({
+   784→        uuid: eventId,
+   785→        tag: tagName,
+   786→      }),
+   787→    });
+   788→
+   789→    return response.response[0].Event;
+   790→  }
+   791→
+   792→  /**
+   793→   * Search tags
+   794→   async searchTags(query?: string): Promise<MISPTag[]> {
+   795→    let url = '/tags';
+   796→    if (query) url += `/search/${query}`;
+   797→
+   798→    const response = await this.request<{
+   799→      response: Array<{ Tag: MISPTag }>;
+   800→    }>(url);
+   801→
+   802→    return response.response.map(r => r.Tag);
+   803→  }
+   804→   */
+   805→
+   806→  // ============================================================
+   807→  // Galaxy & Threat Actor Intelligence
+   808→  // ============================================================
+   809→
+   810→  /**
+   811→   * Get all available galaxies
+   812→   */
+   813→  async getGalaxies(): Promise<MISPGalaxy[]> {
+   814→    this.log('getGalaxies', 'Fetching all galaxies');
+   815→
+   816→    const response = await this.request<{
+   817→      response: Array<Array<{ Galaxy: MISPGalaxy }>>;
+   818→    }>('/galaxies');
+   819→
+   820→    return response.response.flatMap(group => group.map(g => g.Galaxy));
+   821→  }
+   822→
+   823→  /**
+   824→   * Get specific galaxy by name/type
+   825→   */
+   826→  async getGalaxy(galaxyType: string): Promise<MISPGalaxy> {
+   827→    this.log('getGalaxy', `Fetching galaxy: ${galaxyType}`);
+   828→
+   829→    const response = await this.request<{
+   830→      response: Array<{ Galaxy: MISPGalaxy }>;
+   831→    }>(`/galaxies/view/${galaxyType}/1`);
+   832→
+   833→    return response.response[0].Galaxy;
+   834→  }
+   835→
+   836→  /**
+   837→   * Get threat actor clusters from MITRE ATT&CK galaxy
+   838→   */
+   839→  async getThreatActors(): Promise<GalaxyCluster[]> {
+   840→    this.log('getThreatActors', 'Fetching threat actors');
+   841→
+   842→    const galaxy = await this.getGalaxy('mitre-intrusion-set');
+   843→    return galaxy.GalaxyCluster || [];
+   844→  }
+   845→
+   846→  /**
+   847→   * Get MITRE ATT&CK tactics
+   848→   */
+   849→  async getMITRETactics(): Promise<GalaxyCluster[]> {
+   850→    const galaxy = await this.getGalaxy('mitre-attack-pattern');
+   851→    return galaxy.GalaxyCluster || [];
+   852→  }
+   853→
+   854→  /**
+   855→   * Get malware families from galaxy
+   856→   */
+   857→  async getMalwareFamilies(): Promise<GalaxyCluster[]> {
+   858→    const galaxy = await this.getGalaxy('mitre-malware');
+   859→    return galaxy.GalaxyCluster || [];
+   860→  }
+   861→
+   862→  /**
+   863→   * Get tools/utilities from galaxy
+   864→   */
+   865→  async getTools(): Promise<GalaxyCluster[]> {
+   866→    const galaxy = await this.getGalaxy('mitre-tool');
+   867→    return galaxy.GalaxyCluster || [];
+   868→  }
+   869→
+   870→  /**
+   871→   * Search clusters across all galaxies
+   872→   */
+   873→  async searchClusters(query: string): Promise<Array<{
+   874→    cluster: GalaxyCluster;
+   875→    galaxy: string;
+   876→  }>> {
+   877→    this.log('searchClusters', `Searching: ${query}`);
+   878→
+   879→    const galaxies = await this.getGalaxies();
+   880→    const results: Array<{ cluster: GalaxyCluster; galaxy: string }> = [];
+   881→
+   882→    for (const galaxy of galaxies) {
+   883→      const matches = (galaxy.GalaxyCluster || []).filter(
+   884→        c =>
+   885→          c.value.toLowerCase().includes(query.toLowerCase()) ||
+   886→          c.description?.toLowerCase().includes(query.toLowerCase())
+   887→      );
+   888→
+   889→      for (const match of matches) {
+   890→        results.push({ cluster: match, galaxy: galaxy.name });
+   891→      }
+   892→    }
+   893→
+   894→    return results;
+   895→  }
+   896→
+   897→  // ============================================================
+   898→  // Feed Management
+   899→  // ============================================================
+   900→
+   901→  /**
+   902→   * Get all configured feeds
+   903→   */
+   904→  async getFeeds(): Promise<MISPFeed[]> {
+   905→    this.log('getFeeds', 'Fetching feeds');
+   906→
+   907→    const response = await this.request<{
+   908→      response: Array<{ Feed: MISPFeed }>;
+   909→    }>('/feeds');
+   910→
+   911→    return response.response.map(f => f.Feed);
+   912→  }
+   913→
+   914→  /**
+   915→   * Fetch/update a specific feed
+   916→   */
+   917→  async fetchFeed(feedId: string): Promise<{ success: boolean; imported: number }> {
+   918→    this.log('fetchFeed', `Fetching feed: ${feedId}`);
+   919→
+   920→    const response = await this.request<{
+   921→      response: Array<{ name: string; result: string }>;
+   922→    }>(`/feeds/fetchFromAll`, {
+   923→      method: 'POST',
+   924→    });
+   925→
+   926→    return {
+   927→      success: true,
+   928→      imported: 0, // MISP doesn't return exact count in this call
+   929→    };
+   930→  }
+   931→
+   932→  /**
+   933→   * Cache all enabled feeds
+   934→   */
+   935→  async cacheFeeds(): Promise<{ total: number; cached: number; failed: number }> {
+   936→    this.log('cacheFeeds', 'Caching all feeds');
+   937→
+   938→    const response = await this.request<{
+   939→      response: Array<{ name: string; result: string; ids: string[] }>;
+   940→    }>(`/feeds/cacheFeeds/all`, {
+   941→      method: 'GET',
+   942→    });
+   943→
+   944→    return {
+   945→      total: response.response.length,
+   946→      cached: response.response.filter(r => r.result === 'success').length,
+   947→      failed: response.response.filter(r => r.result !== 'success').length,
+   948→    };
+   949→  }
+   950→
+   951→  /**
+   952→   * Import feed events into local instance
+   953→   */
+   954→  async importFeedEvents(feedId: string, options?: {
+   955→    eventIds?: string[];
+   956→    toIds?: boolean;
+   957→    merge?: boolean;
+   958→  }): Promise<MISPBulkOperationResult> {
+   959→    this.log('importFeedEvents', `Importing from feed: ${feedId}`);
+   960→
+   961→    const response = await this.request<{
+   962→      response: Array<{ success: boolean; result: string }>;
+   963→    }>(`/feeds/importFeeds/${feedId}`, {
+   964→      method: 'POST',
+   965→      body: JSON.stringify({
+   966→        eventIds: options?.eventIds,
+   967→        toIds: options?.toIds !== false,
+   968→        merge: options?.merge !== false,
+   969→      }),
+   970→    });
+   971→
+   972→    return {
+   973→      success: true,
+   974→      processed: response.response.length,
+   975→      failed: 0,
+   976→      skipped: 0,
+   977→      errors: [],
+   978→    };
+   979→  }
+   980→
+   981→  /**
+   982→   * Preview feed content before importing
+   983→   */
+   984→  async previewFeed(feedId: string, limit: number = 10): Promise<MISPEvent[]> {
+   985→    this.log('previewFeed', `Previewing feed: ${feedId}, limit: ${limit}`);
+   986→
+   987→    const response = await this.request<{
+   988→      response: Array<{ Event: MISPEvent }>;
+   989→    }>(`/feeds/previewIndex/${feedId}/${limit}`);
+   990→
+   991→    return response.response.map(r => r.Event);
+   992→  }
+   993→
+   994→  // ============================================================
+   995→  // Server Synchronization
+   996→  // ============================================================
+   997→
+   998→  /**
+   999→   * Get configured sync servers
+  1000→   */
+  1001→  async getServers(): Promise<MISPServer[]> {
+  1002→    this.log('getServers', 'Fetching sync servers');
+  1003→
+  1004→    const response = await this.request<{
+  1005→      response: Array<{ Server: MISPServer }>;
+  1006→    }>(`/servers/index/Pagination/1/0/sort:id/desc`);
+  1007→
+  1008→    return response.response.map(s => s.Server);
+  1009→  }
+  1010→
+  1011→  /**
+  1012→   * Pull events from remote server
+  1013→   */
+  1014→  async pullFromServer(serverId: string, options?: {
+  1015→    eventIds?: string[];
+  1016→    technique?: 'full' | 'incremental';
+  1017→  }): Promise<{ pulled: number; failures: number }> {
+  1018→    this.log('pullFromServer', `Pulling from server: ${serverId}`);
+  1019→
+  1020→    const response = await this.request<{
+  1021→      response: Array<{ result: string; message: string }>;
+  1022→    }>(`/servers/pull/${serverId}/${options?.technique || 'full'}`, {
+  1023→      method: 'POST',
+  1024→    });
+  1025→
+  1026→    return {
+  1027→      pulled: 1,
+  1028→      failures: 0,
+  1029→    };
+  1030→  }
+  1031→
+  1032→  /**
+  1033→   * Push events to remote server
+  1034→   */
+  1035→  async pushToServer(serverId: string): Promise<{ pushed: number; failures: number }> {
+  1036→    this.log('pushToServer', `Pushing to server: ${serverId}`);
+  1037→
+  1038→    const response = await this.request<{
+  1039→      response: Array<{ result: string; message: string }>;
+  1040→    }>(`/servers/push/${serverId}`, {
+  1041→      method: 'POST',
+  1042→    });
+  1043→
+  1044→    return {
+  1045→      pushed: 1,
+  1046→      failures: 0,
+  1047→    };
+  1048→  }
+  1049→
+  1050→  // ============================================================
+  1051→  // YARA Rule Generation
+  1052→  // ============================================================
+  1053→
+  1054→  /**
+  1055→   * Generate YARA rule from event attributes
+  1056→   */
+  1057→  async generateYARAFromEvent(eventId: string, options?: {
+  1058→    includeHashes?: boolean;
+  1059→    includeStrings?: boolean;
+  1060→    includeIPs?: boolean;
+  1061→    includeDomains?: boolean;
+  1062→    maxSize?: number;
+  1063→  }): Promise<YARARule> {
+  1064→    this.log('generateYARAFromEvent', `Generating YARA for event: ${eventId}`);
+  1065→
+  1066→    const event = await this.getEvent(eventId);
+  1067→
+  1068→    // Filter IOCs based on options
+  1069→    const iocs = event.Attribute.filter(a => a.to_ids);
+  1070→    
+  1071→    const strings: YARAString[] = [];
+  1072→    const meta: YARAMeta = {
+  1073→      description: event.info,
+  1074→      date: event.date,
+  1075→      misp_event_id: event.id,
+  1076→      misp_event_uuid: event.uuid,
+  1077→      author: event.orgc?.name || 'Algeria SOC',
+  1078→    };
+  1079→
+  1080→    // Extract hash-based strings
+  1081→    if (options?.includeHashes !== false) {
+  1082→      for (const attr of iocs.filter(a => ['md5', 'sha1', 'sha256'].includes(a.type))) {
+  1083→        strings.push({
+  1084→          name: `$hash_${attr.type}`,
+  1085→          value: attr.value,
+  1086→          type: 'text',
+  1087→          fullword: true,
+  1088→          ascii: true,
+  1089→        });
+  1090→      }
+  1091→    }
+  1092→
+  1093→    // Extract domain/hostname strings
+  1094→    if (options?.includeDomains !== false) {
+  1095→      for (const attr of iocs.filter(a => ['domain', 'hostname'].includes(a.type))) {
+  1096→        strings.push({
+  1097→          name: `$domain_${strings.filter(s => s.name.startsWith('$domain')).length}`,
+  1098→          value: attr.value,
+  1099→          type: 'text',
+  1100→          nocase: true,
+  1101→          fullword: true,
+  1102→          ascii: true,
+  1103→        });
+  1104→      }
+  1105→    }
+  1106→
+  1107→    // Extract URL patterns
+  1108→    for (const attr of iocs.filter(a => a.type === 'url')) {
+  1109→      strings.push({
+  1110→        name: `$url_${strings.filter(s => s.name.startsWith('$url')).length}`,
+  1111→        value: attr.value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'),
+  1112→        type: 'regex',
+  1113→        nocase: true,
+  1114→        ascii: true,
+  1115→      });
+  1116→    }
+  1117→
+  1118→    // Build condition
+  1119→    const hashNames = strings.filter(s => s.name.startsWith('$hash')).map(s => s.name).join(' or ');
+  1120→    const domainNames = strings.filter(s => s.name.startsWith('$domain')).map(s => s.name).join(' or ');
+  1121→    const urlNames = strings.filter(s => s.name.startsWith('$url')).map(s => s.name).join(' or ');
+  1122→
+  1123→    const conditions: string[] = [];
+  1124→    if (hashNames) conditions.push(`any of (${hashNames})`);
+  1125→    if (domainNames) conditions.push(`any of (${domainNames})`);
+  1126→    if (urlNames) conditions.push(`any of (${urlNames})`);
+  1127→
+  1128→    const condition = conditions.join(' or ') || 'false';
+  1129→
+  1130→    // Generate rule name
+  1131→    const safeName = event.info
+  1132→      .replace(/[^a-zA-Z0-9_]/g, '_')
+  1133→      .substring(0, 50)
+  1134→      .replace(/_+$/, '');
+  1135→
+  1136→    const rule: YARARule = {
+  1137→      name: `misp_${safeName}_${event.id}`,
+  1138→      condition,
+  1139→      strings,
+  1140→      meta,
+  1141→      scopes: ['file'],
+  1142→      source: this.formatYARARule(rule),
+  1143→    };
+  1144→
+  1145→    return rule;
+  1146→  }
+  1147→
+  1148→  /**
+  1149→   * Format YARA rule as text
+  1150→   */
+  1151→  private formatYARARule(rule: YARARule): string {
+  1152→    const lines: string[] = [
+  1153→      `rule ${rule.name} {`,
+  1154→      '    meta:',
+  1155→    ];
+  1156→
+  1157→    // Meta section
+  1158→    for (const [key, value] of Object.entries(rule.meta)) {
+  1159→      if (Array.isArray(value)) {
+  1160→        lines.push(`        ${key} = "${value.join(', ')}"`);
+  1161→      } else if (value) {
+  1162→        lines.push(`        ${key} = "${value}"`);
+  1163→      }
+  1164→    }
+  1165→
+  1166→    // Strings section
+  1167→    lines.push('    strings:');
+  1168→    for (const str of rule.strings) {
+  1169→      let modifiers = '';
+  1170→      if (str.nocase) modifiers += ' nocase';
+  1171→      if (str.wide) modifiers += ' wide';
+  1172→      if (str.fullword) modifiers += ' fullword';
+  1173→      if (str.ascii) modifiers += ' ascii';
+  1174→
+  1175→      switch (str.type) {
+  1176→        case 'text':
+  1177→          lines.push(`        ${str.name} = "${str.value}"${modifiers}`);
+  1178→          break;
+  1179→        case 'hex':
+  1180→          lines.push(`        ${str.name} = { ${str.value} }${modifiers}`);
+  1181→          break;
+  1182→        case 'regex':
+  1183→          lines.push(`        ${str.name} = /${str.value}/${modifiers}`);
+  1184→          break;
+  1185→      }
+  1186→    }
+  1187→
+  1188→    // Condition
+  1189→    lines.push(`    condition:`);
+  1190→    lines.push(`        ${rule.condition}`);
+  1191→    lines.push('}');
+  1192→
+  1193→    return lines.join('\n');
+  1194→  }
+  1195→
+  1196→  /**
+  1197→   * Export YARA ruleset from multiple events
+  1198→   */
+  1199→  async exportYARARuleset(eventIds: string[]): Promise<string> {
+  1200→    this.log('exportYARARuleset', `Exporting ${eventIds.length} rules`);
+  1201→
+  1202→    const rules: string[] = [
+  1203→      '// ===========================================',
+  1204→      `// MISP YARA Ruleset - Generated ${new Date().toISOString()}`,
+  1205→      `// Source: Algeria National SOC Platform`,
+  1206→      `// Events: ${eventIds.length}`,
+  1207→      '// ===========================================',
+  1208→      '',
+  1209→    ];
+  1210→
+  1211→    for (const eventId of eventIds) {
+  1212→      try {
+  1213→        const rule = await this.generateYARAFromEvent(eventId);
+  1214→        rules.push(rule.source);
+  1215→        rules.push('');
+  1216→      } catch (error) {
+  1217→        this.log('exportYARARuleset', `Failed to generate rule for event ${eventId}`, error);
+  1218→      }
+  1219→    }
+  1220→
+  1221→    return rules.join('\n');
+  1222→  }
+  1223→
+  1224→  // ============================================================
+  1225→  // Sightings
+  1226→  // ============================================================
+  1227→
+  1228→  /**
+  1229→   * Report sighting for an IOC
+  1230→   */
+  1231→  async reportSighting(params: {
+  1232→    attribute_id?: string;
+  1233→    value?: string;
+  1234→    event_id?: string;
+  1235→    type?: '0' | '1' | '2';  // sighting, false-positive, expiration
+  1236→    source?: string;
+  1237→  }): Promise<MISPSighting> {
+  1238→    this.log('reportSighting', 'Reporting sighting');
+  1239→
+  1240→    const response = await this.request<{
+  1241→      response: Array<{ Sighting: MISPSighting }>;
+  1242→    }>(`/sightings/add`, {
+  1243→      method: 'POST',
+  1244→      body: JSON.stringify(params),
+  1245→    });
+  1246→
+  1247→    return response.response[0].Sighting;
+  1248→  }
+  1249→
+  1250→  /**
+  1251→   * Get sightings for an attribute
+  1252→   */
+  1253→  async getSightings(attributeId: string): Promise<MISPSighting[]> {
+  1254→    const response = await this.request<{
+  1255→      response: Array<{ Sighting: MISPSighting[] }>;
+  1256→    }>(`/sightings/index/attribute:${attributeId}`);
+  1257→
+  1258→    return response.response.flatMap(r => r.Sighting);
+  1259→  }
+  1260→
+  1261→  // ============================================================
+  1262→  // Statistics & Analytics
+  1263→  // ============================================================
+  1264→
+  1265→  /**
+  1266→   * Get dashboard statistics
+  1267→   */
+  1268→  async getStatistics(timeRange: string = '30d'): Promise<MISPStatistics> {
+  1269→    this.log('getStatistics', `Getting stats for ${timeRange}`);
+  1270→
+  1271→    const [recentEvents, recentAttrs] = await Promise.all([
+  1272→      this.searchEvents({ last: timeRange, limit: 1000 }),
+  1273→      this.searchAttributes({ to_ids: true, limit: 5000 }),
+  1274→    ]);
+  1275→
+  1276→    const events = recentEvents.response.MISPEvent || [];
+  1277→    const attributes = recentAttrs.response.Attribute || [];
+  1278→
+  1279→    // Calculate statistics
+  1280→    const stats: MISPStatistics = {
+  1281→      events: {
+  1282→        total: events.length,
+  1283→        published: events.filter(e => e.published).length,
+  1284→        unpublished: events.filter(e => !e.published).length,
+  1285→        today: events.filter(e => e.date === new Date().toISOString().split('T')[0]).length,
+  1286→        this_week: events.filter(e => {
+  1287→          const d = new Date(e.date);
+  1288→          const weekAgo = new Date();
+  1289→          weekAgo.setDate(weekAgo.getDate() - 7);
+  1290→          return d >= weekAgo;
+  1291→        }).length,
+  1292→        this_month: events.filter(e => {
+  1293→          const d = new Date(e.date);
+  1294→          const monthAgo = new Date();
+  1295→          monthAgo.setMonth(monthAgo.getMonth() - 1);
+  1296→          return d >= monthAgo;
+  1297→        }).length,
+  1298→        by_threat_level: {},
+  1299→        by_analysis_status: {
+  1300→          [AnalysisStatus.INITIAL]: 0,
+  1301→          [AnalysisStatus.ONGOING]: 0,
+  1302→          [AnalysisStatus.COMPLETED]: 0,
+  1303→        },
+  1304→      },
+  1305→      attributes: {
+  1306→        total: attributes.length,
+  1307→        with_ids: attributes.filter(a => a.to_ids).length,
+  1308→        unique_types: {},
+  1309→        unique_categories: {},
+  1310→      },
+  1311→      correlations: {
+  1312→        total: 0,
+  1313→        events_with_correlations: 0,
+  1314→        avg_correlations_per_event: 0,
+  1315→      },
+  1316→      organizations: {
+  1317→        local: 0,
+  1318→        external: 0,
+  1319→        contributing: 0,
+  1320→      },
+  1321→      feeds: {
+  1322→        active: 0,
+  1323→        total_events_imported: 0,
+  1324→        last_fetch_times: {},
+  1325→      },
+  1326→      threats: {
+  1327→        top_actors: [],
+  1328→        top_mitres: [],
+  1329→        trending_iocs: [],
+  1330→      },
+  1331→    };
+  1332→
+  1333→    // Aggregate event statistics
+  1334→    for (const event of events) {
+  1335→      // By threat level
+  1336→      const tl = event.threat_level_id;
+  1337→      stats.events.by_threat_level[tl] = (stats.events.by_threat_level[tl] || 0) + 1;
+  1338→
+  1339→      // By analysis status
+  1340→      stats.events.by_analysis_status[event.analysis] =
+  1341→        (stats.events.by_analysis_status[event.analysis] || 0) + 1;
+  1342→
+  1343→      // Track organizations
+  1344→      if (event.owner_org?.local) {
+  1345→        stats.organizations.local++;
+  1346→      } else {
+  1347→        stats.organizations.external++;
+  1348→      }
+  1349→
+  1350→      // Extract threat actor tags
+  1351→      for (const tag of event.Tag || []) {
+  1352→        if (tag.name.startsWith('misp-galaxy:intrusion-set="')) {
+  1353→          const actor = tag.name.match(/intrusion-set="([^"]+)"/)?.[1];
+  1354→          if (actor) {
+  1355→            const existing = stats.threats.top_actors.find(t => t.name === actor);
+  1356→            if (existing) {
+  1357→              existing.count++;
+  1358→            } else {
+  1359→              stats.threats.top_actors.push({ name: actor, count: 1 });
+  1360→            }
+  1361→          }
+  1362→        }
+  1363→      }
+  1364→    }
+  1365→
+  1366→    // Aggregate attribute statistics
+  1367→    for (const attr of attributes) {
+  1368→      stats.attributes.unique_types[attr.type] =
+  1369→        (stats.attributes.unique_types[attr.type] || 0) + 1;
+  1370→      stats.attributes.unique_categories[attr.category] =
+  1371→        (stats.attributes.unique_categories[attr.category] || 0) + 1;
+  1372→    }
+  1373→
+  1374→    // Sort threats
+  1375→    stats.threats.top_actors.sort((a, b) => b.count - a.count);
+  1376→    stats.threats.top_actors = stats.threats.top_actors.slice(0, 10);
+  1377→
+  1378→    // Top trending IOCs (most common values)
+  1379→    const iocCounts: Record<string, { type: string; count: number }> = {};
+  1380→    for (const attr of attributes) {
+  1381→      const key = `${attr.type}:${attr.value}`;
+  1382→      if (!iocCounts[key]) {
+  1383→        iocCounts[key] = { type: attr.type, count: 0 };
+  1384→      }
+  1385→      iocCounts[key].count++;
+  1386→    }
+  1387→    stats.threats.trending_iocs = Object.entries(iocCounts)
+  1388→      .map(([key, val]) => ({ type: val.type, value: key.split(':')[1], count: val.count }))
+  1389→      .sort((a, b) => b.count - a.count)
+  1390→      .slice(0, 20);
+  1391→
+  1392→    return stats;
+  1393→  }
+  1394→
+  1395→  /**
+  1396→   * Get event timeline data
+  1397→   */
+  1398→  async getTimeline(days: number = 30): Promise<TimelinePoint[]> {
+  1399→    this.log('timeline', `Getting timeline for ${days} days`);
+  1400→
+  1401→    const events = await this.searchEvents({ last: `${days}d`, limit: 5000 });
+  1402→    const eventList = events.response.MISPEvent || [];
+  1403→
+  1404→    // Group by date
+  1405→    const dailyData: Record<string, { events: number; attributes: number; published: number }> = {};
+  1406→
+  1407→    for (let i = 0; i < days; i++) {
+  1408→      const date = new Date();
+  1409→      date.setDate(date.getDate() - i);
+  1410→      const dateStr = date.toISOString().split('T')[0];
+  1411→      dailyData[dateStr] = { events: 0, attributes: 0, published: 0 };
+  1412→    }
+  1413→
+  1414→    for (const event of eventList) {
+  1415→      const dateStr = event.date;
+  1416→      if (dailyData[dateStr]) {
+  1417→        dailyData[dateStr].events++;
+  1418→        dailyData[dateStr].attributes += (event.Attribute || []).length;
+  1419→        if (event.published) {
+  1420→          dailyData[dateStr].published++;
+  1421→        }
+  1422→      }
+  1423→    }
+  1424→
+  1425→    return Object.entries(dailyData)
+  1426→      .map(([date, counts]) => ({
+  1427→        date,
+  1428→        ...counts,
+  1429→      }))
+  1430→      .sort((a, b) => a.date.localeCompare(b.date));
+  1431→  }
+  1432→
+  1433→  // ============================================================
+  1434→  // Export Functions
+  1435→  // ============================================================
+  1436→
+  1437→  /**
+  1438→   * Export event in various formats
+  1439→   */
+  1440→  async exportEvent(eventId: string, format: 'json' | 'xml' | 'stix' | 'stix2' | 'text' | 'csv' | 'yara'): Promise<MISPExportResult> {
+  1441→    this.log('exportEvent', `Exporting event ${eventId} as ${format}`);
+  1442→
+  1443→    const endpointMap: Record<string, string> = {
+  1444→      json: `/events/view/${eventId}`,
+  1445→      xml: `/events/xml/download/${eventId}`,
+  1446→      stix: `/events/stix/download/${eventId}`,
+  1447→      stix2: `/events/stix2/download/${eventId}`,
+  1448→      text: `/events/text/download/${eventId}`,
+  1449→      csv: `/events/csv/download/${eventId}`,
+  1450→    };
+  1451→
+  1452→    let content: string;
+  1453→
+  1454→    if (format === 'yara') {
+  1455→      const rule = await this.generateYARAFromEvent(eventId);
+  1456→      content = rule.source;
+  1457→    } else {
+  1458→      const response = await fetch(`${this.config.url}${endpointMap[format]}`, {
+  1459→        headers: { Authorization: this.authHeader },
+  1460→      });
+  1461→      content = await response.text();
+  1462→    }
+  1463→
+  1464→    return {
+  1465→      success: true,
+  1466→      format,
+  1467→      filename: `misp_event_${eventId}.${format}`,
+  1468→      size: content.length,
+  1469→      content,
+  1470→      event_count: 1,
+  1471→      attribute_count: 0,
+  1472→    };
+  1473→  }
+  1474→
+  1475→  /**
+  1476→   * Bulk export multiple events
+  1477→   */
+  1478→  async bulkExport(eventIds: string[], format: 'json' | 'stix' | 'stix2' | 'csv'): Promise<MISPExportResult> {
+  1479→    this.log('bulkExport', `Exporting ${eventIds.length} events as ${format}`);
+  1480→
+  1481→    const contents: string[] = [];
+  1482→    let totalAttributes = 0;
+  1483→
+  1484→    for (const eventId of eventIds) {
+  1485→      const result = await this.exportEvent(eventId, format);
+  1486→      contents.push(result.content as string);
+  1487→      totalAttributes += result.attribute_count;
+  1488→    }
+  1489→
+  1490→    return {
+  1491→      success: true,
+  1492→      format,
+  1493→      filename: `misp_export_${Date.now()}.${format}`,
+  1494→      size: contents.join('\n').length,
+  1495→      content: contents.join('\n'),
+  1496→      event_count: eventIds.length,
+  1497→      attribute_count: totalAttributes,
+  1498→    };
+  1499→  }
+  1500→
+  1501→  // ============================================================
+  1502→  // Warninglist Management
+  1503→  // ============================================================
+  1504→
+  1505→  /**
+  1506→   * Get all warninglists
+  1507→   */
+  1508→  async getWarninglists(): Promise<Warninglist[]> {
+  1509→    this.log('getWarninglists', 'Fetching warninglists');
+  1510→
+  1511→    const response = await this.request<{
+  1512→      response: Array<{ Warninglist: Warninglist }>;
+  1513→    }>('/warninglists');
+  1514→
+  1515→    return response.response.map(w => w.Warninglist);
+  1516→  }
+  1517→
+  1518→  /**
+  1519→   * Toggle warninglist enabled state
+  1520→   */
+  1521→  async toggleWarninglist(warninglistId: string, enabled: boolean): Promise<boolean> {
+  1522→    this.log('toggleWarninglist', `${enabled ? 'Enabling' : 'Disabling'} warninglist ${warninglistId}`);
+  1523→
+  1524→    await this.request(`/warninglists/toggleEnable/${warninglistId}/${Number(enabled)}`, {
+  1525→      method: 'POST',
+  1526→    });
+  1527→
+  1528→    return true;
+  1529→  }
+  1530→
+  1531→  // ============================================================
+  1532→  // Decaying Models
+  1533→  // ============================================================
+  1534→
+  1535→  /**
+  1536→   * Get configured decaying models
+  1537→   */
+  1538→  async getDecayingModels(): Promise<DecayingModel[]> {
+  1539→    const response = await this.request<{
+  1540→      response: Array<{ DecayingModel: DecayingModel }>;
+  1541→    }>('decayingModel/DecayingModel/getRows');
+  1542→
+  1543→    return response.response.map(m => m.DecayingModel);
+  1544→  }
+  1545→
+  1546→  /**
+  1547→   * Calculate decayed score for an attribute
+  1548→   */
+  1549→  async calculateDecayedScore(
+  1550→    modelId: string,
+  1551→    attribute: { type: AttributeType; value: string }
+  1552→  ): Promise<{ score: number; decayed: boolean }> {
+  1553→    const response = await this.request<{
+  1554→      response: Array<{ score: number; decayed: boolean }>;
+  1555→    }>('decayingModel/DecayingModel/computeScores', {
+  1556→      method: 'POST',
+  1557→      body: JSON.stringify({
+  1558→        model_id: modelId,
+  1559→        attributes: [attribute],
+  1560→      }),
+  1561→    });
+  1562→
+  1563→    return response.response[0];
+  1564→  }
+  1565→
+  1566→  // ============================================================
+  1567→  // Utility Functions
+  1568→  // ============================================================
+  1569→
+  1570→  /**
+  1571→   * Create alert-to-event conversion
+  1572→   * Convert security alert into structured MISP event
+  1573→   */
+  1574→  async createEventFromAlert(alert: {
+  1575→    title: string;
+  1576→    description: string;
+  1577→    severity: 'critical' | 'high' | 'medium' | 'low';
+  1578→    source: string;
+  1579→    iocs: Array<{
+  1580→      type: AttributeType;
+  1581→      value: string;
+  1582→      category: string;
+  1583→    }>;
+  1584→    tags?: string[];
+  1585→    references?: string[];
+  1586→  }): Promise<MISPEvent> {
+  1587→    this.log('createEventFromAlert', `Creating event from alert: ${alert.title}`);
+  1588→
+  1589→    // Map severity to threat level
+  1590→    const severityToThreatLevel: Record<string, number> = {
+  1591→      critical: 1,
+  1592→      high: 2,
+  1593→      medium: 3,
+  1594→      low: 4,
+  1595→    };
+  1596→
+  1597→    const event = await this.createEvent({
+  1598→      info: `[ALERT] ${alert.title}`,
+  1599→      threat_level_id: severityToThreatLevel[alert.severity] || 4,
+  1600→      analysis: AnalysisStatus.ONGOING,
+  1601→      distribution: DistributionLevel.CONNECTED_COMMUNITIES,
+  1602→      tags: alert.tags || [],
+  1603→    });
+  1604→
+  1605→    // Add IOCs as attributes
+  1606→    if (alert.iocs.length > 0) {
+  1607→      await this.addAttributesBatch(event.id, alert.iocs.map(ioc => ({
+  1608→        type: ioc.type,
+  1609→        value: ioc.value,
+  1610→        category: ioc.category,
+  1611→        to_ids: true,
+  1612→        comment: `Source: ${alert.source}`,
+  1613→      })));
+  1614→    }
+  1615→
+  1616→    // Add description as comment attribute
+  1617→    if (alert.description) {
+  1618→      await this.addAttribute(event.id, {
+  1619→        type: 'comment',
+  1620→        value: alert.description.substring(0, 255),
+  1621→        to_ids: false,
+  1622→      });
+  1623→    }
+  1624→
+  1625→    return event;
+  1626→  }
+  1627→
+  1628→  /**
+  1629→   * Find correlated events for given IOCs
+  1630→   */
+  1631→  async findCorrelatedEvents(iocs: Array<{ type: AttributeType; value: string }>): Promise<Map<string, MISPEvent[]>> {
+  1632→    this.log('findCorrelatedEvents', `Finding correlations for ${iocs.length} IOCs`);
+  1633→
+  1634→    const correlations = new Map<string, MISPEvent[]>();
+  1635→
+  1636→    for (const ioc of iocs) {
+  1637→      try {
+  1638→        const result = await this.searchAttributes({
+  1639→          value: ioc.value,
+  1640→          type: ioc.type,
+  1641→          includeCorrelations: true,
+  1642→          limit: 50,
+  1643→        });
+  1644→
+  1645→        const events: MISPEvent[] = [];
+  1646→        for (const attr of result.response.Attribute || []) {
+  1647→          if (attr.correlating_value) {
+  1648→            for (const corr of attr.correlating_value) {
+  1649→              // We'd need to fetch full events here, but for now just track IDs
+  1650→              events.push({ id: corr.event_id, info: corr.event_info } as MISPEvent);
+  1651→            }
+  1652→          }
+  1653→        }
+  1654→
+  1655→        correlations.set(`${ioc.type}:${ioc.value}`, events);
+  1656→      } catch (error) {
+  1657→        this.log('findCorrelatedEvents', `Failed to correlate ${ioc.type}:${ioc.value}`, error);
+  1658→        correlations.set(`${ioc.type}:${ioc.value}`, []);
+  1659→      }
+  1660→    }
+  1661→
+  1662→    return correlations;
+  1663→  }
+  1664→}
+  1665→
+  1666→// ============================================================
+  1667→// Singleton Instance
+  1668→// ============================================================
+  1669→
+  1670→let mispClientInstance: MISPClientInstance | null = null;
+  1671→
+  1672→/**
+  1673→ * Initialize MISP client singleton
+  1674→ */
+  1675→export function initializeMISPClient(config: MISPClientConfig): MISPClientInstance {
+  1676→  mispClientInstance = new MISPClientInstance(config);
+  1677→  return mispClientInstance;
+  1678→}
+  1679→
+  1680→/**
+  1681→ * Get MISP client instance (must call initialize first)
+  1682→ */
+  1683→export function getMISPClient(): MISPClientInstance {
+  1684→  if (!mispClientInstance) {
+  1685→    throw new MISPError('MISP client not initialized. Call initializeMISPClient first.');
+  1686→  }
+  1687→  return mispClientInstance;
+  1688→}
+  1689→
+  1690→/**
+  1691→ * Create isolated MISP client (for multi-instance support)
+  1692→ */
+  1693→export function createMISPClient(config: MISPClientConfig): MISPClientInstance {
+  1694→  return new MISPClientInstance(config);
+  1695→}
+  1696→
+  1697→// Export types
+  1698→export type {
+  1699→  MISPClientConfig,
+  1700→};
+  1701→

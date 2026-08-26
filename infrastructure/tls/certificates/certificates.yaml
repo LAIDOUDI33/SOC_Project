@@ -1,0 +1,256 @@
+# ============================================================
+# National SOC Platform - TLS Certificates
+# Automatic Certificate Management with cert-manager
+# Phase 3: TLS Automation
+# ============================================================
+#
+# Certificate Hierarchy:
+# 1. soc-platform-wildcard - Main platform (*.soc.djezzy.dz)
+# 2. soc-api - API-specific certificate (api.soc.djezzy.dz)
+# 3. soc-internal - Internal services (*.internal.djezzy.dz)
+# 4. soc-monitoring - Grafana/Kibana certificates
+# 5. soc-database - mTLS for database connections
+#
+# ============================================================
+
+---
+# ============================================================
+# Primary Wildcard Certificate for SOC Platform
+# Covers: *.soc.djezzy.dz (public-facing)
+# Issuer: Let's Encrypt Production (DNS-01 via Cloudflare)
+# ============================================================
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: soc-platform-wildcard
+  namespace: soc-platform
+  labels:
+    app.kubernetes.io/name: soc-platform
+    app.kubernetes.io/component: tls-certificate
+    app.kubernetes.io/part-of: national-soc
+    certificate-type: wildcard-public
+  annotations:
+    description: "Wildcard TLS certificate for Djezzy SOC public domains"
+    contact: "soc-ops@djezzy.dz"
+spec:
+  # Secret name where cert will be stored
+  secretName: soc-tls-secret
+  
+  # Duration and renewal (Let's Encrypt default: 90 days)
+  duration: 2160h  # 90 days
+  renewBefore: 360h  # Renew 15 days before expiration
+  
+  # Private key configuration
+  privateKey:
+    rotationPolicy: Always
+    algorithm: ECDSA
+    size: 256
+  
+  # DNS names covered by this certificate
+  dnsNames:
+    - "soc.djezzy.dz"
+    - "*.soc.djezzy.dz"
+    - "api.soc.djezzy.dz"
+    - "www.soc.djezzy.dz"
+  
+  # URIs if needed (SANs)
+  uris:
+    - "https://soc.djezzy.dz"
+  
+  # Issuer reference
+  issuerRef:
+    name: letsencrypt-production
+    kind: ClusterIssuer
+
+---
+# ============================================================
+# API-Specific Certificate
+# For dedicated API gateway with stricter security
+# ============================================================
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: soc-api-certificate
+  namespace: soc-platform
+  labels:
+    app.kubernetes.io/name: soc-platform
+    app.kubernetes.io/component: tls-certificate
+    app.kubernetes.io/part-of: national-soc
+    certificate-type: api-endpoint
+  annotations:
+    description: "TLS certificate for SOC API endpoints"
+spec:
+  secretName: soc-api-tls-secret
+  
+  duration: 2160h  # 90 days
+  renewBefore: 360h  # 15 days before
+  
+  privateKey:
+    rotationPolicy: Always
+    algorithm: RSA
+    size: 2048
+  
+  dnsNames:
+    - "api.soc.djezzy.dz"
+    - "api-v2.soc.djezzy.dz"
+  
+  issuerRef:
+    name: letsencrypt-production
+    kind: ClusterIssuer
+
+---
+# ============================================================
+# Internal Services Certificate
+# For internal microservices communication
+# Uses Djezzy Internal CA (not public)
+# ============================================================
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: soc-internal-certificate
+  namespace: soc-platform
+  labels:
+    app.kubernetes.io/name: soc-platform
+    app.kubernetes.io/component: tls-certificate
+    app.kubernetes.io/part-of: national-soc
+    certificate-type: internal-services
+  annotations:
+    description: "Internal TLS certificate for SOC service mesh"
+spec:
+  secretName: soc-internal-tls-secret
+  
+  duration: 8760h  # 1 year (internal CA, longer validity)
+  renewBefore: 720h  # 30 days before
+  
+  privateKey:
+    rotationPolicy: Always
+    algorithm: ECDSA
+    size: 256
+  
+  dnsNames:
+    - "soc-internal.djezzy.dz"
+    - "*.internal.djezzy.dz"
+    - "soc-platform.soc-platform.svc.cluster.local"
+    - "*.soc-platform.svc.cluster.local"
+    
+  ipAddresses:
+    - "10.0.0.100"  # Internal VIP (if applicable)
+  
+  issuerRef:
+    name: djezzy-internal-ca
+    kind: ClusterIssuer
+
+---
+# ============================================================
+# Monitoring Stack Certificates
+# For Grafana, Kibana, Prometheus web UIs
+# ============================================================
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: soc-monitoring-certificate
+  namespace: monitoring  # or soc-platform depending on setup
+  labels:
+    app.kubernetes.io/name: soc-monitoring
+    app.kubernetes.io/component: tls-certificate
+    app.kubernetes.io/part-of: national-soc
+    certificate-type: monitoring
+  annotations:
+    description: "TLS certificate for monitoring stack (Grafana, Kibana)"
+spec:
+  secretName: soc-monitoring-tls-secret
+  
+  duration: 2160h
+  renewBefore: 360h
+  
+  privateKey:
+    rotationPolicy: Always
+    algorithm: RSA
+    size: 2048
+  
+  dnsNames:
+    - "grafana.soc.djezzy.dz"
+    - "kibana.soc.djezzy.dz"
+    - "prometheus.soc.djezzy.dz"
+    - "alertmanager.soc.djezzy.dz"
+  
+  issuerRef:
+    name: letsencrypt-production
+    kind: ClusterIssuer
+
+---
+# ============================================================
+# Database mTLS Certificate
+# For mutual TLS authentication to PostgreSQL/Redis
+# ============================================================
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: soc-database-mtls-client
+  namespace: soc-platform
+  labels:
+    app.kubernetes.io/name: soc-platform
+    app.kubernetes.io/component: tls-certificate
+    app.kubernetes.io/part-of: national-soc
+    certificate-type: mtls-database
+  annotations:
+    description: "mTLS client certificate for database connections"
+spec:
+  secretName: soc-db-mtls-secret
+  
+  duration: 8760h  # 1 year
+  renewBefore: 720h  # 30 days before
+  
+  privateKey:
+    rotationPolicy: Always
+    algorithm: ECDSA
+    size: 256
+  
+  dnsNames:
+    - "soc-db-client.soc-platform.svc.cluster.local"
+  
+  # Additional usages for client authentication
+  usages:
+    - server auth
+    - client auth
+    
+  issuerRef:
+    name: djezzy-internal-ca
+    kind: ClusterIssuer
+
+---
+# ============================================================
+# Staging Certificate (For Testing Only!)
+# Use this during development to avoid hitting Let's Encrypt limits
+# ============================================================
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: soc-staging-certificate
+  namespace: soc-platform
+  labels:
+    app.kubernetes.io/name: soc-platform
+    app.kubernetes.io/component: tls-certificate
+    app.kubernetes.io/part-of: national-soc
+    environment: staging
+    certificate-type: staging-test
+  annotations:
+    description: "STAGING ONLY - Test certificate from Let's Encrypt Staging"
+spec:
+  secretName: soc-staging-tls-secret
+  
+  duration: 168h  # 7 days (staging certs are short-lived)
+  renewBefore: 24h
+  
+  privateKey:
+    rotationPolicy: Always
+    algorithm: ECDSA
+    size: 256
+  
+  dnsNames:
+    - "soc-staging.djezzy.dz"
+    - "*.staging.djezzy.dz"
+  
+  issuerRef:
+    name: letsencrypt-staging
+    kind: ClusterIssuer

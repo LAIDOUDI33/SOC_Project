@@ -1,0 +1,1390 @@
+     1→#!/usr/bin/env python3
+     2→"""
+     3→CyberSOC Platform - Kubernetes Production Deployment Guide
+     4→Phase 2 of Go-Live Roadmap
+     5→Generates comprehensive K8s deployment documentation with manifests, Helm charts, and procedures
+     6→"""
+     7→
+     8→import os
+     9→import sys
+    10→from datetime import datetime
+    11→from reportlab.lib import colors
+    12→from reportlab.lib.pagesizes import A4
+    13→from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+    14→from reportlab.lib.units import inch, cm
+    15→from reportlab.platypus import (
+    16→    SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle,
+    17→    PageBreak, Image, ListFlowable, ListItem, KeepTogether, Preformatted
+    18→)
+    19→from reportlab.lib.enums import TA_CENTER, TA_LEFT, TA_JUSTIFY, TA_RIGHT
+    20→from reportlab.pdfbase import pdfmetrics
+    21→from reportlab.pdfbase.ttfonts import TTFont
+    22→from reportlab.platypus.flowables import HRFlowable
+    23→
+    24→# Constants
+    25→FONT_DIR = '/usr/share/fonts'
+    26→OUTPUT_DIR = '/home/z/my-project/download'
+    27→pt = 1  # ReportLab unit definition
+    28→
+    29→# Register fonts
+    30→pdfmetrics.registerFont(TTFont('NotoSerifSC', f'{FONT_DIR}/truetype/noto-serif-sc/NotoSerifSC-Regular.ttf'))
+    31→pdfmetrics.registerFont(TTFont('NotoSerifSC-Bold', f'{FONT_DIR}/truetype/noto-serif-sc/NotoSerifSC-Bold.ttf'))
+    32→pdfmetrics.registerFont(TTFont('SarasaMonoSC', f'{FONT_DIR}/truetype/chinese/SarasaMonoSC-Regular.ttf'))
+    33→
+    34→# Cascade Palette for CyberSOC (matches platform design system)
+    35→PAGE_BG       = colors.HexColor('#f2f2f1')
+    36→SECTION_BG    = colors.HexColor('#ebeae8')
+    37→CARD_BG       = colors.HexColor('#f0efec')
+    38→TABLE_STRIPE  = colors.HexColor('#f5f5f3')
+    39→HEADER_FILL   = colors.HexColor('#5c543c')
+    40→COVER_BLOCK   = colors.HexColor('#595343')
+    41→BORDER        = colors.HexColor('#d7d3c7')
+    42→ICON          = colors.HexColor('#907b3a')
+    43→ACCENT        = colors.HexColor('#866f2c')
+    44→ACCENT_2      = colors.HexColor('#735bb9')
+    45→TEXT_PRIMARY  = colors.HexColor('#161614')
+    46→TEXT_MUTED    = colors.HexColor('#807e76')
+    47→SEM_SUCCESS   = colors.HexColor('#3c8956')
+    48→SEM_WARNING   = colors.HexColor('#b59048')
+    49→SEM_ERROR     = colors.HexColor('#8c504b')
+    50→SEM_INFO      = colors.HexColor('#42678d')
+    51→
+    52→def create_styles():
+    53→    """Create custom paragraph styles for the document"""
+    54→    styles = getSampleStyleSheet()
+    55→    
+    56→    # Title style
+    57→    styles.add(ParagraphStyle(
+    58→        name='CyberSOCTitle',
+    59→        fontName='NotoSerifSC-Bold',
+    60→        fontSize=28,
+    61→        leading=34,
+    62→        alignment=TA_CENTER,
+    63→        textColor=HEADER_FILL,
+    64→        spaceAfter=20
+    65→    ))
+    66→    
+    67→    # Subtitle style
+    68→    styles.add(ParagraphStyle(
+    69→        name='CyberSOCSubtitle',
+    70→        fontName='NotoSerifSC',
+    71→        fontSize=16,
+    72→        leading=22,
+    73→        alignment=TA_CENTER,
+    74→        textColor=TEXT_MUTED,
+    75→        spaceAfter=30
+    76→    ))
+    77→    
+    78→    # Heading 1 (Section headers)
+    79→    styles.add(ParagraphStyle(
+    80→        name='CyberSOCH1',
+    81→        fontName='NotoSerifSC-Bold',
+    82→        fontSize=18,
+    83→        leading=24,
+    84→        textColor=HEADER_FILL,
+    85→        spaceBefore=20,
+    86→        spaceAfter=12,
+    87→        borderPadding=(0, 0, 5, 0)
+    88→    ))
+    89→    
+    90→    # Heading 2 (Subsection headers)
+    91→    styles.add(ParagraphStyle(
+    92→        name='CyberSOCH2',
+    93→        fontName='NotoSerifSC-Bold',
+    94→        fontSize=14,
+    95→        leading=19,
+    96→        textColor=ACCENT,
+    97→        spaceBefore=15,
+    98→        spaceAfter=8
+    99→    ))
+   100→    
+   101→    # Heading 3 (Sub-subsection)
+   102→    styles.add(ParagraphStyle(
+   103→        name='CyberSOCH3',
+   104→        fontName='NotoSerifSC-Bold',
+   105→        fontSize=12,
+   106→        leading=16,
+   107→        textColor=TEXT_PRIMARY,
+   108→        spaceBefore=12,
+   109→        spaceAfter=6
+   110→    ))
+   111→    
+   112→    # Body text
+   113→    styles.add(ParagraphStyle(
+   114→        name='CyberSOCBody',
+   115→        fontName='NotoSerifSC',
+   116→        fontSize=10,
+   117→        leading=15,
+   118→        alignment=TA_JUSTIFY,
+   119→        textColor=TEXT_PRIMARY,
+   120→        spaceBefore=4,
+   121→        spaceAfter=8,
+   122→        firstLineIndent=0
+   123→    ))
+   124→    
+   125→    # Body no indent
+   126→    styles.add(ParagraphStyle(
+   127→        name='CyberSOCBodyNoIndent',
+   128→        fontName='NotoSerifSC',
+   129→        fontSize=10,
+   130→        leading=15,
+   131→        alignment=TA_JUSTIFY,
+   132→        textColor=TEXT_PRIMARY,
+   133→        spaceBefore=4,
+   134→        spaceAfter=8
+   135→    ))
+   136→    
+   137→    # Code/Manifest style
+   138→    styles.add(ParagraphStyle(
+   139→        name='CyberSOCCode',
+   140→        fontName='SarasaMonoSC',
+   141→        fontSize=8,
+   142→        leading=11,
+   143→        textColor=TEXT_PRIMARY,
+   144→        backColor=CARD_BG,
+   145→        borderColor=BORDER,
+   146→        borderWidth=1,
+   147→        borderPadding=8,
+   148→        spaceBefore=6,
+   149→        spaceAfter=6
+   150→    ))
+   151→    
+   152→    # Bullet point
+   153→    styles.add(ParagraphStyle(
+   154→        name='CyberSOCBullet',
+   155→        fontName='NotoSerifSC',
+   156→        fontSize=10,
+   157→        leading=14,
+   158→        textColor=TEXT_PRIMARY,
+   159→        leftIndent=20,
+   160→        spaceBefore=2,
+   161→        spaceAfter=2
+   162→    ))
+   163→    
+   164→    # Table header
+   165→    styles.add(ParagraphStyle(
+   166→        name='CyberSOCTableHeader',
+   167→        fontName='NotoSerifSC-Bold',
+   168→        fontSize=9,
+   169→        leading=12,
+   170→        alignment=TA_CENTER,
+   171→        textColor=colors.white
+   172→    ))
+   173→    
+   174→    # Table cell
+   175→    styles.add(ParagraphStyle(
+   176→        name='CyberSOCTableCell',
+   177→        fontName='NotoSerifSC',
+   178→        fontSize=9,
+   179→        leading=12,
+   180→        textColor=TEXT_PRIMARY
+   181→    ))
+   182→    
+   183→    # Caption/Figure text
+   184→    styles.add(ParagraphStyle(
+   185→        name='CyberSOCCaption',
+   186→        fontName='NotoSerifSC',
+   187→        fontSize=9,
+   188→        leading=12,
+   189→        alignment=TA_CENTER,
+   190→        textColor=TEXT_MUTED,
+   191→        spaceBefore=4,
+   192→        spaceAfter=12
+   193→    ))
+   194→    
+   195→    # Important note
+   196→    styles.add(ParagraphStyle(
+   197→        name='CyberSOCNote',
+   198→        fontName='NotoSerifSC',
+   199→        fontSize=9,
+   200→        leading=13,
+   201→        textColor=SEM_WARNING,
+   202→        leftIndent=15,
+   203→        rightIndent=15,
+   204→        spaceBefore=8,
+   205→        spaceAfter=8,
+   206→        borderColor=SEM_WARNING,
+   207→        borderWidth=1,
+   208→        borderPadding=8
+   209→    ))
+   210→    
+   211→    return styles
+   212→
+   213→
+   214→def create_section_table(data, col_widths, styles):
+   215→    """Create a styled table with CyberSOC theme"""
+   216→    table = Table(data, colWidths=col_widths, repeatRows=1)
+   217→    
+   218→    style_commands = [
+   219→        ('BACKGROUND', (0, 0), (-1, 0), HEADER_FILL),
+   220→        ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
+   221→        ('FONTNAME', (0, 0), (-1, 0), 'NotoSerifSC-Bold'),
+   222→        ('FONTSIZE', (0, 0), (-1, 0), 9),
+   223→        ('ALIGN', (0, 0), (-1, 0), 'CENTER'),
+   224→        ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+   225→        ('FONTNAME', (0, 1), (-1, -1), 'NotoSerifSC'),
+   226→        ('FONTSIZE', (0, 1), (-1, -1), 8),
+   227→        ('ROWBACKGROUNDS', (0, 1), (-1, -1), [CARD_BG, TABLE_STRIPE]),
+   228→        ('GRID', (0, 0), (-1, -1), 0.5, BORDER),
+   229→        ('TOPPADDING', (0, 0), (-1, -1), 6),
+   230→        ('BOTTOMPADDING', (0, 0), (-1, -1), 6),
+   231→        ('LEFTPADDING', (0, 0), (-1, -1), 8),
+   232→        ('RIGHTPADDING', (0, 0), (-1, -1), 8),
+   233→    ]
+   234→    
+   235→    table.setStyle(TableStyle(style_commands))
+   236→    return table
+   237→
+   238→
+   239→def build_k8s_deployment_guide():
+   240→    """Build the complete Kubernetes Production Deployment Guide"""
+   241→    
+   242→    output_path = os.path.join(OUTPUT_DIR, 'Cybersoc_Kubernetes_Production_Deployment_Guide.pdf')
+   243→    doc = SimpleDocTemplate(
+   244→        output_path,
+   245→        pagesize=A4,
+   246→        rightMargin=2*cm,
+   247→        leftMargin=2*cm,
+   248→        topMargin=2.5*cm,
+   249→        bottomMargin=2*cm
+   250→    )
+   251→    
+   252→    styles = create_styles()
+   253→    story = []
+   254→    
+   255→    # ==================== COVER PAGE ====================
+   256→    story.append(Spacer(1, 80))
+   257→    story.append(Paragraph("CyberSOC Platform", styles['CyberSOCTitle']))
+   258→    story.append(Spacer(1, 10))
+   259→    story.append(Paragraph("Kubernetes Production Deployment Guide", styles['CyberSOCTitle']))
+   260→    story.append(Spacer(1, 30))
+   261→    story.append(Paragraph("Phase 2: Go-Live Roadmap Execution", styles['CyberSOCSubtitle']))
+   262→    story.append(Spacer(1, 20))
+   263→    story.append(HRFlowable(width="60%", thickness=2, color=ACCENT, spaceBefore=10, spaceAfter=10))
+   264→    story.append(Spacer(1, 30))
+   265→    
+   266→    # Document metadata table on cover
+   267→    meta_data = [
+   268→        ['Document Type', 'Technical Deployment Guide'],
+   269→        ['Version', '1.0.0 - Production Ready'],
+   270→        ['Classification', 'Internal Technical'],
+   271→        ['Date', datetime.now().strftime('%Y-%m-%d')],
+   272→        ['Platform', 'CyberSOC AI-Native SOC OS'],
+   273→        ['Target Environment', 'Kubernetes Production Cluster'],
+   274→    ]
+   275→    meta_table = Table(meta_data, colWidths=[150, 250])
+   276→    meta_table.setStyle(TableStyle([
+   277→        ('BACKGROUND', (0, 0), (0, -1), SECTION_BG),
+   278→        ('FONTNAME', (0, 0), (0, -1), 'NotoSerifSC-Bold'),
+   279→        ('FONTSIZE', (0, 0), (-1, -1), 10),
+   280→        ('TEXTCOLOR', (0, 0), (-1, -1), TEXT_PRIMARY),
+   281→        ('ALIGN', (0, 0), (0, -1), 'RIGHT'),
+   282→        ('ALIGN', (1, 0), (1, -1), 'LEFT'),
+   283→        ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+   284→        ('GRID', (0, 0), (-1, -1), 0.5, BORDER),
+   285→        ('TOPPADDING', (0, 0), (-1, -1), 8),
+   286→        ('BOTTOMPADDING', (0, 0), (-1, -1), 8),
+   287→        ('LEFTPADDING', (0, 0), (-1, -1), 12),
+   288→        ('RIGHTPADDING', (0, 0), (-1, -1), 12),
+   289→    ]))
+   290→    story.append(meta_table)
+   291→    
+   292→    story.append(PageBreak())
+   293→    
+   294→    # ==================== TABLE OF CONTENTS ====================
+   295→    story.append(Paragraph("Table of Contents", styles['CyberSOCH1']))
+   296→    story.append(Spacer(1, 15))
+   297→    
+   298→    toc_items = [
+   299→        ("1. Executive Summary", "Overview and deployment objectives"),
+   300→        ("2. Architecture Overview", "Production architecture design"),
+   301→        ("3. Prerequisites & Requirements", "Infrastructure and tooling requirements"),
+   302→        ("4. Cluster Configuration", "Production cluster setup specifications"),
+   303→        ("5. Helm Chart Structure", "Complete Helm chart organization"),
+   304→        ("6. Core Manifests", "Deployment, Service, ConfigMap, Secret definitions"),
+   305→        ("7. Database Deployment", "PostgreSQL, Redis, Elasticsearch deployment"),
+   306→        ("8. Service Mesh Integration", "Istio configuration and traffic management"),
+   307→        ("9. Security Hardening", "Pod security, network policies, RBAC"),
+   308→        ("10. Deployment Procedures", "Step-by-step deployment workflow"),
+   309→        ("11. Scaling Strategies", "Horizontal and vertical scaling configurations"),
+   310→        ("12. Monitoring & Observability", "Prometheus, Grafana, logging stack"),
+   311→        ("13. Disaster Recovery", "Backup, restore, and failover procedures"),
+   312→        ("14. Troubleshooting Guide", "Common issues and resolution steps"),
+   313→    ]
+   314→    
+   315→    for item, desc in toc_items:
+   316→        story.append(Paragraph(f"<b>{item}</b> — {desc}", styles['CyberSOCBodyNoIndent']))
+   317→    
+   318→    story.append(PageBreak())
+   319→    
+   320→    # ==================== SECTION 1: EXECUTIVE SUMMARY ====================
+   321→    story.append(Paragraph("1. Executive Summary", styles['CyberSOCH1']))
+   322→    story.append(HRFlowable(width="100%", thickness=1, color=BORDER, spaceBefore=5, spaceAfter=15))
+   323→    
+   324→    exec_summary = """
+   325→This Kubernetes Production Deployment Guide provides comprehensive technical documentation for deploying the CyberSOC Platform (AI-Native Security Operations Center Operating System) into production Kubernetes environments. The guide encompasses complete infrastructure-as-code artifacts including production-ready Kubernetes manifests, Helm charts for package management, detailed deployment procedures, and operational runbooks for maintaining the platform at scale.
+   326→"""
+   327→    story.append(Paragraph(exec_summary.strip(), styles['CyberSOCBodyNoIndent']))
+   328→    
+   329→    story.append(Paragraph("1.1 Document Scope and Objectives", styles['CyberSOCH2']))
+   330→    scope_text = """
+   331→The primary objective of this deployment guide is to enable DevOps and Site Reliability Engineering teams to deploy, configure, and maintain the CyberSOC Platform in production Kubernetes clusters with confidence and repeatability. This document addresses the complete lifecycle of containerized deployment operations from initial cluster provisioning through ongoing operational maintenance, scaling events, and disaster recovery scenarios. The guide is structured to support both greenfield deployments in new Kubernetes environments as well as migration paths from existing staging or development deployments to full production readiness.
+   332→"""
+   333→    story.append(Paragraph(scope_text.strip(), styles['CyberSOCBodyNoIndent']))
+   334→    
+   335→    story.append(Paragraph("1.2 Target Audience", styles['CyberSOCH2']))
+   336→    audience_text = """
+   337→This technical documentation is specifically designed for platform engineers, DevOps practitioners, site reliability engineers, and security architects who are responsible for deploying and operating cloud-native security platforms. Readers should possess intermediate to advanced knowledge of Kubernetes orchestration concepts including pod lifecycles, controller patterns, service discovery mechanisms, and network policy implementation. Familiarity with Helm package management, container security best practices, and observability stack integration is assumed throughout the technical procedures outlined in subsequent sections.
+   338→"""
+   339→    story.append(Paragraph(audience_text.strip(), styles['CyberSOCBodyNoIndent']))
+   340→    
+   341→    story.append(Paragraph("1.3 Deployment Targets and Success Criteria", styles['CyberSOCH2']))
+   342→    
+   343→    target_data = [
+   344→        ['Metric', 'Target Value', 'Measurement Method'],
+   345→        ['Deployment Time', '< 45 minutes', 'Automated pipeline timing'],
+   346→        ['Availability SLA', '99.95% uptime', 'Prometheus SLO monitoring'],
+   347→        ['Recovery Time Objective (RTO)', '< 15 minutes', 'Failover drill execution'],
+   348→        ['Recovery Point Objective (RPO)', '< 5 minutes', 'Backup verification testing'],
+   349→        ['Scale-out Latency', '< 90 seconds', 'HPA metric observation'],
+   350→        ['Security Compliance', 'SOC 2 Type II', 'Annual audit certification'],
+   351→    ]
+   352→    story.append(create_section_table(target_data, [180, 120, 160], styles))
+   353→    story.append(Paragraph("Table 1.1: Production Deployment Success Criteria", styles['CyberSOCCaption']))
+   354→    
+   355→    # ==================== SECTION 2: ARCHITECTURE OVERVIEW ====================
+   356→    story.append(Paragraph("2. Architecture Overview", styles['CyberSOCH1']))
+   357→    story.append(HRFlowable(width="100%", thickness=1, color=BORDER, spaceBefore=5, spaceAfter=15))
+   358→    
+   359→    arch_intro = """
+   360→The CyberSOC Platform employs a microservices architecture designed specifically for Kubernetes-native deployment, leveraging cloud-native patterns for scalability, resilience, and operational excellence. The production architecture implements defense-in-depth security principles at every layer, from container image integrity verification through network segmentation and zero-trust service-to-service authentication. This section provides a comprehensive overview of the architectural components, their interactions, and the design decisions that inform the deployment configuration presented throughout this guide.
+   361→"""
+   362→    story.append(Paragraph(arch_intro.strip(), styles['CyberSOCBodyNoIndent']))
+   363→    
+   364→    story.append(Paragraph("2.1 High-Level System Architecture", styles['CyberSOCH2']))
+   365→    hl_arch = """
+   366→The production deployment organizes CyberSOC platform components into distinct namespaces following Kubernetes best practices for multi-tenant isolation and operational boundary delineation. The core platform services reside within the cybersoc-system namespace, providing foundational capabilities including API gateway routing, authentication and authorization services, configuration management, and centralized logging aggregation. Application-layer services including threat detection engines, incident response workflows, compliance monitoring modules, and user interface components deploy into the cybersoc-workloads namespace, enabling independent scaling and rollout strategies without impacting critical system infrastructure.
+   367→"""
+   368→    story.append(Paragraph(hl_arch.strip(), styles['CyberSOCBodyNoIndent']))
+   369→    
+   370→    story.append(Paragraph("2.2 Component Inventory and Responsibilities", styles['CyberSOCH2']))
+   371→    
+   372→    component_data = [
+   373→        ['Component', 'Namespace', 'Replicas', 'Resource Class', 'Description'],
+   374→        ['API Gateway', 'cybersoc-system', '3', 'cpu: 500m, mem: 512Mi', 'Edge routing, rate limiting, TLS termination'],
+   375→        ['Auth Service', 'cybersoc-system', '2', 'cpu: 300m, mem: 256Mi', 'OAuth/OIDC, JWT issuance, session mgmt'],
+   376→        ['Threat Engine', 'cybersoc-workloads', '5', 'cpu: 2000m, mem: 4Gi', 'AI/ML threat detection pipeline'],
+   377→        ['SIEM Core', 'cybersoc-workloads', '3', 'cpu: 1500m, mem: 3Gi', 'Event correlation, alert generation'],
+   378→        ['Case Mgmt', 'cybersoc-workloads', '2', 'cpu: 500m, mem: 1Gi', 'Incident tracking, workflow engine'],
+   379→        ['UI Frontend', 'cybersoc-workloads', '3', 'cpu: 200m, mem: 256Mi', 'React-based admin console'],
+   380→        ['PostgreSQL', 'cybersoc-data', '3', 'cpu: 1000m, mem: 4Gi', 'Primary relational data store'],
+   381→        ['Redis Cluster', 'cybersoc-data', '6', 'cpu: 500m, mem: 1Gi', 'Caching, session state, pub/sub'],
+   382→        ['Elasticsearch', 'cybersoc-data', '5', 'cpu: 2000m, mem: 8Gi', 'Log aggregation, full-text search'],
+   383→    ]
+   384→    story.append(create_section_table(component_data, [75, 85, 50, 115, 145], styles))
+   385→    story.append(Paragraph("Table 2.1: Production Component Inventory", styles['CyberSOCCaption']))
+   386→    
+   387→    story.append(Paragraph("2.3 Network Topology and Traffic Flow", styles['CyberSOCH2']))
+   388→    network_text = """
+   389→Production network architecture implements a layered security model with clearly defined trust boundaries and encrypted communication channels between all components. External traffic enters through cloud provider load balancers (AWS ALB/NLB or GCP Load Balancer) which terminate TLS connections using certificates managed via cert-manager with Let's Encrypt or enterprise PKI integration. The API Gateway receives decrypted HTTP/HTTPS traffic and applies layer 7 routing rules, authentication validation, and rate limiting before forwarding requests to backend microservices. All inter-service communication traverses the Istio service mesh, which enforces mutual TLS encryption, identity-based access policies, and detailed telemetry collection for observability purposes.
+   390→"""
+   391→    story.append(Paragraph(network_text.strip(), styles['CyberSOCBodyNoIndent']))
+   392→    
+   393→    # ==================== SECTION 3: PREREQUISITES ====================
+   394→    story.append(Paragraph("3. Prerequisites and Requirements", styles['CyberSOCH1']))
+   395→    story.append(HRFlowable(width="100%", thickness=1, color=BORDER, spaceBefore=5, spaceAfter=15))
+   396→    
+   397→    prereq_intro = """
+   398→Successful deployment of the CyberSOC Platform into production Kubernetes environments requires careful preparation of infrastructure resources, toolchain installation, and credential provisioning. This section enumerates all prerequisites organized by category, providing specific version requirements, configuration parameters, and verification commands that deployment teams should execute prior to initiating the installation procedure. Failure to satisfy these prerequisites may result in deployment failures, runtime instability, or security vulnerabilities that could compromise the production environment.
+   399→"""
+   400→    story.append(Paragraph(prereq_intro.strip(), styles['CyberSOCBodyNoIndent']))
+   401→    
+   402→    story.append(Paragraph("3.1 Infrastructure Requirements", styles['CyberSOCH2']))
+   403→    
+   404→    infra_data = [
+   405→        ['Resource', 'Minimum', 'Recommended', 'Notes'],
+   406→        ['Node Count', '6 worker nodes', '9+ worker nodes', '3 AZ distribution required'],
+   407→        ['vCPU Total', '32 cores', '64+ cores', 'Dedicated node pools preferred'],
+   408→        ['Memory', '128 GB RAM', '256 GB RAM', 'Include headroom for bursts'],
+   409→        ['Storage (SSD)', '1 TB GP3/Premium SSD', '2 TB+ provisioned IOPS', 'Separate storage classes'],
+   410→        ['Network Bandwidth', '10 Gbps', '25+ Gbps', 'Cross-AZ traffic consideration'],
+   411→        ['Kubernetes Version', '1.28+', '1.29+ (latest stable)', 'Upgrade path validated'],
+   412→    ]
+   413→    story.append(create_section_table(infra_data, [110, 95, 110, 155], styles))
+   414→    story.append(Paragraph("Table 3.1: Infrastructure Resource Requirements", styles['CyberSOCCaption']))
+   415→    
+   416→    story.append(Paragraph("3.2 Toolchain and Software Requirements", styles['CyberSOCH2']))
+   417→    tools_text = """
+   418→The deployment toolchain requires specific versions of command-line utilities and cluster addons to ensure compatibility with the provided Helm charts and Kubernetes manifests. Primary tooling includes Helm 3.12 or later for chart rendering and release management, kubectl matching the cluster minor version for direct resource manipulation, and kustomize for overlay-based environment customization. Cluster-level prerequisites include installation of the cert-manager certificate lifecycle controller (v1.13+), Istio service mesh (v1.20+ with ambient mesh support optional), and the Prometheus Operator for monitoring stack management. Each prerequisite component includes health check commands in the deployment verification section to confirm proper installation and operational status before proceeding with CyberSOC-specific resource creation.
+   419→"""
+   420→    story.append(Paragraph(tools_text.strip(), styles['CyberSOCBodyNoIndent']))
+   421→    
+   422→    tools_data = [
+   423→        ['Tool/Component', 'Version', 'Purpose', 'Installation Method'],
+   424→        ['helm', '3.12+', 'Package management', 'Official script or package manager'],
+   425→        ['kubectl', ' matches cluster', 'Cluster interaction', 'Cloud provider CLI bundle'],
+   426→        ['kustomize', '5.0+', 'Overlay customization', 'kubectl apply-k or standalone binary'],
+   427→        ['cert-manager', '1.13+', 'Certificate lifecycle', 'Helm chart (jetstack repo)'],
+   428→        ['istio/base + istiod', '1.20+', 'Service mesh', 'istioctl install or Helm'],
+   429→        ['prometheus-operator', '0.68+', 'Monitoring CRDs', 'Helm chart (kube-prometheus-stack)'],
+   430→        ['external-secrets', '0.9+', 'Secret sync', 'Helm chart (external-secrets repo)'],
+   431→    ]
+   432→    story.append(create_section_table(tools_data, [105, 65, 110, 190], styles))
+   433→    story.append(Paragraph("Table 3.2: Toolchain Version Requirements", styles['CyberSOCCaption']))
+   434→    
+   435→    # ==================== SECTION 4: CLUSTER CONFIGURATION ====================
+   436→    story.append(Paragraph("4. Cluster Configuration", styles['CyberSOCH1']))
+   437→    story.append(HRFlowable(width="100%", thickness=1, color=BORDER, spaceBefore=5, spaceAfter=15))
+   438→    
+   439→    cluster_intro = """
+   440→Production Kubernetes cluster configuration establishes the foundation upon which all CyberSOC platform components operate. This section details namespace topology, resource quotas, network policies, pod security standards, and node pool assignments that must be configured prior to deploying application workloads. The configuration parameters presented here represent hardened production defaults derived from CIS Kubernetes Benchmarks, NIST cybersecurity frameworks, and operational experience from large-scale security platform deployments.
+   441→"""
+   442→    story.append(Paragraph(cluster_intro.strip(), styles['CyberSOCBodyNoIndent']))
+   443→    
+   444→    story.append(Paragraph("4.1 Namespace Topology", styles['CyberSOCH2']))
+   445→    ns_text = """
+   446→The production deployment utilizes a multi-namespace architecture to provide logical separation between system infrastructure, application workloads, data stores, and observability components. Each namespace enforces specific resource limits, network policies, and security contexts appropriate to its contained workloads. Namespace isolation enables independent backup strategies, access control boundaries, and troubleshooting scopes that simplify operational complexity while maintaining strong security posture across the entire platform deployment.
+   447→"""
+   448→    story.append(Paragraph(ns_text.strip(), styles['CyberSOCBodyNoIndent']))
+   449→    
+   450→    ns_data = [
+   451→        ['Namespace', 'Purpose', 'Network Policy', 'Resource Quota'],
+   452→        ['cybersoc-system', 'Infrastructure services', 'Deny-all, allow egress', 'cpu: 10, mem: 32Gi, pods: 50'],
+   453→        ['cybersoc-workloads', 'Application microservices', 'Mesh-internal only', 'cpu: 40, mem: 128Gi, pods: 200'],
+   454→        ['cybersoc-data', 'Database and cache layers', 'Isolated ingress', 'cpu: 20, mem: 96Gi, pods: 30'],
+   455→        ['cybersoc-monitoring', 'Observability stack', 'Allow metrics scrape', 'cpu: 15, mem: 48Gi, pods: 50'],
+   456→        ['cybersoc-security', 'Security scanning, vault', 'Highly restricted', 'cpu: 5, mem: 16Gi, pods: 20'],
+   457→    ]
+   458→    story.append(create_section_table(ns_data, [95, 125, 115, 135], styles))
+   459→    story.append(Paragraph("Table 4.1: Namespace Configuration Matrix", styles['CyberSOCCaption']))
+   460→    
+   461→    story.append(Paragraph("4.2 Node Pool Architecture", styles['CyberSOCH2']))
+   462→    nodepool_text = """
+   463→Production deployments leverage dedicated node pools with specialized instance types and taints/tolerations to optimize workload placement and resource utilization. Compute-optimized nodes (C-series on AWS, C2 on GCP) host CPU-intensive threat detection and SIEM correlation workloads, while memory-optimized nodes (R-series on AWS, E2/M2 on GCP) accommodate database and caching layer memory demands. Infrastructure and system components deploy to general-purpose nodes with spot instance fallback capability for cost optimization without sacrificing availability guarantees provided by PodDisruptionBudget configurations.
+   464→"""
+   465→    story.append(Paragraph(nodepool_text.strip(), styles['CyberSOCBodyNoIndent']))
+   466→    
+   467→    nodepool_data = [
+   468→        ['Node Pool', 'Instance Type', 'Autoscaling', 'Taint', 'Workload Target'],
+   469→        ['system-pool', 'm6i.xlarge', '3-6 nodes', 'dedicated=system:NoSchedule', 'Gateway, Auth, Operators'],
+   470→        ['compute-pool', 'c6i.2xlarge', '5-15 nodes', 'workload=compute:NoSchedule', 'Threat Engine, SIEM Core'],
+   471→        ['memory-pool', 'r6i.xlarge', '3-8 nodes', 'workload=memory:NoSchedule', 'PostgreSQL, Redis, ES'],
+   472→        ['ui-pool', 'm6i.large', '3-6 nodes', 'frontend=true:NoSchedule', 'Frontend, static assets'],
+   473→        ['monitor-pool', 'm6i.large', '2-4 nodes', 'monitoring=true:NoSchedule', 'Prometheus, Grafana'],
+   474→    ]
+   475→    story.append(create_section_table(nodepool_data, [80, 85, 70, 140, 105], styles))
+   476→    story.append(Paragraph("Table 4.2: Node Pool Specification", styles['CyberSOCCaption']))
+   477→    
+   478→    # ==================== SECTION 5: HELM CHART STRUCTURE ====================
+   479→    story.append(Paragraph("5. Helm Chart Structure", styles['CyberSOCH1']))
+   480→    story.append(HRFlowable(width="100%", thickness=1, color=BORDER, spaceBefore=5, spaceAfter=15))
+   481→    
+   482→    helm_intro = """
+   483→The CyberSOC Platform employs Helm as its primary packaging and deployment mechanism, providing templated Kubernetes manifests with configurable values for environment-specific customization. The chart architecture follows Helm best practices with a parent chart managing dependencies to subcharts for each major component group. This hierarchical structure enables independent versioning of component charts while maintaining centralized configuration management through the parent chart's values hierarchy. Deployment teams interact primarily with the parent chart, overriding values through command-line arguments, values files, or the --set flag for rapid iteration during development and staging phases.
+   484→"""
+   485→    story.append(Paragraph(helm_intro.strip(), styles['CyberSOCBodyNoIndent']))
+   486→    
+   487→    story.append(Paragraph("5.1 Chart Directory Layout", styles['CyberSOCH2']))
+   488→    
+   489→    helm_layout = """
+   490→cybersoc-platform/
+   491→├── Chart.yaml                    # Parent chart metadata (version 1.0.0)
+   492→├── values.yaml                   # Default production values
+   493→├── values-staging.yaml           # Staging environment overrides
+   494→├── values-dev.yaml               # Development environment overrides
+   495→├── templates/
+   496→│   ├── _helpers.tpl              # Template helper functions
+   497→│   ├── _labels.tpl               # Standard label definitions
+   498→│   ├── NOTES.txt                 # Post-install notes
+   499→│   ├── namespace.yaml            # Namespace creation (if needed)
+   500→│   ├── networkpolicies.yaml      # Baseline network policies
+   501→│   └── resourcequotas.yaml       # Namespace resource limits
+   502→├── charts/
+   503→│   ├── cybersoc-gateway/         # API Gateway subchart
+   504→│   │   ├── Chart.yaml
+   505→│   │   ├── values.yaml
+   506→│   │   └── templates/
+   507→│   │       ├── deployment.yaml
+   508→│   │       ├── service.yaml
+   509→│   │       ├── hpa.yaml
+   510→│   │       ├── configmap.yaml
+   511→│   │       └── servicemonitor.yaml
+   512→│   ├── cybersoc-auth/            # Authentication service subchart
+   513→│   ├── cybersoc-threatengine/    # Threat detection subchart
+   514→│   ├── cybersoc-siem/            # SIEM core subchart
+   515→│   ├── cybersoc-database/        # Database dependencies (PostgreSQL, Redis, ES)
+   516→│   └── cybersoc-monitoring/      # Monitoring stack subchart
+   517→└── docs/
+   518→    ├── INSTALLATION.md           # Installation instructions
+   519→    ├── CONFIGURATION.md          # Values reference
+   520→    └── UPGRADE.md                # Upgrade procedures
+   521→"""
+   522→    story.append(Preformatted(helm_layout, styles['CyberSOCCode']))
+   523→    story.append(Paragraph("Figure 5.1: Complete Helm Chart Directory Structure", styles['CyberSOCCaption']))
+   524→    
+   525→    story.append(Paragraph("5.2 Parent Chart Configuration", styles['CyberSOCH2']))
+   526→    parent_chart = """
+   527→The parent Chart.yaml defines metadata, API version compatibility, dependency declarations, and app version mappings for the entire CyberSOC platform. Dependencies are pinned to specific versions to ensure reproducible deployments, with update procedures documented separately for controlled upgrade workflows. The chart maintains Kubernetes API version compatibility annotations to enable Helm schema validation and pre-rendering checks that catch manifest errors before cluster submission.
+   528→"""
+   529→    story.append(Paragraph(parent_chart.strip(), styles['CyberSOCBodyNoIndent']))
+   530→    
+   531→    chart_yaml_content = """apiVersion: v2
+   532→name: cybersoc-platform
+   533→description: CyberSOC AI-Native Security Operations Center Platform
+   534→type: application
+   535→version: 1.0.0
+   536→appVersion: "1.0.0"
+   537→dependencies:
+   538→  - name: cybersoc-gateway
+   539→    version: "1.0.0"
+   540→    repository: "file://charts/cybersoc-gateway"
+   541→  - name: cybersoc-auth
+   542→    version: "1.0.0"
+   543→    repository: "file://charts/cybersoc-auth"
+   544→  - name: cybersoc-threatengine
+   545→    version: "1.0.0"
+   546→    repository: "file://charts/cybersoc-threatengine"
+   547→  - name: cybersoc-siem
+   548→    version: "1.0.0"
+   549→    repository: "file://charts/cybersoc-siem"
+   550→  - name: cybersoc-database
+   551→    version: "1.0.0"
+   552→    repository: "file://charts/cybersoc-database"
+   553→    condition: database.enabled
+   554→  - name: cybersoc-monitoring
+   555→    version: "1.0.0"
+   556→    repository: "file://charts/cybersoc-monitoring"
+   557→    condition: monitoring.enabled
+   558→maintainers:
+   559→  - name: CyberSOC Platform Team
+   560→    email: platform@cybersoc.io"""
+   561→    story.append(Preformatted(chart_yaml_content, styles['CyberSOCCode']))
+   562→    story.append(Paragraph("Listing 5.1: Parent Chart.yaml Configuration", styles['CyberSOCCaption']))
+   563→    
+   564→    # ==================== SECTION 6: CORE MANIFESTS ====================
+   565→    story.append(Paragraph("6. Core Kubernetes Manifests", styles['CyberSOCH1']))
+   566→    story.append(HRFlowable(width="100%", thickness=1, color=BORDER, spaceBefore=5, spaceAfter=15))
+   567→    
+   568→    manifests_intro = """
+   569→This section presents production-ready Kubernetes manifest definitions for core CyberSOC platform components. Each manifest includes comprehensive annotations for operational metadata, pod security context configurations, resource requests and limits calibrated for production workloads, probe configurations for health assessment, and service mesh integration annotations. Manifests are organized by component with explanatory commentary addressing key configuration decisions and customization points that deployment teams may need to adjust for their specific environment constraints or organizational policies.
+   570→"""
+   571→    story.append(Paragraph(manifests_intro.strip(), styles['CyberSOCBodyNoIndent']))
+   572→    
+   573→    story.append(Paragraph("6.1 API Gateway Deployment", styles['CyberSOCH2']))
+   574→    gateway_deploy = """
+   575→The API Gateway serves as the primary ingress point for all external traffic to the CyberSOC platform, implementing authentication validation, rate limiting, request routing, and TLS termination responsibilities. The deployment configuration specifies three replicas distributed across availability zones with anti-affinity rules preventing co-location on single nodes. Resource allocations accommodate burst traffic patterns typical of security event surges during active incident response scenarios. Health probes are configured with conservative thresholds to prevent premature eviction during initialization or temporary degradation periods.
+   576→"""
+   577→    story.append(Paragraph(gateway_deploy.strip(), styles['CyberSOCBodyNoIndent']))
+   578→    
+   579→    gateway_manifest = """apiVersion: apps/v1
+   580→kind: Deployment
+   581→metadata:
+   582→  name: cybersoc-gateway
+   583→  namespace: cybersoc-system
+   584→  labels:
+   585→    app.kubernetes.io/name: cybersoc-gateway
+   586→    app.kubernetes.io/component: api-gateway
+   587→    app.kubernetes.io/part-of: cybersoc-platform
+   588→    app.kubernetes.io/managed-by: Helm
+   589→spec:
+   590→  replicas: 3
+   591→  strategy:
+   592→    type: RollingUpdate
+   593→    rollingUpdate:
+   594→      maxSurge: 1
+   595→      maxUnavailable: 0
+   596→  selector:
+   597→    matchLabels:
+   598→      app.kubernetes.io/name: cybersoc-gateway
+   599→  template:
+   600→    metadata:
+   601→      labels:
+   602→        app.kubernetes.io/name: cybersoc-gateway
+   603→      annotations:
+   604→        prometheus.io/scrape: "true"
+   605→        prometheus.io/port: "9102"
+   606→        prometheus.io/path: "/metrics"
+   607→        sidecar.istio.io/inject: "true"
+   608→    spec:
+   609→      serviceAccountName: cybersoc-gateway
+   610→      securityContext:
+   611→        runAsNonRoot: true
+   612→        runAsUser: 101
+   613→        fsGroup: 101
+   614→        seccompProfile:
+   615→          type: RuntimeDefault
+   616→      affinity:
+   617→        podAntiAffinity:
+   618→          preferredDuringSchedulingIgnoredDuringExecution:
+   619→            - weight: 100
+   620→              podAffinityTerm:
+   621→                labelSelector:
+   622→                  matchLabels:
+   623→                    app.kubernetes.io/name: cybersoc-gateway
+   624→                topologyKey: kubernetes.io/hostname
+   625→      containers:
+   626→        - name: gateway
+   627→          image: ghcr.io/cybersoc/platform-gateway:v1.0.0
+   628→          ports:
+   629→            - name: http
+   630→              containerPort: 8080
+   631→              protocol: TCP
+   632→            - name: https
+   633→              containerPort: 8443
+   634→              protocol: TCP
+   635→            - name: metrics
+   636→              containerPort: 9102
+   637→              protocol: TCP
+   638→          env:
+   639→            - name: LOG_LEVEL
+   640→              value: "info"
+   641→            - name: AUTH_SERVICE_URL
+   642→              value: "http://cybersoc-auth.cybersoc-system.svc:8080"
+   643→            - name: RATE_LIMIT_ENABLED
+   644→              value: "true"
+   645→            - name: RATE_LIMIT_REQUESTS
+   646→              value: "1000"
+   647→            - name: RATE_LIMIT_WINDOW
+   648→              value: "60"
+   649→          resources:
+   650→            requests:
+   651→              cpu: 500m
+   652→              memory: 512Mi
+   653→            limits:
+   654→              cpu: 2000m
+   655→              memory: 1Gi
+   656→          livenessProbe:
+   657→            httpGet:
+   658→              path: /healthz/live
+   659→              port: http
+   660→            initialDelaySeconds: 30
+   661→            periodSeconds: 10
+   662→            timeoutSeconds: 5
+   663→            failureThreshold: 3
+   664→          readinessProbe:
+   665→            httpGet:
+   666→              path: /healthz/ready
+   667→              port: http
+   668→            initialDelaySeconds: 10
+   669→            periodSeconds: 5
+   670→            timeoutSeconds: 3
+   671→            failureThreshold: 3
+   672→          startupProbe:
+   673→            httpGet:
+   674→              path: /healthz/startup
+   675→              port: http
+   676→            initialDelaySeconds: 10
+   677→            periodSeconds: 5
+   678→            timeoutSeconds: 3
+   679→            failureThreshold: 30
+   680→          volumeMounts:
+   681→            - name: tls-certs
+   682→              mountPath: /etc/cybersoc/tls
+   683→              readOnly: true
+   684→            - name: gateway-config
+   685→              mountPath: /etc/cybersoc/config
+   686→              readOnly: true
+   687→      volumes:
+   688→        - name: tls-certs
+   689→          secret:
+   690→            secretName: cybersoc-gateway-tls
+   691→            defaultMode: 0400
+   692→        - name: gateway-config
+   693→          configMap:
+   694→            name: cybersoc-gateway-config
+   695→            defaultMode: 0444"""
+   696→    story.append(Preformatted(gateway_manifest, styles['CyberSOCCode']))
+   697→    story.append(Paragraph("Listing 6.1: API Gateway Deployment Manifest", styles['CyberSOCCaption']))
+   698→    
+   699→    story.append(Paragraph("6.2 Gateway Service Definition", styles['CyberSOCH2']))
+   700→    svc_manifest = """apiVersion: v1
+   701→kind: Service
+   702→metadata:
+   703→  name: cybersoc-gateway
+   704→  namespace: cybersoc-system
+   705→  labels:
+   706→    app.kubernetes.io/name: cybersoc-gateway
+   707→  annotations:
+   708→    service.beta.kubernetes.io/aws-load-balancer-type: nlb
+   709→    service.beta.kubernetes.io/aws-load-balancer-cross-zone-load-balancing-enabled: "true"
+   710→    service.beta.kubernetes.io/aws-load-balancer-ssl-ports: "https"
+   711→    service.beta.kubernetes.io/aws-load-balancer-ssl-cert: arn:aws:acm:region:account-id:certificate/id
+   712→spec:
+   713→  type: LoadBalancer
+   714→  externalTrafficPolicy: Local
+   715→  selector:
+   716→    app.kubernetes.io/name: cybersoc-gateway
+   717→  ports:
+   718→    - name: http
+   719→      port: 80
+   720→      targetPort: http
+   721→      protocol: TCP
+   722→    - name: https
+   723→      port: 443
+   724→      targetPort: https
+   725→      protocol: TCP"""
+   726→    story.append(Preformatted(svc_manifest, styles['CyberSOCCode']))
+   727→    story.append(Paragraph("Listing 6.2: Gateway Service with AWS NLB Integration", styles['CyberSOCCaption']))
+   728→    
+   729→    story.append(Paragraph("6.3 Horizontal Pod Autoscaler Configuration", styles['CyberSOCH2']))
+   730→    hpa_text = """
+   731→The Horizontal Pod Autoscaler (HPA) configuration enables automatic scaling of gateway replicas based on observed CPU utilization and custom metrics from request throughput. The HPA targets 70% average CPU utilization as the primary scaling trigger with a minimum replica count of 3 (for availability guarantees) and maximum of 20 replicas to handle extreme traffic bursts during security incidents. Custom metrics integration with Prometheus Adapter allows scaling decisions based on requests-per-second and queue depth metrics that better represent actual load than CPU alone.
+   732→"""
+   733→    story.append(Paragraph(hpa_text.strip(), styles['CyberSOCBodyNoIndent']))
+   734→    
+   735→    hpa_manifest = """apiVersion: autoscaling/v2
+   736→kind: HorizontalPodAutoscaler
+   737→metadata:
+   738→  name: cybersoc-gateway-hpa
+   739→  namespace: cybersoc-system
+   740→spec:
+   741→  scaleTargetRef:
+   742→    apiVersion: apps/v1
+   743→    kind: Deployment
+   744→    name: cybersoc-gateway
+   745→  minReplicas: 3
+   746→  maxReplicas: 20
+   747→  behavior:
+   748→    scaleDown:
+   749→      stabilizationWindowSeconds: 300
+   750→      policies:
+   751→        - type: Percent
+   752→          value: 10
+   753→          periodSeconds: 60
+   754→    scaleUp:
+   755→      stabilizationWindowSeconds: 0
+   756→      policies:
+   757→        - type: Percent
+   758→          value: 100
+   759→          periodSeconds: 15
+   760→        - type: Pods
+   761→          value: 4
+   762→          periodSeconds: 15
+   763→      selectPolicy: Max
+   764→  metrics:
+   765→    - type: Resource
+   766→      resource:
+   767→        name: cpu
+   768→        target:
+   769→          type: Utilization
+   770→          averageUtilization: 70
+   771→    - type: Pods
+   772→      pods:
+   773→        metric:
+   774→          name: requests_per_second
+   775→        target:
+   776→          type: AverageValue
+   777→          averageValue: "1000"
+   778→    - type: Resource
+   779→      resource:
+   780→        name: memory
+   781→        target:
+   782→          type: Utilization
+   783→          averageUtilization: 80"""
+   784→    story.append(Preformatted(hpa_manifest, styles['CyberSOCCode']))
+   785→    story.append(Paragraph("Listing 6.3: Gateway HPA with Multi-Metric Scaling", styles['CyberSOCCaption']))
+   786→    
+   787→    # ==================== SECTION 7: DATABASE DEPLOYMENT ====================
+   788→    story.append(Paragraph("7. Database Deployment", styles['CyberSOCH1']))
+   789→    story.append(HRFlowable(width="100%", thickness=1, color=BORDER, spaceBefore=5, spaceAfter=15))
+   790→    
+   791→    db_intro = """
+   792→The CyberSOC Platform requires persistent data stores for transactional data, caching layers, and log aggregation. This section provides deployment configurations for PostgreSQL (primary relational database), Redis (in-memory cache and message broker), and Elasticsearch (log storage and full-text search). Database deployments utilize StatefulSets for ordered deployment, stable network identifiers, and persistent volume claims with appropriate storage classes for production performance requirements. Backup and recovery procedures are integrated through sidecar containers and CronJob schedules documented in the Disaster Recovery section.
+   793→"""
+   794→    story.append(Paragraph(db_intro.strip(), styles['CyberSOCBodyNoIndent']))
+   795→    
+   796→    story.append(Paragraph("7.1 PostgreSQL StatefulSet", styles['CyberSOCH2']))
+   797→    pg_text = """
+   798→PostgreSQL deployment uses the CloudNativePG operator for production-grade PostgreSQL management, providing automated failover, backup scheduling, and connection pooling capabilities. The operator manages Patroni-based high availability clusters with streaming replication between primary and replica instances. Storage configuration utilizes provisioned IOPS SSD volumes with 3000 IOPS baseline to support the concurrent query patterns generated by SIEM correlation queries and audit trail writes. Connection pooling via PgBouncer sidecar reduces connection overhead for stateless application pods that frequently connect and disconnect.
+   799→"""
+   800→    story.append(Paragraph(pg_text.strip(), styles['CyberSOCBodyNoIndent']))
+   801→    
+   802→    pg_manifest = """apiVersion: postgresql.cnpg.io/v1
+   803→kind: Cluster
+   804→metadata:
+   805→  name: cybersoc-postgres
+   806→  namespace: cybersoc-data
+   807→spec:
+   808→  instances: 3
+   809→  imageName: ghcr.io/cloudnative-pg/postgresql:16.2
+   810→  primaryUpdateStrategy: unsupervised
+   811→  postgresql:
+   812→    parameters:
+   813→      max_connections: "200"
+   814→      shared_buffers: "1GB"
+   815→      effective_cache_size: "3GB"
+   816→      maintenance_work_mem: "256MB"
+   817→      wal_compression: "on"
+   818→      max_wal_senders: "3"
+   819→      max_replication_slots: "3"
+   820→      hot_standby: "on"
+   821→      log_min_duration_statement: "1000"
+   822→    pg_hba:
+   823→      - hostssl all all 0.0.0.0/0 scram-sha-256
+   824→      - host    all all 127.0.0.1/32 md5
+   825→  bootstrap:
+   826→    initdb:
+   827→      database: cybersoc
+   828→      owner: cybersoc_admin
+   829→      secret: cybersoc-postgres-admin
+   830→      encoding: UTF8
+   831→      locale: C.UTF-8
+   832→      dataChecksums: enabled
+   833→  storage:
+   834→    storageClass: gp3-crypted
+   835→    size: 500Gi
+   836→    resizeInUseVolumes: true
+   837→  resources:
+   838→    requests:
+   839→      cpu: 1000m
+   840→      memory: 4Gi
+   841→    limits:
+   842→      cpu: 2000m
+   843→      memory: 8Gi
+   844→  monitoredServices:
+   845→    - type: prometheus
+   846→  backup:
+   847→    retentionDays: 30
+   848→    barmanObjectStore:
+   849→      destinationPath: s3://cybersoc-backups/postgresql
+   850→      endpointUrl: https://s3.amazonaws.com
+   851→      s3Credentials:
+   852→        accessKeyId:
+   853→          name: cybersoc-backup-creds
+   854→          key: ACCESS_KEY_ID
+   855→        secretAccessKey:
+   856→          name: cybersoc-backup-creds
+   857→          key: SECRET_ACCESS_KEY
+   858→      serverName: cybersoc-postgres-current
+   859→      wal:
+   860→        compression: gzip
+   861→        maxParallel: 2
+   862→  affinity:
+   863→    topologySpreadConstraints:
+   864→      - maxSkew: 1
+   865→        topologyKey: topology.kubernetes.io/zone
+   866→        whenUnsatisfiable: DoNotSchedule
+   867→        labelSelector:
+   868→          matchLabels:
+   869→            postgresql.cnpg.io/cluster: cybersoc-postgres"""
+   870→    story.append(Preformatted(pg_manifest, styles['CyberSOCCode']))
+   871→    story.append(Paragraph("Listing 7.1: CloudNativePG Cluster Definition", styles['CyberSOCCaption']))
+   872→    
+   873→    story.append(Paragraph("7.2 Redis Cluster Configuration", styles['CyberSOCH2']))
+   874→    redis_text = """
+   875→Redis deployment operates in cluster mode with six nodes (three masters, three replicas) providing high availability and horizontal partitioning for dataset sizes exceeding single-node memory capacity. The cluster handles session state storage, real-time event pub/sub messaging, API rate limiting counters, and frequently-accessed configuration caching. Authentication is enforced via ACL rules with dedicated users for each application service, following least-privilege principles. Persistence configuration enables AOF (Append-Only File) with fsync-every-second for durability acceptable trade-off versus pure in-memory performance.
+   876→"""
+   877→    story.append(Paragraph(redis_text.strip(), styles['CyberSOCBodyNoIndent']))
+   878→    
+   879→    redis_manifest = """apiVersion: redis.redis.opstreelabs.in/v1beta1
+   880→kind: RedisCluster
+   881→metadata:
+   882→  name: cybersoc-redis
+   883→  namespace: cybersoc-data
+   884→spec:
+   885→  clusterSize: 6
+   886→  redisImage: redis:7.2-alpine
+   887→  redisConfig:
+   888→    maxmemory-policy: allkeys-lru
+   889→    save: ""
+   890→    appendonly: "yes"
+   891→    appendfsync: "everysec"
+   892→    tcp-keepalive: "300"
+   893→    timeout: "0"
+   894→    aclfile: /etc/redis/user.acl
+   895→  persistenceEnabled: true
+   896→  storage:
+   897→    volumeClaimTemplate:
+   898→      spec:
+   899→        storageClassName: gp3-crypted
+   900→        resources:
+   901→          requests:
+   902→            storage: 50Gi
+   903→  resources:
+   904→    requests:
+   905→      cpu: 500m
+   906→      memory: 1Gi
+   907→    limits:
+   908→      cpu: 1000m
+   909→      memory: 2Gi
+   910→  podSecurityContext:
+   911→    fsGroup: 1000
+   912→    runAsNonRoot: true
+   913→    runAsUser: 999
+   914→  nodeSelector:
+   915→    workload: memory
+   916→  tolerations:
+   917→    - key: workload=memory
+   918→      operator: Exists
+   919→      effect: NoSchedule
+   920→  topologySpreadConstraints:
+   921→    - maxSkew: 1
+   922→      topologyKey: kubernetes.io/zone
+   923→      whenUnsatisfiable: DoNotSchedule
+   924→      labelSelector:
+   925→        matchLabels:
+   926→          app.redis.opstreelabs.in/name: cybersoc-redis"""
+   927→    story.append(Preformatted(redis_manifest, styles['CyberSOCCode']))
+   928→    story.append(Paragraph("Listing 7.2: Redis Cluster with Persistence", styles['CyberSOCCaption']))
+   929→    
+   930→    # ==================== SECTION 8: SERVICE MESH ====================
+   931→    story.append(Paragraph("8. Service Mesh Integration", styles['CyberSOCH1']))
+   932→    story.append(HRFlowable(width="100%", thickness=1, color=BORDER, spaceBefore=5, spaceAfter=15))
+   933→    
+   934→    mesh_intro = """
+   935→Istio service mesh integration provides zero-trust networking for all CyberSOC platform components, enforcing mutual TLS encryption for all inter-service communication regardless of network perimeter security assumptions. The mesh configuration defines authorization policies implementing intent-based access control, telemetry collection for distributed tracing and metrics, and traffic management rules for canary deployments and circuit breaking. This section documents the istiod control plane configuration, sidecar injection policies, and security-focused mesh settings appropriate for handling sensitive security operations data.
+   936→"""
+   937→    story.append(Paragraph(mesh_intro.strip(), styles['CyberSOCBodyNoIndent']))
+   938→    
+   939→    story.append(Paragraph("8.1 Mesh-Wide mTLS Configuration", styles['CyberSOCH2']))
+   940→    mtls_text = """
+   941→PeerAuthentication resources define mTLS enforcement modes at namespace and workload granularity. The production configuration sets STRICT mode for all CyberSOC namespaces, requiring mutual TLS for all inbound connections and rejecting unencrypted traffic. Certificate management leverages Istio's built-in Citadel (now integrated into istiod) for automatic X.509 certificate issuance and rotation with 24-hour certificate validity and 1-hour rotation advance window. Workload identities integrate with Kubernetes ServiceAccount tokens via SPIFFE/SPIRE-compliant identity documents enabling cross-cluster mesh federation if multi-cluster deployment is implemented.
+   942→"""
+   943→    story.append(Paragraph(mtls_text.strip(), styles['CyberSOCBodyNoIndent']))
+   944→    
+   945→    mtls_manifest = """apiVersion: security.istio.io/v1beta1
+   946→kind: PeerAuthentication
+   947→metadata:
+   948→  name: default-mtls-strict
+   949→  namespace: cybersoc-system
+   950→spec:
+   951→  mtls:
+   952→    mode: STRICT
+   953→---
+   954→apiVersion: security.istio.io/v1beta1
+   955→kind: PeerAuthentication
+   956→metadata:
+   957→  name: default-mtls-strict
+   958→  namespace: cybersoc-workloads
+   959→spec:
+   960→  mtls:
+   961→    mode: STRICT
+   962→---
+   963→apiVersion: security.istio.io/v1beta1
+   964→kind: AuthorizationPolicy
+   965→metadata:
+   966→  name: deny-all-default
+   967→  namespace: cybersoc-workloads
+   968→spec:
+   969→  {}
+   970→  action: DENY
+   971→---
+   972→apiVersion: security.istio.io/v1beta1
+   973→kind: AuthorizationPolicy
+   974→metadata:
+   975→  name: allow-internal-traffic
+   976→  namespace: cybersoc-workloads
+   977→spec:
+   978→  action: ALLOW
+   979→  rules:
+   980→  - from:
+   981→    - source:
+   982→        principals:
+   983→        - "cluster.local/ns/cybersoc-system/sa/cybersoc-gateway"
+   984→        - "cluster.local/ns/cybersoc-system/sa/cybersoc-auth"
+   985→    - source:
+   986→        namespaces:
+   987→        - "cybersoc-workloads"
+   988→    to:
+   989→    - operation:
+   990→        methods: ["GET", "POST", "PUT", "DELETE", "PATCH"]
+   991→        notPaths: ["/admin/*", "/debug/*"]"""
+   992→    story.append(Preformatted(mtls_manifest, styles['CyberSOCCode']))
+   993→    story.append(Paragraph("Listing 8.1: Istio mTLS and Authorization Policies", styles['CyberSOCCaption']))
+   994→    
+   995→    story.append(Paragraph("8.2 Destination Rules and Traffic Management", styles['CyberSOCH2']))
+   996→    dest_rule = """
+   997→DestinationRule configurations establish connection pool settings, circuit breaker thresholds, and load balancing algorithms for service-to-service communication within the mesh. These settings protect backend services from cascading failures during traffic spikes or degraded downstream dependencies. Load balancing utilizes locality-aware round-robin to prefer same-zone endpoints, reducing cross-zone network costs and latency while maintaining distribution across availability zones for fault tolerance.
+   998→"""
+   999→    story.append(Paragraph(dest_rule.strip(), styles['CyberSOCBodyNoIndent']))
+  1000→    
+  1001→    dest_manifest = """apiVersion: networking.istio.io/v1beta1
+  1002→kind: DestinationRule
+  1003→metadata:
+  1004→  name: cybersoc-threat-engine
+  1005→  namespace: cybersoc-workloads
+  1006→spec:
+  1007→  host: cybersoc-threat-engine
+  1008→  trafficPolicy:
+  1009→    loadBalancer:
+  1010→      simple: LEAST_REQUEST
+  1011→      localityLbSetting:
+  1012→        enabled: true
+  1013→        distribute:
+  1014→          - from: us-east-1/us-east-1a
+  1015→            to:
+  1016→              "us-east-1/us-east-1a": 80
+  1017→              "us-east-1/us-east-1b": 10
+  1018→              "us-east-1/us-east-1c": 10
+  1019→    connectionPool:
+  1020→      tcp:
+  1021→        maxConnections: 100
+  1022→        connectTimeout: 5s
+  1023→        tcpKeepalive:
+  1024→          time: 7200s
+  1025→          interval: 75s
+  1026→      http:
+  1027→        h2UpgradePolicy: DEFAULT
+  1028→        http1MaxPendingRequests: 100
+  1029→        http2MaxRequests: 1000
+  1030→        maxRequestsPerConnection: 10
+  1031→        maxRetries: 3
+  1032→    outlierDetection:
+  1033→      consecutive5xxErrors: 5
+  1034→      interval: 30s
+  1035→      baseEjectionTime: 60s
+  1036→      maxEjectionPercent: 50
+  1037→      minHealthPercent: 51
+  1038→    tls:
+  1039→      mode: ISTIO_MUTUAL"""
+  1040→    story.append(Preformatted(dest_manifest, styles['CyberSOCCode']))
+  1041→    story.append(Paragraph("Listing 8.2: Threat Engine Destination Rule with Circuit Breaking", styles['CyberSOCCaption']))
+  1042→    
+  1043→    # ==================== SECTION 9: SECURITY HARDENING ====================
+  1044→    story.append(Paragraph("9. Security Hardening", styles['CyberSOCH1']))
+  1045→    story.append(HRFlowable(width="100%", thickness=1, color=BORDER, spaceBefore=5, spaceAfter=15))
+  1046→    
+  1047→    sec_intro = """
+  1048→Security hardening configurations implement defense-in-depth protections aligned with CIS Kubernetes Benchmark, NIST SP 800-204B (Zero Trust Architecture), and PCI-DSS requirements applicable to security operations platforms. This section addresses pod security standards, network policy enforcement, secrets management integration, container image integrity verification, and runtime security monitoring. All configurations represent mandatory production requirements; deviations require formal risk acceptance documentation and compensating control implementation approved by the CyberSOC security architecture team.
+  1049→"""
+  1050→    story.append(Paragraph(sec_intro.strip(), styles['CyberSOCBodyNoIndent']))
+  1051→    
+  1052→    story.append(Paragraph("9.1 Pod Security Standards", styles['CyberSOCH2']))
+  1053→    pss_text = """
+  1054→Kubernetes Pod Security Standards (PSS) enforce baseline, restricted, and privileged policy levels at the namespace level through built-in admission controllers or third-party policy engines such as Kyverno or OPA Gatekeeper. CyberSOC production namespaces enforce the Restricted profile as minimum, prohibiting privilege escalation, requiring non-root execution, dropping all capabilities by default, and mandating read-only root filesystems. Exceptions for specific workloads requiring elevated privileges (such as node-agent based security scanners) undergo enhanced review and are deployed in isolated namespaces with Privileged profile explicitly acknowledged.
+  1055→"""
+  1056→    story.append(Paragraph(pss_text.strip(), styles['CyberSOCBodyNoIndent']))
+  1057→    
+  1058→    pss_manifest = """apiVersion: psp.policy/v1alpha1
+  1059→kind: PodSecurityPolicy
+  1060→metadata:
+  1061→  name: cybersoc-restricted
+  1062→  annotations:
+  1063→    seccomp.security.alpha.kubernetes.io/allowedProfiles: runtime/default
+  1064→    apparmor.security.alpha.kubernetes.io/allowedProfiles: runtime/default
+  1065→spec:
+  1066→  privileged: false
+  1067→  allowPrivilegeEscalation: false
+  1068→  requiredDropCapabilities:
+  1069→    - ALL
+  1070→  volumes:
+  1071→    - 'configMap'
+  1072→    - 'emptyDir'
+  1073→    - 'projected'
+  1074→    - 'secret'
+  1075→    - 'downwardAPI'
+  1076→    - 'persistentVolumeClaim'
+  1077→  hostNetwork: false
+  1078→  hostIPC: false
+  1079→  hostPID: false
+  1080→  runAsUser:
+  1081→    rule: MustRunAsNonRoot
+  1082→  runAsGroup:
+  1083→    rule: MustRunAs
+  1084→    ranges:
+  1085→      - min: 100
+  1086→        max: 65535
+  1087→  supplementalGroups:
+  1088→    rule: MustRunAs
+  1089→    ranges:
+  1090→      - min: 100
+  1091→        max: 65535
+  1092→  fsGroup:
+  1093→    rule: MustRunAs
+  1094→    ranges:
+  1095→      - min: 100
+  1096→        max: 65535
+  1097→  readOnlyRootFilesystem: true
+  1098→  seccompProfile:
+  1099→    type: RuntimeDefault"""
+  1100→    story.append(Preformatted(pss_manifest, styles['CyberSOCCode']))
+  1101→    story.append(Paragraph("Listing 9.1: Restricted Pod Security Policy", styles['CyberSOCCaption']))
+  1102→    
+  1103→    story.append(Paragraph("9.2 Network Policy Implementation", styles['CyberSOCH2']))
+  1104→    netpol_text = """
+  1105→Network policies implement zero-trust networking principles by default-deny-ingress at the namespace level, then selectively permitting required traffic flows through explicitly defined policy rules. The policy architecture follows a layered approach with baseline namespace policies establishing deny-all defaults, followed by component-specific policies authorizing necessary communication patterns. Policy enforcement occurs at the kernel level through kube-proxy iptables/ipvs rules or, when using CNI plugins like Calico or Cilium, through more efficient eBPF-based implementations supporting L7 policy awareness.
+  1106→"""
+  1107→    story.append(Paragraph(netpol_text.strip(), styles['CyberSOCBodyNoIndent']))
+  1108→    
+  1109→    netpol_manifest = """apiVersion: networking.k8s.io/v1
+  1110→kind: NetworkPolicy
+  1111→metadata:
+  1112→  name: default-deny-all-ingress
+  1113→  namespace: cybersoc-workloads
+  1114→spec:
+  1115→  podSelector: {}
+  1116→  policyTypes:
+  1117→  - Ingress
+  1118→---
+  1119→apiVersion: networking.k8s.io/v1
+  1120→kind: NetworkPolicy
+  1121→metadata:
+  1122→  name: allow-gateway-to-workloads
+  1123→  namespace: cybersoc-workloads
+  1124→spec:
+  1125→  podSelector:
+  1126→    matchLabels:
+  1127→      app.kubernetes.io/part-of: cybersoc-platform
+  1128→  policyTypes:
+  1129→  - Ingress
+  1130→  ingress:
+  1131→  - from:
+  1132→    - namespaceSelector:
+  1133→        matchLabels:
+  1134→          kubernetes.io/metadata.name: cybersoc-system
+  1135→      podSelector:
+  1136→        matchLabels:
+  1137→          app.kubernetes.io/name: cybersoc-gateway
+  1138→    ports:
+  1139→    - protocol: TCP
+  1140→      port: 8080
+  1141→---
+  1142→apiVersion: networking.k8s.io/v1
+  1143→kind: NetworkPolicy
+  1144→metadata:
+  1145→  name: allow-same-namespace
+  1146→  namespace: cybersoc-workloads
+  1147→spec:
+  1148→  podSelector:
+  1149→    matchLabels:
+  1150→      app.kubernetes.io/part-of: cybersoc-platform
+  1151→  policyTypes:
+  1152→  - Ingress
+  1153→  - Egress
+  1154→  ingress:
+  1155→  - from:
+  1156→    - podSelector:
+  1157→        matchLabels:
+  1158→          app.kubernetes.io/part-of: cybersoc-platform
+  1159→  egress:
+  1160→  - to:
+  1161→    - podSelector:
+  1162→        matchLabels:
+  1163→          app.kubernetes.io/part-of: cybersoc-platform"""
+  1164→    story.append(Preformatted(netpol_manifest, styles['CyberSOCCode']))
+  1165→    story.append(Paragraph("Listing 9.2: Zero-Trust Network Policies", styles['CyberSOCCaption']))
+  1166→    
+  1167→    # ==================== SECTION 10: DEPLOYMENT PROCEDURES ====================
+  1168→    story.append(Paragraph("10. Deployment Procedures", styles['CyberSOCH1']))
+  1169→    story.append(HRFlowable(width="100%", thickness=1, color=BORDER, spaceBefore=5, spaceAfter=15))
+  1170→    
+  1171→    deploy_intro = """
+  1172→This section provides step-by-step deployment procedures for installing the CyberSOC Platform into production Kubernetes environments. Procedures are sequenced in dependency order, beginning with cluster-level prerequisites and progressing through infrastructure components, databases, application services, and finally post-deployment validation. Each procedure includes pre-flight checks, execution commands, expected outputs, and rollback triggers. Automated deployment through CI/CD pipelines should incorporate these procedures as referenced job definitions with appropriate approval gates for production environments.
+  1173→"""
+  1174→    story.append(Paragraph(deploy_intro.strip(), styles['CyberSOCBodyNoIndent']))
+  1175→    
+  1176→    story.append(Paragraph("10.1 Pre-Flight Verification Checklist", styles['CyberSOCH2']))
+  1177→    preflight_text = """
+  1178→Before initiating deployment, execute the following verification commands to confirm cluster readiness and prerequisite satisfaction. Any check failure must be resolved before proceeding; attempting deployment against an unprepared cluster will result in undefined behavior, partial installations requiring manual cleanup, or runtime failures affecting platform stability. Document all pre-flight results in the deployment runbook for post-incident analysis if issues arise during subsequent steps.
+  1179→"""
+  1180→    story.append(Paragraph(preflight_text.strip(), styles['CyberSOCBodyNoIndent']))
+  1181→    
+  1182→    preflight_data = [
+  1183→        ['Check', 'Command', 'Expected Output', 'Remediation'],
+  1184→        ['K8s Version', 'kubectl version --short', 'v1.28+ server', 'Upgrade cluster'],
+  1185→        ['Node Readiness', 'kubectl get nodes', 'Ready status', 'Investigate nodes'],
+  1186→        ['Helm Installed', 'helm version', 'v3.12+', 'Install/upgrade Helm'],
+  1187→        ['Cert Manager', 'kubectl get pods -n cert-manager', 'Running', 'Install cert-manager'],
+  1188→        ['Istiod Running', 'kubectl get pods -n istio-system', 'Running', 'Install Istio'],
+  1189→        ['Storage Classes', 'kubectl get sc', 'gp3-crypted exists', 'Create SC'],
+  1190→        ['Quota Available', 'kubectl resourcequota -n cybersoc-system', 'Headroom > 50%', 'Adjust quotas'],
+  1191→    ]
+  1192→    story.append(create_section_table(preflight_data, [80, 130, 90, 100], styles))
+  1193→    story.append(Paragraph("Table 10.1: Pre-Flight Verification Checklist", styles['CyberSOCCaption']))
+  1194→    
+  1195→    story.append(Paragraph("10.2 Step-by-Step Deployment Workflow", styles['CyberSOCH2']))
+  1196→    
+  1197→    deploy_steps = """
+  1198→<b>Step 1: Create Namespaces and Base Resources</b>
+  1199→Execute namespace creation and apply resource quotas, network policies, and PodSecurityPolicy bindings that establish the operational boundaries for all subsequent deployments. Verify namespace creation before proceeding.
+  1200→
+  1201→<font face="SarasaMonoSC" size="8">
+  1202→kubectl apply -f k8s/base/namespaces.yaml<br/>
+  1203→kubectl apply -f k8s/base/resourcequotas.yaml<br/>
+  1204→kubectl apply -f k8s/base/networkpolicies.yaml<br/>
+  1205→kubectl get namespaces | grep cybersoc
+  1206→</font>
+  1207→
+  1208→<b>Step 2: Install Certificates and Secrets</b>
+  1209→Deploy certificate issuers (Let's Encrypt production or enterprise CA), request TLS certificates for gateway and internal services, and configure ExternalSecret resources to synchronize credentials from HashiCorp Vault or cloud KMS into Kubernetes secrets.
+  1210→
+  1211→<font face="SarasaMonoSC" size="8">
+  1212→helm install cert-manager jetstack/cert-manager -n cert-manager<br/>
+  1213→kubectl apply -f k8s/secrets/certificate-issuers.yaml<br/>
+  1214→kubectl apply -f k8s/secrets/external-secrets.yaml<br/>
+  1215→kubectl wait --for=condition=ready certificate/cybersoc-gateway-tls -n cybersoc-system --timeout=300s
+  1216→</font>
+  1217→
+  1218→<b>Step 3: Deploy Database Layer</b>
+  1219→Initialize PostgreSQL cluster via CloudNativePG operator, Redis cluster via Redis operator, and Elasticsearch cluster via ECK operator. Wait for all database clusters to reach Ready state before proceeding to application deployment.
+  1220→
+  1221→<font face="SarasaMonoSC" size="8">
+  1222→helm dependency build charts/cybersoc-database/<br/>
+  1223→helm install cybersoc-database ./charts/cybersoc-database -n cybersoc-data -f values-prod-db.yaml<br/>
+  1224→kubectl wait --for=condition=Ready cluster/cybersoc-postgres -n cybersoc-data --timeout=600s<br/>
+  1225→kubectl wait --for=condition=Ready rediscluster/cybersoc-redis -n cybersoc-data --timeout=300s
+  1226→</font>
+  1227→
+  1228→<b>Step 4: Deploy Application Services</b>
+  1229→Install the main CyberSOC platform chart with production values file, triggering deployment of gateway, authentication, threat engine, SIEM core, case management, and UI frontend components. Monitor rollout progress for each component.
+  1230→
+  1231→<font face="SarasaMonoSC" size="8">
+  1232→helm dependency build ./<br/>
+  1233→helm install cybersoc-platform ./ -n cybersoc-workloads -f values-production.yaml --timeout 15m<br/>
+  1234→kubectl rollout status deployment/cybersoc-gateway -n cybersoc-system --timeout=300s<br/>
+  1235→kubectl rollout status deployment/cybersoc-threat-engine -n cybersoc-workloads --timeout=600s
+  1236→</font>
+  1237→
+  1238→<b>Step 5: Configure DNS and Ingress</b>
+  1239→Create DNS records pointing to the gateway load balancer, configure VirtualService routes for path-based routing, and verify end-to-end TLS connectivity from external clients through to backend services.
+  1240→
+  1241→<font face="SarasaMonoSC" size="8">
+  1242→export LB_HOST=$(kubectl get svc cybersoc-gateway -n cybersoc-system -o jsonpath='{.status.loadBalancer.ingress[0].hostname}')<br/>
+  1243→# Update DNS: api.cybersoc.example.com -> $LB_HOST<br/>
+  1244→kubectl apply -f k8s/networking/virtualservices.yaml<br/>
+  1245→curl -vvv https://api.cybersoc.example.com/healthz
+  1246→</font>
+  1247→
+  1248→<b>Step 6: Post-Deployment Validation</b>
+  1249→Execute comprehensive health checks, smoke tests, and integration verification to confirm all components are operational and communicating correctly. Document validation results and any deviations requiring follow-up.
+  1250→
+  1251→<font face="SarasaMonoSC" size="8">
+  1252→./scripts/validate-deployment.sh --environment production<br/>
+  1253→./scripts/smoke-tests.sh --endpoint https://api.cybersoc.example.com<br/>
+  1254→kubectl top nodes && kubectl top pods -A | sort -k3 -h
+  1255→</font>
+  1256→"""
+  1257→    story.append(Paragraph(deploy_steps, styles['CyberSOCBodyNoIndent']))
+  1258→    
+  1259→    # ==================== SECTION 11: SCALING STRATEGIES ====================
+  1260→    story.append(Paragraph("11. Scaling Strategies", styles['CyberSOCH1']))
+  1261→    story.append(HRFlowable(width="100%", thickness=1, color=BORDER, spaceBefore=5, spaceAfter=15))
+  1262→    
+  1263→    scaling_intro = """
+  1264→Production deployment must accommodate variable workloads ranging from steady-state operation during normal business hours through extreme demand spikes during active security incidents affecting multiple customers simultaneously. This section documents horizontal and vertical scaling configurations, auto-scaling trigger calibration, and operational procedures for manual scaling interventions when automated responses prove insufficient. Scaling strategies balance responsiveness to demand changes against cost efficiency and stability during scale events.
+  1265→"""
+  1266→    story.append(Paragraph(scaling_intro.strip(), styles['CyberSOCBodyNoIndent']))
+  1267→    
+  1268→    story.append(Paragraph("11.1 Horizontal Pod Autoscaler Tuning", styles['CyberSOCH2']))
+  1269→    hpa_tuning = """
+  1270→HPA tuning requires understanding of workload characteristics to select appropriate metrics, threshold values, and stabilization windows that prevent oscillation (replica count thrashing between scale-up and scale-down events). CPU-based scaling provides baseline responsiveness but poorly represents actual capacity pressure for I/O-bound or queue-driven workloads. Custom metrics from Prometheus (requests per second, queue depth, latency percentiles) enable more accurate scaling decisions aligned with user experience quality indicators rather than infrastructure utilization proxies.
+  1271→"""
+  1272→    story.append(Paragraph(hpa_tuning.strip(), styles['CyberSOCBodyNoIndent']))
+  1273→    
+  1274→    scaling_data = [
+  1275→        ['Component', 'Min Replicas', 'Max Replicas', 'Primary Metric', 'Target', 'Scale-up Rate'],
+  1276→        ['API Gateway', '3', '20', 'CPU + RPS', '70% / 1000 req/s', '100% per 15s'],
+  1277→        ['Threat Engine', '5', '50', 'Queue Depth', '< 100 events', '4 pods per 15s'],
+  1278→        ['SIEM Core', '3', '25', 'CPU + Latency P99', '75% / < 500ms', '100% per 30s'],
+  1279→        ['Case Management', '2', '10', 'CPU', '70%', '50% per 60s'],
+  1280→        ['Frontend', '3', '15', 'CPU + Connections', '70% / 5000 conn', '100% per 15s'],
+  1281→    ]
+  1282→    story.append(create_section_table(scaling_data, [85, 55, 60, 85, 85, 75], styles))
+  1283→    story.append(Paragraph("Table 11.1: HPA Configuration by Component", styles['CyberSOCCaption']))
+  1284→    
+  1285→    story.append(Paragraph("11.2 Cluster Autoscaler Configuration", styles['CyberSOCH2']))
+  1286→    ca_text = """
+  1287→When pod scaling exhausts available node capacity, the Cluster Autoscaler (or cloud-provider equivalent such as Karpenter for AWS or Autopilot for GKE) provisions new nodes to accommodate pending pods. Configuration balances over-provisioning waste against startup latency for cold nodes. Scale-down thresholds prevent premature node termination that would trigger disruptive pod rescheduling. Priority-based scoring ensures critical system components receive node capacity before lower-priority batch workloads during resource-constrained situations.
+  1288→"""
+  1289→    story.append(Paragraph(ca_text.strip(), styles['CyberSOCBodyNoIndent']))
+  1290→    
+  1291→    # ==================== SECTION 12: MONITORING ====================
+  1292→    story.append(Paragraph("12. Monitoring and Observability", styles['CyberSOCH1']))
+  1293→    story.append(HRFlowable(width="100%", thickness=1, color=BORDER, spaceBefore=5, spaceAfter=15))
+  1294→    
+  1295→    mon_intro = """
+  1296→Comprehensive monitoring and observability are essential for operating the CyberSOC Platform at production scale, enabling rapid detection of anomalies, efficient root cause analysis during incidents, and data-driven capacity planning. The monitoring stack integrates Prometheus for metrics collection and alerting, Grafana for dashboard visualization, Jaeger for distributed tracing, and Loki for log aggregation. This section documents the monitoring architecture, key metrics to track, alert threshold configurations, and dashboard layouts for operational visibility.
+  1297→"""
+  1298→    story.append(Paragraph(mon_intro.strip(), styles['CyberSOCBodyNoIndent']))
+  1299→    
+  1300→    story.append(Paragraph("12.1 Key Performance Indicators", styles['CyberSOCH2']))
+  1301→    
+  1302→    kpi_data = [
+  1303→        ['KPI Category', 'Metric Name', 'Alert Threshold', 'Dashboard Panel'],
+  1304→        ['Availability', 'Uptime Percentage', '< 99.9% triggers P1', 'SLA Overview'],
+  1305→        ['Latency', 'API Response P50', '> 200ms warning', 'Latency Distribution'],
+  1306→        ['Latency', 'API Response P99', '> 2000ms critical', 'Latency Distribution'],
+  1307→        ['Throughput', 'Events Processed/sec', '< baseline - 30%', 'Throughput Gauge'],
+  1308→        ['Error Rate', 'HTTP 5xx Errors', '> 1% warning, > 5% critical', 'Error Budget'],
+  1309→        ['Saturation', 'CPU Utilization', '> 80% sustained', 'Resource Utilization'],
+  1310→        ['Saturation', 'Memory Utilization', '> 85% warning', 'Resource Utilization'],
+  1311→        ['Internal', 'Queue Depth', '> 1000 events', 'Pipeline Status'],
+  1312→        ['Business', 'Active Incidents', '> 10x baseline', 'Operations Overview'],
+  1313→    ]
+  1314→    story.append(create_section_table(kpi_data, [75, 110, 115, 100], styles))
+  1315→    story.append(Paragraph("Table 12.1: Critical KPIs and Alert Thresholds", styles['CyberSOCCaption']))
+  1316→    
+  1317→    # ==================== SECTION 13: DISASTER RECOVERY ====================
+  1318→    story.append(Paragraph("13. Disaster Recovery", styles['CyberSOCH1']))
+  1319→    story.append(HRFlowable(width="100%", thickness=1, color=BORDER, spaceBefore=5, spaceAfter=15))
+  1320→    
+  1321→    dr_intro = """
+  1322→Disaster recovery planning ensures the CyberSOC Platform can recover from catastrophic failures including entire availability zone loss, region-wide outages, or data corruption events. This section documents backup strategies for each data tier, recovery time objectives (RTO) and recovery point objectives (RPO) by component, failover procedures, and testing cadence requirements. DR procedures must be practiced regularly through chaos engineering exercises to validate assumptions and identify gaps before real incidents expose deficiencies.
+  1323→"""
+  1324→    story.append(Paragraph(dr_intro.strip(), styles['CyberSOCBodyNoIndent']))
+  1325→    
+  1326→    story.append(Paragraph("13.1 Backup Strategy by Data Tier", styles['CyberSOCH2']))
+  1327→    
+  1328→    backup_data = [
+  1329→        ['Data Tier', 'Technology', 'Backup Frequency', 'Retention', 'RPO Target'],
+  1330→        ['PostgreSQL', 'CloudNativePG WAL + Base', 'Continuous WAL, Daily base', '30 days', '< 5 min'],
+  1331→        ['Redis AOF', 'S3 Snapshot', 'Hourly', '7 days', '< 1 hour'],
+  1332→        ['Elasticsearch', 'Snapshot Repository', 'Every 6 hours', '14 days', '< 6 hours'],
+  1333→        ['Object Storage (S3)', 'Cross-Region Replication', 'Real-time CRR', '90 days', 'Near-zero'],
+  1334→        ['Secrets (Vault)', 'Raft Auto-snapshot', 'Automatic', '30 days', '< 15 min'],
+  1335→        ['GitOps Repo', 'Geo-redundant Git', 'On push', 'Indefinite', '< 1 min'],
+  1336→    ]
+  1337→    story.append(create_section_table(backup_data, [90, 105, 95, 70, 70], styles))
+  1338→    story.append(Paragraph("Table 13.1: Backup Strategy Matrix", styles['CyberSOCCaption']))
+  1339→    
+  1340→    story.append(Paragraph("13.2 Failover Procedure", styles['CyberSOCH2']))
+  1341→    failover_text = """
+  1342→In the event of primary region failure, initiate the documented failover procedure to activate the standby deployment in the secondary region. The procedure assumes standby infrastructure is pre-provisioned and continuously replicating data from primary; cold-start provisioning is not covered as it exceeds RTO targets. Failover execution requires coordination between platform team (infrastructure failover), security team (access restoration validation), and customer success team (communication regarding service interruption).
+  1343→
+  1344→<b>Failover Steps:</b>
+  1345→1. Confirm primary region outage via multiple monitoring sources (avoid false positive triggers)
+  1346→2. Execute DNS cutover to secondary region load balancer (TTL should be 60 seconds maximum)
+  1347→3. Activate read-write mode on standby PostgreSQL cluster (promote replica)
+  1348→4. Redirect object storage traffic to secondary bucket
+  1349→5. Validate end-to-end functionality via smoke test suite
+  1350→6. Communicate status to stakeholders via established notification channels
+  1351→7. Initiate post-mortem timeline reconstruction once primary region recovers
+  1352→"""
+  1353→    story.append(Paragraph(failover_text, styles['CyberSOCBodyNoIndent']))
+  1354→    
+  1355→    # ==================== SECTION 14: TROUBLESHOOTING ====================
+  1356→    story.append(Paragraph("14. Troubleshooting Guide", styles['CyberSOCH1']))
+  1357→    story.append(HRFlowable(width="100%", thickness=1, color=BORDER, spaceBefore=5, spaceAfter=15))
+  1358→    
+  1359→    ts_intro = """
+  1360→This troubleshooting guide addresses common operational issues encountered during CyberSOC Platform deployment and operation. Each issue entry includes symptom description, diagnostic commands, root cause analysis guidance, and resolution steps. For issues not covered in this guide, escalate to the platform engineering team via the designated PagerDuty rotation with collected diagnostic artifacts including pod logs, events, and metrics snapshots surrounding the issue timeframe.
+  1361→"""
+  1362→    story.append(Paragraph(ts_intro.strip(), styles['CyberSOCBodyNoIndent']))
+  1363→    
+  1364→    story.append(Paragraph("14.1 Common Issues and Resolutions", styles['CyberSOCH2']))
+  1365→    
+  1366→    trouble_data = [
+  1367→        ['Symptom', 'Likely Cause', 'Diagnostic Command', 'Resolution'],
+  1368→        ['Pod CrashLoopBackOff', 'Missing ConfigMap/Secret', 'kubectl describe pod', 'Verify resource existence'],
+  1369→        ['Pod Pending (Insufficient CPU)', 'Cluster at capacity', 'kubectl describe node', 'Scale cluster or reduce requests'],
+  1370→        ['503 from Gateway', 'Backend unhealthy', 'kubectl get endpoints', 'Check backend pod health'],
+  1371→        ['TLS Handshake Failure', 'Certificate expired/missing', 'kubectl get certificate', 'Renew via cert-manager'],
+  1372→        ['High Memory OOMKills', 'Limits too low', 'kubectl top pods', 'Increase memory limits'],
+  1373→        ['Slow API Responses', 'Database connection exhaustion', 'check DB pool metrics', 'Increase pool size'],
+  1374→        ['Intermittent 500 Errors', 'Pod being evicted (PDB)', 'kubectl get pdb', 'Adjust PDB or add capacity'],
+  1375→        ['Metrics Missing', 'ServiceMonitor misconfigured', 'kubectl get servicemonitor', 'Fix label selectors'],
+  1376→    ]
+  1377→    story.append(create_section_table(trouble_data, [100, 95, 105, 100], styles))
+  1378→    story.append(Paragraph("Table 14.1: Common Issues Quick Reference", styles['CyberSOCCaption']))
+  1379→    
+  1380→    # Build PDF
+  1381→    doc.build(story)
+  1382→    print(f"Successfully generated: {output_path}")
+  1383→    return output_path
+  1384→
+  1385→
+  1386→if __name__ == "__main__":
+  1387→    output_file = build_k8s_deployment_guide()
+  1388→    print(f"\nKubernetes Production Deployment Guide generated successfully!")
+  1389→    print(f"Output: {output_file}")
+  1390→

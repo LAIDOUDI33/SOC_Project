@@ -1,0 +1,744 @@
+     1→"""
+     2→Djezzy SOC - SS7/Diameter Signaling Collector
+     3→Captures and normalizes telecom signaling messages from STP/MSC/HLR via SIGTRAN (M3UA/SCTP) or Diameter
+     4→"""
+     5→
+     6→import asyncio
+     7→import json
+     8→import logging
+     9→import signal
+    10→import socket
+    11→import struct
+    12→import time
+    13→from dataclasses import dataclass, field, asdict
+    14→from datetime import datetime, timezone
+    15→from enum import Enum
+    16→from pathlib import Path
+    17→from typing import Optional, Dict, List, Any
+    18→
+    19→import orjson
+    20→from confluent_kafka import Producer
+    21→from fastapi import FastAPI, HTTPException
+    22→from pydantic import BaseModel, Field
+    23→from pydantic_settings import BaseSettings
+    24→
+    25→# Configure structured logging
+    26→import structlog
+    27→
+    28→structlog.configure(
+    29→    processors=[
+    30→        structlog.stdlib.filter_by_level,
+    31→        structlog.add_log_level,
+    32→        structlog.processors.TimeStamper(fmt="iso"),
+    33→        structlog.processors.StackInfoRenderer(),
+    34→        structlog.processors.format_exc_info,
+    35→        structlog.dev.ConsoleRenderer(),
+    36→    ],
+    37→    wrapper_class=structlog.stdlib.BoundLogger,
+    38→    context_class=dict,
+    39→    logger_factory=structlog.PrintLoggerFactory(),
+    40→    cache_logger_on_first_use=True,
+    41→)
+    42→
+    43→logger = structlog.get_logger()
+    44→
+    45→
+    46→# ============== Configuration ==============
+    47→
+    48→class Settings(BaseSettings):
+    49→    """Application settings from environment variables."""
+    50→    
+    51→    # Server configuration
+    52→    host: str = "0.0.0.0"
+    53→    port: int = 7000
+    54→    
+    55→    # SS7/SIGTRAN configuration
+    56→    m3ua_listen_port: int = 2904
+    57→    sctp_listen_port: int = 2905
+    58→    
+    59→    # Diameter configuration
+    60→    diameter_listen_port: int = 3868
+    61→    diameter_realm: str = "djezzy.dz"
+    62→    diameter_host: str = "ss7-collector.djezzy.dz"
+    63→    
+    64→    # Kafka configuration
+    65→    kafka_bootstrap_servers: str = "kafka-broker-1:9092,kafka-broker-2:9092,kafka-broker-3:9092"
+    66→    output_topic: str = "ss7-raw-events"
+    67→    kafka_linger_ms: int = 10
+    68→    kafka_batch_size: int = 16384
+    69→    kafka_compression_type: str = "lz4"
+    70→    
+    71→    # Capture settings
+    72→    capture_interface: str = "eth0"
+    73→    pcap_enabled: bool = True
+    74→    pcap_dir: Path = Path("/var/capture/ss7")
+    75→    pcap_max_size_mb: int = 512
+    76→    pcap_rotation_interval_hours: int = 1
+    77→    
+    78→    # Processing settings
+    79→    normalize_messages: bool = True
+    80→    enrich_with_geoip: bool = True
+    81→    max_message_size_bytes: int = 65535
+    82→    buffer_size: int = 10000
+    83→    
+    84→    class Config:
+    85→        env_prefix = "SS7_"
+    86→        env_file = "/etc/ss7-collector/.env"
+    87→
+    88→
+    89→settings = Settings()
+    90→
+    91→
+    92→# ============== Data Models ==============
+    93→
+    94→class SS7Protocol(Enum):
+    95→    MTP3 = "mtp3"
+    96→    SCCP = "sccp"
+    97→    TCAP = "tcap"
+    98→    MAP = "map"
+    99→    CAP = "cap"
+   100→    ISUP = "isup"
+   101→    INAP = "inap"
+   102→    DIAMETER = "diameter"
+   103→
+   104→
+   105→class MessageType(Enum):
+   106→    # MAP messages
+   107→    MAP_SEND_ROUTING_INFO_FOR_SM = "sendRoutingInfoForSM"
+   108→    MAP_PROVIDE_ROAMING_NUMBER = "provideRoamingNumber"
+   109→    MAP_UPDATE_LOCATION = "updateLocation"
+   110→    MAP_CANCEL_LOCATION = "cancelLocation"
+   111→    MAP_INSERT_SUBSCRIBER_DATA = "insertSubscriberData"
+   112→    MAP_DELETE_SUBSCRIBER_DATA = "deleteSubscriberData"
+   113→    MAP_FORWARD_SHORT_MESSAGE = "forwardShortMessage"
+   114→    MAP_PROCESS_UNSTRUCTURED_SS_REQUEST = "processUnstructuredSSRequest"
+   115→    MAP_AUTHENTICATION_FAILURE_REPORT = "authenticationFailureReport"
+   116→    MAP_NOTE_SUBSCRIBER_PRESENT = "noteSubscriberPresent"
+   117→    MAP_READY_FOR_SM = "readyForSM"
+   118→    MAP_ANY_TIME_INTERROGATION = "anyTimeInterrogation"
+   119→    
+   120→    # ISUP messages
+   121→    ISUP_IAM = "initialAddressMessage"  # Initial Address Message
+   122→    ISUP_ACM = "addressCompleteMessage"
+   123→    ISUP_ANM = "answerMessage"
+   124→    ISUP_REL = "releaseMessage"
+   125→    ISUP_RLC = "releaseComplete"
+   126→    
+   127→    # Diameter messages
+   128→    DIAMETER_CER = "capabilities-exchange-request"
+   129→    DIAMETER_CEA = "capabilities-exchange-answer"
+   130→    DIAMETER_DWR = "device-watchdog-request"
+   131→    DIAMETER_DWA = "device-watchdog-answer"
+   132→    DIAMETER_ULR = "user-location-register-request"  # S6a/HSS
+   133→    DIAMETER_ULA = "user-location-register-answer"
+   134→    DIAMETER_AIR = "authenticate-information-request"
+   135→    DIAMETER_AIA = "authenticate-information-answer"
+   136→    DIAMETER_CLR = "cancel-location-request"
+   137→    DIAMETER_CLA = "cancel-location-answer"
+   138→    DIAMETER_IDR = "insert-subscriber-data-request"
+   139→    DIAMETER_IDA = "insert-subscriber-data-answer"
+   140→    
+   141→
+   142→@dataclass
+   143→class GlobalTitle:
+   144→    """SS7 Global Title (GT) structure."""
+   145→    number_type: int  # Nature of address indicator
+   146→    numbering_plan: int
+   147→    translation_type: int
+   148→    encoding_scheme: int
+   149→    address: str  # Digits string
+   150→
+   151→
+   152→@dataclass  
+   153→class SS7Message:
+   154→    """Normalized SS7 message structure."""
+   155→    
+   156→    # Metadata
+   157→    timestamp: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+   158→    message_id: str = field(default_factory=lambda: f"ss7_{int(time.time()*1000000)}")
+   159→    capture_source: str = "unknown"
+   160→    raw_length: int = 0
+   161→    
+   162→    # Protocol layers
+   163→    protocol: SS7Protocol = SS7Protocol.MAP
+   164→    message_type: MessageType = None
+   165→    opcode: int = 0
+   166→    
+   167→    # Addresses
+   168→    calling_party_gt: Optional[GlobalTitle] = None
+   169→    called_party_gt: Optional[GlobalTitle] = None
+   170→    originating_point_code: int = 0
+   171→    destination_point_code: int = 0
+   172→    
+   173→    # Subscriber info (if present)
+   174→    imsi: Optional[str] = None
+   175→    msisdn: Optional[str] = None
+   176→    imei: Optional[str] = None
+   177→    
+   178→    # Location info
+   179→    msc_address: Optional[str] = None
+   180→    vlr_number: Optional[str] = None
+   181→    location_area: Optional[Dict] = None
+   182→    cell_id: Optional[str] = None
+   183→    
+   184→    # Content
+   185→    payload: Optional[Dict] = None
+   186→    raw_payload_hex: Optional[str] = None
+   187→    
+   188→    # Risk indicators (computed during analysis)
+   189→    risk_score: float = 0.0
+   190→    risk_indicators: List[str] = field(default_factory=list)
+   191→    
+   192→    def to_dict(self) -> Dict:
+   193→        """Convert to dictionary for JSON serialization."""
+   194→        return {
+   195→            "timestamp": self.timestamp.isoformat(),
+   196→            "message_id": self.message_id,
+   197→            "capture_source": self.capture_source,
+   198→            "raw_length": self.raw_length,
+   199→            "protocol": self.protocol.value if isinstance(self.protocol, SS7Protocol) else self.protocol,
+   200→            "message_type": self.message_type.value if isinstance(self.message_type, MessageType) else self.message_type,
+   201→            "opcode": self.opcode,
+   202→            "calling_party_gt": asdict(self.calling_party_gt) if self.calling_party_gt else None,
+   203→            "called_party_gt": asdict(self.called_party_gt) if self.called_party_gt else None,
+   204→            "originating_point_code": self.originating_point_code,
+   205→            "destination_point_code": self.destination_point_code,
+   206→            "imsi": self.imsi,
+   207→            "msisdn": self.msisdn,
+   208→            "imei": self.imei,
+   209→            "msc_address": self.msc_address,
+   210→            "vlr_number": self.vlr_number,
+   211→            "location_area": self.location_area,
+   212→            "cell_id": self.cell_id,
+   213→            "payload": self.payload,
+   214→            "risk_score": self.risk_score,
+   215→            "risk_indicators": self.risk_indicators,
+   216→        }
+   217→
+   218→
+   219→class HealthResponse(BaseModel):
+   220→    """Health check response model."""
+   221→    status: str = "healthy"
+   222→    service: str = "ss7-collector"
+   223→    version: str = "1.0.0"
+   224→    uptime_seconds: float = 0.0
+   225→    messages_processed: int = 0
+   226→    messages_dropped: int = 0
+   227→    kafka_lag: int = 0
+   228→
+   229→
+   230→# ============== Kafka Producer ==============
+   231→
+   232→class SS7KafkaProducer:
+   233→    """Kafka producer for SS7 events with delivery guarantees."""
+   234→    
+   235→    def __init__(self):
+   236→        config = {
+   237→            'bootstrap.servers': settings.kafka_bootstrap_servers,
+   238→            'client.id': 'ss7-collector',
+   239→            'linger.ms': settings.kafka_linger_ms,
+   240→            'batch.size': settings.kafka_batch_size,
+   241→            'compression.type': settings.kafka_compression_type,
+   242→            'acks': 'all',
+   243→            'retries': 5,
+   244→            'max.in.flight.requests.per.connection': 5,
+   245→            'enable.idempotence': True,
+   246→            'queue.buffering.max.messages': settings.buffer_size,
+   247→            'socket.keepalive.enable': True,
+   248→        }
+   249→        
+   250→        self.producer = Producer(config)
+   251→        self.messages_sent = 0
+   252→        self.messages_failed = 0
+   253→        
+   254→        logger.info("kafka_initialized", bootstrap_servers=settings.kafka_bootstrap_servers)
+   255→    
+   256→    def delivery_callback(self, err, msg):
+   257→        """Callback for message delivery reports."""
+   258→        if err:
+   259→            self.messages_failed += 1
+   260→            logger.error("kafka_delivery_error", error=str(err), topic=msg.topic(), partition=msg.partition())
+   261→        else:
+   262→            pass  # Successful delivery
+   263→    
+   264→    async def send_message(self, message: SS7Message):
+   265→        """Send a normalized SS7 message to Kafka."""
+   266→        try:
+   267→            key = message.imsi or message.msisdn or message.message_id
+   268→            value = orjson.dumps(message.to_dict())
+   269→            
+   270→            self.producer.produce(
+   271→                topic=settings.output_topic,
+   272→                key=key.encode('utf-8'),
+   273→                value=value,
+   274→                callback=self.delivery_callback
+   275→            )
+   276→            
+   277→            self.messages_sent += 1
+   278→            
+   279→            # Poll for delivery callbacks periodically
+   280→            if self.messages_sent % 100 == 0:
+   281→                self.producer.poll(0)
+   282→                
+   283→        except Exception as e:
+   284→            logger.exception("kafka_send_error", message_id=message.message_id)
+   285→            raise
+   286→    
+   287→    def flush(self):
+   288→        """Flush any pending messages."""
+   289→        remaining = self.producer.flush(timeout=30)
+   290→        if remaining > 0:
+   291→            logger.warning("kafka_flush_incomplete", remaining=remaining)
+   292→        return remaining
+   293→    
+   294→    def close(self):
+   295→        """Close the producer gracefully."""
+   296→        self.flush()
+   297→        self.producer.flush(infinity=10)
+   298→        logger.info("kafka_producer_closed", total_sent=self.messages_sent)
+   299→
+   300→
+   301→# ============== Protocol Parsers ==============
+   302→
+   303→class M3UAParser:
+   304→    """Parse M3UA (MTP3 User Adaptation) messages."""
+   305→    
+   306→    MESSAGE_CLASS_MGMT = 0
+   307→    MESSAGE_CLASS_TRANSFER = 1
+   308→    MESSAGE_CLASS_SSNM = 2
+   309→    MESSAGE_CLASS_ASPSM = 3
+   310→    MESSAGE_CLASS_ASPTM = 4
+   311→    
+   312→    @classmethod
+   313→    def parse_header(cls, data: bytes) -> Dict:
+   314→        """Parse M3UA header (8 bytes)."""
+   315→        if len(data) < 8:
+   316→            raise ValueError("M3UA header too short")
+   317→        
+   318→        version, reserved, message_class, message_type = struct.unpack('!BBHH', data[:8])
+   319→        
+   320→        return {
+   321→            "version": version,
+   322→            "reserved": reserved,
+   323→            "message_class": message_class,
+   324→            "message_type": message_type,
+   325→            "length": struct.unpack('!I', data[4:8])[0] & 0x00FFFFFF,
+   326→        }
+   327→    
+   328→    @classmethod
+   329→    def parse_payload_data(cls, data: bytes) -> Dict:
+   330→        """Parse DATA message payload (MTP3 payload)."""
+   331→        if len(data) < 16:
+   332→            raise ValueError("M3UA DATA payload too short")
+   333→        
+   334→        # Parse MTP3 routing label
+   335→        opc, dpc, si, ni, mp, sls = struct.unpack('!IIIBBBI', data[:16])
+   336→        
+   337→        return {
+   338→            "opc": opc & 0x3FFFFFFF,  # Originating Point Code (14-bit or 24-bit)
+   339→            "dpc": dpc & 0x3FFFFFFF,  # Destination Point Code
+   340→            "service_indicator": si,
+   341→            "network_indicator": ni,
+   342→            "message_priority": mp,
+   343→            "signaling_link_selection": sls,
+   344→            "mtp3_payload": data[16:] if len(data) > 16 else b'',
+   345→        }
+   346→
+   347→
+   348→class SCCPParser:
+   349→    """Parse SCCP (Signaling Connection Control Part) messages."""
+   350→    
+   351→    MESSAGE_TYPE_CR = 0x01  # Connection Request
+   352→    MESSAGE_TYPE_CC = 0x02  # Connection Confirm
+   353→    MESSAGE_TYPE_DT1 = 0x05  # Data Form 1
+   354→    MESSAGE_TYPE_UDT = 0x09  # Unitdata (connectionless)
+   355→    MESSAGE_TYPE_XUDT = 0x11  # Extended Unitdata
+   356→    
+   357→    GT_INDICATOR_NO_GT = 0x00
+   358→    GT_INDICATOR_GT_ONLY = 0x01
+   359→    GT_INDICATOR_GT_SSN = 0x02
+   360→    
+   361→    @classmethod
+   362→    def parse_called_party_address(cls, data: bytes) -> Dict:
+   363→        """Parse SCCP called party address."""
+   364→        if not data:
+   365→            return {}
+   366→        
+   367→        result = {}
+   368→        byte0 = data[0]
+   369→        
+   370→        result["point_code_indicator"] = bool(byte0 & 0x80)
+   371→        result["ssn_indicator"] = bool(byte0 & 0x40)
+   372→        result["global_title_indicator"] = (byte0 >> 2) & 0x03
+   373→        result["routing_indicator"] = byte0 & 0x03
+   374→        
+   375→        offset = 1
+   376→        
+   377→        if result["global_title_indicator"] != cls.GT_INDICATOR_NO_GT:
+   378→            if offset < len(data):
+   379→                result["nature_of_address"] = data[offset] & 0x07
+   380→                result["numbering_plan"] = (data[offset] >> 4) & 0x0F
+   381→                offset += 1
+   382→                if offset < len(data):
+   383→                    odd_flag = data[offset] & 0x80
+   384→                    digits = b''
+   385→                    while offset < len(data):
+   386→                        b = data[offset]
+   387→                        high = (b >> 4) & 0x0F
+   388→                        low = b & 0x0F
+   389→                        if high <= 9:
+   390→                            digits += bytes([high + 0x30])
+   391→                        if low <= 9:
+   392→                            digits += bytes([low + 0x30])
+   393→                        offset += 1
+   394→                    result["address_digits"] = digits.decode('ascii')
+   395→        
+   396→        if result["ssn_indicator"] and offset < len(data):
+   397→            result["subsystem_number"] = data[offset]
+   398→        
+   399→        return result
+   400→
+   401→
+   402→class TCAPParser:
+   403→    """Parse TCAP (Transaction Capabilities Application Part)."""
+   404→    
+   405→    @classmethod
+   406→    def parse_transaction_id(cls, data: bytes) -> tuple:
+   407→        """Extract OTID (Originating Transaction ID) and DTID (Destination Transaction ID)."""
+   408→        # Simplified OTID/DTID extraction from TCAP
+   409→        otid = dtid = None
+   410→        try:
+   411→            if len(data) >= 12:
+   412→                # OTID is typically first 4 bytes of transaction portion
+   413→                otid = struct.unpack('!I', data[4:8])[0]
+   414→                dtid = struct.unpack('!I', data[8:12])[0]
+   415→        except Exception:
+   416→            pass
+   417→        return otid, dtid
+   418→
+   419→
+   420→class MAPParser:
+   421→    """Parse MAP (Mobile Application Part) operations."""
+   422→    
+   423→    OPERATION_CODES = {
+   424→        2: "sendRoutingInfoForSM",
+   425→        18: "provideRoamingNumber",
+   426→        2: "updateLocation",
+   427→        56: "cancelLocation",
+   428→        52: "insertSubscriberData",
+   429→        53: "deleteSubscriberData",
+   430→        46: "forwardShortMessage",
+   431→        59: "processUnstructuredSSRequest",
+   432→        66: "authenticationFailureReport",
+   433→        68: "noteSubscriberPresent",
+   434→        67: "readyForSM",
+   435→        88: "anyTimeInterrogation",
+   436→    }
+   437→    
+   438→    @classmethod
+   439→    def get_operation_name(cls, opcode: int) -> str:
+   440→        return cls.OPERATION_CODES.get(opcode, f"unknown_operation_{opcode}")
+   441→    
+   442→    @classmethod
+   443→    def extract_imsi(cls, data: bytes) -> Optional[str]:
+   444→        """Attempt to extract IMSI from MAP message."""
+   445→        # IMSI is typically encoded as BCD string in specific parameters
+   446→        # This is a simplified extraction - real implementation needs full ASN.1 parsing
+   447→        imsi_patterns = [
+   448→            b'\x08\x29\x80\x00',  # Common IMSI tag prefix
+   449→            b'\x80\x91\xA3',       # Alternative encoding
+   450→        ]
+   451→        for pattern in imsi_patterns:
+   452→            idx = data.find(pattern)
+   453→            if idx != -1:
+   454→                start = idx + len(pattern)
+   455→                # Extract up to 15 digits (IMSI length)
+   456→                end = min(start + 8, len(data))
+   457→                try:
+   458→                    digits = ''
+   459→                    for b in data[start:end]:
+   460→                        high = (b >> 4) & 0x0F
+   461→                        low = b & 0x0F
+   462→                        if high <= 9:
+   463→                            digits += chr(high + 0x30)
+   464→                        if low <= 9:
+   465→                            digits += chr(low + 0x30)
+   466→                    if len(digits) >= 8 and digits.isdigit():
+   467→                        return digits
+   468→                except Exception:
+   469→                    continue
+   470→        return None
+   471→
+   472→
+   473→class DiameterParser:
+   474→    """Parse Diameter protocol messages."""
+   475→    
+   476→    APPLICATION_IDS = {
+   477→        0: "Diameter Common Commands",
+   478→        16777250: "3GPP Cx (IMS)",           # Cx interface
+   479→        16777251: "3GPP Dx (IMS)",
+   480→        16777264: "3GPP Sh (UDR)",
+   481→        16777265: "3GPP Dh (UDR)",
+   482→        16777236: "3GPP S6a (HSS-LTE)",      # S6a interface
+   483→        16777237: "3GPP S6d (HSS-LTE)",
+   484→        16777250: "3GPP Gx (PCRF-PCEF)",     # Policy control
+   485→        16777238: "3GPP Rx (AF-PCRF)",
+   486→        16777221: "3GPP SGd (AS-SGSN)",
+   487→        16777251: "3GPP S13 (EIR-MME)",
+   488→        16777263: "3GPP SLh (GMLC-HSS)",
+   489→        4: "3GPP2 AKA",
+   490→        16777272: "3GPP2 S6M",
+   491→    }
+   492→    
+   493→    COMMAND_CODES = {
+   494→        280: "capabilities-exchange",
+   495→        281: "capabilities-exchange-answer",
+   496→        280: "device-watchdog-request",
+   497→        281: "device-watchdog-answer",
+   498→        301: "disconnect-peer-request",
+   499→        302: "disconnect-peer-answer",
+   500→        257: "abort-session",
+   501→        275: "re-auth-request",
+   502→        276: "re-auth-answer",
+   503→        271: "session-termination-request",
+   504→        272: "session-termination-answer",
+   505→        274: "abort-session-request",
+   506→        275: "abort-session-answer",
+   507→        316: "user-location-register-request",   # ULR (S6a)
+   508→        317: "user-location-register-answer",   # ULA
+   509→        318: "authenticate-information-request",  # AIR (S6a)
+   510→        319: "authenticate-information-answer",  # AIA
+   511→        320: "cancel-location-request",          # CLR (S6a)
+   512→        321: "cancel-location-answer",          # CLA
+   513→        322: "insert-subscriber-data-request",   # IDR (S6a)
+   514→        323: "insert-subscriber-data-answer",   # IDA (S6a),
+   515→    }
+   516→    
+   517→    @classmethod
+   518→    def parse_header(cls, data: bytes) -> Dict:
+   519→        """Parse Diameter header (20 bytes)."""
+   520→        if len(data) < 20:
+   521→            raise ValueError("Diameter header too short")
+   522→        
+   523→        version = data[0]
+   524→        length = struct.unpack('!I', b'\x00' + data[1:4])[0]
+   525→        flags = data[4]
+   526→        command_code = struct.unpack('!I', b'\x00' + data[5:8])[0]
+   527→        application_id = struct.unpack('!I', data[8:12])[0]
+   528→        hop_by_hop_id = struct.unpack('!I', data[12:16])[0]
+   529→        end_to_end_id = struct.unpack('!I', data[16:20])[0]
+   530→        
+   531→        return {
+   532→            "version": version,
+   533→            "length": length,
+   534→            "is_request": bool(flags & 0x80),
+   535→            "is_proxiable": bool(flags & 0x40),
+   536→            "error_bit": bool(flags & 0x20),
+   537→            "is_retransmit": bool(flags & 0x10),
+   538→            "command_code": command_code,
+   539→            "command_name": cls.COMMAND_CODES.get(command_code, f"unknown_{command_code}"),
+   540→            "application_id": application_id,
+   541→            "application_name": cls.APPLICATION_IDS.get(application_id, f"unknown_app_{application_id}"),
+   542→            "hop_by_hop_id": hop_by_hop_id,
+   543→            "end_to_end_id": end_to_end_id,
+   544→        }
+   545→
+   546→
+   547→# ============== Main Application ==============
+   548→
+   549→app = FastAPI(
+   550→    title="Djezzy SOC - SS7 Signaling Collector",
+   551→    description="Captures and normalizes SS7/Diameter signaling messages for security analysis",
+   552→    version="1.0.0",
+   553→)
+   554→
+   555→# Global state
+   556→kafka_producer: Optional[SS7KafkaProducer] = None
+   557→message_counter = {"total": 0, "errors": 0}
+   558→start_time = time.time()
+   559→
+   560→
+   561→@app.on_event("startup")
+   562→async def startup_event():
+   563→    """Initialize components on startup."""
+   564→    global kafka_producer
+   565→    
+   566→    logger.info("startup_beginning")
+   567→    
+   568→    # Initialize Kafka producer
+   569→    kafka_producer = SS7KafkaProducer()
+   570→    
+   571→    logger.info("startup_complete", 
+   572→                kafka_servers=settings.kafka_bootstrap_servers,
+   573→                output_topic=settings.output_topic)
+   574→
+   575→
+   576→@app.on_event("shutdown")
+   577→async def shutdown_event():
+   578→    """Cleanup on shutdown."""
+   579→    global kafka_producer
+   580→    
+   581→    logger.info("shutdown_initiated")
+   582→    
+   583→    if kafka_producer:
+   584→        kafka_producer.close()
+   585→    
+   586→    logger.info("shutdown_complete", total_messages=message_counter["total"])
+   587→
+   588→
+   589→@app.get("/health", response_model=HealthResponse)
+   590→async def health_check():
+   591→    """Health check endpoint."""
+   592→    return HealthResponse(
+   593→        status="healthy",
+   594→        uptime_seconds=time.time() - start_time,
+   595→        messages_processed=message_counter["total"],
+   596→        messages_dropped=message_counter["errors"],
+   597→    )
+   598→
+   599→
+   600→@app.get("/metrics")
+   601→async def prometheus_metrics():
+   602→    """Prometheus-compatible metrics endpoint."""
+   603→    from prometheus_client import generate_latest, CONTENT_TYPE_LATEST, REGISTRY
+   604→    
+   605→    # Custom metrics would be registered here
+   606→    metrics_data = generate_latest(REGISTRY)
+   607→    
+   608→    from fastapi.responses import Response
+   609→    return Response(content=metrics_data, media_type=CONTENT_TYPE_LATEST)
+   610→
+   611→
+   612→@app.post("/api/v1/message/inject")
+   613→async def inject_message(message: Dict[str, Any]):
+   614→    """
+   615→    Inject a pre-parsed message (for testing or external sources).
+   616→    This allows integration with external SS7 probes or firewalls.
+   617→    """
+   618→    global kafka_producer, message_counter
+   619→    
+   620→    try:
+   621→        ss7_msg = SS7Message(**message)
+   622→        
+   623→        if kafka_producer:
+   624→            await kafka_producer.send_message(ss7_msg)
+   625→        
+   626→        message_counter["total"] += 1
+   627→        
+   628→        return {
+   629→            "status": "accepted",
+   630→            "message_id": ss7_msg.message_id,
+   631→            "topic": settings.output_topic,
+   632→        }
+   633→    except Exception as e:
+   634→        message_counter["errors"] += 1
+   635→        logger.exception("inject_error")
+   636→        raise HTTPException(status_code=500, detail=str(e))
+   637→
+   638→
+   639→@app.get("/api/v1/stats")
+   640→async def get_statistics():
+   641→    """Get collection statistics."""
+   642→    return {
+   643→        "uptime_seconds": time.time() - start_time,
+   644→        "messages_processed": message_counter["total"],
+   645→        "messages_errors": message_counter["errors"],
+   646→        "messages_per_second": message_counter["total"] / max(1, time.time() - start_time),
+   647→        "kafka_topic": settings.output_topic,
+   648→        "capture_enabled": settings.pcap_enabled,
+   649→    }
+   650→
+   651→
+   652→# ============== SCTP/M3UA Listener ==============
+   653→
+   654→class SCTPServer:
+   655→    """Simplified SCTP server for receiving SIGTRAN messages."""
+   656→    
+   657→    def __init__(self, port: int, handler_coroutine):
+   658→        self.port = port
+   659→        self.handler = handler_coroutine
+   660→        self.server = None
+   661→        self.running = False
+   662→    
+   663→    async def start(self):
+   664→        """Start listening on SCTP port."""
+   665→        # Note: Full SCTP implementation requires sctp library
+   666→        # For production, use dedicated SIGTRAN stack (e.g., Kamailio, Open5GS)
+   667→        logger.warning("sctp_listener_note", 
+   668→                      message="Full SCTP requires kernel support - use external SIGTRAN gateway")
+   669→        logger.info("sctp_mode", mode="http_bridge_only")
+   670→
+   671→
+   672→# ============== PCAP Writer ==============
+   673→
+   674→class PCAPWriter:
+   675→    """Rotating PCAP file writer for SS7 traffic capture."""
+   676→    
+   677→    def __init__(self, base_dir: Path, max_size_mb: int = 512, rotation_hours: int = 1):
+   678→        self.base_dir = base_dir
+   679→        self.max_size_bytes = max_size_mb * 1024 * 1024
+   680→        self.rotation_hours = rotation_hours
+   681→        self.current_file = None
+   682→        self.current_size = 0
+   683→        self.rotation_time = time.time()
+   684→        self.base_dir.mkdir(parents=True, exist_ok=True)
+   685→    
+   686→    def write_packet(self, data: bytes, timestamp: float = None):
+   687→        """Write a packet to current PCAP file."""
+   688→        import os
+   689→        
+   690→        if timestamp is None:
+   691→            timestamp = time.time()
+   692→        
+   693→        # Check rotation conditions
+   694→        need_rotation = (
+   695→            self.current_file is None or
+   696→            self.current_size > self.max_size_bytes or
+   697→            (time.time() - self.rotation_time) > (self.rotation_hours * 3600)
+   698→        )
+   699→        
+   700→        if need_rotation:
+   701→            self._rotate_file(timestamp)
+   702→        
+   703→        # Write packet (simplified - use scapy for proper PCAP format)
+   704→        try:
+   705→            self.current_file.write(data)
+   706→            self.current_size += len(data)
+   707→        except Exception as e:
+   708→            logger.error("pcap_write_error", error=str(e))
+   709→    
+   710→    def _rotate_file(self, timestamp: float):
+   711→        """Rotate to new PCAP file."""
+   712→        if self.current_file:
+   713→            self.current_file.close()
+   714→        
+   715→        filename = f"ss7_capture_{datetime.fromtimestamp(timestamp).strftime('%Y%m%d_%H%M%S')}.pcap"
+   716→        filepath = self.base_dir / filename
+   717→        
+   718→        self.current_file = open(filepath, 'ab')
+   719→        self.current_size = 0
+   720→        self.rotation_time = timestamp
+   721→        
+   722→        logger.info("pcap_rotated", file=str(filepath))
+   723→
+   724→
+   725→# ============== Entry Point ==============
+   726→
+   727→if __name__ == "__main__":
+   728→    import uvicorn
+   729→    
+   730→    logger.info("starting_ss7_collector",
+   731→                version="1.0.0",
+   732→                listen_on=f"{settings.host}:{settings.port}",
+   733→                m3ua_port=settings.m3ua_listen_port,
+   734→                diameter_port=settings.diameter_listen_port,
+   735→                kafka_topic=settings.output_topic)
+   736→    
+   737→    uvicorn.run(
+   738→        app,
+   739→        host=settings.host,
+   740→        port=settings.port,
+   741→        log_level="info",
+   742→        access_log=True,
+   743→    )
+   744→

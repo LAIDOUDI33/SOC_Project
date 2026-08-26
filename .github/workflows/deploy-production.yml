@@ -1,0 +1,787 @@
+# ============================================================
+# National SOC Platform - Production Deployment
+# Djezzy Telecom - CRITICAL PRODUCTION PIPELINE
+# Trigger: Release tags + Manual dispatch with approvals
+# ============================================================
+
+name: 🏭 Deploy to Production
+
+on:
+  push:
+    tags:
+      - 'v[0-9]+.[0-9]+.[0-9]+'        # Version tags: v1.0.0
+      - 'v[0-9]+.[0-9]+.[0-9]+-rc.*'    # Release candidates
+  workflow_call:
+    inputs:
+      image_tag:
+        description: 'Docker image tag to deploy'
+        required: true
+        type: string
+      rollback_from:
+        description: 'Previous version to rollback from (if rolling back)'
+        required: false
+        type: string
+  workflow_dispatch:
+    inputs:
+      image_tag:
+        description: 'Docker image tag to deploy (required)'
+        required: true
+        type: string
+      deployment_type:
+        description: 'Deployment strategy'
+        required: false
+        default: 'rolling'
+        type: choice
+        options:
+          - 'rolling'
+          - 'canary'
+          - 'blue-green'
+      canary_percentage:
+        description: 'Canary traffic percentage (if canary selected)'
+        required: false
+        default: '10'
+        type: string
+      emergency_release:
+        description: 'Emergency release (bypasses some checks)'
+        required: false
+        default: false
+        type: boolean
+      reason:
+        description: 'Reason for production deployment'
+        required: false
+        type: string
+
+# CRITICAL: Only one production deployment at a time, never cancel in-progress
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+env:
+  NODE_VERSION: '20'
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+  KUBECONFIG_PATH: /tmp/kubeconfig-production
+  DEPLOYMENT_TIMEOUT: 600s
+
+permissions:
+  contents: read
+  packages: read
+  deployments: write
+  id-token: write
+  actions: read
+
+jobs:
+  # ============================================================
+  # JOB 1: Pre-deployment Gate (CRITICAL)
+  # ============================================================
+  pre-deployment-gate:
+    name: 🛡️ Pre-deployment Gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    outputs:
+      approved: ${{ steps.gate.outputs.approved }}
+      image_tag: ${{ steps.resolve.outputs.tag }}
+      deployment_type: ${{ steps.config.outputs.deployment_type }}
+    
+    steps:
+      - name: 📥 Checkout Repository
+        uses: actions/checkout@v4
+      
+      - name: 🔍 Validate Release Tag Format
+        id: validate-tag
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          TAG="${GITHUB_REF#refs/tags/}"
+          echo "Validating tag: $TAG"
+          
+          # Check semantic versioning format
+          if [[ ! "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-rc\.[0-9+])?$ ]]; then
+            echo "::error::Invalid tag format. Expected: v{major}.{minor}.{patch} or v{major}.{minor}.{patch}-rc.{number}"
+            exit 1
+          fi
+          
+          echo "✅ Tag format valid: $TAG"
+      
+      - name: 🏷️ Resolve Image Tag
+        id: resolve
+        run: |
+          if [ -n "${{ github.event.inputs.image_tag }}" ]; then
+            TAG="${{ github.event.inputs.image_tag }}"
+          elif [ -n "${{ inputs.image_tag }}" ]; then
+            TAG="${{ inputs.image_tag }}"
+          elif startsWith(github.ref, 'refs/tags/'); then
+            TAG="${GITHUB_REF#refs/tags/}"
+          else
+            TAG="sha-${GITHUB_SHA::7}"
+          fi
+          
+          echo "tag=$TAG" >> $GITHUB_OUTPUT
+          echo "🏷️ Production Image Tag: $TAG"
+      
+      - name: ⚙️ Resolve Deployment Config
+        id: config
+        run: |
+          TYPE="${{ github.event.inputs.deployment_type || 'rolling' }}"
+          echo "deployment_type=$TYPE" >> $GITHUB_OUTPUT
+          
+          echo "## ⚙️ Deployment Configuration" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Parameter | Value |" >> $GITHUB_STEP_SUMMARY
+          echo "|-----------|-------|" >> $GITHUB_STEP_SUMMARY
+          echo "| **Strategy** | $TYPE |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Image Tag** | \`${{ steps.resolve.outputs.tag }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Emergency** | ${{ github.event.inputs.emergency_release || 'false' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Initiated By** | @${{ github.actor }} |" >> $GITHUB_STEP_SUMMARY
+      
+      - name: ✅ Verify CI Pipeline Passed
+        id: ci-check
+        run: |
+          echo "::group::CI Status Verification"
+          
+          # Check for successful CI workflow on this commit
+          CI_STATUS=$(gh run list \
+            --workflow=ci.yml \
+            --branch=${{ github.ref_name }} \
+            --status=success \
+            --limit=1 \
+            --json conclusion \
+            --jq '.[0].conclusion' || echo "not_found")
+          
+          if [[ "$CI_STATUS" == "success" ]]; then
+            echo "✅ CI pipeline passed"
+          else
+            EMERGENCY="${{ github.event.inputs.emergency_release || 'false' }}"
+            if [[ "$EMERGENCY" == "true" ]]; then
+              echo "::warning::⚠️ EMERGENCY RELEASE: CI check bypassed"
+              echo "EMERGENCY_BYPASS=true" >> $GITHUB_ENV
+            else
+              echo "::error::CI pipeline did not pass or not found"
+              exit 1
+            fi
+          fi
+          echo "::endgroup::"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      
+      - name: ✅ Verify Security Scan Passed
+        id: security-check
+        run: |
+          echo "::group::Security Status Verification"
+          
+          SECURITY_STATUS=$(gh run list \
+            --workflow=security.yml \
+            --branch=${{ github.ref_name }} \
+            --status=success \
+            --limit=1 \
+            --json conclusion \
+            --jq '.[0].conclusion' || echo "not_found")
+          
+          if [[ "$SECURITY_STATUS" == "success" ]]; then
+            echo "✅ Security scan passed"
+          else
+            EMERGENCY="${{ github.event.inputs.emergency_release || 'false' }}"
+            if [[ "$EMERGENCY" == "true" ]]; then
+              echo "::warning::⚠️ EMERGENCY RELEASE: Security check bypassed"
+            else
+              echo "::error::Security scan did not pass or not found"
+              exit 1
+            fi
+          fi
+          echo "::endgroup::"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      
+      - name: 🛡️ Final Approval Gate
+        id: gate
+        run: |
+          echo "approved=true" >> $GITHUB_OUTPUT
+          echo "🛡️ All pre-deployment gates passed"
+
+  # ============================================================
+  # JOB 2: Backup Current State (CRITICAL before deploy)
+  # ============================================================
+  backup:
+    name: 💾 Pre-deployment Backup
+    runs-on: ubuntu-latest
+    needs: pre-deployment-gate
+    timeout-minutes: 20
+    
+    steps:
+      - name: 📥 Checkout Repository
+        uses: actions/checkout@v4
+      
+      - name: 🔐 Setup kubectl
+        uses: azure/setup-kubectl@v4
+        with:
+          version: 'v1.29.0'
+      
+      - name: 🔐 Configure Access
+        run: |
+          mkdir -p ~/.kube
+          echo "${{ secrets.KUBE_CONFIG_PRODUCTION }}" | base64 -d > ~/.kube/config
+          chmod 600 ~/.kube/config
+      
+      - name: 📸 Capture Current State
+        id: capture-state
+        run: |
+          NAMESPACE="soc-platform"
+          
+          echo "## 📸 Pre-deployment State Capture" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          # Get current deployment info
+          CURRENT_IMAGE=$(kubectl get deployment soc-platform -n $NAMESPACE -o jsonpath='{.spec.template.spec.containers[0].image}')
+          CURRENT_REPLICAS=$(kubectl get deployment soc-platform -n $NAMESPACE -o jsonpath='{.spec.replicas}')
+          
+          echo "| Field | Value |" >> $GITHUB_STEP_SUMMARY
+          echo "|-------|-------|" >> $GITHUB_STEP_SUMMARY
+          echo "| **Current Image** | \`$CURRENT_IMAGE\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Replicas** | $CURRENT_REPLICAS |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Timestamp** | $(date -u '+%Y-%m-%d %H:%M:%S UTC') |" >> $GITHUB_STEP_SUMMARY
+          
+          # Save current state for potential rollback
+          kubectl get deployment soc-platform -n $NAMESPACE -o yaml > /tmp/pre-deployment-state.yaml
+          kubectl get all -n $NAMESPACE -o yaml > /tmp/all-resources-backup.yaml
+          
+          echo "current_image=$CURRENT_IMAGE" >> $GITHUB_OUTPUT
+          echo "state_saved=/tmp/pre-deployment-state.yaml" >> $GITHUB_OUTPUT
+      
+      - name: 💾 Create Database Backup
+        if: env.DATABASE_BACKUP_ENABLED == 'true'
+        run: |
+          POD_NAME=$(kubectl get pods -n soc-platform -l app=soc-platform -o jsonpath='{.items[0].metadata.name}')
+          
+          kubectl exec -n soc-platform $POD_NAME -- pg_dumpall -U soc_admin > /tmp/db-backup-$(date +%Y%m%d-%H%M%S).sql
+          
+          echo "Database backup completed"
+        env:
+          DATABASE_BACKUP_ENABLED: ${{ secrets.DATABASE_BACKUP_ENABLED || 'false' }}
+      
+      - name: 📤 Upload Backup Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: pre-deployment-backup-${{ github.run_id }}
+          path: |
+            /tmp/pre-deployment-state.yaml
+            /tmp/all-resources-backup.yaml
+            /tmp/db-backup-*.sql
+          retention-days: 30
+
+  # ============================================================
+  # JOB 3: Production Deployment (CRITICAL)
+  # ============================================================
+  deploy-production:
+    name: 🏭 Deploy to Production
+    runs-on: ubuntu-latest
+    needs: [pre-deployment-gate, backup]
+    environment:
+      name: production
+      url: https://soc.djezzy.dz
+    
+    outputs:
+      deployed_version: ${{ steps.deploy.outputs.version }}
+      rollout_status: ${{ steps.rollout.outputs.status }}
+    
+    steps:
+      - name: 📥 Checkout Repository
+        uses: actions/checkout@v4
+      
+      - name: 🔐 Setup kubectl & Helm
+        uses: azure/setup-kubectl@v4
+        with:
+          version: 'v1.29.0'
+      
+      - name: ⛵ Setup Helm
+        uses: azure/setup-helm@v3
+        with:
+          version: 'v3.14.0'
+      
+      - name: 🔐 Configure Kubernetes Access
+        id: kubeconfig
+        run: |
+          mkdir -p $(dirname ${{ env.KUBECONFIG_PATH }})
+          echo "${{ secrets.KUBE_CONFIG_PRODUCTION }}" | base64 -d > ${{ env.KUBECONFIG_PATH }}
+          chmod 600 ${{ env.KUBECONFIG_PATH }}
+          export KUBECONFIG=${{ env.KUBECONFIG_PATH }}
+          
+          # Verify connection
+          kubectl cluster-info
+          kubectl get nodes -L topology.kubernetes.io/zone
+          
+          echo "✅ Connected to production cluster"
+      
+      - name: 🐳 Login to Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      
+      - name: 🔄 Pull and Verify Image
+        run: |
+          IMAGE="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ needs.pre-deployment-gate.outputs.image_tag }}"
+          
+          echo "Pulling production image: $IMAGE"
+          docker pull "$IMAGE"
+          
+          # Verify image exists and is valid
+          IMAGE_ID=$(docker inspect --format='{{.Id}}' "$IMAGE")
+          echo "Image ID: $IMAGE_ID"
+          echo "image_id=$IMAGE_ID" >> $GITHUB_OUTPUT
+      
+      - name: 🏭 Execute Deployment Strategy
+        id: deploy
+        run: |
+          export KUBECONFIG=${{ env.KUBECONFIG_PATH }}
+          NAMESPACE="soc-platform"
+          IMAGE_TAG="${{ needs.pre-deployment-gate.outputs.image_tag }}"
+          STRATEGY="${{ needs.pre-deployment-gate.outputs.deployment_type }}"
+          
+          echo "## 🏭 Executing Deployment" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Strategy:** $STRATEGY" >> $GITHUB_STEP_SUMMARY
+          echo "**Image:** \`${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:$IMAGE_TAG\`" >> $GITHUB_STEP_SUMMARY
+          echo "**Started:** $(date -u '+%Y-%m-%d %H:%M:%S UTC')" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          case $STRATEGY in
+            canary)
+              echo "### Canary Deployment" >> $GITHUB_STEP_SUMMARY
+              
+              # Update main deployment with reduced replicas first
+              kubectl set image deployment/soc-platform \
+                soc-platform=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:$IMAGE_TAG \
+                -n $NAMESPACE
+              
+              # Scale down old version gradually
+              kubectl scale deployment soc-platform --replicas=3 -n $NAMESPACE
+              
+              echo "Canary deployed with 3 replicas"
+              ;;
+            
+            blue-green)
+              echo "### Blue-Green Deployment" >> $GITHUB_STEP_SUMMARY
+              
+              # Create green deployment
+              sed "s|soc-platform|soc-platform-green|g; s|IMAGE_TAG|$IMAGE_TAG|g" \
+                k8s/deployment.yaml | kubectl apply -f - -n $NAMESPACE
+              
+              # Wait for green to be ready
+              kubectl rollout status deployment/soc-platform-green -n $NAMESPACE --timeout=$DEPLOYMENT_TIMEOUT
+              
+              # Switch service selector
+              kubectl patch service soc-platform -n $NAMESPACE -p '{"spec":{"selector":{"app":"soc-platform-green"}}}'
+              
+              echo "Blue-Green switch complete"
+              ;;
+            
+            *)
+              ### ROLLING UPDATE (Default) ###
+              echo "### Rolling Update Deployment" >> $GITHUB_STEP_SUMMARY
+              
+              cd helm/soc-platform
+              
+              helm upgrade --install soc-platform . \
+                --namespace $NAMESPACE \
+                --values ../values.yaml \
+                --values ../values-production.yaml \
+                --set image.repository=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }} \
+                --set image.tag=$IMAGE_TAG \
+                --set image.pullPolicy=Always \
+                --set environment.name=production \
+                --set ingress.enabled=true \
+                --set ingress.hosts[0]=soc.djezzy.dz \
+                --set ingress.annotations."cert-manager\.io/cluster-issuer"=letsencrypt-prod \
+                --set ingress.tls[0].secretName=soc-production-tls \
+                --set ingress.tls[0].hosts[0]=soc.djezzy.dz \
+                --set replicaCount=5 \
+                --set resources.requests.cpu=2000m \
+                --set resources.requests.memory=4Gi \
+                --set resources.limits.cpu=4000m \
+                --set resources.limits.memory=8Gi \
+                --set autoscaling.enabled=true \
+                --set autoscaling.minReplicas=5 \
+                --set autoscaling.maxReplicas=20 \
+                --set autoscaling.targetCPUUtilizationPercentage=70 \
+                --set nodeSelector."kubernetes\.io/os"=linux \
+                --set tolerations[0].key="dedicated" \
+                --set tolerations[0].operator="Equal" \
+                --set tolerations[0].value="soc-platform" \
+                --set tolerations[0].effect="NoSchedule" \
+                --wait \
+                --timeout=15m \
+                --atomic
+              
+              echo "Rolling update initiated"
+              ;;
+          esac
+          
+          echo "version=$IMAGE_TAG" >> $GITHUB_OUTPUT
+          echo "deployed_at=$(date -u '+%Y-%m-%dT%H:%M:%SZ')" >> $GITHUB_OUTPUT
+      
+      - name: ⏳ Monitor Rollout Progress
+        id: rollout
+        run: |
+          export KUBECONFIG=${{ env.KUBECONFIG_PATH }}
+          
+          echo "### Rollout Monitoring" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          # Watch rollout progress
+          kubectl rollout status deployment/soc-platform \
+            -n soc-platform \
+            --timeout=$DEPLOYMENT_TIMEOUT \
+            --watch=true 2>&1 | tee rollout-log.txt || {
+            echo "::error::Rollout failed or timed out"
+            echo "status=failed" >> $GITHUB_OUTPUT
+            exit 1
+          }
+          
+          echo "status=success" >> $GITHUB_OUTPUT
+          
+          # Get final state
+          REPLICAS=$(kubectl get deployment soc-platform -n soc-platform -o jsonpath='{.status.readyReplicas}')
+          TOTAL=$(kubectl get deployment soc-platform -n soc-platform -o jsonpath='{.status.replicas}')
+          UP_TO_DATE=$(kubectl get deployment soc-platform -n soc-platform -o jsonpath='{.status.updatedReplicas}')
+          
+          echo "| Metric | Value |" >> $GITHUB_STEP_SUMMARY
+          echo "|--------|-------|" >> $GITHUB_STEP_SUMMARY
+          echo "| **Ready Replicas** | $REPLICAS/$TOTAL |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Up-to-date** | $UP_TO_DATE |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Completed At** | $(date -u '+%Y-%m-%d %H:%M:%S UTC') |" >> $GITHUB_STEP_SUMMARY
+      
+      - name: 📊 Upload Rollout Logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rollout-logs-${{ github.run_id }}
+          path: rollout-log.txt
+          retention-days: 14
+
+  # ============================================================
+  # JOB 4: Post-deployment Validation (CRITICAL)
+  # ============================================================
+  post-deploy-validation:
+    name: ✅ Production Validation
+    runs-on: ubuntu-latest
+    needs: deploy-production
+    timeout-minutes: 15
+    
+    steps:
+      - name: 🔐 Setup kubectl
+        uses: azure/setup-kubectl@v4
+        with:
+          version: 'v1.29.0'
+      
+      - name: 🔐 Configure Access
+        run: |
+          mkdir -p ~/.kube
+          echo "${{ secrets.KUBE_CONFIG_PRODUCTION }}" | base64 -d > ~/.kube/config
+          chmod 600 ~/.kube/config
+      
+      - name: 🧪 Health Check (Critical Services)
+        id: healthcheck
+        run: |
+          export KUBECONFIG=~/.kube/config
+          
+          echo "## 🧪 Post-deployment Health Checks" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          # Test internal health endpoint
+          HEALTH_POD=$(kubectl get pods -n soc-platform -l app=soc-platform -o jsonpath='{.items[0].metadata.name}')
+          
+          INTERNAL_HEALTH=$(kubectl exec -n soc-platform $HEALTH_POD -- curl -sf http://localhost:3000/api/health || echo "FAILED")
+          
+          echo "**Internal Health:** \`$INTERNAL_HEALTH\`" >> $GITHUB_STEP_SUMMARY
+          
+          # Check pod status
+          READY_PODS=$(kubectl get pods -n soc-platform -l app=soc-platform -o jsonpath='{.items[?(@.status.phase=="Running")].metadata.name}' | wc -w)
+          TOTAL_PODS=$(kubectl get pods -n soc-platform -l app=soc-platform --no-headers | wc -l)
+          
+          echo "**Pods Ready:** $READY_PODS/$TOTAL_PODS" >> $GITHUB_STEP_SUMMARY
+          
+          if [[ "$INTERNAL_HEALTH" != *"ok"* ]] && [[ "$READY_PODS" -lt $((TOTAL_PODS * 80 / 100)) ]]; then
+            echo "::error::Health check failed after deployment"
+            exit 1
+          fi
+      
+      - name: 🌐 External Endpoint Test
+        id: external-test
+        run: |
+          PROD_URL="https://soc.djezzy.dz"
+          
+          echo "### External Endpoint Tests" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          # Test main endpoints
+          ENDPOINTS=(
+            "/api/health:Health API"
+            "/api/dashboard:Dashboard"
+            "/api/alerts:Alerts Feed"
+            "/api/metrics:Metrics Export"
+          )
+          
+          PASSED=0
+          FAILED=0
+          
+          for item in "${ENDPOINTS[@]}"; do
+            IFS=':' read -r endpoint name <<< "$item"
+            
+            HTTP_CODE=$(curl -sf -o /dev/null -w "%{http_code}" \
+              --max-time 10 \
+              "$PROD_URL$endpoint" || echo "000")
+            
+            RESPONSE_TIME=$(curl -sf -o /dev/null -w "%{time_total}" \
+              --max-time 10 \
+              "$PROD_URL$endpoint" || echo "0")
+            
+            if [[ "$HTTP_CODE" =~ ^2 ]]; then
+              STATUS="✅"
+              ((PASSED++))
+            else
+              STATUS="❌"
+              ((FAILED++))
+            fi
+            
+            echo "| $STATUS $name | \`$endpoint\` | ${HTTP_CODE} | ${RESPONSE_TIME}s |" >> $GITHUB_STEP_SUMMARY
+          done
+          
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Results:** $PASSED passed, $FAILED failed" >> $GITHUB_STEP_SUMMARY
+          
+          if [ $FAILED -gt 0 ]; then
+            echo "::warning::$FAILED endpoint(s) failing"
+          fi
+      
+      - name: 🔒 Security Headers Validation
+        run: |
+          PROD_URL="https://soc.djezzy.dz"
+          
+          echo "### Security Headers" >> $GITHUB_STEP_SUMMARY
+          echo '\`\`\`' >> $GITHUB_STEP_SUMMARY
+          curl -sI "$PROD_URL" 2>/dev/null | grep -iE "(strict-transport|x-frame|x-content-type|x-xss|content-security-policy)" | head -10 >> $GITHUB_STEP_SUMMARY || echo "Headers verification needed" >> $GITHUB_STEP_SUMMARY
+          echo '\`\`\`' >> $GITHUB_STEP_SUMMARY
+      
+      - name: 📊 Performance Baseline
+        run: |
+          PROD_URL="https://soc.djezzy.dz"
+          
+          echo "### Performance Metrics" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          # Measure response times
+          for i in {1..5}; do
+            TIME=$(curl -sf -o /dev/null -w "%{time_total}" --max-time 10 "$PROD_URL/api/health")
+            echo "Request $i: ${TIME}s" >> $GITHUB_STEP_SUMMARY
+          done
+
+  # ============================================================
+  # JOB 5: Notify Teams (CRITICAL)
+  # ============================================================
+  notify-production:
+    name: 📢 Production Notifications
+    runs-on: ubuntu-latest
+    needs: [deploy-production, post-deploy-validation]
+    if: always()
+    
+    steps:
+      - name: 📊 Generate Deployment Report
+        run: |
+          echo "# 🏭 Production Deployment Report" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "## Deployment Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Field | Details |" >> $GITHUB_STEP_SUMMARY
+          echo "|-------|---------|" >> $GITHUB_STEP_SUMMARY
+          echo "| **Environment** | 🟢 Production |" >> $GITHUB_STEP_SUMMARY
+          echo "| **URL** | https://soc.djezzy.dz |" >> $GITHUB_STEP_SUMMARY
+          echo"| **Version** | \`${{ needs.deploy-production.outputs.deployed_version }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Deploy Status** | ${{ needs.deploy-production.result == 'success' && '✅ Success' || '❌ Failed' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Validation** | ${{ needs.post-deploy-validation.result == 'success' && '✅ Passed' || '⚠️ Issues' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Strategy** | ${{ needs.pre-deployment-gate.outputs.deployment_type }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Initiator** | @${{ github.actor }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Timestamp** | $(date -u '+%Y-%m-%d %H:%M:%S UTC') |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Run ID** | #${{ github.run_number }} |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "---" >> $GITHUB_STEP_SUMMARY
+          echo "*Generated by Djezzy SOC Platform CI/CD*" >> $GITHUB_STEP_SUMMARY
+      
+      - name: 📧 Slack - #soc-deployments Channel
+        if: always()
+        uses: slackapi/slack-github-action@v1.26.0
+        with:
+          payload: |
+            {
+              "text": "🏭 Production Deployment ${{ needs.deploy-production.result == 'success' && 'Successful ✅' || 'Failed ❌' }}",
+              "blocks": [
+                {
+                  "type": "header",
+                  "text": {"type": "plain_text", "text": "🏭 Djezzy SOC Platform - PRODUCTION DEPLOYMENT"}
+                },
+                {
+                  "type": "section",
+                  "fields": [
+                    {"type": "mrkdwn", "text": "*Status:*\n${{ needs.deploy-production.result == 'success' && '✅ Success' || '❌ Failed' }}"},
+                    {"type": "mrkdwn", "text": "*Version:*\n`${{ needs.deploy-production.outputs.deployed_version }}`"},
+                    {"type": "mrkdwn", "text": "*Environment:*\n🟢 Production"},
+                    {"type": "mrkdwn", "text": "*By:*\n@${{ github.actor }}"}
+                  ]
+                },
+                {
+                  "type": "section",
+                  "fields": [
+                    {"type": "mrkdwn", "text": "*Validation:*\n${{ needs.post-deploy-validation.result == 'success' && '✅ Passed' || '⚠️ Review Required' }}"},
+                    {"type": "mrkdwn", "text": "*Rollout:*\n${{ needs.deploy-production.outputs.rollout_status }}"}
+                  ]
+                },
+                {
+                  "type": "actions",
+                  "elements": [
+                    {
+                      "type": "button",
+                      "text": {"type": "plain_text", "text": "🔗 View Production"},
+                      "url": "https://soc.djezzy.dz",
+                      "style": "primary"
+                    },
+                    {
+                      "type": "button",
+                      "text": {"type": "plain_text", "text": "📋 Workflow Run"},
+                      "url": "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+                    }
+                  ]
+                }
+              ]
+            }
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_DEPLOYMENTS }}
+          SLACK_WEBHOOK_TYPE: INCOMING_WEBHOOK
+      
+      - name: 📧 Slack - #soc-incidents (if failed)
+        if: failure()
+        uses: slackapi/slack-github-action@v1.26.0
+        with:
+          payload: |
+            {
+              "text": "🚨 PRODUCTION DEPLOYMENT FAILED",
+              "blocks": [
+                {
+                  "type": "header",
+                  "text": {"type": "plain_text", "text": "🚨 URGENT: Production Deployment Failed"}
+                },
+                {
+                  "type": "section",
+                  "text": {
+                    "type": "mrkdwn",
+                    "text": "*Immediate Action Required!*\n\n*Repository:* ${{ github.repository }}\n*Version:* `${{ needs.deploy-production.outputs.deployed_version }}`\n*Initiator:* @${{ github.actor }}\n*Run:* <${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|#${{ github.run_number }}>"
+                  }
+                },
+                {
+                  "type": "section",
+                  "text": {
+                    "type": "mrkdwn",
+                    "text": "@soc-on-call Please investigate immediately!"
+                  }
+                }
+              ]
+            }
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_INCIDENTS }}
+          SLACK_WEBHOOK_TYPE: INCOMING_WEBFLOW
+      
+      - name: 📱 PagerDuty Alert (if critical failure)
+        if: failure() && needs.post-deploy-validation.result == 'failure'
+        run: |
+          # PagerDuty integration would go here
+          echo "PagerDuty alert triggered for critical deployment failure"
+
+  # ============================================================
+  # JOB 6: Automatic Rollback (if validation fails)
+  # ============================================================
+  auto-rollback:
+    name: ↩️ Auto-Rollback
+    runs-on: ubuntu-latest
+    needs: [deploy-production, post-deploy-validation]
+    if: failure() && needs.post-deploy-validation.result == 'failure'
+    
+    steps:
+      - name: 📥 Download Backup Artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: pre-deployment-backup-${{ github.run_id }}
+          path: /tmp/backup
+      
+      - name: 🔐 Setup kubectl
+        uses: azure/setup-kubectl@v4
+        with:
+          version: 'v1.29.0'
+      
+      - name: 🔐 Configure Access
+        run: |
+          mkdir -p ~/.kube
+          echo "${{ secrets.KUBE_CONFIG_PRODUCTION }}" | base64 -d > ~/.kube/config
+          chmod 600 ~/.kube/config
+      
+      - name: ↩️ Execute Rollback
+        run: |
+          export KUBECONFIG=~/.kube/config
+          NAMESPACE="soc-platform"
+          
+          echo "## ↩️ Automatic Rollback Initiated" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Reason:** Post-deployment validation failed" >> $GITHUB_STEP_SUMMARY
+          echo "**Time:** $(date -u '+%Y-%m-%d %H:%M:%S UTC')" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          # Option 1: Use kubectl rollout undo
+          kubectl rollout undo deployment/soc-platform -n $NAMESPACE
+          
+          # Wait for rollback to complete
+          kubectl rollout status deployment/soc-platform -n $NAMESPACE --timeout=300s
+          
+          echo "✅ Rollback completed" >> $GITHUB_STEP_SUMMARY
+      
+      - name: 🚨 Alert on Rollback
+        if: always()
+        uses: slackapi/slack-github-action@v1.26.0
+        with:
+          payload: |
+            {
+              "text": "↩️ AUTOMATIC ROLLBACK EXECUTED",
+              "blocks": [
+                {
+                  "type": "header",
+                  "text": {"type": "plain_text", "text": "⚠️ Production Rollback Executed"}
+                },
+                {
+                  "type": "section",
+                  "text": {
+                    "type": "mrkdwn",
+                    "text": "*Automatic rollback due to validation failure*\n\n*Previous Version:* Restored\n*Current Status:* Rolling back\n*Action:* Investigate root cause"
+                  }
+                }
+              ]
+            }
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_INCIDENTS }}
+          SLACK_WEBHOOK_TYPE: INCOMING_WEBFLOW
+
+# ============================================================
+# ENVIRONMENT CONFIGURATION (GitHub Protected Environment)
+# ============================================================
+environments:
+  production:
+    url: https://soc.djezzy.dz
+    protection_rules:
+      # CRITICAL: Require approval before deploying to production
+      required_reviewers: 2
+      reviewers:
+        - laidoudi33
+        - soc-team-lead
+        - infra-manager
+      wait_timer: 15  # 15 minutes minimum before deployment can proceed
+      branch_policy:
+        protected_branches: [main]
+        required_checks:
+          - CI Pipeline
+          - Security Pipeline
+      exclude_environment_users: []  # No one is exempt

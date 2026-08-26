@@ -1,0 +1,742 @@
+# =============================================================================
+# Djezzy National SOC Platform - Phase 5: SIEM Integration
+# Elasticsearch Configuration (elasticsearch.yml)
+# =============================================================================
+# Production-optimized configuration for security log analytics
+# ARTP/ANSSI compliant with encryption and audit logging
+# =============================================================================
+
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: elasticsearch-config
+  namespace: siem
+  labels:
+    app.kubernetes.io/name: elasticsearch
+    app.kubernetes.io/component: config
+data:
+  elasticsearch.yml: |
+    # ========================================
+    # Cluster Configuration
+    # ========================================
+    cluster.name: djezzy-soc-cluster
+    
+    # ========================================
+    # Node Configuration
+    # ========================================
+    node.name: ${HOSTNAME}
+    node.attr.data: hot
+    node.attr.zone: algeria-central-1
+    
+    # Node roles for dedicated architecture
+    # Master nodes handle cluster state
+    # Data nodes store and process data
+    # Ingest nodes pre-process documents
+    node.roles: [ master, data_hot, data_content, ingest, remote_cluster_client ]
+    
+    # ========================================
+    # Network Configuration
+    # ========================================
+    network.host: 0.0.0.0
+    http.port: 9200
+    transport.port: 9300
+    
+    # Bind to specific interfaces in production
+    http.host: [_local_, _site_]
+    transport.host: [_site_]
+    
+    # CORS for Kibana development (restrict in production)
+    http.cors.enabled: true
+    http.cors.allow-origin: "https://kibana.soc.djezzy.dz"
+    
+    # ========================================
+    # Discovery Configuration
+    # ========================================
+    discovery.seed_hosts: ["elasticsearch-0.elasticsearch", "elasticsearch-1.elasticsearch", "elasticsearch-2.elasticsearch"]
+    cluster.initial_master_nodes: ["elasticsearch-0", "elasticsearch-1", "elasticsearch-2"]
+    
+    # ========================================
+    # Path Configuration
+    # ========================================
+    path.data: /usr/share/elasticsearch/data
+    path.logs: /usr/share/elasticsearch/logs
+    path.repo: ["/usr/share/elasticsearch/snapshots"]
+    
+    # ========================================
+    # Memory & Performance Tuning
+    # ========================================
+    # Lock memory to prevent swapping
+    bootstrap.memory_lock: true
+    
+    # Thread pool settings for high throughput
+    thread_pool.write.size: 10
+    thread_pool.write.queue_size: 2000
+    thread_pool.search.size: 15
+    thread_pool.search.queue_size: 1500
+    thread_pool.bulk.size: 8
+    thread_pool.bulk.queue_size: 200
+    
+    # Field data cache for aggregations
+    indices.fielddata.cache.size: 20%
+    indices.queries.cache.size: 15%
+    
+    # Request cache for frequent queries
+    indices.requests.cache.enable: true
+    indices.requests.cache.expire: 10m
+    
+    # ========================================
+    # Index Settings (Defaults)
+    # ========================================
+    # Number of shards per index (adjust based on data volume)
+    number_of_shards: 3
+    number_of_replicas: 1
+    
+    # Refresh interval for near real-time search
+    index.refresh_interval: 5s
+    
+    # Translog durability vs performance balance
+    index.translog.durability: async
+    index.translog.sync_interval: 30s
+    index.translog.flush_threshold_size: 512mb
+    
+    # Compression for storage optimization
+    index.codec: best_compression
+    
+    # ========================================
+    # Security Configuration (X-Pack)
+    # ========================================
+    xpack.security.enabled: true
+    xpack.security.http.ssl.enabled: true
+    xpack.security.http.ssl.certificate: /usr/share/elasticsearch/config/certs/tls.crt
+    xpack.security.http.ssl.key: /usr/share/elasticsearch/config/certs/tls.key
+    xpack.security.transport.ssl.enabled: true
+    xpack.security.transport.ssl.verification_mode: certificate
+    xpack.security.transport.ssl.certificate: /usr/share/elasticsearch/config/certs/tls.crt
+    xpack.security.transport.ssl.key: /usr/share/elasticsearch/config/certs/tls.key
+    xpack.security.transport.ssl.certificate_authorities: /usr/share/elasticsearch/config/certs/ca.crt
+    
+    # Audit logging for compliance
+    xpack.security.audit.enabled: true
+    xpack.audit.logfile.events.include: access_denied, authentication_failed, connection_denied, tampered_request, missing_privileges
+    
+    # API keys for service-to-service auth
+    xpack.security.authc.api_key.enabled: true
+    
+    # Anonymous access disabled (security requirement)
+    xpack.security.authc.anonymous.username: anonymous
+    xpack.security.authc.anonymous.roles: []
+    xpack.security.authc.anonymous.authz.exception: false
+    
+    # ========================================
+    # Monitoring Configuration
+    # ========================================
+    xpack.monitoring.enabled: true
+    xpack.monitoring.collection.enabled: true
+    xpack.monitoring.collection.interval: 30s
+    xpack.monitoring.history.duration: 7d
+    
+    # Export metrics for Prometheus
+    xpack.monitoring.exporters:
+      prometheus_local:
+        type: prometheus
+        enabled: true
+        host: "0.0.0.0"
+        port: 9115
+        
+    # ========================================
+    # Index Lifecycle Management (ILM)
+    # ========================================
+    xpack.ilm.enabled: true
+    xpack.ilm.poll_interval: 10m
+    
+    # Auto-create ILM policy for SOC logs
+    # Hot phase: 7 days (active investigation)
+    # Warm phase: 30 days (occasional queries)
+    # Cold phase: 90 days (archive, minimal queries)
+    # Delete phase: 365 days (compliance retention)
+    
+    # ========================================
+    # Snapshot/Backup Configuration
+    # ========================================
+    # S3 repository for cloud backups
+    # repos.djezzy-soc-backup:
+    #   type: s3
+    #   settings:
+    #     bucket: djezzy-soc-elasticsearch-backups
+    #     region: eu-west-1
+    #     client: default
+    #     compress: true
+    #     server_side_encryption: true
+    
+    # Snapshot scheduling via SLM
+    xpack.slm.enabled: true
+    xpack.slm.poll_interval: 15m
+    xpack.slm.retention_schedule: "0 0 3 * * ?"  # Daily at 3 AM Algeria time
+    
+    # ========================================
+    # Alerting Configuration
+    # ========================================
+    xpack.alerting.enabled: true
+    xpack.alerting.index_frequency: 1m
+    
+    # ========================================
+    # Machine Learning (for anomaly detection)
+    # ========================================
+    xpack.ml.enabled: true
+    xpack.ml.max_machine_memory_percent: 30
+    xpack.ml.max_open_jobs: 20
+    
+    # ========================================
+    # Transform Configuration (for correlation)
+    # ========================================
+    xpack.transform.enabled: true
+    
+    # ========================================
+    # EQL (Event Query Language) for threat hunting
+    # ========================================
+    xpack.eql.enabled: true
+    
+    # ========================================
+    # SQL Support for analysts
+    # ========================================
+    xpack.sql.enabled: true
+    
+    # ========================================
+    # Logging Configuration
+    # ========================================
+    logger.level: INFO
+    logger._root: INFO
+    logger.org.elasticsearch.cluster: DEBUG
+    logger.org.elasticsearch.indices.recovery: DEBUG
+    
+  jvm.options: |
+    ## JVM configuration
+    
+    # GC Configuration
+    -XX:+UseG1GC
+    -XX:G1ReservePercent=25
+    -XX:InitiatingHeapOccupancyPercent=30
+    
+    # Heap sizing (should match container limits)
+    -Xms2g
+    -Xmx2g
+    
+    # G1GC tuning
+    -XX:MaxGCPauseMillis=200
+    -XX:GCTimeRatio=4
+    
+    # DNS caching
+    -Dsun.net.inetaddr.ttl=60
+    -Dsun.net.inetaddr.negative.ttl=10
+    
+    # Stack size
+    -Xss1m
+    
+    # Metrics
+    +HeapDumpOnOutOfMemoryError
+    -XX:HeapDumpPath=/usr/share/elasticsearch/logs/
+    -XX:ErrorFile=/usr/share/elasticsearch/logs/hs_err_pid%p.log
+    
+    # Java locale
+    -Djava.locale.providers=SPI,COMPAT,JRE
+    
+    # File encoding
+    -Dfile.encoding=UTF-8
+    
+    # Disable JDK internal access warnings (Elasticsearch compatibility)
+    -Djdk.attach.allowAttachSelf=true
+    --add-exports=jdk.internal.jvmstat/sun.jvmstat.perfdata=ALL-UNNAMED
+    --add-exports=jdk.internal.jvmstat/sun.jvmstat.monitor=ALL-UNNAMED
+    --add-exports=java.management/sun.management=ALL-UNNAMED
+    --add-exports=java.rmi/sun.rmi.registry=ALL-UNNAMED
+    --add-exports=jdk.management/com.sun.management.internal.diagnosecommand=ALL-UNNAMED
+    --add-opens=java.base/java.lang=ALL-UNNAMED
+    --add-opens=java.base/java.nio=ALL-UNNAMED
+    --add-opens=java.base/sun.nio.ch=ALL-UNNAMED
+    --add-opens=java.base/java.util=ALL-UNNAMED
+    --add-opens=java.base/java.util.concurrent=ALL-UNNAMED
+    --add-opens=java.base/java.util.concurrent.atomic=ALL-UNNAMED
+    --add-opens=java.base/sun.nio.cs=ALL-UNNAMED
+    --add-opens=java.base/sun.net.util=ALL-UNNAMED
+    --add-opens=java.base/java.lang.reflect=ALL-UNNAMED
+    --add-opens=java.base/java.time=ALL-UNNAMED
+    --add-opens=java.base/java.text=ALL-UNNAMED
+    --add-opens=java.base/java.lang.invoke=ALL-UNNAMED
+    --add-opens=java.base/java.math=ALL-UNNAMED
+    --add-opens=java.base/java.util.stream=ALL-UNNAMED
+    --add-opens=java.base/java.net=ALL-UNNAMED
+    --add-opens=java.base/java.security=ALL-UNNAMED
+    --add-opens=java.base/java.security.cert=ALL-UNNAMED
+    --add-opens=java.base/jdk.internal.misc=ALL-UNNAMED
+    --add-opens=java.base/sun.security.pkcs=ALL-UNNAMED
+    --add-opens=java.base/sun.security.x509=ALL-UNNAMED
+    --add-opens=java.base/sun.security.util=ALL-UNNAMED
+    --add-opens=java.security.jgss/sun.security.krb5=ALL-UNNAMED
+    --add-opens=java.management/sun.management=ALL-UNNAMED
+    --add-opens=java.management/com.sun.management.internal.diagnosecommand=ALL-UNNAMED
+    --add-opens=java.rmi/sun.rmi.registry=ALL-UNNAMED
+    --add-opens=java.rmi/sun.rmi.server=ALL-UNNAMED
+    --add-opens=java.sql/java.sql=ALL-UNNAMED
+    --add-opens=java.transaction.xa/javax.transaction.xa=ALL-UNNAMED
+    --add-opens=java.xml/jdk.xml.internal=ALL-UNNAMED
+
+  log4j2.properties: |
+    status = error
+    
+    appender.console.type = Console
+    appender.console.name = console
+    appender.console.layout.type = PatternLayout
+    appender.console.layout.pattern = [%d{ISO8601}][%-5p][%-25c{1.}] %marker%m%n
+    
+    appender.rolling.type = RollingFile
+    appender.rolling.name = rolling
+    appender.rolling.fileName = ${sys:es.logs.base_path}${sys:file.separator}${sys:es.logs.cluster_name}_server.json
+    appender.rolling.layout.type = ECSJsonLayout
+    appender.rolling.layout.dataset = elasticsearch.server
+    appender.rolling.filePattern = ${sys:es.logs.base_path}${sys:file.separator}${sys:es.logs.cluster_name}-%d{yyyy-MM-dd}-%i.json.gz
+    appender.rolling.policies.type = Policies
+    appender.rolling.policies.time.type = TimeBasedTriggeringPolicy
+    appender.rolling.policies.time.interval = 1
+    appender.rolling.policies.time.modulate = true
+    appender.rolling.policies.size.type = SizeBasedTriggeringPolicy
+    appender.rolling.policies.size.size = 256MB
+    appender.rolling.strategy.type = DefaultRolloverStrategy
+    appender.rolling.strategy.fileIndex = nomax
+    appender.rolling.strategy.action.type = Delete
+    appender.rolling.strategy.action.condition.type = IfFileName
+    appender.rolling.strategy.action.condition.glob = *
+    appender.rolling.strategy.action.condition.nested_condition.type = IfAccumulatedFileSize
+    appender.rolling.strategy.action.condition.nested_condition.exceeds = 5GB
+    
+    rootLogger.level = info
+    rootLogger.appenderRef.console.ref = console
+    rootLogger.appenderRef.rolling.ref = rolling
+    
+    logger.deprecation.name = org.elasticsearch.deprecation
+    logger.deprecation.level = critical
+---
+# =============================================================================
+# Index Templates for SOC Logs
+# =============================================================================
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: elasticsearch-index-templates
+  namespace: siem
+data:
+  # Template for security events from all sources
+  soc-security-events-template.json: |
+    {
+      "index_patterns": ["soc-security-events-*"],
+      "template": {
+        "settings": {
+          "number_of_shards": 3,
+          "number_of_replicas": 1,
+          "index.lifecycle.name": "soc-security-policy",
+          "index.lifecycle.rollover_alias": "soc-security-events",
+          "refresh_interval": "5s",
+          "codec": "best_compression"
+        },
+        "mappings": {
+          "dynamic_templates": [
+            {
+              "strings_as_keyword": {
+                "match_mapping_type": "string",
+                "mapping": {
+                  "type": "keyword",
+                  "ignore_above": 256,
+                  "fields": {
+                    "text": {
+                      "type": "text",
+                      "analyzer": "standard"
+                    }
+                  }
+                }
+              }
+            },
+            {
+              "ip_addresses": {
+                "match": "*_ip",
+                "match_mapping_type": "string",
+                "mapping": {
+                  "type": "ip"
+                }
+              }
+            }
+          ],
+          "properties": {
+            "@timestamp": { "type": "date" },
+            "event": {
+              "properties": {
+                "category": { "type": "keyword" },
+                "type": { "type": "keyword" },
+                "severity": { "type": "keyword" },
+                "risk_score": { "type": "integer" },
+                "action": { "type": "keyword" },
+                "outcome": { "type": "keyword" },
+                "id": { "type": "keyword" },
+                "start": { "type": "date" },
+                "end": { "type": "date" },
+                "dataset": { "type": "keyword" },
+                "module": { "type": "keyword" },
+                "url": { "type": "keyword" }
+              }
+            },
+            "source": {
+              "properties": {
+                "ip": { "type": "ip" },
+                "port": { "type": "integer" },
+                "domain": { "type": "keyword" },
+                "address": { "type": "keyword" },
+                "mac": { "type": "keyword" },
+                "geo": {
+                  "properties": {
+                    "country_name": { "type": "keyword" },
+                    "city_name": { "type": "keyword" },
+                    "location": { "type": "geo_point" }
+                  }
+                },
+                "as": {
+                  "properties": {
+                    "number": { "type": "long" },
+                    "organization": { "type": "keyword" }
+                  }
+                },
+                "user": {
+                  "properties": {
+                    "name": { "type": "keyword" },
+                    "id": { "type": "keyword" },
+                    "domain": { "type": "keyword" },
+                    "email": { "type": "keyword" }
+                  }
+                }
+              }
+            },
+            "destination": {
+              "properties": {
+                "ip": { "type": "ip" },
+                "port": { "type": "integer" },
+                "domain": { "type": "keyword" },
+                "address": { "type": "keyword" },
+                "mac": { "type": "keyword" },
+                "geo": {
+                  "properties": {
+                    "country_name": { "type": "keyword" },
+                    "city_name": { "type": "keyword" },
+                    "location": { "type": "geo_point" }
+                  }
+                },
+                "as": {
+                  "properties": {
+                    "number": { "type": "long" },
+                    "organization": { "type": "keyword" }
+                  }
+                },
+                "user": {
+                  "properties": {
+                    "name": { "type": "keyword" },
+                    "id": { "type": "keyword" },
+                    "domain": { "type": "keyword" },
+                    "email": { "type": "keyword" }
+                  }
+                }
+              }
+            },
+            "network": {
+              "properties": {
+                "transport": { "type": "keyword" },
+                "protocol": { "type": "keyword" },
+                "bytes": { "type": "long" },
+                "packets": { "type": "long" },
+                "community_id": { "type": "keyword" },
+                "direction": { "type": "keyword" },
+                "iana_number": { "type": "keyword" },
+                "application": { "type": "keyword" }
+              }
+            },
+            "threat": {
+              "properties": {
+                "framework": { "type": "keyword" },
+                "tactic": { "type": "keyword" },
+                "technique": { "type": "keyword" },
+                "technique_id": { "type": "keyword" },
+                "subtechnique": { "type": "keyword" },
+                "software": { "type": "keyword" },
+                "indicators": {
+                  "properties": {
+                    "file": {
+                      "properties": {
+                        "hash": { "type": "keyword" },
+                        "name": { "type": "keyword" },
+                        "size": { "type": "long" },
+                        "type": { "type": "keyword" }
+                      }
+                    },
+                    "email": { "type": "keyword" },
+                    "domain": { "type": "keyword" },
+                    "ip": { "type": "ip" },
+                    "url": { "type": "keyword" },
+                    "registry_key": { "type": "keyword" }
+                  }
+                }
+              }
+            },
+            "rule": {
+              "properties": {
+                "uuid": { "type": "keyword" },
+                "name": { "type": "keyword" },
+                "author": { "type": "keyword" },
+                "description": { "type": "text" },
+                "level": { "type": "keyword" },
+                "false_positives": { "type": "keyword" },
+                "references": { "type": "keyword" },
+                "tags": { "type": "keyword" }
+              }
+            },
+            "soc": {
+              "properties": {
+                "alert_id": { "type": "keyword" },
+                "incident_id": { "type": "keyword" },
+                "case_id": { "type": "keyword" },
+                "analyst": { "type": "keyword" },
+                "status": { "type": "keyword" },
+                "priority": { "type": "keyword" },
+                "escalation_level": { "type": "integer" },
+                "playbook_triggered": { "type": "boolean" },
+                "automated_response": { "type": "boolean" },
+                "source_system": { "type": "keyword" },
+                "raw_log": { "type": "text", "index": false }
+              }
+            },
+            "telecom": {
+              "properties": {
+                "imsi": { "type": "keyword" },
+                "msisdn": { "type": "keyword" },
+                "imei": { "type": "keyword" },
+                "cell_id": { "type": "keyword" },
+                "lac": { "type": "keyword" },
+                "apn": { "type": "keyword" },
+                "protocol": { "type": "keyword" },  # SS7, GTP, SIP, Diameter
+                "roaming_status": { "type": "keyword" },
+                "fraud_indicators": { "type": "keyword" },
+                "subscriber_type": { "type": "keyword" }
+              }
+            },
+            "cloud": {
+              "properties": {
+                "provider": { "type": "keyword" },
+                "account": { "type": "keyword" },
+                "service": { "type": "keyword" },
+                "instance": { "type": "keyword" },
+                "region": { "type": "keyword" },
+                "project": { "type": "keyword" }
+              }
+            },
+            "custom": {
+              "type": "object",
+              "enabled": true
+            },
+            "tags": { "type": "keyword" },
+            "labels": { "type": "object" },
+            "message": { "type": "text" },
+            "log": {
+              "properties": {
+                "level": { "type": "keyword" },
+                "logger": { "type": "keyword" },
+                "origin": {
+                  "properties": {
+                    "file": { "type": "keyword" },
+                    "line": { "type": "long" },
+                    "function": { "type": "keyword" }
+                  }
+                }
+              }
+            },
+            "observer": {
+              "properties": {
+                "name": { "type": "keyword" },
+                "type": { "type": "keyword" },
+                "hostname": { "type": "keyword" },
+                "ip": { "type": "ip" },
+                "version": { "type": "keyword" },
+                "vendor": { "type": "keyword" },
+                "product": { "type": "keyword" },
+                "serial_number": { "type": "keyword" }
+              }
+            },
+            "process": {
+              "properties": {
+                "name": { "type": "keyword" },
+                "pid": { "type": "long" },
+                "ppid": { "type": "long" },
+                "executable": { "type": "keyword" },
+                "args": { "type": "keyword" },
+                "working_directory": { "type": "keyword" },
+                "hash": {
+                  "properties": {
+                    "md5": { "type": "keyword" },
+                    "sha1": { "type": "keyword" },
+                    "sha256": { "type": "keyword" }
+                  }
+                }
+              }
+            },
+            "related": {
+              "properties": {
+                "ip": { "type": "ip" },
+                "user": { "type": "keyword" },
+                "hash": { "type": "keyword" },
+                "host": { "type": "keyword" },
+                "indicator": { "type": "keyword" }
+              }
+            },
+            "ecs.version": { "type": "keyword" }
+          }
+        }
+      }
+    }
+
+  # Template for telecom-specific events
+  soc-telecom-events-template.json: |
+    {
+      "index_patterns": ["soc-telecom-events-*"],
+      "template": {
+        "settings": {
+          "number_of_shards": 5,
+          "number_of_replicas": 1,
+          "index.lifecycle.name": "soc-telecom-policy",
+          "refresh_interval": "3s"
+        },
+        "mappings": {
+          "properties": {
+            "@timestamp": { "type": "date" },
+            "event": {
+              "properties": {
+                "category": { "type": "keyword" },
+                "type": { "type": "keyword" },
+                "severity": { "type": "keyword" }
+              }
+            },
+            "telecom": {
+              "properties": {
+                "imsi": { "type": "keyword" },
+                "msisdn": { "type": "keyword" },
+                "imei": { "type": "keyword" },
+                "cell_id": { "type": "keyword" },
+                "lac": { "type": "keyword" },
+                "apn": { "type": "keyword" },
+                "protocol": { 
+                  "type": "keyword",
+                  "fields": { "text": { "type": "text" } }
+                },
+                "message_type": { "type": "keyword" },
+                "calling_party": { "type": "keyword" },
+                "called_party": { "type": "keyword" },
+                "roaming_partner": { "type": "keyword" },
+                "serving_msc": { "type": "keyword" },
+                "home_hlr": { "type": "keyword" },
+                "sgsn_ip": { "type": "ip" },
+                "ggsn_ip": { "type": "ip" },
+                "apn_ni": { "type": "keyword" },
+                "charging_id": { "type": "keyword" },
+                "rat_type": { "type": "keyword" },
+                "location_info": { "type": "object" },
+                "fraud_score": { "type": "float" },
+                "fraud_reason": { "type": "keyword" },
+                "signaling_data": { "type": "object", "enabled": false }
+              }
+            },
+            "source": {
+              "properties": {
+                "ip": { "type": "ip" },
+                "port": { "type": "integer" }
+              }
+            },
+            "destination": {
+              "properties": {
+                "ip": { "type": "ip" },
+                "port": { "type": "integer" }
+              }
+            },
+            "network": {
+              "properties": {
+                "bytes": { "type": "long" },
+                "packets": { "type": "long" },
+                "protocol": { "type": "keyword" }
+              }
+            },
+            "observer": {
+              "properties": {
+                "name": { "type": "keyword" },
+                "type": { "type": "keyword" }
+              }
+            },
+            "tags": { "type": "keyword" },
+            "ecs.version": { "type": "keyword" }
+          }
+        }
+      }
+    }
+
+  # Template for audit and compliance logs
+  soc-audit-template.json: |
+    {
+      "index_patterns": ["soc-audit-*"],
+      "template": {
+        "settings": {
+          "number_of_shards": 2,
+          "number_of_replicas": 2,
+          "index.lifecycle.name": "soc-audit-policy",
+          "refresh_interval": "10s"
+        },
+        "mappings": {
+          "properties": {
+            "@timestamp": { "type": "date" },
+            "event": {
+              "properties": {
+                "category": { "type": "keyword" },
+                "type": { "type": "keyword" },
+                "action": { "type": "keyword" },
+                "outcome": { "type": "keyword" },
+                "severity": { "type": "keyword" }
+              }
+            },
+            "user": {
+              "properties": {
+                "name": { "type": "keyword" },
+                "id": { "type": "keyword" },
+                "roles": { "type": "keyword" },
+                "domain": { "type": "keyword" }
+              }
+            },
+            "source": {
+              "properties": {
+                "ip": { "type": "ip" }
+              }
+            },
+            "audit": {
+              "properties": {
+                "resource": { "type": "keyword" },
+                "resource_type": { "type": "keyword" },
+                "old_value": { "type": "text" },
+                "new_value": { "type": "text" },
+                "reason": { "type": "text" },
+                "approval_id": { "type": "keyword" },
+                "session_id": { "type": "keyword" }
+              }
+            },
+            "compliance": {
+              "properties": {
+                "framework": { "type": "keyword" },
+                "control_id": { "type": "keyword" },
+                "control_name": { "type": "keyword" },
+                "status": { "type": "keyword" },
+                "evidence_ref": { "type": "keyword" }
+              }
+            },
+            "tags": { "type": "keyword" },
+            "ecs.version": { "type": "keyword" }
+          }
+        }
+      }
+    }

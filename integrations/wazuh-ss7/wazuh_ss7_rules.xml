@@ -1,0 +1,282 @@
+<!--
+  Djezzy SOC - Wazuh Integration Rules for SS7 Security
+  These rules integrate SS7 alerts from the analyzer into Wazuh SIEM
+  Place in /var/ossec/rules/local_rules/ss7_rules.xml
+-->
+
+<!-- SS7 Rule Group -->
+<group name="ss7,telecom,signaling,privacy,fraud">
+
+  <!-- ============================================================ -->
+  <!-- Base rule for all SS7 alerts (from Kafka/Analyzer)          -->
+  <!-- ============================================================ -->
+  <rule id="100000" level="0">
+    <decoded_son>ss7_alert</decoded_son>
+    <description>SS7 Security Alert received from Analyzer</description>
+    <type>ss7</type>
+  </rule>
+
+  <!-- ============================================================ -->
+  <!-- Location Tracking & Privacy Violations                      -->
+  <!-- ============================================================ -->
+  
+  <!-- Excessive SRI requests - Location tracking suspicion -->
+  <rule id="100101" level="10">
+    <if_sid>100000</if_sid>
+    <field name="rule_name">^SS7_LOCATION_TRACKING_SUSPICIOUS$</field>
+    <description>Potential subscriber location tracking detected via excessive SRI requests</description>
+    <group>location_tracking,privacy</group>
+    <mitre>
+      <id>T1419</id>
+      <name>Substitute Trust</name>
+      <tactic>Initial Access</tactic>
+    </mitre>
+  </rule>
+
+  <!-- SRI from unusual/unauthorized source GT -->
+  <rule id="100102" level="8">
+    <if_sid>100000</if_sid>
+    <field name="rule_name">^SS7_SRI_FROM_UNUSUAL_SOURCE$</field>
+    <description>SRI location request from unauthorized or unusual source Global Title</description>
+    <group>location_tracking,authorization</group>
+    <mitre>
+      <id>T1078</id>
+      <name>Valid Accounts</name>
+      <tactic>Initial Access</tactic>
+    </mitre>
+  </rule>
+
+  <!-- Provide Roaming Number anomaly (SIM swap indicator) -->
+  <rule id="100103" level="12">
+    <if_sid>100000</if_sid>
+    <field name="rule_name">^SS7_ROAMING_NUMBER_ANOMALY$</field>
+    <description>Suspicious provideRoamingNumber pattern indicating potential roaming fraud or SIM swap</description>
+    <group>roaming_fraud,sim_swap,critical</group>
+    <mitre>
+      <id>T1419</id>
+      <name>Substitute Trust</name>
+      <tactic>Persistence</tactic>
+    </mitre>
+  </rule>
+
+  <!-- Any Time Interrogation abuse -->
+  <rule id="100104" level="9">
+    <if_sid>100000</if_sid>
+    <field name="rule_name">^SS7_ATI_ABUSE_DETECTED$</field>
+    <description>Abuse of AnyTimeInterrogation for subscriber status/location harvesting</description>
+    <group>ati_abuse,data_harvesting,privacy</group>
+    <mitre>
+      <id>T1119</id>
+      <name>Automated Collection</name>
+      <tactic>Collection</tactic>
+    </mitre>
+  </rule>
+
+  <!-- Update Location storm (device cloning) -->
+  <rule id="100105" level="14">
+    <if_sid>100000</if_sid>
+    <field name="rule_name">^SS7_UPDATE_LOCATION_STORM$</field>
+    <description>Critical: Abnormally frequent updateLocation messages indicating device cloning or network probing</description>
+    <group>anomaly,device_cloning,critical</group>
+    <mitre>
+      <id>T1489</id>
+      <name>Virtualization/Sandbox Evasion</name>
+      <tactic>Persistence</tactic>
+    </mitre>
+  </rule>
+
+  <!-- ============================================================ -->
+  <!-- Fraud Detection Rules                                        -->
+  <!-- ============================================================ -->
+
+  <!-- IRSF Pattern - International Revenue Share Fraud -->
+  <rule id="100201" level="14">
+    <if_sid>100000</if_sid>
+    <field name="rule_name">^SS7_IRSF_PATTERN_DETECTED$</field>
+    <description>CRITICAL: International Revenue Share Fraud signature detected with high-risk destination calls</description>
+    <group>fraud,irsf,financial_loss,critical,regulatory</group>
+    <mitre>
+      <id>T1589</id>
+      <name>Generate or Obtain Resources: Financial</name>
+      <tactic>Resource Development</tactic>
+    </mitre>
+  </rule>
+
+  <!-- Wangiri / Callback fraud pattern -->
+  <rule id="100202" level="12">
+    <if_sid>100000</if_sid>
+    <field name="rule_name">^SS7_WANGIRI_FRAUD_PATTERN$</field>
+    <description>Wangiri/callback fraud pattern with mass short calls from same source range</description>
+    <group>fraud,wangiri,callback_fraud,subscriber_harm</group>
+    <mitre>
+      <id>T1418</id>
+      <name>Software Discovery</name>
+      <tactic>Initial Access</tactic>
+    </mitre>
+  </rule>
+
+  <!-- USSD Brute Force attack -->
+  <rule id="100203" level="9">
+    <if_sid>100000</if_sid>
+    <field name="rule_name">^SS7_USSD_BRUTE_FORCE$</field>
+    <description>Brute force attack via excessive USSD service code requests</description>
+    <group>ussd_attack,brute_force,service_abuse</group>
+    <mitre>
+      <id>T1110</id>
+      <name>Brute Force</name>
+      <tactic>Credential Access</tactic>
+    </mitre>
+  </rule>
+
+  <!-- SMS Forwarding to suspicious destinations -->
+  <rule id="100204" level="12">
+    <if_sid>100000</if_sid>
+    <field name="rule_name">^SS7_SMS_FORWARDING_SUSPICIOUS$</field>
+    <description>Suspicious SMS forwarding pattern indicating potential interception or data exfiltration</description>
+    <group>sms_interception,privacy_breach,otp_interception</group>
+    <mitre>
+      <id>T1421</id>
+      <name>Remote Capture</name>
+      <tactic>Collection</tactic>
+    </mitre>
+  </rule>
+
+  <!-- Premium Rate Service abuse -->
+  <rule id="100205" level="11">
+    <if_sid>100000</if_sid>
+    <field name="rule_name">^SS7_PREMIUM_RATE_ABUSE$</field>
+    <description>Abnormal call patterns to premium-rate services indicating potential revenue share fraud</description>
+    <group>fraud,premium_rate,revenue_abuse</group>
+    <mitre>
+      <id>T1589</id>
+      <name>Generate or Obtain Resources: Financial</name>
+      <tactic>Resource Development</tactic>
+    </mitre>
+  </rule>
+
+  <!-- SIM Box / Gateway detection -->
+  <rule id="100206" level="14">
+    <if_sid>100000</if_sid>
+    <field name="rule_name">^SS7_SIM_BOX_DETECTED$</field>
+    <description>CRITICAL: SIM box/gateway usage detected for bulk SMS or call termination fraud</description>
+    <group>sim_box,bulk_fraud,termination_fraud,critical,legal</group>
+    <mitre>
+      <id>T1489</id>
+      <name>Virtualization/Sandbox Evasion</name>
+      <tactic>Persistence</tactic>
+    </mitre>
+  </rule>
+
+  <!-- ============================================================ -->
+  <!-- Network Attack & DoS Rules                                   -->
+  <!-- ============================================================ -->
+
+  <!-- Signaling DoS / Flooding attack -->
+  <rule id="100301" level="15">
+    <if_sid>100000</if_sid>
+    <field name="rule_name">^SS7_SIGNALING_DOS_DETECTED$</field>
+    <description>CRITICAL: Signaling flood/DoS attack targeting network elements - immediate response required</description>
+    <group>dos,flooding,availability,critical,immediate_response</group>
+    <mitre>
+      <id>T1498</id>
+      <name>Network Denial of Service</name>
+      <tactic>Impact</tactic>
+    </mitre>
+  </rule>
+
+  <!-- Global Title translation attack -->
+  <rule id="100302" level="11">
+    <if_sid>100000</if_sid>
+    <field name="rule_name">^SS7_GT_TRANSLATION_ATTACK$</field>
+    <description>Suspicious Global Title translation patterns indicating routing manipulation attempt</description>
+    <group>routing_attack,gt_manipulation,security_bypass</group>
+    <mitre>
+      <id>T1563</id>
+      <name>Remote Service Session Hijacking</name>
+      <tactic>Defense Evasion</tactic>
+    </mitre>
+  </rule>
+
+  <!-- Malformed message / exploit attempt -->
+  <rule id="100303" level="8">
+    <if_sid>100000</if_sid>
+    <field name="rule_name">^SS7_MALFORMED_MESSAGE_DETECTED$</field>
+    <description>Malformed or protocol-violating SS7/SCTP/M3UA message indicating potential exploit attempt</description>
+    <group>malformed,exploit_attempt,probing</group>
+    <mitre>
+      <id>T1499</id>
+      <name>Endpoint Security</name>
+      <tactic>Initial Access</tactic>
+    </mitre>
+  </rule>
+
+  <!-- Unauthorized MAP operation -->
+  <rule id="100304" level="13">
+    <if_sid>100000</if_sid>
+    <field name="rule_name">^SS7_UNAUTHORIZED_MAP_OPERATION$</field>
+    <description>Unauthorized MAP operation attempt indicating access control bypass or privilege escalation</description>
+    <group>unauthorized_access,privilege_escalation,access_control</group>
+    <mitre>
+      <id>T1078</id>
+      <name>Valid Accounts</name>
+      <tactic>Initial Access</tactic>
+    </mitre>
+  </rule>
+
+  <!-- Diameter/LTE signaling anomaly -->
+  <rule id="100305" level="11">
+    <if_sid>100000</if_sid>
+    <field name="rule_name">^SS7_DIAMETER_ANOMALY_DETECTED$</field>
+    <description>Anomalous Diameter signaling on LTE interfaces (S6a/HSS, Gx/PCRF) indicating potential 4G attack</description>
+    <group>lte,diameter,authentication,4g_security</group>
+    <mitre>
+      <id>T1506</id>
+      <name>Virtualization/Sandbox Escape</name>
+      <tactic>Initial Access</tactic>
+    </mitre>
+  </rule>
+
+  <!-- Roaming partner anomaly -->
+  <rule id="100306" level="9">
+    <if_sid>100000</if_sid>
+    <field name="rule_name">^SS7_ROAMING_PARTNER_ANOMALY$</field>
+    <description>Anomalous signaling from roaming partner indicating potential compromise or fraudulent activity</description>
+    <group>roaming,partner_security,supply_chain</group>
+    <mitre>
+      <id>T1199</id>
+      <name>Persistence</name>
+      <tactic>Persistence</tactic>
+    </mitre>
+  </rule>
+
+  <!-- ============================================================ -->
+  <!-- Severity Enhancement Rules                                     -->
+  <!-- ============================================================ -->
+
+  <!-- Escalate if risk score is very high (>0.9) -->
+  <rule id="100400" level="14">
+    <if_sid>100000</if_sid>
+    <field name="risk_score">\.(9[0-9]|1\.00)</field>
+    <description>SS7 alert with extremely high risk score requiring immediate investigation</description>
+    <group>high_risk,immediate_attention</group>
+  </rule>
+
+  <!-- Escalate if IMSI is present in critical alerts -->
+  <rule id="100401" level="13">
+    <rule_id>100101,100103,100105,100201,100206,100301</rule_id>
+    <field name="imsi">^.+$</field>
+    <description>Elevated: Critical SS7 alert involving identifiable subscriber (IMSI present)</description>
+    <group>elevated,subscriber_identified</group>
+  </rule>
+
+  <!-- Correlate multiple alerts from same source within time window -->
+  <rule id="100402" level="12">
+    <if_sid>100000</if_sid>
+    <field name="calling_party_gt.address">^.+$</field>
+    <description>Multiple SS7 alerts from same source Global Title indicating coordinated activity</description>
+    <timeframe>60</timeframe>
+    <group>correlated,coordinated_activity</group>
+    <if_matched_freq>5</if_matched_freq>
+  </rule>
+
+</group>

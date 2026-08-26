@@ -1,0 +1,340 @@
+# Djezzy SOC - SS7 Detection Rules
+# Network Attack & DoS Detection Rules
+# Version: 1.0.0
+
+# ============================================================
+# RULE 12: Signaling DoS via Message Flooding
+# Detects denial of service attacks through excessive
+# signaling message rates that could overwhelm network elements
+# ============================================================
+- name: SS7_SIGNALING_DOS_DETECTED
+  description: "Detect signaling flood/DoS attack via abnormally high message rates targeting network elements"
+  severity: CRITICAL
+  enabled: true
+  
+  condition:
+    op: and
+    conditions:
+      - # Overall message rate from source exceeds threshold
+        field: _messages_per_second_from_source
+        operator: greater_than
+        value: 1000  # >1000 messages/second from single source GT
+      
+      - # Targeting specific DPC (network element)
+        field: _target_dpc_concentration
+        operator: greater_than
+        value: 0.9  # >90% of messages to same DPC
+      
+      - # Sustained rate (not just burst)
+        field: _sustained_rate_duration_seconds
+        operator: greater_than
+        value: 30  # Sustained for >30 seconds
+  
+  action:
+    - create_thehive_case(priority: P1)
+    - immediate_alert_to_noc
+    - trigger_auto_mitigation
+    - block_source_at_stp_level
+    - initiate_incident_response
+  
+  tags:
+    - dos
+    - flooding
+    - availability
+    - critical
+    - immediate_response
+  
+  mitre_technique: T1498
+  mitre_tactic: Impact
+
+# ============================================================
+# RULE 13: SCCP GT Translation Attack
+# Detects attempts to manipulate Global Title translation
+# for routing manipulation or bypass
+# ============================================================
+- name: SS7_GT_TRANSLATION_ATTACK
+  description: "Detect suspicious Global Title translation patterns indicating routing manipulation or bypass attempts"
+  severity: HIGH
+  enabled: true
+  
+  condition:
+    op: and
+    conditions:
+      - field: protocol
+        operator: equals
+        value: sccp
+      
+      - # Unusual GT translation requests
+        field: _gt_translation_type
+        operator: in
+        value:
+          - unknown_translation
+          - recursive_translation
+          - loop_detected
+      
+      - # From unauthorized source
+        field: _source_authorized_for_gt_translation
+        operator: not_equals
+        value: true
+      
+      - # Targeting sensitive DPCs (HLR, VLR, MSC)
+        field: destination_point_code
+        operator: in
+        value: [sensitive_hlr_dpcs, sensitive_vlr_dpcs, sensitive_msc_dpcs]  # Configured lists
+  
+  action:
+    - create_thehive_case
+    - investigate_routing_tables
+    - check_stp_configuration
+    - alert_network_engineers
+  
+  tags:
+    - routing_attack
+    - gt_manipulation
+    - security_bypass
+    - infrastructure
+  
+  mitre_technique: T1563
+  mitre_tactic: Defense Evasion
+
+# ============================================================
+# RULE 14: M3UA/SCCP Malformed Messages
+# Detects malformed or protocol-violating messages that
+# could indicate probing, fuzzing, or exploitation attempts
+# ============================================================
+- name: SS7_MALFORMED_MESSAGE_DETECTED
+  description: "Detect malformed or protocol-violating SS7/SCTP/M3UA messages indicating potential exploit attempts"
+  severity: MEDIUM
+  enabled: true
+  
+  condition:
+    op: or
+    conditions:
+      - # Invalid M3UA header
+        field: _m3ua_header_valid
+        operator: not_equals
+        value: true
+      
+      - # Invalid SCCP addressing
+        field: _sccp_address_valid
+        operator: not_equals
+        value: true
+      
+      - # TCAP transaction anomalies
+        field: _tcap_transaction_valid
+        operator: not_equals
+        value: true
+      
+      - # Suspicious payload patterns (shellcode, overflow markers)
+        field: raw_payload_hex
+        operator: matches
+        value: "(?i)(90909090|c0c0c0c0|41414141|0d0a0d0a|2f2f2f2f)"  # Common exploit patterns
+  
+  action:
+    - log_detailed_packet_capture
+    - increment_source_risk_score
+    - create_thehive_case(if_repeated: 10/hour)
+    - correlate_with_other_anomalies
+  
+  tags:
+    - malformed
+    - exploit_attempt
+    - probing
+    - protocol_violation
+  
+  mitre_technique: T1499
+  mitre_tactic: Initial Access
+
+# ============================================================
+# RULE 15: Unauthorized MAP Operation
+# Detects attempts to use MAP operations from sources
+# not authorized for those operations
+# ============================================================
+- name: SS7_UNAUTHORIZED_MAP_OPERATION
+  description: "Detect unauthorized MAP operation attempts indicating privilege escalation or access control bypass"
+  severity: HIGH
+  enabled: true
+  
+  condition:
+    op: and
+    conditions:
+      - field: protocol
+        operator: equals
+        value: map
+      
+      - # Sensitive operations requiring authorization
+        field: message_type
+        operator: in
+        value:
+          - insertSubscriberData
+          - deleteSubscriberData
+          - cancelLocation
+          - provideSubscriberInfo
+          - purgeMS
+      
+      - # Source not in authorized list for this operation
+        field: _operation_authorized_for_source
+        operator: not_equals
+        value: true
+      
+      - # Not a normal roaming partner
+        field: _is_known_roaming_partner
+        operator: not_equals
+        value: true
+  
+  action:
+    - create_thehive_case
+    - immediate_investigation
+    - verify_authorization_tables
+    - consider_blocking_temporarily
+    - regulatory_notification(if_subscriber_data_involved)
+  
+  tags:
+    - unauthorized_access
+    - privilege_escalation
+    - access_control
+    - subscriber_data
+  
+  mitre_technique: T1078
+  mitre_tactic: Initial Access
+
+# ============================================================
+# RULE 16: Diameter/LTE Signaling Anomaly
+# Detects unusual patterns in LTE Diameter signaling
+# (S6a, Gx, Rx interfaces) for 4G/LTE-specific attacks
+# ============================================================
+- name: SS7_DIAMETER_ANOMALY_DETECTED
+  description: "Detect anomalous Diameter signaling patterns on LTE interfaces (S6a/HSS, Gx/PCRF)"
+  severity: HIGH
+  enabled: true
+  
+  condition:
+    op: or
+    conditions:
+      # Authentication failures pattern
+      - op: and
+        conditions:
+          - field: protocol
+            operator: equals
+            value: diameter
+          
+          - field: message_type
+            operator: equals
+            value: authenticate-information-answer
+          
+          - field: payload.result_code
+            operator: not_equals
+            value: 2001  # DIAMETER_SUCCESS
+          
+          - field: _auth_failure_rate_per_imsi
+            operator: greater_than
+            value: 5  # >5 auth failures per minute per IMSI
+      
+      # Location update storm on S6a
+      - op: and
+        conditions:
+          - field: protocol
+            operator: equals
+            value: diameter
+          
+          - field: application_name
+            operator: contains
+            value: "S6a"
+          
+          - field: message_type
+            operator: equals
+            value: user-location-register-request
+          
+          - field: _ulr_rate_per_imsi
+            operator: greater_than
+          value: 20  # >20 ULR/min/subscriber
+      
+      # Policy violations on Gx
+      - op: and
+        conditions:
+          - field: application_name
+            operator: contains
+            value: "Gx"
+          
+          - field: _policy_rejection_rate
+            operator: greater_than
+            value: 50  # >50% policy rejections
+  
+  action:
+    - create_thehive_case
+    - correlate_with_ss7_events
+    - check_lte_provisioning
+    - flag_potential_sim_cloning
+    - notify_mobile_security_team
+  
+  tags:
+    - lte
+    - diameter
+    - authentication
+    - 4g_security
+    - anomaly
+  
+  mitre_technique: T1506
+  mitre_tactic: Initial Access
+
+# ============================================================
+# RULE 17: Roaming Partner Anomaly
+# Detects unusual activity from roaming partners that could
+# indicate compromised roaming agreement or fraudulent partner
+# ============================================================
+- name: SS7_ROAMING_PARTNER_ANOMALY
+  description: "Detect anomalous signaling patterns from roaming partners indicating potential compromise or fraud"
+  severity: MEDIUM
+  enabled: true
+  
+  condition:
+    op: and
+    conditions:
+      - # Source is a known roaming partner
+        field: _is_roaming_partner
+        operator: equals
+        value: true
+      
+      - # Activity level significantly above baseline for this partner
+        field: _partner_activity_ratio_vs_baseline
+        operator: greater_than
+        value: 5.0  # 5x normal activity level
+      
+      - # At least one additional indicator
+        op: or
+        conditions:
+          - # New message types not normally seen from this partner
+            field: _new_message_types_from_partner
+            operator: greater_than
+            value: 2
+          
+          - # Unusual time of day (partner's timezone considered)
+            field: _unusual_time_for_partner
+            operator: equals
+            value: true
+          
+          - # Targeting specific subscriber ranges
+            field: _targeted_subscriber_range
+            operator: equals
+            value: true
+          
+          - # Error rate higher than normal
+            field: _partner_error_rate
+            operator: greater_than
+            value: 0.1  # >10% error rate
+  
+  action:
+    - create_thehive_case
+    - notify_roaming_team
+    - review_roaming_agreement
+    - contact_partner_security_team
+    - increase_monitoring_on_partner
+  
+  tags:
+    - roaming
+    - partner_security
+    - supply_chain
+    - trust_boundary
+  
+  mitre_technique: T1199
+  mitre_tactic: Persistence

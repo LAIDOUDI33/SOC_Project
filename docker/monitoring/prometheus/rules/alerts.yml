@@ -1,0 +1,436 @@
+# ===========================================
+# National SOC Platform - Alert Rules
+# Algeria 2026-2030 | Telecom Operator Scale
+#
+# Alert Categories:
+# 1. Infrastructure (System, Network, Containers)
+# 2. Application (Response Time, Errors, Throughput)
+# 3. Database (PostgreSQL Performance, Connections)
+# 4. Cache (Redis Memory, Latency)
+# 5. Security (Anomalies, Breaches)
+# 6. Business (SLA, ARPT Compliance)
+# ===========================================
+
+groups:
+  # ============= INFRASTRUCTURE ALERTS =============
+  
+  - name: infrastructure_alerts
+    interval: 30s
+    rules:
+      # High CPU Usage
+      - alert: HighCPUUsage
+        expr: 100 - (avg by(instance) (irate(node_cpu_seconds_total{mode="idle"}[5m])) * 100) > 80
+        for: 5m
+        labels:
+          severity: warning
+          team: operations
+        annotations:
+          summary: "High CPU usage on {{ $labels.instance }}"
+          description: "CPU usage is above 80% for more than 5 minutes. Current value: {{ $value }}%"
+
+      # Critical CPU Usage
+      - alert: CriticalCPUUsage
+        expr: 100 - (avg by(instance) (irate(node_cpu_seconds_total{mode="idle"}[5m])) * 100) > 95
+        for: 2m
+        labels:
+          severity: critical
+          team: operations
+        annotations:
+          summary: "CRITICAL CPU usage on {{ $labels.instance }}"
+          description: "CPU usage is above 95%! Immediate action required. Current: {{ $value }}%"
+
+      # High Memory Usage
+      - alert: HighMemoryUsage
+        expr: (1 - node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes) * 100 > 85
+        for: 5m
+        labels:
+          severity: warning
+          team: operations
+        annotations:
+          summary: "High memory usage on {{ $labels.instance }}"
+          description: "Memory usage is above 85%. Current: {{ $value }}%"
+
+      # Disk Space Warning
+      - alert: DiskSpaceWarning
+        expr: (node_filesystem_avail_bytes{mountpoint="/"} / node_filesystem_size_bytes{mountpoint="/"}) * 100 < 20
+        for: 10m
+        labels:
+          severity: warning
+          team: operations
+        annotations:
+          summary: "Low disk space on {{ $labels.instance }}"
+          description: "Disk space is below 20%. Available: {{ $value }}%"
+
+      # Disk Space Critical
+      - alert: DiskSpaceCritical
+        expr: (node_filesystem_avail_bytes{mountpoint="/"} / node_filesystem_size_bytes{mountpoint="/"}) * 100 < 10
+        for: 5m
+        labels:
+          severity: critical
+          team: operations
+        annotations:
+          summary: "CRITICAL disk space on {{ $labels.instance }}"
+          description: "Disk space is critically low (<10%). Immediate cleanup required!"
+
+      # System Load High
+      - alert: HighSystemLoad
+        expr: node_load5 / count by(instance) (cpu{mode="idle"}) > 0.8
+        for: 5m
+        labels:
+          severity: warning
+          team: operations
+        annotations:
+          summary: "High system load on {{ $labels.instance }}"
+          description: "5-minute load average is high: {{ $value }}"
+
+  # ============= APPLICATION ALERTS =============
+  
+  - name: application_alerts
+    interval: 15s
+    rules:
+      # Application Down
+      - alert: ApplicationDown
+        expr: up{job="soc-application"} == 0
+        for: 1m
+        labels:
+          severity: critical
+          team: soc
+          pager: true
+        annotations:
+          summary: "🚨 SOC Platform is DOWN!"
+          description: "The SOC application has been unresponsive for over 1 minute!"
+          
+          # Telegram/Slack notification
+          runbook: "Check docker logs: ./scripts/docker-manager.sh logs soc-app"
+          impact: "All SOC analysts cannot access platform"
+          urgency: "IMMEDIATE"
+
+      # High Response Time
+      - alert: HighResponseTime
+        expr: histogram_quantile(0.95, rate(http_request_duration_seconds_bucket[5m])) > 2
+        for: 5m
+        labels:
+          severity: warning
+          team: soc
+        annotations:
+          summary: "High API response time"
+          description: "95th percentile response time is above 2 seconds: {{ $value }}s"
+
+      # Critical Response Time
+      - alert: CriticalResponseTime
+        expr: histogram_quantile(0.99, rate(http_request_duration_seconds_bucket[5m])) > 5
+        for: 3m
+        labels:
+          severity: critical
+          team: soc
+        annotations:
+          summary: "CRITICAL API response time"
+          description: "99th percentile response time is above 5 seconds: {{ $value }}s"
+
+      # High Error Rate
+      - alert: HighErrorRate
+        expr: (rate(http_requests_total{status=~"5.."}[5m]) / rate(http_requests_total[5m])) * 100 > 5
+        for: 5m
+        labels:
+          severity: warning
+          team: soc
+        annotations:
+          summary: "High HTTP error rate"
+          description: "Error rate is above 5%: {{ $value }}%"
+
+      # Critical Error Rate
+      - alert: CriticalErrorRate
+        expr: (rate(http_requests_total{status=~"5.."}[5m]) / rate(http_requests_total[5m])) * 100 > 20
+        for: 2m
+        labels:
+          severity: critical
+          team: soc
+          pager: true
+        annotations:
+          summary: "CRITICAL error rate!"
+          description: "Error rate is above 20%: {{ $value }}%. Platform may be degraded!"
+
+      # Low Request Rate (Potential Issue)
+      - alert: LowRequestRate
+        expr: rate(http_requests_total[5m]) < 10
+        for: 10m
+        labels:
+          severity: info
+          team: soc
+        annotations:
+          summary: "Unusually low request rate"
+          description: "Request rate dropped to {{ $value }} req/s. May indicate connectivity issue."
+
+      # WebSocket Connections Low
+      - alert: LowWebSocketConnections
+        expr: websocket_connections < 50
+        for: 15m
+        labels:
+          severity: warning
+          team: soc
+        annotations:
+          summary: "Low WebSocket connections"
+          description: "Only {{ $value }} active WebSocket connections. Expected: 200+"
+
+  # ============= DATABASE ALERTS =============
+  
+  - name: database_alerts
+    interval: 30s
+    rules:
+      # PostgreSQL Down
+      - alert: PostgreSQLDown
+        expr: up{job="postgresql-exporter"} == 0
+        for: 1m
+        labels:
+          severity: critical
+          team: database
+          pager: true
+        annotations:
+          summary: "🗄️ PostgreSQL database is DOWN!"
+          description: "PostgreSQL exporter cannot connect to database!"
+          runbook: "Check PostgreSQL logs: docker exec soc-postgres pg_isready"
+
+      # High Connection Count
+      - alert: HighPostgreSQLConnections
+        expr: pg_stat_activity_count / pg_settings_max_connections * 100 > 80
+        for: 5m
+        labels:
+          severity: warning
+          team: database
+        annotations:
+          summary: "High PostgreSQL connections"
+          description: "{{ $value }}% of max connections used. Consider increasing pool size."
+
+      # Critical Connection Count
+      - alert: CriticalPostgreSQLConnections
+        expr: pg_stat_activity_count / pg_settings_max_connections * 100 > 95
+        for: 2m
+        labels:
+          severity: critical
+          team: database
+        annotations:
+          summary: "CRITICAL PostgreSQL connections!"
+          description: "Running out of connections! Current: {{ $value }}%"
+
+      # Slow Queries
+      - alert: SlowPostgreSQLQueries
+        expr: avg by (datname)(pg_stat_statements_mean_query_time) > 1000
+        for: 10m
+        labels:
+          severity: warning
+          team: database
+        annotations:
+          summary: "Slow PostgreSQL queries detected"
+          description: "Average query time is {{ $value }}ms. Review slow query log."
+
+      # Database Size Growing Fast
+      - alert: RapidDatabaseGrowth
+        expr: increase(pg_database_size_bytes{datname="soc_production"}[24h]) > 10737418240  # 10GB/day
+        for: 4h
+        labels:
+          severity: warning
+          team: database
+        annotations:
+          summary: "Rapid database growth detected"
+          description: "Database grew by more than 10GB in 24 hours. Check data retention policies."
+
+      # Deadlocks Detected
+      - alert: PostgreSQLDeadlocks
+        expr: increase(pg_stat_database_deadlocks[1h]) > 10
+        for: 5m
+        labels:
+          severity: warning
+          team: database
+        annotations:
+          summary: "PostgreSQL deadlocks detected"
+          description: "{{ $value }} deadlocks in last hour. Review transaction isolation levels."
+
+  # ============= REDIS CACHE ALERTS =============
+  
+  - name: redis_alerts
+    interval: 20s
+    rules:
+      # Redis Down
+      - alert: RedisDown
+        expr: up{job="redis-exporter"} == 0
+        for: 1m
+        labels:
+          severity: critical
+          team: cache
+          pager: true
+        annotations:
+          summary: "⚡ Redis cache is DOWN!"
+          description: "Redis is not responding! Session management and caching affected."
+          impact: "Users may be logged out, performance degraded"
+
+      # High Memory Usage
+      - alert: RedisHighMemoryUsage
+        expr: redis_memory_used_bytes / redis_memory_max_bytes * 100 > 80
+        for: 5m
+        labels:
+          severity: warning
+          team: cache
+        annotations:
+          summary: "Redis memory usage high"
+          description: "Redis using {{ $value }}% of max memory. Consider eviction policy tuning."
+
+      # Critical Memory Usage
+      - alert: RedisCriticalMemoryUsage
+        expr: redis_memory_used_bytes / redis_memory_max_bytes * 100 > 95
+        for: 2m
+        labels:
+          severity: critical
+          team: cache
+        annotations:
+          summary: "CRITICAL Redis memory!"
+          description: "Redis at {{ $value }}% capacity. Risk of OOM kill!"
+
+      # High Eviction Rate
+      - alert: RedisHighEvictionRate
+        expr: rate(redis_evicted_keys_total[5m]) > 100
+        for: 5m
+        labels:
+          severity: warning
+          team: cache
+        annotations:
+          summary: "High Redis eviction rate"
+          description: "Evicting {{ $value }} keys/sec. Increase memory or review TTL settings."
+
+      # Low Hit Rate
+      - alert: RedisLowHitRate
+        expr: rate(redis_keyspace_hits_total[5m]) / (rate(redis_keyspace_hits_total[5m]) + rate(redis_keyspace_misses_total[5m])) * 100 < 70
+        for: 15m
+        labels:
+          severity: warning
+          team: cache
+        annotations:
+          summary: "Low Redis hit rate"
+          description: "Cache hit rate only {{ $value }}%. Review caching strategy."
+
+  # ============= SECURITY & TELECOM ALERTS =============
+  
+  - name: security_telecom_alerts
+    interval: 10s
+    rules:
+      # Surge in Alerts (Potential Attack)
+      - alert: AlertSurgeDetected
+        expr: rate(soc_alerts_total[5m]) > 1000
+        for: 2m
+        labels:
+          severity: warning
+          team: security
+        annotations:
+          summary: "🔔 Unusual alert surge detected"
+          description: "Alert rate: {{ $value }}/sec. Possible attack or network anomaly."
+          action: "Check telecom protocol parsers for DDoS patterns"
+
+      # Critical Alert Volume
+      - alert: CriticalAlertVolume
+        expr: rate(soc_alerts_total{severity="critical"}[5m]) > 500
+        for: 1m
+        labels:
+          severity: critical
+          team: security
+          pager: true
+        annotations:
+          summary: "🚨 CRITICAL alert volume spike!"
+          description: "{{ $value }} critical alerts/sec. Major incident or attack in progress!"
+          urgency: "IMMEDIATE RESPONSE REQUIRED"
+
+      # GTP Protocol Anomalies
+      - alert: GTPProtocolAnomalies
+        expr: rate(telecom_gtp_errors_total[5m]) > 100
+        for: 3m
+        labels:
+          severity: warning
+          team: telecom
+        annotations:
+          summary: "GTP protocol anomalies detected"
+          description: "{{ $value }} GTP errors/sec. Check roaming configuration."
+
+      # SS7/SIGTRAN Suspicious Activity
+      - alert: SS7SuspiciousActivity
+        expr: rate(telecom_ss7_suspicious_total[5m]) > 50
+        for: 2m
+        labels:
+          severity: critical
+          team: telecom
+          pager: true
+        annotations:
+          summary: "📞 SUSPICIOUS SS7 ACTIVITY DETECTED!"
+          description: "{{ $value }} suspicious SS7 events/sec. Potential signaling attack!"
+          action: "Immediate investigation required - subscriber tracking risk!"
+
+      # Subscriber Data Access Spike
+      - alert: SubscriberDataAccessSpike
+        expr: rate(subscriber_data_accesses_total[5m]) > 10000
+        for: 3m
+        labels:
+          severity: warning
+          team: privacy
+        annotations:
+          summary: "Unusual subscriber data access pattern"
+          description: "{{ $value }} accesses/sec. Verify authorization compliance."
+
+      # Failed Authentication Attempts
+      - alert: BruteForceAttackSuspected
+        expr: rate(auth_failures_total[5m]) > 100
+        for: 2m
+        labels:
+          severity: critical
+          team: security
+          pager: true
+        annotations:
+          summary: "🔐 Potential brute force attack!"
+          description: "{{ $value }} failed auth attempts/sec. Enable IP blocking!"
+
+      # Incident SLA Breach Risk
+      - alert: IncidentSLABreachRisk
+        expr: (soc_incidents_open_count * soc_avg_resolution_hours) > 24
+        for: 30m
+        labels:
+          severity: warning
+          team: soc
+        annotations:
+          summary: "Incident SLA breach risk"
+          description: "Current workload may cause SLA breaches. Open incidents: {{ $value }}"
+
+  # ============= BUSINESS & COMPLIANCE ALERTS =============
+  
+  - name: business_compliance_alerts
+    interval: 60s
+    rules:
+      # ARPT Reporting Deadline Approaching
+      - alert: ARPTReportingDeadlineNear
+        expr: time() % 86400 > 82800  # Within 1 hour of midnight
+        for: 1h
+        labels:
+          severity: info
+          team: compliance
+        annotations:
+          summary: "ARPT reporting deadline approaching"
+          description: "Daily report due within 1 hour. Ensure all incidents are logged."
+
+      # Data Retention Policy Violation
+      - alert: DataRetentionPolicyViolation
+        expr: (pg_database_size_bytes{datname="soc_production"} - increase(pg_database_size_bytes{datname="soc_production"}[7d]*86400)) > 0
+        for: 1d
+        labels:
+          severity: warning
+          team: compliance
+        annotations:
+          summary: "Data retention policy may need attention"
+          description: "Database size not decreasing as expected per 7-year retention policy."
+
+      # Uptime SLA at Risk
+      - alert: UptimeSLAatRisk
+        expr: (sum(up) / count(up)) * 100 < 99.9
+        for: 5m
+        labels:
+          severity: critical
+          team: operations
+          pager: true
+        annotations:
+          summary: "Uptime SLA at risk!"
+          description: "Current uptime: {{ $value }}%. Target: 99.9%"
+          impact: "ARPT compliance requires 99.9% availability"
