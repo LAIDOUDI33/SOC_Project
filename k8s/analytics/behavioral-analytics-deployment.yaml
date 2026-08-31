@@ -1,0 +1,279 @@
+# =============================================================================
+# CyberSOC Platform - Behavioral Analytics Engine (UEBA)
+# =============================================================================
+# User and Entity Behavior Analytics for:
+# - Insider threat detection
+# - Compromised account identification
+# - Telecom-specific behavior patterns (SS7/Diameter anomalies)
+# - Risk scoring based on behavioral anomalies
+#
+# Production: 3 replicas, High Memory (behavior profiles), HA
+# =============================================================================
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: behavioral-analytics-engine
+  namespace: cybersoc-analytics
+  labels:
+    app.kubernetes.io/name: behavioral-analytics
+    app.kubernetes.io/component: ueba-engine
+    app.kubernetes.io/part-of: cybersoc-platform
+    environment: production
+    version: "2.0.0"
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: behavioral-analytics
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: behavioral-analytics
+        app.kubernetes.io/component: ueba-engine
+        app.kubernetes.io/part-of: cybersoc-platform
+        environment: production
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8003"
+        prometheus.io/path: "/metrics"
+    spec:
+      serviceAccountName: analytics-sa
+      automountServiceAccountToken: false
+      
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1001
+        runAsGroup: 1001
+        fsGroup: 1001
+        seccompProfile:
+          type: RuntimeDefault
+      
+      containers:
+        - name: behavioral-analytics
+          image: ghcr.io/laidoudi33/soc-behavioral-analytics:2.0.0-production
+          imagePullPolicy: Always
+          
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+          
+          ports:
+            - name: http
+              containerPort: 8003
+              protocol: TCP
+            - name: grpc
+              containerPort: 50053
+              protocol: TCP
+            - name: metrics
+              containerPort: 8003
+              protocol: TCP
+          
+          env:
+            - name: NODE_ENV
+              value: "production"
+            - name: SERVICE_PORT
+              value: "8003"
+            - name: LOG_LEVEL
+              value: "warn"
+            
+            # Database Connections
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: analytics-secrets
+                  key: database-url
+            - name: REDIS_URL
+              valueFrom:
+                secretKeyRef:
+                  name: analytics-secrets
+                  key: redis-url
+            
+            # Kafka for real-time behavior events
+            - name: KAFKA_BROKERS
+              valueFrom:
+                configMapKeyRef:
+                  name: analytics-config
+                  key: kafka-brokers
+            - name: KAFKA_BEHAVIOR_TOPIC
+              value: "analytics.behavior.events"
+            - name: KAFKA_ALERTS_TOPIC
+              value: "alerts.behavioral.anomalies"
+            - name: KAFKA_SASL_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: analytics-secrets
+                  key: kafka-username
+            - name: KAFKA_SASL_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: analytics-secrets
+                  key: kafka-password
+            
+            # Elasticsearch for behavior profiles
+            - name: ELASTICSEARCH_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: analytics-config
+                  key: elasticsearch-url
+            - name: BEHAVIOR_PROFILE_INDEX
+              value: "cybersoc-behavior-profiles"
+            - name: ANOMALY_INDEX
+              value: "cybersoc-behavior-anomalies"
+            
+            # UEBA Configuration
+            - name: BASELINE_LEARNING_DAYS
+              value: "30"
+            - name: RISK_SCORE_THRESHOLD
+              value: "70"
+            - name: PEER_GROUP_SIZE
+              value: "50"
+            - name: SESSION_TIMEOUT_MINUTES
+              value: "480"
+            - name: MAX_CONCURRENT_PROFILES
+              value: "10000"
+            
+            # Telecom-Specific Config
+            - name: SS7_BEHAVIOR_MONITORING
+              value: "true"
+            - name: DIAMETER_ANOMALY_DETECTION
+              value: "true"
+            - name: FRAUD_PATTERN_DETECTION
+              value: "true"
+            
+            # Model Configuration
+            - name: MODEL_PATH
+              value: "/models/behavioral"
+            - name: ENSEMBLE_MODELS
+              value: "isolation_forest,autoencoder,lstm_anomaly"
+          
+          resources:
+            requests:
+              cpu: "4000m"
+              memory: "8Gi"  # Higher memory for behavior profiles
+            limits:
+              cpu: "12000m"
+              memory: "32Gi"
+          
+          # Liveness Probe
+          livenessProbe:
+            httpGet:
+              path: /api/health/live
+              port: http
+            initialDelaySeconds: 45  # Longer for profile loading
+            periodSeconds: 15
+            timeoutSeconds: 5
+            failureThreshold: 3
+          
+          # Readiness Probe
+          readinessProbe:
+            httpGet:
+              path: /api/health/ready
+              port: http
+            initialDelaySeconds: 30
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 3
+          
+          volumeMounts:
+            - name: models-volume
+              mountPath: /models
+              readOnly: true
+            - name: profiles-cache
+              mountPath: /data/profiles
+            - name: tmp-dir
+              mountPath: /tmp
+            - name: cache-dir
+              mountPath: /.cache
+      
+      volumes:
+        - name: models-volume
+          persistentVolumeClaim:
+            claimName: analytics-models-pvc
+        - name: profiles-cache
+          persistentVolumeClaim:
+            claimName: behavioral-profiles-pvc
+        - name: tmp-dir
+          emptyDir: {}
+        - name: cache-dir
+          emptyDir:
+            sizeLimit: "4Gi"
+      
+      nodeSelector:
+        node-type: production
+        workload-class: ml-inference
+      
+      tolerations:
+        - key: "dedicated"
+          operator: "Equal"
+          value: "ml-workloads"
+          effect: NoSchedule
+      
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                labelSelector:
+                  matchExpressions:
+                    - key: app.kubernetes.io/name
+                      operator: In
+                      values:
+                        - behavioral-analytics
+                topologyKey: kubernetes.io/hostname
+      
+      terminationGracePeriodSeconds: 180  # Graceful profile save
+      priorityClassName: high-priority
+---
+# Horizontal Pod Autoscaler for UEBA
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: behavioral-analytics-hpa
+  namespace: cybersoc-analytics
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: behavioral-analytics-engine
+  minReplicas: 3
+  maxReplicas: 8
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 65
+    - type: Resource
+      resource:
+        name: memory
+        target:
+          type: Utilization
+          averageUtilization: 70
+    - type: Pods
+      pods:
+        metric:
+          name: active_behavior_profiles
+        target:
+          type: AverageValue
+          averageValue: "2500"
+---
+# Pod Disruption Budget
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: behavioral-analytics-pdb
+  namespace: cybersoc-analytics
+spec:
+  minAvailable: 2
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: behavioral-analytics

@@ -1,0 +1,79 @@
+# =============================================================================
+# CyberSOC Platform - Analytics Persistent Volume Claims
+# =============================================================================
+# Storage for ML models, behavior profiles, and analytics data
+# Production: Premium SSD/NVMe for performance
+# =============================================================================
+
+---
+# ML Models Repository PVC
+# Stores trained ML models (TensorFlow, ONNX, PyTorch)
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: analytics-models-pvc
+  namespace: cybersoc-analytics
+  labels:
+    app.kubernetes.io/component: model-storage
+    app.kubernetes.io/part-of: cybersoc-platform
+spec:
+  accessModes:
+    - ReadWriteMany  # Multiple pods need read access
+  storageClassName: premium-ssd  # or nfs-client for RWX
+  resources:
+    requests:
+      storage: 100Gi  # Large storage for multiple model versions
+---
+# Behavioral Profiles PVC
+# Stores UEBA baseline profiles and anomaly data
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: behavioral-profiles-pvc
+  namespace: cybersoc-analytics
+  labels:
+    app.kubernetes.io/component: behavioral-storage
+    app.kubernetes.io/part-of: cybersoc-platform
+spec:
+  accessModes:
+    - ReadWriteMany
+  storageClassName: premium-ssd
+  resources:
+    requests:
+      storage: 500Gi  # Large storage for user/entity profiles
+---
+# Analytics Training Data PVC
+# Temporary storage for training datasets and feature caches
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: analytics-training-data-pvc
+  namespace: cybersoc-analytics
+  labels:
+    app.kubernetes.io/component: training-storage
+    app.kubernetes.io/part-of: cybersoc-platform
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: premium-nvme  # Fast I/O for training
+  resources:
+    requests:
+      storage: 200Gi
+---
+# Analytics Output/Export PVC
+# For generated reports, exports, and batch processing results
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: analytics-output-pvc
+  namespace: cybersoc-analytics
+  labels:
+    app.kubernetes.io/component: output-storage
+    app.kubernetes.io/part-of: cybersoc-platform
+spec:
+  accessModes:
+    - ReadWriteMany
+  storageClassName: premium-ssd
+  resources:
+    requests:
+      storage: 50Gi

@@ -1,0 +1,302 @@
+# =============================================================================
+# CyberSOC Platform - Analytics Network Policies
+# =============================================================================
+# Zero-Trust Network Security for Analytics/ML Services
+# Default deny all, explicit allow rules only
+# ANRT compliant network segmentation
+# =============================================================================
+
+---
+# Default Deny All Ingress for Analytics Namespace
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-ingress
+  namespace: cybersoc-analytics
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+---
+# Default Deny All Egress for Analytics Namespace
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-egress
+  namespace: cybersoc-analytics
+spec:
+  podSelector: {}
+  policyTypes:
+    - Egress
+
+---
+# Allow DNS Egress (Required for all pods)
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-dns-egress
+  namespace: cybersoc-analytics
+spec:
+  podSelector: {}
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+
+---
+# Predictive Analytics Network Policy
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: predictive-analytics-netpol
+  namespace: cybersoc-analytics
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: predictive-analytics
+  policyTypes:
+    - Ingress
+    - Egress
+  
+  # Ingress Rules (Who can talk TO us)
+  ingress:
+    # From API Gateway / Ingress Controller
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              name: cybersoc
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: soc-platform-api
+      ports:
+        - port: 8002
+          protocol: TCP
+    
+    # From ML Model Server (gRPC)
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: ml-model-server
+      ports:
+        - port: 50052
+          protocol: TCP
+    
+    # From Monitoring (Prometheus)
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              name: monitoring
+      ports:
+        - port: 8002
+          protocol: TCP
+  
+  # Egress Rules (Who can we talk TO)
+  egress:
+    # To PostgreSQL
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              name: cybersoc
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: postgresql
+      ports:
+        - port: 5432
+          protocol: TCP
+    
+    # To Redis
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              name: cybersoc
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: redis
+      ports:
+        - port: 6379
+          protocol: TCP
+    
+    # To Kafka
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              name: cybersoc
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: kafka
+      ports:
+        - port: 9092
+          protocol: TCP
+    
+    # To Elasticsearch
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              name: cybersoc
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: elasticsearch
+      ports:
+        - port: 9200
+          protocol: TCP
+    
+    # To ML Model Server
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: ml-model-server
+      ports:
+        - port: 50051
+          protocol: TCP
+        - port: 8001
+          protocol: TCP
+
+---
+# Behavioral Analytics (UEBA) Network Policy
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: behavioral-analytics-netpol
+  namespace: cybersoc-analytics
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: behavioral-analytics
+  policyTypes:
+    - Ingress
+    - Egress
+  
+  ingress:
+    # From API Gateway
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              name: cybersoc
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: soc-platform-api
+      ports:
+        - port: 8003
+          protocol: TCP
+    
+    # From SS7 Collector (telecom events)
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              name: cybersoc
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: ss7-collector
+      ports:
+        - port: 8003
+          protocol: TCP
+    
+    # From Monitoring
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              name: monitoring
+      ports:
+        - port: 8003
+          protocol: TCP
+  
+  egress:
+    # Same as predictive + additional for UEBA-specific needs
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              name: cybersoc
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: postgresql
+      ports:
+        - port: 5432
+          protocol: TCP
+    
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              name: cybersoc
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: redis
+      ports:
+        - port: 6379
+          protocol: TCP
+    
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              name: cybersoc
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: kafka
+      ports:
+        - port: 9092
+          protocol: TCP
+    
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              name: cybersoc
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: elasticsearch
+      ports:
+        - port: 9200
+          protocol: TCP
+
+---
+# ML Model Server Network Policy
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: ml-model-server-netpol
+  namespace: cybersoc-analytics
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: ml-model-server
+  policyTypes:
+    - Ingress
+    - Egress
+  
+  ingress:
+    # From all analytics engines (internal gRPC)
+    - from:
+        - podSelector:
+            matchExpressions:
+              - key: app.kubernetes.io/part-of
+                operator: In
+                values:
+                  - cybersoc-platform
+      ports:
+        - port: 50051
+          protocol: TCP
+        - port: 8001
+          protocol: TCP
+    
+    # From Monitoring
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              name: monitoring
+      ports:
+        - port: 8001
+          protocol: TCP
+  
+  egress:
+    # To Model Repository PVC (already mounted, but for any external calls)
+    - to:
+        - namespaceSelector: {}
+      ports:
+        - port: 443
+          protocol: TCP  # For model registry downloads

@@ -1,0 +1,354 @@
+# =============================================================================
+# CyberSOC Platform - Analytics Batch Processing
+# =============================================================================
+# CronJobs for scheduled analytics tasks:
+# - Model retraining (weekly)
+# - Report generation (daily)
+# - Data aggregation (hourly)
+# - Baseline updates (daily)
+# - Backup/Export jobs (daily)
+# =============================================================================
+
+---
+# Scheduled Model Retraining Job (Weekly - Sunday 3AM)
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: predictive-model-retraining
+  namespace: cybersoc-analytics
+  labels:
+    app.kubernetes.io/component: ml-training
+    app.kubernetes.io/part-of: cybersoc-platform
+spec:
+  schedule: "0 3 * * 0"  # Weekly Sunday at 3 AM
+  concurrencyPolicy: Forbid  # Don't run if previous hasn't finished
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 5
+  jobTemplate:
+    spec:
+      template:
+        metadata:
+          labels:
+            app.kubernetes.io/name: model-retraining-job
+        spec:
+          serviceAccountName: analytics-sa
+          restartPolicy: OnFailure
+          activeDeadlineSeconds: 7200  # 2 hour max
+          backoffLimit: 3
+          
+          containers:
+            - name: model-trainer
+              image: ghcr.io/laidoudi33/soc-ml-trainer:2.0.0-production
+              imagePullPolicy: Always
+              
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities:
+                  drop:
+                    - ALL
+              
+              env:
+                - name: JOB_TYPE
+                  value: "predictive_model_retraining"
+                - name: DATABASE_URL
+                  valueFrom:
+                    secretKeyRef:
+                      name: analytics-secrets
+                      key: database-url
+                - name: KAFKA_BROKERS
+                  valueFrom:
+                    configMapKeyRef:
+                      name: analytics-config
+                      key: kafka-brokers
+                - name: ELASTICSEARCH_URL
+                  valueFrom:
+                    configMapKeyRef:
+                      name: analytics-config
+                      key: elasticsearch-url
+                - name: MODEL_OUTPUT_PATH
+                  value: "/models/predictive"
+                - name: TRAINING_DATA_DAYS
+                  value: "90"
+              
+              resources:
+                requests:
+                  cpu: "8000m"
+                  memory: "16Gi"
+                limits:
+                  cpu: "16000m"
+                  memory: "64Gi"
+                
+              volumeMounts:
+                - name: models-volume
+                  mountPath: /models
+                - name: training-data-volume
+                  mountPath: /data/training
+          
+          volumes:
+            - name: models-volume
+              persistentVolumeClaim:
+                claimName: analytics-models-pvc
+            - name: training-data-volume
+              persistentVolumeClaim:
+                claimName: analytics-training-data-pvc
+          
+          nodeSelector:
+            node-type: production
+            workload-class: ml-training
+          
+          tolerations:
+            - key: "dedicated"
+              operator: "Equal"
+              value: "ml-workloads"
+              effect: NoSchedule
+
+---
+# Behavioral Baseline Update Job (Daily - 2AM)
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: behavioral-baseline-update
+  namespace: cybersoc-analytics
+  labels:
+    app.kubernetes.io/component: ueba-maintenance
+    app.kubernetes.io/part-of: cybersoc-platform
+spec:
+  schedule: "0 2 * * *"  # Daily at 2 AM
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 7
+  failedJobsHistoryLimit: 5
+  jobTemplate:
+    spec:
+      template:
+        metadata:
+          labels:
+            app.kubernetes.io/name: baseline-update-job
+        spec:
+          serviceAccountName: analytics-sa
+          restartPolicy: OnFailure
+          activeDeadlineSeconds: 3600  # 1 hour max
+          
+          containers:
+            - name: baseline-updater
+              image: ghcr.io/laidoudi33/soc-behavioral-analytics:2.0.0-production
+              command: ["node", "/app/scripts/update-baselines.js"]
+              
+              env:
+                - name: JOB_TYPE
+                  value: "baseline_update"
+                - name: DATABASE_URL
+                  valueFrom:
+                    secretKeyRef:
+                      name: analytics-secrets
+                      key: database-url
+                - name: REDIS_URL
+                  valueFrom:
+                    secretKeyRef:
+                      name: analytics-secrets
+                      key: redis-url
+                - name: ELASTICSEARCH_URL
+                  valueFrom:
+                    configMapKeyRef:
+                      name: analytics-config
+                      key: elasticsearch-url
+                - name: PROFILES_PATH
+                  value: "/data/profiles"
+              
+              resources:
+                requests:
+                  cpu: "4000m"
+                  memory: "8Gi"
+                limits:
+                  cpu: "8000m"
+                  memory: "32Gi"
+              
+              volumeMounts:
+                - name: profiles-volume
+                  mountPath: /data/profiles
+          
+          volumes:
+            - name: profiles-volume
+              persistentVolumeClaim:
+                claimName: behavioral-profiles-pvc
+
+---
+# Daily Analytics Report Generation (6AM)
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: analytics-report-generator
+  namespace: cybersoc-analytics
+  labels:
+    app.kubernetes.io/component: reporting
+    app.kubernetes.io/part-of: cybersoc-platform
+spec:
+  schedule: "0 6 * * *"  # Daily at 6 AM
+  concurrencyPolicy: Allow
+  successfulJobsHistoryLimit: 7
+  failedJobsHistoryLimit: 5
+  jobTemplate:
+    spec:
+      template:
+        metadata:
+          labels:
+            app.kubernetes.io/name: report-generator-job
+        spec:
+          serviceAccountName: analytics-sa
+          restartPolicy: OnFailure
+          activeDeadlineSeconds: 1800  # 30 min max
+          
+          containers:
+            - name: report-generator
+              image: ghcr.io/laidoudi33/soc-reporting:2.0.0-production
+              
+              env:
+                - name: JOB_TYPE
+                  value: "daily_report_generation"
+                - name: DATABASE_URL
+                  valueFrom:
+                    secretKeyRef:
+                      name: analytics-secrets
+                      key: database-url
+                - name: ELASTICSEARCH_URL
+                  valueFrom:
+                    configMapKeyRef:
+                      name: analytics-config
+                      key: elasticsearch-url
+                - name: OUTPUT_PATH
+                  value: "/output/reports"
+                - name: REPORT_TYPES
+                  value: "threat_summary,incident_kpi,behavioral_anomalies,prediction_accuracy,compliance_status"
+                - name: EMAIL_RECIPIENTS
+                  value: "soc-management@djezzy.dz,security-ops@djezzy.dz"
+              
+              resources:
+                requests:
+                  cpu: "1000m"
+                  memory: "2Gi"
+                limits:
+                  cpu: "4000m"
+                  memory: "8Gi"
+              
+              volumeMounts:
+                - name: output-volume
+                  mountPath: /output
+          
+          volumes:
+            - name: output-volume
+              persistentVolumeClaim:
+                claimName: analytics-output-pvc
+
+---
+# Hourly Data Aggregation Job
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: hourly-data-aggregation
+  namespace: cybersoc-analytics
+  labels:
+    app.kubernetes.io/component: data-processing
+    app.kubernetes.io/part-of: cybersoc-platform
+spec:
+  schedule: "5 * * * *"  # Hourly at minute 5
+  concurrencyPolicy: Allow
+  successfulJobsHistoryLimit: 24
+  failedJobsHistoryLimit: 10
+  jobTemplate:
+    spec:
+      template:
+        metadata:
+          labels:
+            app.kubernetes.io/name: data-aggregation-job
+        spec:
+          serviceAccountName: analytics-sa
+          restartPolicy: OnFailure
+          activeDeadlineSeconds: 1800
+          
+          containers:
+            - name: data-aggregator
+              image: ghcr.io/laidoudi33/soc-aggregator:2.0.0-production
+              
+              env:
+                - name: JOB_TYPE
+                  value: "hourly_aggregation"
+                - name: DATABASE_URL
+                  valueFrom:
+                    secretKeyRef:
+                      name: analytics-secrets
+                      key: database-url
+                - name: REDIS_URL
+                  valueFrom:
+                    secretKeyRef:
+                      name: analytics-secrets
+                      key: redis-url
+                - name: KAFKA_BROKERS
+                  valueFrom:
+                    configMapKeyRef:
+                      name: analytics-config
+                      key: kafka-brokers
+                - name: AGGREGATION_WINDOW
+                  value: "1h"
+              
+              resources:
+                requests:
+                  cpu: "2000m"
+                  memory: "4Gi"
+                limits:
+                  cpu: "8000m"
+                  memory: "16Gi"
+
+---
+# Analytics Backup/Export Job (Daily - Midnight)
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: analytics-backup-export
+  namespace: cybersoc-analytics
+  labels:
+    app.kubernetes.io/component: backup
+    app.kubernetes.io/part-of: cybersoc-platform
+spec:
+  schedule: "0 0 * * *"  # Daily at midnight
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 7
+  failedJobsHistoryLimit: 5
+  jobTemplate:
+    spec:
+      template:
+        metadata:
+          labels:
+            app.kubernetes.io/name: backup-export-job
+        spec:
+          serviceAccountName: analytics-sa
+          restartPolicy: OnFailure
+          activeDeadlineSeconds: 3600
+          
+          containers:
+            - name: backup-exporter
+              image: ghcr.io/laidoudi33/soc-backup:2.0.0-production
+              
+              env:
+                - name: JOB_TYPE
+                  value: "analytics_backup"
+                - name: BACKUP_TARGETS
+                  value: "models,profiles,configurations"
+                - name: S3_BUCKET
+                  value: "cybersoc-production-backups/analytics"
+                - name: S3_REGION
+                  value: "eu-west-1"
+                - name: ENCRYPTION_KEY
+                  valueFrom:
+                    secretKeyRef:
+                      name: analytics-secrets
+                      key: encryption-key
+                - name: RETENTION_DAYS
+                  value: "90"
+              
+              resources:
+                requests:
+                  cpu: "1000m"
+                  memory: "2Gi"
+                limits:
+                  cpu: "4000m"
+                  memory: "8Gi"

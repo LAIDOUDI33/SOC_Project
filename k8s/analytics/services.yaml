@@ -1,0 +1,130 @@
+# =============================================================================
+# CyberSOC Platform - Analytics Services
+# =============================================================================
+# Kubernetes Services for Analytics/ML microservices
+# Internal cluster communication + external API gateway
+# =============================================================================
+
+---
+# Predictive Analytics Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: predictive-analytics-svc
+  namespace: cybersoc-analytics
+  labels:
+    app.kubernetes.io/name: predictive-analytics
+    app.kubernetes.io/component: ml-engine
+  annotations:
+    prometheus.io/port: "8002"
+    prometheus.io/scrape: "true"
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: predictive-analytics
+  ports:
+    - name: http
+      port: 8002
+      targetPort: 8002
+      protocol: TCP
+    - name: grpc
+      port: 50052
+      targetPort: 50052
+      protocol: TCP
+
+---
+# Behavioral Analytics Service (UEBA)
+apiVersion: v1
+kind: Service
+metadata:
+  name: behavioral-analytics-svc
+  namespace: cybersoc-analytics
+  labels:
+    app.kubernetes.io/name: behavioral-analytics
+    app.kubernetes.io/component: ueba-engine
+  annotations:
+    prometheus.io/port: "8003"
+    prometheus.io/scrape: "true"
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: behavioral-analytics
+  ports:
+    - name: http
+      port: 8003
+      targetPort: 8003
+      protocol: TCP
+    - name: grpc
+      port: 50053
+      targetPort: 50053
+      protocol: TCP
+
+---
+# ML Model Server Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: ml-model-server-svc
+  namespace: cybersoc-analytics
+  labels:
+    app.kubernetes.io/name: ml-model-server
+    app.kubernetes.io/component: model-serving
+  annotations:
+    prometheus.io/port: "8001"
+    prometheus.io/scrape: "true"
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: ml-model-server
+  ports:
+    - name: http
+      port: 8001
+      targetPort: 8001
+      protocol: TCP
+    - name: grpc
+      port: 50051
+      targetPort: 50051
+      protocol: TCP
+
+---
+# Headless Service for Stateful Set (if needed)
+apiVersion: v1
+kind: Service
+metadata:
+  name: analytics-headless
+  namespace: cybersoc-analytics
+  labels:
+    app.kubernetes.io/name: analytics-headless
+spec:
+  type: ClusterIP
+  clusterIP: None
+  selector:
+    app.kubernetes.io/part-of: cybersoc-platform
+  ports:
+    - name: metrics
+      port: 8000
+      targetPort: 8000
+      protocol: TCP
+
+---
+# External API Gateway Service (via Ingress)
+apiVersion: v1
+kind: Service
+metadata:
+  name: analytics-api-gateway
+  namespace: cybersoc-analytics
+  labels:
+    app.kubernetes.io/name: analytics-api-gateway
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/component: api-gateway
+  ports:
+    - name: http
+      port: 80
+      targetPort: 8080
+      protocol: TCP
+    - name: https
+      port: 443
+      targetPort: 8443
+      protocol: TCP

@@ -1,0 +1,118 @@
+# =============================================================================
+# CyberSOC Platform - Analytics Configuration
+# =============================================================================
+# Centralized configuration for all analytics/ML services
+# Environment-specific settings, connection strings, feature flags
+# =============================================================================
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: analytics-config
+  namespace: cybersoc-analytics
+  labels:
+    app.kubernetes.io/part-of: cybersoc-platform
+    app.kubernetes.io/component: analytics
+data:
+  # Environment
+  ENVIRONMENT: "production"
+  LOG_LEVEL: "warn"
+  LOG_FORMAT: "json"
+  CORRELATION_IDS: "true"
+  
+  # Infrastructure Connections
+  kafka-brokers: "kafka-0.kafka-headless.cybersoc.svc.cluster.local:9092,kafka-1.kafka-headless.cybersoc.svc.cluster.local:9092,kafka-2.kafka-headless.cybersoc.svc.cluster.local:9092"
+  elasticsearch-url: "https://elasticsearch-coordinating.cybersoc.svc.cluster.local:9200"
+  postgresql-host: "postgresql-primary.cybersoc.svc.cluster.local"
+  postgresql-port: "5432"
+  redis-host: "redis-master.cybersoc.svc.cluster.local"
+  redis-port: "6379"
+  
+  # Kafka Topics
+  predictions-topic: "analytics.predictions.output"
+  behavior-events-topic: "analytics.behavior.events"
+  behavioral-alerts-topic: "alerts.behavioral.anomalies"
+  ml-training-topic: "analytics.ml.training.data"
+  model-updates-topic: "analytics.model.updates"
+  
+  # Elasticsearch Indices
+  predictions-index: "cybersoc-predictions"
+  behavior-profiles-index: "cybersoc-behavior-profiles"
+  anomalies-index: "cybersoc-behavior-anomalies"
+  models-metadata-index: "cybersoc-models-metadata"
+  
+  # Feature Flags
+  predictive-analytics-enabled: "true"
+  behavioral-analytics-enabled: "true"
+  fraud-detection-enabled: "true"
+  threat-intelligence-ml-enabled: "true"
+  anomaly-detection-enabled: "true"
+  network-intrusion-detection-enabled: "true"
+  
+  # ML Configuration
+  default-model-version: "2.0.0"
+  prediction-confidence-threshold: "0.7"
+  risk-score-threshold: "70"
+  baseline-learning-days: "30"
+  peer-group-size: "50"
+  
+  # Telecom-Specific
+  ss7-monitoring-enabled: "true"
+  diameter-anomaly-detection: "true"
+  fraud-pattern-detection: "true"
+  simbox-detection-enabled: "true"
+  irgs-detection-enabled: "true"
+  
+  # Rate Limiting
+  rate-limit-window-ms: "60000"
+  rate-limit-max-requests: "1000"
+  batch-processing-limit: "10000"
+  
+  # Timeouts
+  inference-timeout-ms: "30000"
+  database-timeout-ms: "10000"
+  redis-timeout-ms: "5000"
+  kafka-producer-timeout-ms: "5000"
+  
+  # Monitoring
+  metrics-enabled: "true"
+  metrics-port: "8000"
+  tracing-enabled: "true"
+  tracing-sample-rate: "0.1"  # 10% sampling in production
+  jaeger-endpoint: "jaeger-collector.cybersoc.svc.cluster.local:14268"
+---
+# Predictive Analytics Specific Config
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: predictive-analytics-config
+  namespace: cybersoc-analytics
+data:
+  prediction-horizons: "24h,7d,30d,90d"
+  model-types: "threat_volume,incident_count,attack_probability,resource_demand,compliance_risk,fraud_likelihood"
+  training-data-retention-days: "730"
+  min-data-points-for-training: "1000"
+  retraining-schedule: "0 3 * * 0"  # Weekly Sunday 3AM
+  ensemble-methods: "averaging,weighted,voting,stacking"
+  feature-importance-threshold: "0.01"
+---
+# Behavioral Analytics (UEBA) Specific Config
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: behavioral-analytics-config
+  namespace: cybersoc-analytics
+data:
+  entity-types: "user,endpoint,service_account,network_segment"
+  behavior-categories: "login_pattern,data_access,resource_usage,network_activity,telecom_specific"
+  risk-levels: "low,medium,high,critical"
+  risk-thresholds: |
+    low: 0-30
+    medium: 31-60
+    high: 61-85
+    critical: 86-100
+  session-timeout-minutes: "480"
+  alert-cooldown-minutes: "60"
+  peer-group-algorithm: "kmeans"
+  anomaly-detectors: "isolation_forest,autoencoder,lstm,statistical"
+  baseline-update-frequency: "daily"
+  profile-retention-days: "90"

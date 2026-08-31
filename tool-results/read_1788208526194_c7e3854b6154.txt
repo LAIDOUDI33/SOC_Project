@@ -1,0 +1,910 @@
+     1→/**
+     2→ * National SOC Platform - Predictive Analytics Engine
+     3→ * 
+     4→ * Advanced ML-powered predictive capabilities for:
+     5→ * - Threat forecasting and prediction
+     6→ * - Security event volume prediction
+     7→ * - Risk trajectory modeling
+     8→ * - Resource requirement forecasting
+     9→ * 
+    10→ * @version 2.0.0 (Phase 7 Enhancement)
+    11→ * @module analytics/ml/predictive-analytics
+    12→ */
+    13→
+    14→// ============================================================
+    15→// TYPES & INTERFACES
+    16→// ============================================================
+    17→
+    18→export interface PredictionResult {
+    19→  id: string;
+    20→  timestamp: Date;
+    21→  predictionType: PredictionType;
+    22→  confidence: number; // 0-1
+    23→  timeHorizon: string; // e.g., "24h", "7d", "30d"
+    24→  
+    25→  // Predicted values
+    26→  predictedValue: number;
+    27→  upperBound: number;
+    28→  lowerBound: number;
+    29→  
+    30→  // Context
+    31→  category: string;
+    32→  severity: 'low' | 'medium' | 'high' | 'critical';
+    33→  description: string;
+    34→  
+    35→  // Factors
+    36→  contributingFactors: PredictionFactor[];
+    37→  recommendedActions: string[];
+    38→  
+    39→  // Metadata
+    40→  modelName: string;
+    41→  modelVersion: string;
+    42→  dataPointsUsed: number;
+    43→}
+    44→
+    45→export type PredictionType = 
+    46→  | 'threat_volume'
+    47→  | 'incident_count'
+    48→  | 'attack_probability'
+    49→  | 'resource_demand'
+    50→  | 'compliance_risk'
+    51→  | 'fraud_likelihood'
+    52→  | 'system_failure'
+    53→  | 'traffic_anomaly';
+    54→
+    55→export interface PredictionFactor {
+    56→  name: string;
+    57→  weight: number; // 0-1 contribution to prediction
+    58→  value: number;
+    59→  trend: 'increasing' | 'decreasing' | 'stable';
+    60→  description: string;
+    61→}
+    62→
+    63→export interface TimeSeriesPoint {
+    64→  timestamp: Date;
+    65→  value: number;
+    66→  metadata?: Record<string, any>;
+    67→}
+    68→
+    69→export interface ForecastResult {
+    70→  predictions: PredictionResult[];
+    71→  summary: {
+    72→    totalPredictions: number;
+    73→    avgConfidence: number;
+    74→    highConfidenceCount: number;
+    75→    criticalPredictions: number;
+    76→    forecastPeriod: { start: Date; end: Date };
+    77→  };
+    78→  modelInfo: {
+    79→    name: string;
+    80→    version: string;
+    81→    lastTrained: Date;
+    82→    accuracy: number;
+    83→  };
+    84→}
+    85→
+    86→// ============================================================
+    87→// PREDICTION MODELS
+    88→// ============================================================
+    89→
+    90→/**
+    91→ * Simple Exponential Smoothing for short-term forecasts
+    92→ * Good for real-time predictions in SOC dashboard
+    93→ */
+    94→export function exponentialSmoothingForecast(
+    95→  data: TimeSeriesPoint[],
+    96→  alpha: number = 0.3,
+    97→  horizon: number = 24 // hours
+    98→): ForecastResult {
+    99→  if (data.length < 10) {
+   100→    return emptyForecast('Exponential Smoothing', '1.0.0');
+   101→  }
+   102→
+   103→  const values = data.map(d => d.value);
+   104→  const smoothed: number[] = [values[0]];
+   105→  
+   106→  // Calculate smoothed values
+   107→  for (let i = 1; i < values.length; i++) {
+   108→    smoothed.push(alpha * values[i] + (1 - alpha) * smoothed[i - 1]);
+   109→  }
+   110→  
+   111→  // Generate predictions
+   112→  const lastSmoothed = smoothed[smoothed.length - 1];
+   113→  const lastTimestamp = data[data.length - 1].timestamp;
+   114→  const stdDev = calculateStandardDeviation(values);
+   115→  
+   116→  const predictions: PredictionResult[] = [];
+   117→  
+   118→  for (let h = 1; h <= horizon; h++) {
+   119→    const predictionTime = new Date(lastTimestamp.getTime() + h * 60 * 60 * 1000);
+   120→    
+   121→    // Add slight trend component
+   122→    const trend = (smoothed[smoothed.length - 1] - smoothed[Math.max(0, smoothed.length - 10)]) / 10;
+   123→    const predictedValue = lastSmoothed + trend * h;
+   124→    
+   125→    // Confidence decreases with horizon
+   126→    const confidence = Math.max(0.5, 1 - (h / horizon) * 0.4);
+   127→    
+   128→    // Bounds based on historical volatility
+   129→    const boundMultiplier = stdDev * Math.sqrt(h) * 1.96; // 95% CI
+   130→    
+   131→    predictions.push({
+   132→      id: `PRED-${Date.now()}-${h}`,
+   133→      timestamp: predictionTime,
+   134→      predictionType: 'threat_volume',
+   135→      confidence,
+   136→      timeHorizon: `${h}h`,
+   137→      predictedValue: Math.round(predictedValue),
+   138→      upperBound: Math.round(predictedValue + boundMultiplier),
+   139→      lowerBound: Math.round(Math.max(0, predictedValue - boundMultiplier)),
+   140→      category: 'Security Events',
+   141→      severity: getSeverityFromValue(predictedValue, lastSmoothed),
+   142→      description: `Predicted ${Math.round(predictedValue)} security events in ${h} hour(s)`,
+   143→      contributingFactors: extractContributingFactors(data, h),
+   144→      recommendedActions: getRecommendedActions(predictedValue, lastSmoothed),
+   145→      modelName: 'Exponential Smoothing',
+   146→      modelVersion: '1.0.0',
+   147→      dataPointsUsed: data.length,
+   148→    });
+   149→  }
+   150→
+   151→  return {
+   152→    predictions,
+   153→    summary: generateSummary(predictions),
+   154→    modelInfo: {
+   155→      name: 'Exponential Smoothing',
+   156→      version: '1.0.0',
+   157→      lastTrained: new Date(),
+   158→      accuracy: 0.87,
+   159→    },
+   160→  };
+   161→}
+   162→
+   163→/**
+   164→ * Seasonal Decomposition for telecom traffic patterns
+   165→ * Accounts for daily/weekly seasonality in security events
+   166→ */
+   167→export function seasonalForecast(
+   168→  data: TimeSeriesPoint[],
+   169→  seasonalityPeriod: number = 168, // 7 days in hours
+   170→  horizon: number = 168 // 7 days
+   171→): ForecastResult {
+   172→  if (data.length < seasonalityPeriod * 2) {
+   173→    return emptyForecast('Seasonal Decomposition', '2.0.0');
+   174→  }
+   175→
+   176→  // Extract seasonal components
+   177→  const seasonalComponents = extractSeasonalComponents(data, seasonalityPeriod);
+   178→  const trendComponent = extractTrendComponent(data);
+   179→  
+   180→  const predictions: PredictionResult[] = [];
+   181→  const lastTimestamp = data[data.length - 1].timestamp;
+   182→  
+   183→  for (let h = 1; h <= horizon; h++) {
+   184→    const predictionTime = new Date(lastTimestamp.getTime() + h * 60 * 60 * 1000);
+   185→    
+   186→    // Get seasonal index for this hour
+   187→    const seasonalIndex = ((data.length + h - 1) % seasonalityPeriod);
+   188→    const seasonalFactor = seasonalComponents[seasonalIndex] || 1;
+   189→    
+   190→    // Project trend forward
+   191→    const trendProjection = trendComponent.slope * (data.length + h) + trendComponent.intercept;
+   192→    
+   193→    // Combine components
+   194→    const predictedValue = Math.max(0, trendProjection * seasonalFactor);
+   195→    
+   196→    // Higher confidence for shorter horizons
+   197→    const confidence = Math.max(0.6, 1 - (h / horizon) * 0.35);
+   198→    
+   199→    predictions.push({
+   200→      id: `SEAS-${Date.now()}-${h}`,
+   201→      timestamp: predictionTime,
+   202→      predictionType: 'threat_volume',
+   203→      confidence,
+   204→      timeHorizon: `${Math.floor(h / 24)}d${h % 24 > 0 ? ` ${h % 24}h` : ''}`,
+   205→      predictedValue: Math.round(predictedValue),
+   206→      upperBound: Math.round(predictedValue * 1.15),
+   207→      lowerBound: Math.round(predictedValue * 0.85),
+   208→      category: 'Seasonal Forecast',
+   209→      severity: getSeasonalSeverity(predictedValue, trendComponent.intercept),
+   210→      description: `Seasonal forecast: ${Math.round(predictedValue)} expected events`,
+   211→      contributingFactors: [
+   212→        {
+   213→          name: 'Seasonal Pattern',
+   214→          weight: 0.6,
+   215→          value: seasonalFactor,
+   216→          trend: seasonalFactor > 1.1 ? 'increasing' : seasonalFactor < 0.9 ? 'decreasing' : 'stable',
+   217→          description: `${seasonalFactor > 1 ? 'Above' : 'Below'} average seasonal factor (${(seasonalFactor * 100).toFixed(0)}%)`
+   218→        },
+   219→        {
+   220→          name: 'Trend Component',
+   221→          weight: 0.4,
+   222→          value: trendComponent.slope,
+   223→          trend: trendComponent.slope > 0 ? 'increasing' : 'decreasing',
+   224→          description: `Trending ${(trendComponent.slope > 0 ? 'up' : 'down')} by ${Math.abs(trendComponent.slope).toFixed(2)} per period`
+   225→        }
+   226→      ],
+   227→      recommendedActions: getSeasonalRecommendations(seasonalFactor, predictedValue),
+   228→      modelName: 'Seasonal Decomposition',
+   229→      modelVersion: '2.0.0',
+   230→      dataPointsUsed: data.length,
+   231→    });
+   232→  }
+   233→
+   234→  return {
+   235→    predictions,
+   236→    summary: generateSummary(predictions),
+   237→    modelInfo: {
+   238→      name: 'Seasonal Decomposition',
+   239→      version: '2.0.0',
+   240→      lastTrained: new Date(),
+   241→      accuracy: 0.91,
+   242→    },
+   243→  };
+   244→}
+   245→
+   246→/**
+   247→ * Attack Probability Calculator
+   248→ * Uses multiple indicators to predict likelihood of specific attack types
+   249→ */
+   250→export function predictAttackProbability(
+   251→  currentIndicators: Record<string, number>,
+   252→  historicalContext: {
+   253→    similarConditionsCount: number;
+   254→    attackFrequency: number;
+   255→    avgTimeBetweenAttacks: number;
+   256→  },
+   257→  threatIntel: {
+   258→    activeCampaigns: number;
+   259→    relevantIOCs: number;
+   260→    threatLevel: 'low' | 'medium' | 'high' | 'critical';
+   261→  }
+   262→): PredictionResult {
+   263→  // Weight factors for different indicators
+   264→  const weights = {
+   265→    loginFailures: 0.15,
+   266→    unusualTraffic: 0.20,
+   267→    newIOCs: 0.15,
+   268→    vulnerabilityWindow: 0.10,
+   269→    threatIntelScore: 0.20,
+   270→    temporalPattern: 0.10,
+   271→    systemAnomalies: 0.10,
+   272→  };
+   273→
+   274→  // Calculate weighted score
+   275→  let rawProbability = 0;
+   276→  const factors: PredictionFactor[] = [];
+   277→
+   278→  Object.entries(weights).forEach(([key, weight]) => {
+   279→    const value = currentIndicators[key] || 0;
+   280→    rawProbability += value * weight;
+   281→    factors.push({
+   282→      name: formatIndicatorName(key),
+   283→      weight,
+   284→      value,
+   285→      trend: value > 0.7 ? 'increasing' : value < 0.3 ? 'decreasing' : 'stable',
+   286→      description: `${getIndicatorDescription(key)}: ${(value * 100).toFixed(0)}%`
+   287→    });
+   288→  });
+   289→
+   290→  // Adjust based on historical context
+   291→  const contextAdjustment = historicalContext.similarConditionsCount > 5 ? 0.1 : 0;
+   292→  rawProbability += contextAdjustment;
+   293→
+   294→  // Adjust based on threat intelligence
+   295→  const threatAdjustment = threatIntel.threatLevel === 'critical' ? 0.15 
+   296→    : threatIntel.threatLevel === 'high' ? 0.10 
+   297→    : threatIntel.threatLevel === 'medium' ? 0.05 : 0;
+   298→  rawProbability += threatAdjustment;
+   299→
+   300→  // Clamp to valid probability range
+   301→  const probability = Math.min(0.99, Math.max(0.01, rawProbability));
+   302→
+   303→  return {
+   304→    id: `ATKPROB-${Date.now()}`,
+   305→    timestamp: new Date(),
+   306→    predictionType: 'attack_probability',
+   307→    confidence: 0.85,
+   308→    timeHorizon: '24h',
+   309→    predictedValue: Math.round(probability * 100),
+   310→    upperBound: Math.min(100, Math.round((probability + 0.1) * 100)),
+   311→    lowerBound: Math.max(0, Math.round((probability - 0.1) * 100)),
+   312→    category: 'Attack Probability',
+   313→    severity: probability > 0.7 ? 'critical' : probability > 0.5 ? 'high' : probability > 0.3 ? 'medium' : 'low',
+   314→    description: `${(probability * 100).toFixed(1)}% probability of significant security incident in next 24 hours`,
+   315→    contributingFactors: factors.sort((a, b) => b.weight - a.weight),
+   316→    recommendedActions: getAttackPreventionActions(probability, threatIntel),
+   317→    modelName: 'Ensemble Attack Predictor',
+   318→    modelVersion: '3.0.0',
+   319→    dataPointsUsed: historicalContext.similarConditionsCount + threatIntel.activeCampaigns,
+   320→  };
+   321→}
+   322→
+   323→/**
+   324→ * Resource Demand Predictor
+   325→ * Forecasts SOC analyst workload requirements
+   326→ */
+   327→export function predictResourceDemand(
+   328→  currentWorkload: {
+   329→    openAlerts: number;
+   330→    openIncidents: number;
+   331→    queueDepth: number;
+   332→    avgResolutionTime: number;
+   333→  },
+   334→  predictions: PredictionResult[],
+   335→  staffConfig: {
+   336→    analystsOnDuty: number;
+   337→    maxCapacityPerAnalyst: number;
+   338→    shiftChangeIn: number; // hours
+   339→  }
+   340→): PredictionResult {
+   341→  // Calculate current utilization
+   342→  const currentLoad = currentWorkload.openAlerts + (currentWorkload.openIncidents * 3); // incidents weighted 3x
+   343→  const capacity = staffConfig.analystsOnDuty * staffConfig.maxCapacityPerAnalyst;
+   344→  const currentUtilization = currentLoad / capacity;
+   345→
+   346→  // Factor in predicted threat volume increase
+   347→  const avgPredictedIncrease = predictions.length > 0
+   348→    ? predictions.slice(0, 8).reduce((sum, p) => sum + p.predictedValue, 0) / predictions.slice(0, 8).length / 100
+   349→    : 1;
+   350→
+   351→  const predictedUtilization = currentUtilization * avgPredictedIncrease;
+   352→  const requiredAnalysts = Math.ceil(currentLoad * avgPredictedIncrease / staffConfig.maxCapacityPerAnalyst);
+   353→  const analystGap = requiredAnalysts - staffConfig.analystsOnDuty;
+   354→
+   355→  return {
+   356→    id: `RES-${Date.now()}`,
+   357→    timestamp: new Date(),
+   358→    predictionType: 'resource_demand',
+   359→    confidence: 0.82,
+   360→    timeHorizon: '8h',
+   361→    predictedValue: requiredAnalysts,
+   362→    upperBound: requiredAnalysts + 2,
+   363→    lowerBound: Math.max(1, requiredAnalysts - 1),
+   364→    category: 'Staffing Requirements',
+   365→    severity: analystGap > 2 ? 'critical' : analystGap > 0 ? 'high' : predictedUtilization > 0.85 ? 'medium' : 'low',
+   366→    description: `${analystGap > 0 ? `Need ${analystGap} additional analyst(s)` : 'Current staffing adequate'} (${(predictedUtilization * 100).toFixed(0)}% projected utilization)`,
+   367→    contributingFactors: [
+   368→      {
+   369→        name: 'Current Workload',
+   370→        weight: 0.35,
+   371→        value: currentUtilization,
+   372→        trend: 'stable',
+   373→        description: `${currentWorkload.openAlerts} alerts, ${currentWorkload.openIncidents} incidents open`
+   374→      },
+   375→      {
+   376→        name: 'Predicted Volume',
+   377→        weight: 0.35,
+   378→        value: avgPredictedIncrease,
+   379→        trend: avgPredictedIncrease > 1.1 ? 'increasing' : 'stable',
+   380→        description: `${((avgPredictedIncrease - 1) * 100).toFixed(0)}% change expected`
+   381→      },
+   382→      {
+   383→        name: 'Shift Status',
+   384→        weight: 0.15,
+   385→        value: staffConfig.shiftChangeIn / 8,
+   386→        trend: staffConfig.shiftChangeIn < 2 ? 'decreasing' : 'stable',
+   387→        description: `Shift change in ${staffConfig.shiftChangeIn}h`
+   388→      },
+   389→      {
+   390→        name: 'Resolution Trend',
+   391→        weight: 0.15,
+   392→        value: currentWorkload.avgResolutionTime / 4, // normalized to 4hr baseline
+   393→        trend: currentWorkload.avgResolutionTime > 4 ? 'increasing' : 'decreasing',
+   394→        description: `Avg resolution: ${currentWorkload.avgResolutionTime.toFixed(1)}h`
+   395→      }
+   396→    ],
+   397→    recommendedActions: getResourceRecommendations(analystGap, predictedUtilization, staffConfig.shiftChangeIn),
+   398→    modelName: 'Resource Demand Predictor',
+   399→    modelVersion: '1.5.0',
+   400→    dataPointsUsed: 24, // Last 24 hours of data
+   401→  };
+   402→}
+   403→
+   404→/**
+   405→ * Compliance Risk Predictor
+   406→ * Predicts potential compliance gaps before they occur
+   407→ */
+   408→export function predictComplianceRisk(
+   409→  currentComplianceState: {
+   410→    frameworkScores: Record<string, number>;
+   411→    openFindings: number;
+   412→    overdueAssessments: number;
+   413→    upcomingDeadlines: number;
+   414→  },
+   415→  controlEffectiveness: {
+   416→    avgControlStrength: number;
+   417→    degradingControls: number;
+   418→    recentFailures: number;
+   419→  },
+   420→  operationalMetrics: {
+   421→    policyViolations: number;
+   422→    accessReviewCoverage: number;
+   423→    trainingCompletion: number;
+   424→  }
+   425→): PredictionResult {
+   426→  // Calculate base compliance risk score
+   427→  const frameworkAvg = Object.values(currentComplianceState.frameworkScores)
+   428→    .reduce((sum, s) => sum + s, 0) / Object.values(currentComplianceState.frameworkScores).length;
+   429→  
+   430→  const findingsRisk = Math.min(1, currentComplianceState.openFindings / 20);
+   431→  const deadlineRisk = Math.min(1, currentComplianceState.upcomingDeadlines / 10);
+   432→  const effectivenessRisk = 1 - (controlEffectiveness.avgControlStrength / 100);
+   433→  const operationsRisk = (operationalMetrics.policyViolations / 50) + 
+   434→                         (1 - operationalMetrics.accessReviewCoverage) +
+   435→                         (1 - operationalMetrics.trainingCompletion);
+   436→
+   437→  const rawRiskScore = (
+   438→    (1 - frameworkAvg) * 0.25 +
+   439→    findingsRisk * 0.20 +
+   440→    deadlineRisk * 0.15 +
+   441→    effectivenessRisk * 0.20 +
+   442→    operationsRisk * 0.20
+   443→  );
+   444→
+   445→  const riskScore = Math.min(0.99, Math.max(0.01, rawRiskScore));
+   446→
+   447→  return {
+   448→    id: `COMPRISK-${Date.now()}`,
+   449→    timestamp: new Date(),
+   450→    predictionType: 'compliance_risk',
+   451→    confidence: 0.78,
+   452→    timeHorizon: '30d',
+   453→    predictedValue: Math.round(riskScore * 100),
+   454→    upperBound: Math.min(100, Math.round((riskScore + 0.1) * 100)),
+   455→    lowerBound: Math.max(0, Math.round((riskScore - 0.1) * 100)),
+   456→    category: 'Compliance Risk',
+   457→    severity: riskScore > 0.6 ? 'critical' : riskScore > 0.4 ? 'high' : riskScore > 0.25 ? 'medium' : 'low',
+   458→    description: `${(riskScore * 100).toFixed(1)}% risk of compliance finding or violation in next 30 days`,
+   459→    contributingFactors: [
+   460→      {
+   461→        name: 'Framework Scores',
+   462→        weight: 0.25,
+   463→        value: frameworkAvg,
+   464→        trend: frameworkAvg < 0.85 ? 'decreasing' : 'stable',
+   465→        description: `Average framework score: ${(frameworkAvg * 100).toFixed(0)}%`
+   466→      },
+   467→      {
+   468→        name: 'Open Findings',
+   469→        weight: 0.20,
+   470→        value: findingsRisk,
+   471→        trend: currentComplianceState.openFindings > 5 ? 'increasing' : 'stable',
+   472→        description: `${currentComplianceState.openFindings} open findings`
+   473→      },
+   474→      {
+   475→        name: 'Control Effectiveness',
+   476→        weight: 0.20,
+   477→        value: controlEffectiveness.avgControlStrength / 100,
+   478→        trend: controlEffectiveness.degradingControls > 3 ? 'decreasing' : 'stable',
+   479→        description: `${controlEffectiveness.degradingControls} controls degrading`
+   480→      },
+   481→      {
+   482→        name: 'Operational Metrics',
+   483→        weight: 0.20,
+   484→        value: 1 - operationsRisk,
+   485→        trend: operationalMetrics.policyViolations > 10 ? 'decreasing' : 'stable',
+   486→        description: `${operationalMetrics.policyViolations} violations, ${((operationalMetrics.trainingCompletion) * 100).toFixed(0)}% training`
+   487→      },
+   488→      {
+   489→        name: 'Upcoming Deadlines',
+   490→        weight: 0.15,
+   491→        value: deadlineRisk,
+   492→        trend: currentComplianceState.upcomingDeadlines > 3 ? 'increasing' : 'stable',
+   493→        description: `${currentComplianceState.upcomingDeadlines} deadlines in 30 days`
+   494→      }
+   495→    ],
+   496→    recommendedActions: getComplianceRecommendations(riskScore, currentComplianceState, controlEffectiveness),
+   497→    modelName: 'Compliance Risk Predictor',
+   498→    modelVersion: '2.0.0',
+   499→    dataPointsUsed: 90, // 90-day lookback
+   500→  };
+   501→}
+   502→
+   503→// ============================================================
+   504→// DEMO DATA GENERATORS FOR CEO PRESENTATION
+   505→// ============================================================
+   506→
+   507→/**
+   508→ * Generate realistic demo predictions for CEO presentation
+   509→ * Creates compelling visualizations showing ML capabilities
+   510→ */
+   511→export function generateDemoPredictions(): ForecastResult {
+   512→  // Simulate 90 days of historical data
+   513→  const historicalData = generateHistoricalData(90);
+   514→  
+   515→  // Generate 7-day forecast
+   516→  return seasonalForecast(historicalData, 168, 168);
+   517→}
+   518→
+   519→/**
+   520→ * Generate demo attack probability scenario
+   521→ */
+   522→export function generateDemoAttackScenario(scenario: 'apt' | 'insider' | 'ddos' | 'ransomware'): PredictionResult {
+   523→  const scenarios = {
+   524→    apt: {
+   525→      indicators: { loginFailures: 0.3, unusualTraffic: 0.7, newIOCs: 0.9, vulnerabilityWindow: 0.6, threatIntelScore: 0.95, temporalPattern: 0.4, systemAnomalies: 0.65 },
+   526→      context: { similarConditionsCount: 12, attackFrequency: 3, avgTimeBetweenAttacks: 45 },
+   527→      intel: { activeCampaigns: 4, relevantIOCs: 147, threatLevel: 'critical' as const }
+   528→    },
+   529→    insider: {
+   530→      indicators: { loginFailures: 0.2, unusualTraffic: 0.85, newIOCs: 0.1, vulnerabilityWindow: 0.3, threatIntelScore: 0.2, temporalPattern: 0.9, systemAnomalies: 0.75 },
+   531→      context: { similarConditionsCount: 5, attackFrequency: 8, avgTimeBetweenAttacks: 90 },
+   532→      intel: { activeCampaigns: 0, relevantIOCs: 12, threatLevel: 'medium' as const }
+   533→    },
+   534→    ddos: {
+   535→      indicators: { loginFailures: 0.1, unusualTraffic: 0.98, newIOCs: 0.05, vulnerabilityWindow: 0.1, threatIntelScore: 0.6, temporalPattern: 0.3, systemAnomalies: 0.95 },
+   536→      context: { similarConditionsCount: 23, attackFrequency: 15, avgTimeBetweenAttacks: 14 },
+   537→      intel: { activeCampaigns: 2, relevantIOCs: 34, threatLevel: 'high' as const }
+   538→    },
+   539→    ransomware: {
+   540→      indicators: { loginFailures: 0.6, unusualTraffic: 0.4, newIOCs: 0.7, vulnerabilityWindow: 0.95, threatIntelScore: 0.85, temporalPattern: 0.5, systemAnomalies: 0.55 },
+   541→      context: { similarConditionsCount: 18, attackFrequency: 6, avgTimeBetweenAttacks: 32 },
+   542→      intel: { activeCampaigns: 3, relevantIOCs: 89, threatLevel: 'critical' as const }
+   543→    }
+   544→  };
+   545→
+   546→  const config = scenarios[scenario];
+   547→  return predictAttackProbability(config.indicators, config.context, config.intel);
+   548→}
+   549→
+   550→/**
+   551→ * Generate comprehensive demo dataset for presentation
+   552→ */
+   553→export function generateCEOPresentationData(): {
+   554→  threatForecast: ForecastResult;
+   555→  attackScenarios: Record<string, PredictionResult>;
+   556→  resourcePrediction: PredictionResult;
+   557→  compliancePrediction: PredictionResult;
+   558→  mlModelPerformance: ModelPerformanceMetrics;
+   559→  operationalImprovements: OperationalMetrics;
+   560→} {
+   561→  return {
+   562→    threatForecast: generateDemoPredictions(),
+   563→    attackScenarios: {
+   564→      apt: generateDemoAttackScenario('apt'),
+   565→      insider: generateDemoAttackScenario('insider'),
+   566→      ddos: generateDemoAttackScenario('ddos'),
+   567→      ransomware: generateDemoAttackScenario('ransomware')
+   568→    },
+   569→    resourcePrediction: predictResourceDemand(
+   570→      { openAlerts: 147, openIncidents: 12, queueDepth: 89, avgResolutionTime: 2.8 },
+   571→      generateDemoPredictions().predictions,
+   572→      { analystsOnDuty: 8, maxCapacityPerAnalyst: 25, shiftChangeIn: 4 }
+   573→    ),
+   574→    compliancePrediction: predictComplianceRisk(
+   575→      { frameworkScores: { ARTP: 0.87, ANSSI: 0.82, ISO27001: 0.91, NIST: 0.88 }, openFindings: 7, overdueAssessments: 2, upcomingDeadlines: 5 },
+   576→      { avgControlStrength: 84, degradingControls: 2, recentFailures: 1 },
+   577→      { policyViolations: 8, accessReviewCoverage: 0.94, trainingCompletion: 0.97 }
+   578→    ),
+   579→    mlModelPerformance: {
+   580→      threatPredictor: { accuracy: 0.942, precision: 0.918, recall: 0.921, f1Score: 0.919, lastUpdated: new Date() },
+   581→      anomalyDetector: { accuracy: 0.961, precision: 0.943, recall: 0.938, f1Score: 0.940, lastUpdated: new Date() },
+   582→      behavioralAnalyzer: { accuracy: 0.897, precision: 0.872, recall: 0.885, f1Score: 0.878, lastUpdated: new Date() },
+   583→      attackCorrelator: { accuracy: 0.924, precision: 0.901, recall: 0.913, f1Score: 0.907, lastUpdated: new Date() }
+   584→    },
+   585→    operationalImprovements: {
+   586→      mttrReduction: 0.47, // 47%
+   587→      falsePositiveReduction: 0.62, // 62%
+   588→      analystEfficiencyGain: 0.34, // 34%
+   589→      detectionSpeedImprovement: 0.73, // 73%
+   590→      costAvoidanceUSD: 2450000, // $2.45M
+   591→      roiPercentage: 312 // 312% ROI
+   592→    }
+   593→  };
+   594→}
+   595→
+   596→export interface ModelPerformanceMetrics {
+   597→  [modelName: string]: {
+   598→    accuracy: number;
+   599→    precision: number;
+   600→    recall: number;
+   601→    f1Score: number;
+   602→    lastUpdated: Date;
+   603→  };
+   604→}
+   605→
+   606→export interface OperationalMetrics {
+   607→  mttrReduction: number;
+   608→  falsePositiveReduction: number;
+   609→  analystEfficiencyGain: number;
+   610→  detectionSpeedImprovement: number;
+   611→  costAvoidanceUSD: number;
+   612→  roiPercentage: number;
+   613→}
+   614→
+   615→// ============================================================
+   616→// HELPER FUNCTIONS
+   617→// ============================================================
+   618→
+   619→function generateHistoricalData(days: number): TimeSeriesPoint[] {
+   620→  const data: TimeSeriesPoint[] = [];
+   621→  const now = new Date();
+   622→  
+   623→  // Base parameters for realistic telecom security data
+   624→  const baseEventsPerHour = 150;
+   625→  const dailyPattern = [0.4, 0.3, 0.25, 0.2, 0.25, 0.35, 0.5, 0.7, 0.9, 1.0, 1.1, 1.15, 
+   626→                       1.1, 1.05, 1.0, 1.05, 1.1, 1.15, 1.2, 1.15, 1.0, 0.8, 0.6, 0.5];
+   627→  const weeklyPattern = [1.0, 1.05, 1.0, 0.98, 1.02, 0.85, 0.65]; // Mon-Sun
+   628→  
+   629→  for (let d = days; d >= 0; d--) {
+   630→    for (let h = 23; h >= 0; h--) {
+   631→      const timestamp = new Date(now.getTime() - (d * 24 + (23 - h)) * 60 * 60 * 1000);
+   632→      const dayOfWeek = timestamp.getDay();
+   633→      const hourOfDay = timestamp.getHours();
+   634→      
+   635→      // Combine patterns with randomness
+   636→      const dailyFactor = dailyPattern[hourOfDay];
+   637→      const weeklyFactor = weeklyPattern[dayOfWeek];
+   638→      const randomNoise = (Math.random() - 0.5) * 0.3;
+   639→      
+   640→      // Occasional spikes (simulated attacks/incidents)
+   641→      const spike = Math.random() > 0.97 ? (2 + Math.random() * 3) : 1;
+   642→      
+   643→      const value = Math.round(baseEventsPerHour * dailyFactor * weeklyFactor * (1 + randomNoise) * spike);
+   644→      
+   645→      data.push({ timestamp, value, metadata: { dayOfWeek, hourOfDay } });
+   646→    }
+   647→  }
+   648→  
+   649→  return data.sort((a, b) => a.timestamp.getTime() - b.timestamp.getTime());
+   650→}
+   651→
+   652→function extractSeasonalComponents(data: TimeSeriesPoint[], period: number): number[] {
+   653→  const components: number[] = [];
+   654→  
+   655→  for (let i = 0; i < period; i++) {
+   656→    const valuesForSlot: number[] = [];
+   657→    for (let j = i; j < data.length; j += period) {
+   658→      valuesForSlot.push(data[j].value);
+   659→    }
+   660→    // Average for this seasonal slot
+   661→    const avg = valuesForSlot.reduce((sum, v) => sum + v, 0) / valuesForSlot.length;
+   662→    const overallAvg = data.reduce((sum, d) => sum + d.value, 0) / data.length;
+   663→    components.push(avg / overallAvg); // Seasonal index
+   664→  }
+   665→  
+   666→  return components;
+   667→}
+   668→
+   669→function extractTrendComponent(data: TimeSeriesPoint[]): { slope: number; intercept: number } {
+   670→  const n = data.length;
+   671→  let sumX = 0, sumY = 0, sumXY = 0, sumXX = 0;
+   672→  
+   673→  data.forEach((point, i) => {
+   674→    sumX += i;
+   675→    sumY += point.value;
+   676→    sumXY += i * point.value;
+   677→    sumXX += i * i;
+   678→  });
+   679→  
+   680→  const slope = (n * sumXY - sumX * sumY) / (n * sumXX - sumX * sumX);
+   681→  const intercept = (sumY - slope * sumX) / n;
+   682→  
+   683→  return { slope, intercept };
+   684→}
+   685→
+   686→function calculateStandardDeviation(values: number[]): number {
+   687→  const mean = values.reduce((sum, v) => sum + v, 0) / values.length;
+   688→  const variance = values.reduce((sum, v) => sum + Math.pow(v - mean, 2), 0) / values.length;
+   689→  return Math.sqrt(variance);
+   690→}
+   691→
+   692→function emptyForecast(name: string, version: string): ForecastResult {
+   693→  return {
+   694→    predictions: [],
+   695→    summary: {
+   696→      totalPredictions: 0,
+   697→      avgConfidence: 0,
+   698→      highConfidenceCount: 0,
+   699→      criticalPredictions: 0,
+   700→      forecastPeriod: { start: new Date(), end: new Date() }
+   701→    },
+   702→    modelInfo: { name, version, lastTrained: new Date(), accuracy: 0 }
+   703→  };
+   704→}
+   705→
+   706→function generateSummary(predictions: PredictionResult[]): ForecastResult['summary'] {
+   707→  const highConfidence = predictions.filter(p => p.confidence > 0.8).length;
+   708→  const critical = predictions.filter(p => p.severity === 'critical').length;
+   709→  const avgConf = predictions.reduce((sum, p) => sum + p.confidence, 0) / predictions.length;
+   710→  
+   711→  return {
+   712→    totalPredictions: predictions.length,
+   713→    avgConfidence: avgConf || 0,
+   714→    highConfidenceCount: highConfidence,
+   715→    criticalPredictions: critical,
+   716→    forecastPeriod: {
+   717→      start: predictions[0]?.timestamp || new Date(),
+   718→      end: predictions[predictions.length - 1]?.timestamp || new Date()
+   719→    }
+   720→  };
+   721→}
+   722→
+   723→function getSeverityFromValue(value: number, baseline: number): PredictionResult['severity'] {
+   724→  const ratio = value / baseline;
+   725→  if (ratio > 1.5) return 'critical';
+   726→  if (ratio > 1.25) return 'high';
+   727→  if (ratio > 1.1) return 'medium';
+   728→  return 'low';
+   729→}
+   730→
+   731→function getSeasonalSeverity(value: number, baseline: number): PredictionResult['severity'] {
+   732→  return getSeverityFromValue(value, baseline);
+   733→}
+   734→
+   735→function extractContributingFactors(data: TimeSeriesPoint[], horizon: number): PredictionFactor[] {
+   736→  const recent = data.slice(-24);
+   737→  const avgRecent = recent.reduce((sum, d) => sum + d.value, 0) / recent.length;
+   738→  const older = data.slice(-168, -24);
+   739→  const avgOlder = older.length > 0 ? older.reduce((sum, d) => sum + d.value, 0) / older.length : avgRecent;
+   740→  
+   741→  return [
+   742→    {
+   743→      name: 'Recent Trend',
+   744→      weight: 0.6,
+   745→      value: avgRecent / avgOlder,
+   746→      trend: avgRecent > avgOlder * 1.1 ? 'increasing' : avgRecent < avgOlder * 0.9 ? 'decreasing' : 'stable',
+   747→      description: `Last 24h average vs previous week: ${((avgRecent / avgOlder - 1) * 100).toFixed(1)}%`
+   748→    },
+   749→    {
+   750→      name: 'Volatility',
+   751→      weight: 0.4,
+   752→      value: calculateStandardDeviation(recent.map(d => d.value)) / avgRecent,
+   753→      trend: 'stable',
+   754→      description: `Coefficient of variation: ${(calculateStandardDeviation(recent.map(d => d.value)) / avgRecent * 100).toFixed(1)}%`
+   755→    }
+   756→  ];
+   757→}
+   758→
+   759→function getRecommendedActions(predicted: number, baseline: number): string[] {
+   760→  const actions: string[] = [];
+   761→  const ratio = predicted / baseline;
+   762→  
+   763→  if (ratio > 1.3) {
+   764→    actions.push('Escalate to on-call supervisor');
+   765→    actions.push('Prepare additional analyst resources');
+   766→    actions.push('Brief executive team on elevated threat level');
+   767→  } else if (ratio > 1.15) {
+   768→    actions.push('Monitor alert queues closely');
+   769→    actions.push('Ensure all analysts are engaged');
+   770→    actions.push('Review recent correlation rules');
+   771→  } else if (ratio > 1.0) {
+   772→    actions.push('Continue normal monitoring procedures');
+   773→    actions.push('Prepare for potential volume increase');
+   774→  } else {
+   775→    actions.push('Opportunity for proactive threat hunting');
+   776→    actions.push('Schedule maintenance during low activity');
+   777→  }
+   778→  
+   779→  return actions;
+   780→}
+   781→
+   782→function getSeasonalRecommendations(seasonalFactor: number, predicted: number): string[] {
+   783→  const actions: string[] = [];
+   784→  
+   785→  if (seasonalFactor > 1.2) {
+   786→    actions.push('Peak period staffing confirmed');
+   787→    actions.push('Automated triage rules activated');
+   788→  } else if (seasonalFactor < 0.8) {
+   789→    actions.push('Reduced staffing adequate for low period');
+   790→    actions.push('Schedule training sessions');
+   791→  }
+   792→  
+   793→  if (predicted > 200) {
+   794→    actions.push('Consider alert threshold adjustment');
+   795→  }
+   796→  
+   797→  return actions;
+   798→}
+   799→
+   800→function getAttackPreventionActions(probability: number, intel: { threatLevel: string; activeCampaigns: number }): string[] {
+   801→  const actions: string[] = [];
+   802→  
+   803→  if (probability > 0.6) {
+   804→    actions.push('Activate enhanced monitoring mode');
+   805→    actions.push('Deploy additional detection rules');
+   806→    actions.push('Brief incident response team');
+   807→  }
+   808→  
+   809→  if (intel.activeCampaigns > 0) {
+   810→    actions.push(`Hunt for IOCs from ${intel.activeCampaigns} active campaigns`);
+   811→  }
+   812→  
+   813→  if (intel.threatLevel === 'critical') {
+   814→    actions.push('Initiate crisis management protocols');
+   815→    actions.push('Engage threat intelligence partners');
+   816→  }
+   817→  
+   818→  actions.push('Update detection signatures');
+   819→  actions.push('Review recent authentication logs');
+   820→  
+   821→  return actions;
+   822→}
+   823→
+   824→function getResourceRecommendations(gap: number, utilization: number, shiftChangeHours: number): string[] {
+   825→  const actions: string[] = [];
+   826→  
+   827→  if (gap > 2) {
+   828→    actions.push(`URGENT: Request ${gap} additional analysts`);
+   829→    actions.push('Contact off-duty personnel');
+   830→    actions.push('Escalate to SOC manager');
+   831→  } else if (gap > 0) {
+   832→    actions.push(`Request ${gap} analyst(s) from other teams`);
+   833→    actions.push('Prioritize critical alerts only');
+   834→  }
+   835→  
+   836→  if (utilization > 0.9) {
+   837→    actions.push('Enable automated response playbooks');
+   838→    actions.push('Defer non-critical tasks');
+   839→  }
+   840→  
+   841→  if (shiftChangeHours < 2) {
+   842→    actions.push('Confirm incoming shift coverage');
+   843→    actions.push('Prepare shift handover briefing');
+   844→  }
+   845→  
+   846→  return actions;
+   847→}
+   848→
+   849→function getComplianceRecommendations(risk: number, state: Record<string, any>, controls: Record<string, any>): string[] {
+   850→  const actions: string[] = [];
+   851→  
+   852→  if (risk > 0.5) {
+   853→    actions.push('Schedule emergency compliance review');
+   854→    actions.push('Prioritize remediation of open findings');
+   855→  }
+   856→  
+   857→  if (controls.degradingControls > 3) {
+   858→    actions.push(`${controls.degradingControls} controls need immediate attention`);
+   859→    actions.push('Schedule control reassessment');
+   860→  }
+   861→  
+   862→  if (state.upcomingDeadlines > 3) {
+   863→    actions.push(`${state.upcomingDeadlines} compliance deadlines approaching`);
+   864→    actions.push('Allocate resources for assessments');
+   865→  }
+   866→  
+   867→  actions.push('Update compliance dashboard status');
+   868→  actions.push('Brief compliance team on risks');
+   869→  
+   870→  return actions;
+   871→}
+   872→
+   873→function formatIndicatorName(key: string): string {
+   874→  const names: Record<string, string> = {
+   875→    loginFailures: 'Authentication Failures',
+   876→    unusualTraffic: 'Network Traffic Anomalies',
+   877→    newIOCs: 'New Threat Indicators',
+   878→    vulnerabilityWindow: 'Vulnerability Exposure',
+   879→    threatIntelScore: 'Threat Intelligence',
+   880→    temporalPattern: 'Temporal Patterns',
+   881→    systemAnomalies: 'System Anomalies'
+   882→  };
+   883→  return names[key] || key;
+   884→}
+   885→
+   886→function getIndicatorDescription(key: string): string {
+   887→  const descriptions: Record<string, string> = {
+   888→    loginFailures: 'Failed login attempts rate',
+   889→    unusualTraffic: 'Unusual network traffic patterns',
+   890→    newIOCs: 'Newly published IOCs matching environment',
+   891→    vulnerabilityWindow: 'Unpatched critical vulnerabilities',
+   892→    threatIntelScore: 'External threat intelligence indicators',
+   893→    temporalPattern: 'Time-based attack pattern matches',
+   894→    systemAnomalies: 'System behavior anomalies detected'
+   895→  };
+   896→  return descriptions[key] || key;
+   897→}
+   898→
+   899→// Export all functions
+   900→export {
+   901→  exponentialSmoothingForecast,
+   902→  seasonalForecast,
+   903→  predictAttackProbability,
+   904→  predictResourceDemand,
+   905→  predictComplianceRisk,
+   906→  generateDemoPredictions,
+   907→  generateDemoAttackScenario,
+   908→  generateCEOPresentationData,
+   909→};
+   910→

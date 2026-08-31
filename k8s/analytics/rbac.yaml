@@ -1,0 +1,157 @@
+# =============================================================================
+# CyberSOC Platform - Analytics Service Account & RBAC
+# =============================================================================
+# Least-privilege access for analytics/ML services
+# ANRT compliant IAM configuration
+# =============================================================================
+
+---
+# Service Account for Analytics Services
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: analytics-sa
+  namespace: cybersoc-analytics
+  labels:
+    app.kubernetes.io/part-of: cybersoc-platform
+    app.kubernetes.io/component: analytics
+  annotations:
+    iam.amazonaws.com/role: cybersoc-analytics-production-role
+    eks.amazonaws.com/role-arn: arn:aws:iam::ACCOUNT:role/cybersoc-analytics-role
+  automountServiceAccountToken: false  # Security: Don't mount unless needed
+
+---
+# Role for Analytics Pods (Namespace-scoped)
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: analytics-pod-role
+  namespace: cybersoc-analytics
+rules:
+  # Allow reading configmaps and secrets in own namespace
+  - apiGroups: [""]
+    resources: ["configmaps", "secrets"]
+    verbs: ["get", "list", "watch"]
+    resourceNames:
+      - analytics-config
+      - predictive-analytics-config
+      - behavioral-analytics-config
+      - analytics-secrets
+  
+  # Allow creating pods for batch jobs (if needed)
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list", "watch"]
+  
+  # Allow reading PVC status
+  - apiGroups: [""]
+    resources: ["persistentvolumeclaims"]
+    verbs: ["get", "list"]
+
+---
+# RoleBinding for Analytics Service Account
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: analytics-role-binding
+  namespace: cybersoc-analytics
+subjects:
+  - kind: ServiceAccount
+    name: analytics-sa
+    namespace: cybersoc-analytics
+roleRef:
+  kind: Role
+  name: analytics-pod-role
+  apiGroup: rbac.authorization.k8s.io
+
+---
+# ClusterRole for Cross-Namespace Access (Minimal)
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: analytics-cross-namespace-reader
+  labels:
+    app.kubernetes.io/part-of: cybersoc-platform
+rules:
+  # Read-only access to specific namespaces for monitoring/integration
+  - apiGroups: [""]
+    resources: ["services", "endpoints"]
+    verbs: ["get", "list", "watch"]
+    resourceNames:
+      - postgresql-primary
+      - redis-master
+      - elasticsearch-coordinating
+      - kafka-headless
+  
+  # Custom metrics access (for HPA)
+  - apiGroups: ["custom.metrics.k8s.io"]
+    resources: ["*/prediction_queue_depth", "*/active_behavior_profiles", "*/inference_requests_in_flight"]
+    verbs: ["get", "list"]
+
+---
+# ClusterRoleBinding for Analytics
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: analytics-cluster-role-binding
+subjects:
+  - kind: ServiceAccount
+    name: analytics-sa
+    namespace: cybersoc-analytics
+roleRef:
+  kind: ClusterRole
+  name: analytics-cross-namespace-reader
+  apiGroup: rbac.authorization.k8s.io
+
+---
+# Pod Security Policy (If using Kubernetes < 1.25)
+# For newer versions, use Pod Security Standards via namespace labels
+apiVersion: policy/v1beta1  # Deprecated in 1.21, removed in 1.25
+kind: PodSecurityPolicy
+metadata:
+  name: analytics-restricted-psp
+  labels:
+    app.kubernetes.io/part-of: cybersoc-platform
+spec:
+  privileged: false
+  allowPrivilegeEscalation: false
+  requiredDropCapabilities:
+    - ALL
+  volumes:
+    - 'configMap'
+    - 'emptyDir'
+    - 'projected'
+    - 'secret'
+    - 'persistentVolumeClaim'
+  hostNetwork: false
+  hostIPC: false
+  hostPID: false
+  runAsUser:
+    rule: 'MustRunAsNonRoot'
+  runAsGroup:
+    rule: 'MustRunAs'
+    ranges:
+      - min: 1001
+        max: 1001
+  supplementalGroups:
+    rule: 'MustRunAs'
+    ranges:
+      - min: 1001
+        max: 1001
+  fsGroup:
+    rule: 'MustRunAs'
+    ranges:
+      - min: 1001
+        max: 1001
+  readOnlyRootFilesystem: true
+  seccompProfile:
+    type: RuntimeDefault
+---
+# Namespace Labels for Pod Security Standards (Kubernetes 1.25+)
+# These are applied to the namespace definition
+# pod-security.kubernetes.io/enforce: restricted
+# pod-security.kubernetes.io/enforce-version: latest
+# pod-security.kubernetes.io/audit: restricted
+# pod-security.kubernetes.io/audit-version: latest
+# pod-security.kubernetes.io/warn: restricted
+# pod-security.kubernetes.io/warn-version: latest

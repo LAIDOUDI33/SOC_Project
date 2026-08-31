@@ -1,0 +1,61 @@
+# =============================================================================
+# CyberSOC Platform - Analytics Namespace
+# =============================================================================
+# Dedicated namespace for ML/AI analytics services
+# Isolated network, dedicated resources, ANRT compliant
+# =============================================================================
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: cybersoc-analytics
+  labels:
+    name: cybersoc-analytics
+    app.kubernetes.io/part-of: cybersoc-platform
+    app.kubernetes.io/component: analytics
+    environment: production
+    security-level: high
+    data-classification: confidential
+  annotations:
+    description: "CyberSOC Analytics & ML Services - Production"
+    contact: "soc-ops@djezzy.dz"
+    anrt-compliance: "v2.1"
+---
+# Resource Quota - Analytics Namespace
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: analytics-resource-quota
+  namespace: cybersoc-analytics
+spec:
+  hard:
+    requests.cpu: "32"
+    requests.memory: "64Gi"
+    limits.cpu: "64"
+    limits.memory: "128Gi"
+    persistentvolumeclaims: "10"
+    pods: "50"
+    services: "20"
+    secrets: "30"
+    configmaps: "20"
+---
+# Limit Range - Analytics Containers
+apiVersion: v1
+kind: LimitRange
+metadata:
+  name: analytics-limit-range
+  namespace: cybersoc-analytics
+spec:
+  limits:
+    - type: Container
+      default:
+        cpu: "4000m"
+        memory: "8Gi"
+      defaultRequest:
+        cpu: "1000m"
+        memory: "2Gi"
+      max:
+        cpu: "16000m"
+        memory: "32Gi"
+      min:
+        cpu: "100m"
+        memory: "128Mi"

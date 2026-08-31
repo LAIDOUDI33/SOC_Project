@@ -1,0 +1,267 @@
+# =============================================================================
+# CyberSOC Platform - Analytics Module (Production Values)
+# =============================================================================
+# Helm values for deploying Analytics/ML microservices
+# Add to main values-production.yaml or use as overlay
+# =============================================================================
+
+analytics:
+  enabled: true
+  namespace: cybersoc-analytics
+  
+  # Global Analytics Settings
+  imagePullSecrets:
+    - name: gcr-json-key
+    - name: github-registry-credentials
+  
+  # Predictive Analytics Engine
+  predictiveAnalytics:
+    enabled: true
+    replicaCount: 3
+    
+    image:
+      repository: ghcr.io/laidoudi33/soc-predictive-analytics
+      tag: "2.0.0-production"
+      pullPolicy: Always
+    
+    resources:
+      requests:
+        cpu: "2000m"
+        memory: "4Gi"
+      limits:
+        cpu: "8000m"
+        memory: "16Gi"
+    
+    config:
+      predictionHorizons: "24h,7d,30d,90d"
+      confidenceThreshold: 0.7
+      maxConcurrentPredictions: 10
+      batchSize: 1000
+    
+    autoscaling:
+      enabled: true
+      minReplicas: 3
+      maxReplicas: 10
+      targetCPUUtilizationPercentage: 70
+      targetMemoryUtilizationPercentage: 75
+    
+    nodeSelector:
+      node-type: production
+      workload-class: ml-inference
+    
+    tolerations:
+      - key: "dedicated"
+        operator: "Equal"
+        value: "ml-workloads"
+        effect: NoSchedule
+
+  # Behavioral Analytics Engine (UEBA)
+  behavioralAnalytics:
+    enabled: true
+    replicaCount: 3
+    
+    image:
+      repository: ghcr.io/laidoudi33/soc-behavioral-analytics
+      tag: "2.0.0-production"
+      pullPolicy: Always
+    
+    resources:
+      requests:
+        cpu: "4000m"
+        memory: "8Gi"  # Higher for behavior profiles
+      limits:
+        cpu: "12000m"
+        memory: "32Gi"
+    
+    config:
+      baselineLearningDays: 30
+      riskScoreThreshold: 70
+      peerGroupSize: 50
+      sessionTimeoutMinutes: 480
+      maxConcurrentProfiles: 10000
+      
+      # Telecom-specific
+      ss7BehaviorMonitoring: true
+      diameterAnomalyDetection: true
+      fraudPatternDetection: true
+    
+    autoscaling:
+      enabled: true
+      minReplicas: 3
+      maxReplicas: 8
+      targetCPUUtilizationPercentage: 65
+      targetMemoryUtilizationPercentage: 70
+    
+    persistence:
+      profiles:
+        enabled: true
+        size: 500Gi
+        storageClass: premium-ssd
+
+  # ML Model Server
+  modelServer:
+    enabled: true
+    replicaCount: 3
+    
+    image:
+      repository: ghcr.io/laidoudi33/soc-ml-server
+      tag: "2.0.0-production"
+      pullPolicy: Always
+    
+    resources:
+      requests:
+        cpu: "4000m"
+        memory: "8Gi"
+      limits:
+        cpu: "16000m"
+        memory: "32Gi"
+        # nvidia.com/gpu: 1  # Uncomment for GPU nodes
+    
+    config:
+      inferenceTimeout: "30s"
+      maxBatchSize: 32
+      batchTimeoutMs: 100
+      concurrentInferences: 20
+      autoReloadModels: true
+      modelCacheSize: "10Gi"
+    
+    autoscaling:
+      enabled: true
+      minReplicas: 3
+      maxReplicas: 10
+      targetCPUUtilizationPercentage: 60
+
+  # CronJobs / Batch Processing
+  cronjobs:
+    modelRetraining:
+      enabled: true
+      schedule: "0 3 * * 0"  # Weekly Sunday 3AM
+      resources:
+        requests:
+          cpu: "8000m"
+          memory: "16Gi"
+        limits:
+          cpu: "16000m"
+          memory: "64Gi"
+    
+    baselineUpdate:
+      enabled: true
+      schedule: "0 2 * * *"  # Daily 2AM
+    
+    reportGeneration:
+      enabled: true
+      schedule: "0 6 * * *"  # Daily 6AM
+    
+    dataAggregation:
+      enabled: true
+      schedule: "5 * * * *"  # Hourly
+    
+    backupExport:
+      enabled: true
+      schedule: "0 0 * * *"  # Daily midnight
+
+  # Persistence
+  persistence:
+    modelsPvc:
+      name: analytics-models-pvc
+      size: 100Gi
+      storageClass: premium-ssd
+      accessMode: ReadWriteMany
+    
+    profilesPvc:
+      name: behavioral-profiles-pvc
+      size: 500Gi
+      storageClass: premium-ssd
+      accessMode: ReadWriteMany
+    
+    trainingDataPvc:
+      name: analytics-training-data-pvc
+      size: 200Gi
+      storageClass: premium-nvme
+      accessMode: ReadWriteOnce
+    
+    outputPvc:
+      name: analytics-output-pvc
+      size: 50Gi
+      storageClass: premium-ssd
+      accessMode: ReadWriteMany
+
+  # Networking
+  services:
+    predictiveAnalytics:
+      type: ClusterIP
+      ports:
+        http: 8002
+        grpc: 50052
+    
+    behavioralAnalytics:
+      type: ClusterIP
+      ports:
+        http: 8003
+        grpc: 50053
+    
+    modelServer:
+      type: ClusterIP
+      ports:
+        http: 8001
+        grpc: 50051
+
+  # Ingress (Optional - for direct API access)
+  ingress:
+    enabled: true
+    className: nginx-enterprise
+    annotations:
+      nginx.ingress.kubernetes.io/ssl-redirect: "true"
+      cert-manager.io/cluster-issuer: letsencrypt-production
+    hosts:
+      - host: analytics.soc.djezzy.dz
+        paths:
+          - path: /api/predictions
+            pathType: Prefix
+          - path: /api/behavior
+            pathType: Prefix
+          - path: /api/ml
+            pathType: Prefix
+    tls:
+      - secretName: analytics-soc-djezzy-dz-tls
+        hosts:
+          - analytics.soc.djezzy.dz
+
+  # Security
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 1001
+    runAsGroup: 1001
+    fsGroup: 1001
+    seccompProfile:
+      type: RuntimeDefault
+  
+  networkPolicy:
+    enabled: true
+    defaultDenyAll: true
+  
+  rbac:
+    create: true
+    serviceAccount:
+      create: true
+      automountToken: false
+
+  # Monitoring
+  monitoring:
+    prometheus:
+      enabled: true
+      scrape: true
+      port: 8000
+    tracing:
+      enabled: true
+      sampleRate: 0.1  # 10% in production
+      jaegerEndpoint: "jaeger-collector.cybersoc.svc.cluster.local:14268"
+
+  # Feature Flags
+  features:
+    predictiveAnalytics: true
+    behavioralAnalytics: true
+    fraudDetection: true
+    threatIntelligenceML: true
+    anomalyDetection: true
+    networkIntrusionDetection: true

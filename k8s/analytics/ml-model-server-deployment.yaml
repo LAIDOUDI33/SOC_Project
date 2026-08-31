@@ -1,0 +1,245 @@
+# =============================================================================
+# CyberSOC Platform - ML Model Serving Infrastructure
+# =============================================================================
+# Centralized model serving for:
+# - TensorFlow/ONNX model inference
+# - Model versioning and A/B testing
+# - Batch and real-time predictions
+# - GPU acceleration support
+#
+# Production: 3 replicas, GPU-enabled nodes, HA
+# =============================================================================
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ml-model-server
+  namespace: cybersoc-analytics
+  labels:
+    app.kubernetes.io/name: ml-model-server
+    app.kubernetes.io/component: model-serving
+    app.kubernetes.io/part-of: cybersoc-platform
+    environment: production
+    version: "2.0.0"
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: ml-model-server
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: ml-model-server
+        app.kubernetes.io/component: model-serving
+        app.kubernetes.io/part-of: cybersoc-platform
+        environment: production
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8001"
+        prometheus.io/path: "/metrics"
+    spec:
+      serviceAccountName: analytics-sa
+      automountServiceAccountToken: false
+      
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1001
+        runAsGroup: 1001
+        fsGroup: 1001
+        seccompProfile:
+          type: RuntimeDefault
+      
+      containers:
+        - name: model-server
+          image: ghcr.io/laidoudi33/soc-ml-server:2.0.0-production
+          imagePullPolicy: Always
+          
+          # NVIDIA Container Runtime for GPU support
+          # command: ["./entrypoint.sh", "--model_dir=/models", "--port=8001"]
+          
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+          
+          ports:
+            - name: http
+              containerPort: 8001
+              protocol: TCP
+            - name: grpc
+              containerPort: 50051
+              protocol: TCP
+            - name: metrics
+              containerPort: 8001
+              protocol: TCP
+          
+          env:
+            - name: NODE_ENV
+              value: "production"
+            - name: MODEL_SERVER_PORT
+              value: "8001"
+            - name: GRPC_PORT
+              value: "50051"
+            
+            # Model Repository
+            - name: MODEL_BASE_PATH
+              value: "/models"
+            - name: MODEL_CACHE_SIZE
+              value: "10Gi"
+            
+            # Inference Configuration
+            - name: INFERENCE_TIMEOUT
+              value: "30s"
+            - name: MAX_BATCH_SIZE
+              value: "32"
+            - name: BATCH_TIMEOUT_MS
+              value: "100"
+            - name: CONCURRENT_INFERENCES
+              value: "20"
+            
+            # GPU Configuration (if available)
+            - name: CUDA_VISIBLE_DEVICES
+              value: "0"
+            - name: TF_GPU_MEMORY_FRACTION
+              value: "0.7"
+            
+            # Monitoring
+            - name: ENABLE_METRICS
+              value: "true"
+            - name: METRICS_PORT
+              value: "8001"
+            - name: LOG_LEVEL
+              value: "warn"
+            
+            # Model Auto-reload
+            - name: AUTO_RELOAD_MODELS
+              value: "true"
+            - name: RELOAD_INTERVAL_SEC
+              value: "60"
+          
+          resources:
+            requests:
+              cpu: "4000m"
+              memory: "8Gi"
+              # nvidia.com/gpu: 1  # Uncomment for GPU nodes
+            limits:
+              cpu: "16000m"
+              memory: "32Gi"
+              # nvidia.com/gpu: 1
+          
+          # Liveness Probe
+          livenessProbe:
+            httpGet:
+              path: /api/health/live
+              port: http
+            initialDelaySeconds: 60  # Longer for model loading
+            periodSeconds: 15
+            timeoutSeconds: 10
+            failureThreshold: 3
+          
+          # Readiness Probe (includes model loading check)
+          readinessProbe:
+            httpGet:
+              path: /api/health/ready
+              port: http
+            initialDelaySeconds: 45
+            periodSeconds: 5
+            timeoutSeconds: 5
+            failureThreshold: 3
+          
+          volumeMounts:
+            - name: models-volume
+              mountPath: /models
+              readOnly: true
+            - name: model-cache
+              mountPath: /cache
+            - name: tmp-dir
+              mountPath: /tmp
+      
+      volumes:
+        - name: models-volume
+          persistentVolumeClaim:
+            claimName: analytics-models-pvc
+        - name: model-cache
+          emptyDir:
+            sizeLimit: "10Gi"
+        - name: tmp-dir
+          emptyDir: {}
+      
+      nodeSelector:
+        node-type: production
+        # workload-class: gpu  # Use GPU nodes if available
+      
+      tolerations:
+        - key: "dedicated"
+          operator: "Equal"
+          value: "ml-workloads"
+          effect: NoSchedule
+      
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffirmTerm:
+                labelSelector:
+                  matchExpressions:
+                    - key: app.kubernetes.io/name
+                      operator: In
+                      values:
+                        - ml-model-server
+                topologyKey: kubernetes.io/hostname
+      
+      terminationGracePeriodSeconds: 120
+      priorityClassName: high-priority
+---
+# HPA for Model Server
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: ml-model-server-hpa
+  namespace: cybersoc-analytics
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: ml-model-server
+  minReplicas: 3
+  maxReplicas: 10
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 60
+    - type: Resource
+      resource:
+        name: memory
+        target:
+          type: Utilization
+          averageUtilization: 70
+    - type: Pods
+      pods:
+        metric:
+          name: inference_requests_in_flight
+        target:
+          type: AverageValue
+          averageValue: "50"
+---
+# PDB for Model Server
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: ml-model-server-pdb
+  namespace: cybersoc-analytics
+spec:
+  minAvailable: 2
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: ml-model-server
