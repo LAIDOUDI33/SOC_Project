@@ -1,0 +1,414 @@
+# =============================================================================
+# CyberSOC Platform - SOAR Core Components
+# Target: Djezzy Telecom Algeria
+# Components: Playbook Engine, Incident Manager, Case Management
+# =============================================================================
+
+---
+# Playbook Execution Engine (Core Automation)
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: playbook-engine
+  namespace: cybersoc-soar
+  labels:
+    app.kubernetes.io/name: playbook-engine
+    app.kubernetes.io/component: automation
+    app.kubernetes.io/part-of: cybersoc-soar
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: playbook-engine
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: playbook-engine
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8080"
+    spec:
+      priorityClassName: soar-critical
+      serviceAccountName: soar-sa
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        fsGroup: 1000
+      containers:
+        - name: playbook-engine
+          image: ghcr.io/laidoudi33/soc-playbook-engine:2.0.0-production
+          ports:
+            - name: http
+              containerPort: 8080
+            - name: grpc
+              containerPort: 50070
+            - name: metrics
+              containerPort: 9090
+            - name: websocket
+              containerPort: 8081  # Real-time status updates
+          env:
+            # Core Configuration
+            - name: ENGINE_MODE
+              value: "production"
+            - name: MAX_CONCURRENT_PLAYBOOKS
+              value: "50"
+            - name: PLAYBOOK_TIMEOUT
+              value: "3600s"  # 1 hour max execution
+            
+            # Database (PostgreSQL)
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: soar-secrets
+                  key: database-url
+            
+            # Message Queue (Kafka)
+            - name: KAFKA_BROKERS
+              valueFrom:
+                configMapKeyRef:
+                  name: soar-config
+                  key: kafka-brokers
+            - name: KAFKA_TOPICS
+              value: "soar.playbooks.triggered,soar.playbooks.completed,soar.incidents.updated"
+            
+            # Cache (Redis)
+            - name: REDIS_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: soar-config
+                  key: redis-url
+            
+            # External Integrations
+            - name: SIEM_API_URL
+              value: "http://sigma-correlation-engine-svc.cybersoc-siem.svc.cluster.local:8080"
+            - name: THREAT_INTEL_API_URL
+              value: "http://threat-intel-api.cybersoc-threat-intel.svc.cluster.local:8080"
+            - name: TICKETING_API_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: soar-config
+                  key: jira-url
+            
+            # Security & Compliance
+            - name: ANRT_AUDIT_LOGGING
+              value: "true"
+            - name: ACTION_APPROVAL_REQUIRED
+              value: "true"  # Destructive actions need approval
+          
+          resources:
+            requests:
+              cpu: "4"
+              memory: "8Gi"
+            limits:
+              cpu: "12"
+              memory: "24Gi"
+          
+          volumeMounts:
+            - name: playbooks-volume
+              mountPath: /opt/soar/playbooks
+              readOnly: true
+            - name: playbook-state
+              mountPath: /var/lib/soar/playbook-state
+            - name: action-plugins
+              mountPath: /opt/soar/plugins/actions
+            - name: cache-volume
+              mountPath: /var/cache/soar
+          
+          livenessProbe:
+            httpGet:
+              path: /api/health/live
+              port: 8080
+            initialDelaySeconds: 30
+            periodSeconds: 15
+          
+          readinessProbe:
+            httpGet:
+              path: /api/health/ready
+              port: 8080
+            initialDelaySeconds: 15
+            periodSeconds: 10
+      
+      volumes:
+        - name: playbooks-volume
+          persistentVolumeClaim:
+            claimName: soar-playbooks-pvc
+        - name: playbook-state
+          persistentVolumeClaim:
+            claimName: soar-playbook-state-pvc
+        - name: action-plugins
+          configMap:
+            name: soar-action-plugins
+        - name: cache-volume
+          emptyDir:
+            medium: Memory
+            sizeLimit: "1Gi"
+
+---
+# HPA for Playbook Engine
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: playbook-engine-hpa
+  namespace: cybersoc-soar
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: playbook-engine
+  minReplicas: 3
+  maxReplicas: 10
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70
+    - type: Resource
+      resource:
+        name: memory
+        target:
+          type: Utilization
+          averageUtilization: 75
+    # Custom metric: Active playbook count
+    - type: Pods
+      pods:
+        metric:
+          name: active_playbooks_count
+        target:
+          type: AverageValue
+          averageValue: "15"
+
+---
+# PDB for Playbook Engine
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: playbook-engine-pdb
+  namespace: cybersoc-soar
+spec:
+  minAvailable: 2
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: playbook-engine
+
+---
+# Incident Management System
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: incident-manager
+  namespace: cybersoc-soar
+  labels:
+    app.kubernetes.io/name: incident-manager
+    app.kubernetes.io/component: incident-management
+    app.kubernetes.io/part-of: cybersoc-soar
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: incident-manager
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: incident-manager
+    spec:
+      serviceAccountName: soar-sa
+      containers:
+        - name: incident-manager
+          image: ghcr.io/laidoudi33/soc-incident-manager:2.0.0-production
+          ports:
+            - name: http
+              containerPort: 8090
+            - name: grpc
+              containerPort: 50071
+          env:
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: soar-secrets
+                  key: database-url
+            - name: KAFKA_BROKERS
+              valueFrom:
+                configMapKeyRef:
+                  name: soar-config
+                  key: kafka-brokers
+            - name: INCIDENT_ESCALATION_POLICY
+              value: "djezzy-standard"
+            - name: SLA_TARGETS
+              value: "critical=15m,high=1h,medium=4h,low=24h"
+            - name: AUTO_ASSIGNMENT_ENABLED
+              value: "true"
+          resources:
+            requests:
+              cpu: "1"
+              memory: "2Gi"
+            limits:
+              cpu: "4"
+              memory: "8Gi"
+
+---
+# Case Management System
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: case-manager
+  namespace: cybersoc-soar
+  labels:
+    app.kubernetes.io/name: case-manager
+    app.kubernetes.io/component: case-management
+    app.kubernetes.io/part-of: cybersoc-soar
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: case-manager
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: case-manager
+    spec:
+      serviceAccountName: soar-sa
+      containers:
+        - name: case-manager
+          image: ghcr.io/laidoudi33/soc-case-manager:2.0.0-production
+          ports:
+            - name: http
+              containerPort: 8091
+            - name: grpc
+              containerPort: 50072
+          env:
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: soar-secrets
+                  key: database-url
+            - name: CASE_RETENTION_DAYS
+              value: "2555"  # 7 years for legal hold
+            - name: EVIDENCE_STORAGE_PATH
+              value: "/data/evidence"
+            - name: PDF_REPORT_GENERATOR
+              value: "enabled"
+          resources:
+            requests:
+              cpu: "1"
+              memory: "2Gi"
+            limits:
+              cpu: "4"
+              memory: "8Gi"
+          volumeMounts:
+            - name: evidence-storage
+              mountPath: /data/evidence
+
+---
+# SOAR API Gateway (External Interface)
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: soar-api-gateway
+  namespace: cybersoc-soar
+  labels:
+    app.kubernetes.io/name: soar-api-gateway
+    app.kubernetes.io/component: api-gateway
+    app.kubernetes.io/part-of: cybersoc-soar
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: soar-api-gateway
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: soar-api-gateway
+    spec:
+      serviceAccountName: soar-sa
+      containers:
+        - name: api-gateway
+          image: ghcr.io/laidoudi33/soc-soar-api-gateway:2.0.0-production
+          ports:
+            - name: http
+              containerPort: 8080
+            - name: https
+              containerPort: 8443
+            - name: grpc
+              containerPort: 50073
+          env:
+            - name: UPSTREAM_PLAYBOOK_ENGINE
+              value: "http://playbook-engine:8080"
+            - name: UPSTREAM_INCIDENT_MANAGER
+              value: "http://incident-manager:8090"
+            - name: UPSTREAM_CASE_MANAGER
+              value: "http://case-manager:8091"
+            - name: RATE_LIMIT_REQUESTS
+              value: "1000"
+            - name: RATE_LIMIT_WINDOW
+              value: "60s"
+            - name: JWT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: soar-secrets
+                  key: jwt-secret
+            - name: OAUTH_PROVIDER_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: soar-config
+                  key: oauth-provider-url
+          resources:
+            requests:
+              cpu: "500m"
+              memory: "1Gi"
+            limits:
+              cpu: "2"
+              memory: "4Gi"
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8080
+            initialDelaySeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: 8080
+            initialDelaySeconds: 5
+
+---
+# SOAR Web UI (React Frontend)
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: soar-web-ui
+  namespace: cybersoc-soar
+  labels:
+    app.kubernetes.io/name: soar-web-ui
+    app.kubernetes.io/component: frontend
+    app.kubernetes.io/part-of: cybersoc-soar
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: soar-web-ui
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: soar-web-ui
+    spec:
+      containers:
+        - name: web-ui
+          image: ghcr.io/laidoudi33/soc-soar-web-ui:2.0.0-production
+          ports:
+            - name: http
+              containerPort: 3000
+          env:
+            - name: REACT_APP_API_URL
+              value: "https://soar-api.soc.djezzy.dz"
+            - name: REACT_APP_WS_URL
+              value: "wss://soar-ws.soc.djezzy.dz"
+            - name: NODE_ENV
+              value: "production"
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "256Mi"
+            limits:
+              cpu: "500m"
+              memory: "512Mi"

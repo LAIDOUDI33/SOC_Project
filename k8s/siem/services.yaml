@@ -1,0 +1,221 @@
+# =============================================================================
+# CyberSOC Platform - SIEM Services
+# Target: Djezzy Telecom Algeria
+# =============================================================================
+
+---
+# Elasticsearch Master Service (ClusterIP for internal)
+apiVersion: v1
+kind: Service
+metadata:
+  name: elasticsearch-siem-master
+  namespace: cybersoc-siem
+  labels:
+    app.kubernetes.io/name: elasticsearch
+    app.kubernetes.io/component: master
+spec:
+  type: ClusterIP
+  clusterIP: None  # Headless service for StatefulSet
+  selector:
+    app.kubernetes.io/name: elasticsearch
+    app.kubernetes.io/component: master
+  ports:
+    - name: http
+      port: 9200
+      targetPort: 9200
+    - name: transport
+      port: 9300
+      targetPort: 9300
+
+---
+# Elasticsearch Hot Data Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: elasticsearch-siem-hot
+  namespace: cybersoc-siem
+  labels:
+    app.kubernetes.io/name: elasticsearch
+    app.kubernetes.io/component: hot-data
+spec:
+  type: ClusterIP
+  clusterIP: None
+  selector:
+    app.kubernetes.io/name: elasticsearch
+    app.kubernetes.io/component: hot-data
+  ports:
+    - name: http
+      port: 9200
+      targetPort: 9200
+
+---
+# Elasticsearch Coordinating Service (Load Balancer)
+apiVersion: v1
+kind: Service
+metadata:
+  name: elasticsearch-siem-coordinating
+  namespace: cybersoc-siem
+  labels:
+    app.kubernetes.io/name: elasticsearch
+    app.kubernetes.io/component: coordinating
+  annotations:
+    # Load balancer config for external access (if needed)
+    service.beta.kubernetes.io/aws-load-balancer-internal: "true"
+spec:
+  type: LoadBalancer
+  selector:
+    app.kubernetes.io/name: elasticsearch
+  ports:
+    - name: https
+      port: 9200
+      targetPort: 9200
+      protocol: TCP
+    - name: transport
+      port: 9300
+      targetPort: 9300
+      protocol: TCP
+
+---
+# Kibana Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: kibana-siem
+  namespace: cybersoc-siem
+  labels:
+    app.kubernetes.io/name: kibana
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: kibana
+  ports:
+    - name: http
+      port: 5601
+      targetPort: 5601
+
+---
+# Logstash Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: logstash-siem
+  namespace: cybersoc-siem
+  labels:
+    app.kubernetes.io/name: logstash
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: logstash
+  ports:
+    - name: beats
+      port: 5044
+      targetPort: 5044
+    - name: http
+      port: 8080
+      targetPort: 8080
+    - name: metrics
+      port: 9600
+      targetPort: 9600
+
+---
+# Sigma Correlation Engine Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: sigma-correlation-engine-svc
+  namespace: cybersoc-siem
+  labels:
+    app.kubernetes.io/name: sigma-engine
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: sigma-engine
+  ports:
+    - name: http
+      port: 8080
+      targetPort: 8080
+    - name: grpc
+      port: 50060
+      targetPort: 50060
+    - name: metrics
+      port: 9090
+      targetPort: 9090
+
+---
+# Alertmanager Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: alertmanager-siem
+  namespace: cybersoc-siem
+  labels:
+    app.kubernetes.io/name: alertmanager
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: alertmanager
+  ports:
+    - name: web
+      port: 9093
+      targetPort: 9093
+
+---
+# SIEM API Gateway Service (External)
+apiVersion: v1
+kind: Service
+metadata:
+  name: siem-api-gateway
+  namespace: cybersoc-siem
+  labels:
+    app.kubernetes.io/name: siem-api-gateway
+  annotations:
+    # Ingress controller annotations
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/backend-protocol: "HTTP"
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: siem-api-gateway
+  ports:
+    - name: http
+      port: 8080
+      targetPort: 8080
+    - name: https
+      port: 8443
+      targetPort: 8443
+
+---
+# SOAR Bridge Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: siem-soar-bridge-svc
+  namespace: cybersoc-siem
+  labels:
+    app.kubernetes.io/name: siem-soar-bridge
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: siem-soar-bridge
+  ports:
+    - name: http
+      port: 8090
+      targetPort: 8090
+    - name: grpc
+      port: 50061
+      targetPort: 50061
+
+---
+# Filebeat/Metricbeat Headless Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: beats-headless
+  namespace: cybersoc-siem
+  labels:
+    app.kubernetes.io/name: beats
+spec:
+  type: ClusterIP
+  clusterIP: None
+  selector:
+    app.kubernetes.io/name: filebeat

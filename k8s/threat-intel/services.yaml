@@ -1,0 +1,130 @@
+# =============================================================================
+# CyberSOC Platform - Threat Intelligence Services
+# Target: Djezzy Telecom Algeria
+# =============================================================================
+
+---
+# TAXII Server Service (External - for partners)
+apiVersion: v1
+kind: Service
+metadata:
+  name: taxii-server-svc
+  namespace: cybersoc-threat-intel
+  labels:
+    app.kubernetes.io/name: taxii-server
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: taxii-server
+  ports:
+    - name: http
+      port: 8080
+      targetPort: 8080
+    - name: https
+      port: 8443
+      targetPort: 8443
+    - name: discovery
+      port: 9497
+      targetPort: 9497
+
+---
+# TAXII Client Service (Internal)
+apiVersion: v1
+kind: Service
+metadata:
+  name: taxii-client-svc
+  namespace: cybersoc-threat-intel
+  labels:
+    app.kubernetes.io/name: taxii-client
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: taxii-client
+  ports:
+    - name: http
+      port: 8080
+      targetPort: 8080
+
+---
+# STIX Processor Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: stix-processor-svc
+  namespace: cybersoc-threat-intel
+  labels:
+    app.kubernetes.io/name: stix-processor
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: stix-processor
+  ports:
+    - name: http
+      port: 8081
+      targetPort: 8081
+    - name: grpc
+      port: 50080
+      targetPort: 50080
+
+---
+# IOC Manager Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: ioc-manager-svc
+  namespace: cybersoc-threat-intel
+  labels:
+    app.kubernetes.io/name: ioc-manager
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: ioc-manager
+  ports:
+    - name: http
+      port: 8082
+      targetPort: 8082
+    - name: grpc
+      port: 50081
+      targetPort: 50081
+
+---
+# Threat Hunting Platform Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: threat-hunting-svc
+  namespace: cybersoc-threat-intel
+  labels:
+    app.kubernetes.io/name: threat-hunting
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: threat-hunting
+  ports:
+    - name: http
+      port: 8083
+      targetPort: 8083
+    - name: grpc
+      port: 50082
+      targetPort: 50082
+
+---
+# Threat Intel API Gateway Service (External)
+apiVersion: v1
+kind: Service
+metadata:
+  name: threat-intel-api-gateway
+  namespace: cybersoc-threat-intel
+  labels:
+    app.kubernetes.io/name: threat-intel-api-gateway
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: threat-intel-api-gateway
+  ports:
+    - name: http
+      port: 8080
+      targetPort: 8080
+    - name: https
+      port: 8443
+      targetPort: 8443

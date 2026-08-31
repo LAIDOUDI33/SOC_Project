@@ -1,0 +1,437 @@
+# =============================================================================
+# CyberSOC Platform - SOAR Configuration & Playbooks
+# Target: Djezzy Telecom Algeria
+# =============================================================================
+
+---
+# Main SOAR Configuration
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: soar-config
+  namespace: cybersoc-soar
+  labels:
+    app.kubernetes.io/part-of: cybersoc-soar
+data:
+  # Kafka Configuration
+  kafka-brokers: "kafka-0.kafka-headless.logging.svc.cluster.local:9094,kafka-1.kafka-headless.logging.svc.cluster.local:9094,kafka-2.kafka-headless.logging.svc.cluster.local:9094"
+  kafka-security-protocol: "SASL_SSL"
+  
+  # Redis Configuration
+  redis-url: "redis-master.cybersoc-cache.svc.cluster.local:6379"
+  
+  # External Integrations
+  jira-url: "https://djezzy.atlassian.net"
+  servicenow-url: "https://djezzy.service-now.com"
+  oauth-provider-url: "https://auth.djezzy.dz/oauth2"
+  
+  # Playbook Settings
+  playbook-default-timeout: "3600"
+  max-nested-playbooks: "5"
+  auto-remediation-enabled: "true"
+  
+  # Incident SLA Targets (Djezzy-specific)
+  sla-critical-response: "15m"   # 15 minutes for critical
+  sla-high-response: "1h"        # 1 hour for high
+  sla-medium-response: "4h"      # 4 hours for medium
+  sla-low-response: "24h"        # 24 hours for low
+  
+  # ANRT Compliance
+  anrt-audit-all-actions: "true"
+  anrt-evidence-preservation: "true"
+
+---
+# Sample Playbooks - Critical Incident Response Automation
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: soar-action-plugins
+  namespace: cybersoc-soar
+  labels:
+    category: playbooks
+data:
+  # ============================================================
+  # PLAYBOOK 1: Malware Containment & Eradication
+  # ============================================================
+  playbook_malware_response.yml: |
+    id: pb-malware-contain-001
+    name: Malware Containment & Eradication Playbook
+    version: 2.0.0
+    author: CyberSOC Team - Djezzy
+    description: Automated response to malware detection including containment, analysis, and eradication
+    
+    trigger:
+      alert_severity: [critical, high]
+      alert_type: [malware, ransomware, trojan]
+      source: siem-sigma-engine
+    
+    steps:
+      - id: step_001
+        name: Initial Triage
+        action: classify_incident
+        params:
+          severity: ${alert.severity}
+          ioc_hash: ${alert.ioc.hash}
+        on_failure: escalate_to_analyst
+      
+      - id: step_002
+        name: Isolate Affected Endpoint
+        action: network_isolate_endpoint
+        params:
+          endpoint_id: ${alert.endpoint.id}
+          isolation_duration: "4h"
+          notify_user: true
+          notify_message: "Device isolated due to security incident. Contact SOC at ext. 5555."
+        approval_required: true
+        approver_role: soc_analyst
+        timeout: 300
+      
+      - id: step_003
+        name: Collect Forensic Artifacts
+        action: collect_artifacts
+        params:
+          endpoint_id: ${alert.endpoint.id}
+          artifacts: [memory_dump, disk_image, process_list, network_connections, registry_snapshot]
+          preserve_chain_of_custody: true
+        parallel: true
+      
+      - id: step_004
+        name: Query Threat Intelligence
+        action: threat_intel_lookup
+        params:
+          iocs: [${alert.ioc.hash}, ${alert.ioc.ip}, ${alert.ioc.domain}]
+          sources: [virustotal, alienvault, mandiant, Recorded Future]
+        parallel: true
+      
+      - id: step_005
+        name: Run YARA Scan
+        action: yara_scan
+        params:
+          ruleset: "latest_malware_rules"
+          target_path: /tmp/artifacts/disk_image.raw
+        depends_on: [step_003]
+      
+      - id: step_006
+        name: Determine Infection Scope
+        action: lateral_movement_analysis
+        params:
+          source_endpoint: ${alert.endpoint.id}
+          time_window: "72h"
+        depends_on: [step_003, step_004]
+      
+      - id: step_007
+        name: Create JIRA Ticket
+        action: jira_create_ticket
+        params:
+          project: SOC
+          issue_type: Incident
+          priority: P1
+          summary: "Malware Incident: ${alert.title}"
+          description: |
+            ## Automated Response Initiated
+            
+            **Alert ID:** ${alert.id}
+            **Severity:** ${alert.severity}
+            **Endpoint:** ${alert.endpoint.name} (${alert.endpoint.ip})
+            
+            ### Actions Taken
+            - [x] Endpoint isolated from network
+            - [x] Forensic artifacts collected
+            - [x] Threat intelligence queried
+            
+            ### Next Steps
+            - [ ] Review forensic analysis results
+            - [ ] Approve eradication actions
+            - [ ] Coordinate with IT for remediation
+            
+            @mention #soc-investigations
+          labels: [malware, automated-response, urgent]
+      
+      - id: step_008
+        name: Notify Stakeholders
+        action: send_notification
+        params:
+          channels: [slack_critical, email_soc_team, pagerduty_oncall]
+          message: |
+            🔴 **MALWARE INCIDENT - AUTOMATED RESPONSE INITIATED**
+            
+            **Incident ID:** ${incident.id}
+            **Severity:** ${alert.severity}
+            **Affected:** ${alert.endpoint.name}
+            
+            **Actions Completed:**
+            ✅ Network isolation applied
+            ✅ Forensics collection started
+            ✅ Threat intel lookup initiated
+            ✅ JIRA ticket created: ${jira.ticket.url}
+            
+            **Required Action:** Analyst review and approve eradication steps.
+          urgency: high
+    
+    rollback:
+      - id: rollback_001
+        name: Restore Network Access (if false positive)
+        action: network_restore_endpoint
+        params:
+          endpoint_id: ${alert.endpoint.id}
+          reason: "False positive confirmed by analyst review"
+
+  # ============================================================
+  # PLAYBOOK 2: Phishing Attack Response
+  # ============================================================
+  playbook_phishing_response.yml: |
+    id: pb-phishing-response-002
+    name: Phishing Attack Detection & Response Playbook
+    version: 2.0.0
+    author: CyberSOC Team - Djezzy
+    description: Automated response to phishing emails including URL analysis, user notification, and IOC extraction
+    
+    trigger:
+      alert_type: [phishing, suspicious_email]
+      source: [email_gateway, user_report, siem]
+    
+    steps:
+      - id: step_001
+        name: Extract IOCs from Email
+        action: extract_email_iocs
+        params:
+          email_id: ${alert.email.message_id}
+          extract_urls: true
+          extract_attachments: true
+          extract_sender_headers: true
+      
+      - id: step_002
+        name: Analyze URLs with Threat Intel
+        action: url_analysis
+        params:
+          urls: ${extracted_iocs.urls}
+          check_phishing_dbs: true
+          check_malware: true
+          screenshot: true
+        parallel: true
+      
+      - id: step_003
+        name: Scan Attachments in Sandbox
+        action: sandbox_analysis
+        params:
+          attachments: ${extracted_iocs.attachments}
+          sandbox_timeout: "10m"
+          detonate_all_files: true
+        parallel: true
+      
+      - id: step_004
+        name: Identify All Recipients
+        action: email_recipient_lookup
+        params:
+          message_id: ${alert.email.message_id}
+          include_cc_bcc: true
+      
+      - id: step_005
+        name: Quarantine Original Email
+        action: email_quarantine
+        params:
+          message_ids: [${alert.email.message_id}]
+          quarantine_reason: "Potential phishing - automated response"
+          move_to_folder: "SOC_Quarantine"
+      
+      - id: step_006
+        name: Delete from Other Mailboxes
+        action: mass_email_delete
+        params:
+          recipients: ${identified_recipients}
+          message_id: ${alert.email.message_id}
+          sender_address: ${alert.email.from_address}
+          approval_required: true
+          approver_role: soc_manager
+      
+      - id: step_007
+        name: Block Sender Domain/IP
+        action: update_security_policies
+        params:
+          block_sender: ${alert.email.from_domain}
+          add_to_spam_filter: true
+          duration: "7d"  # Temporary block pending review
+      
+      - id: step_008
+        name: Notify Affected Users
+        action: send_user_notification
+        params:
+          recipients: ${identified_recipients}
+          template: "phishing_warning"
+          include_reporting_instructions: true
+          language: "fr-DZ"  # Algerian French
+      
+      - id: step_009
+        name: Update Threat Intelligence Feed
+        action: publish_iocs
+        params:
+          iocs: ${all_extracted_iocs}
+          confidence_score: 85
+          source: "phishing_auto_response_${incident.id}"
+          share_with: [internal_threat_feed, anrt_if_applicable]
+
+  # ============================================================
+  # PLAYBOOK 3: Brute Force Attack Mitigation
+  # ============================================================
+  playbook_brute_force_response.yml: |
+    id: pb-bruteforce-mitigate-003
+    name: Brute Force Attack Mitigation Playbook
+    version: 2.0.0
+    author: CyberSOC Team - Djezdy
+    description: Automated mitigation of brute force attacks including account lockout and IP blocking
+    
+    trigger:
+      sigma_rule: rule_brute_force.yml
+      threshold: failed_attempts > 10 within 5m
+    
+    steps:
+      - id: step_001
+        name: Identify Target Account
+        action: lookup_account
+        params:
+          username: ${event.target_user}
+          source_ad: djezzy.dz
+      
+      - id: step_002
+        name: Block Source IP
+        action: firewall_block_ip
+        params:
+          ip_address: ${event.source_ip}
+          duration: "30m"
+          reason: "Brute force attack detected"
+          firewall_rule_name: "auto-block-${timestamp}"
+      
+      - id: step_003
+        name: Lock Target Account (Temporary)
+        action: ad_lock_account
+        params:
+          username: ${event.target_user}
+          lock_duration: "30m"
+          unlock_code: generate_random
+          notify_user: true
+        approval_required: true
+        approver_role: soc_analyst
+      
+      - id: step_004
+        name: Check for Compromised Credentials
+        action: haveibeenpwned_check
+        params:
+          email: "${event.target_user}@djezzy.dz"
+        parallel: true
+      
+      - id: step_005
+        name: Reset Session Tokens
+        action: invalidate_sessions
+        params:
+          username: ${event.target_user}
+          all_sessions: true
+        depends_on: [step_003]
+      
+      - id: step_006
+        name: Force Password Reset
+        action: force_password_change
+        params:
+          username: ${event.target_user}
+          require_mfa_setup: true
+          password_complexity: "high"
+        depends_on: [step_003]
+      
+      - id: step_007
+        name: Escalate if Privileged Account
+        condition: ${account.is_privileged} == true
+        action: escalate_incident
+        params:
+          escalation_level: critical
+          notify: [ciso, security_manager, it_director]
+          reason: "Brute force attack against privileged account detected"
+      
+      - id: step_008
+        name: Log to Audit System
+        action: audit_log
+        params:
+          event_type: "automated_brute_force_response"
+          details: |
+            Blocked IP: ${event.source_ip}
+            Target User: ${event.target_user}
+            Failed Attempts: ${event.failed_count}
+            Actions Taken: [ip_blocked, account_locked, sessions_invalidated]
+
+  # ============================================================
+  # PLAYBOOK 4: Data Exfiltration Response
+  # ============================================================
+  playbook_data_exfil_response.yml: |
+    id: pb-data-exfil-response-004
+    name: Data Exfiltration Detection & Response Playbook
+    version: 2.0.0
+    author: CyberSOC Team - Djezzy
+    description: Automated response to potential data exfiltration including traffic blocking and investigation initiation
+    
+    trigger:
+      sigma_rule: rule_data_exfiltration.yml
+      threshold: data_transfer > 100MB to external destination
+    
+    steps:
+      - id: step_001
+        name: Block Destination IP/Country
+        action: firewall_block
+        params:
+          destination_ip: ${event.destination_ip}
+          destination_country: ${event.destination_geo.country}
+          block_egress: true
+          duration: "24h"
+          reason: "Potential data exfiltration detected"
+      
+      - id: step_002
+        name: Quarantine Source User Account
+        action: ad_quarantine_user
+        params:
+          username: ${event.source_user}
+          revoke_external_access: true
+          preserve_mailbox: true
+        approval_required: true
+        approver_role: soc_manager
+      
+      - id: step_003
+        name: Preserve Network Flow Logs
+        action: export_pcap
+        params:
+          time_range: "1h_before_to_now"
+          filter: "ip.src == ${event.source_ip} && ip.dst == ${event.destination_ip}"
+          output_format: pcapng
+          storage_location: "/evidence/incidents/${incident.id}/network.pcap"
+      
+      - id: step_004
+        name: Identify Exfiltrated Data Type
+        action: dpi_classification
+        params:
+          flow_id: ${event.flow_id}
+          classify_content: true
+          detect_pii: true
+          detect_financial_data: true
+          detect_ip: true
+      
+      - id: step_005
+        name: Notify DPO (Data Protection Officer)
+        condition: ${classification.contains_pii} == true || ${classification.contains_financial} == true
+        action: notify_dpo
+        params:
+          incident_summary: "Potential data breach involving ${classification.data_types}"
+          regulatory_notification_required: true  # GDPR/ANRT
+          timeline: "72h"
+      
+      - id: step_006
+        name: Legal Hold Notification
+        action: initiate_legal_hold
+        params:
+          custodian: ${event.source_user}
+          data_sources: [mailbox, file_shares, cloud_storage, endpoint]
+          hold_reason: "Potential data exfiltration investigation"
+          preserve_period: "7_years"
+      
+      - id: step_007
+        name: Executive Briefing Preparation
+        action: generate_executive_summary
+        params:
+          format: pdf
+          audience: c_level
+          sections: [executive_summary, timeline, impact_assessment, recommendations]

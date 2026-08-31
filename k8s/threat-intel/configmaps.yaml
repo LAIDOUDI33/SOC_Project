@@ -1,0 +1,219 @@
+# =============================================================================
+# CyberSOC Platform - Threat Intelligence Configuration
+# Target: Djezzy Telecom Algeria
+# =============================================================================
+
+---
+# Main Threat Intelligence Configuration
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: threat-intel-config
+  namespace: cybersoc-threat-intel
+  labels:
+    app.kubernetes.io/part-of: cybersoc-threat-intel
+data:
+  # Kafka Configuration
+  kafka-brokers: "kafka-0.kafka-headless.logging.svc.cluster.local:9094,kafka-1.kafka-headless.logging.svc.cluster.local:9094,kafka-2.kafka-headless.logging.svc.cluster.local:9094"
+  
+  # Redis Configuration
+  redis-url: "redis-master.cybersoc-cache.svc.cluster.local:6379"
+  
+  # Elasticsearch for IOC Storage & Hunting
+  elasticsearch-url: "https://elasticsearch-siem-coordinating.cybersoc-siem.svc.cluster.local:9200"
+  
+  # Feed Sources (TAXII 2.0 endpoints)
+  feed-sources: |
+    {
+      "feeds": [
+        {
+          "name": "CISA Known Exploited Vulnerabilities",
+          "url": "https://www.cisa.gov/taxii",
+          "collection": "known-exploited-vulnerabilities",
+          "username": "${CISA_USER}",
+          "password": "${CISA_PASS}",
+          "poll_interval_minutes": 60,
+          "enabled": true,
+          "priority": "critical"
+        },
+        {
+          "name": "AlienVault OTX",
+          "url": "https://otx.alienvault.com/taxii",
+          "collection": "Pulses",
+          "api_key": "${OTX_API_KEY}",
+          "poll_interval_minutes": 30,
+          "enabled": true,
+          "priority": "high"
+        },
+        {
+          "name": "Anomali ThreatStream",
+          "url": "https://threatstream-api.anomali.com/taxii",
+          "collection": "anomali-intel",
+          "api_key": "${ANOMALI_KEY}",
+          "poll_interval_minutes": 15,
+          "enabled": true,
+          "priority": "high"
+        },
+        {
+          "name": "Recorded Future",
+          "url": "https://api.recordedfuture.com/taxii",
+          "collection": "rf-intel",
+          "api_key": "${RF_TOKEN}",
+          "poll_interval_minutes": 30,
+          "enabled": true,
+          "priority": "high"
+        },
+        {
+          "name": "Mandiant Advantage",
+          "url": "https://advantage.mandiant.com/taxii",
+          "collection": "mandiant-threat-intel",
+          "api_key": "${MANDIANT_KEY}",
+          "poll_interval_minutes": 60,
+          "enabled": true,
+          "priority": "high"
+        },
+        {
+          "name": "FIRST.org (Africa Region)",
+          "url": "https://taxii.first.org/taxii",
+          "collection": "africa-events",
+          "username": "${FIRST_USER}",
+          "password": "${FIRST_PASS}",
+          "poll_interval_minutes": 120,
+          "enabled": true,
+          "priority": "medium"
+        },
+        {
+          "name": "ANRT National CSIRT",
+          "url": "https://taxii.anrt.dz/taxii",
+          "collection": "algeria-national-threats",
+          "certificate_path": "/etc/ssl/certs/anrt-cert.pem",
+          "poll_interval_minutes": 30,
+          "enabled": true,
+          "priority": "critical",
+          "local_only": true
+        }
+      ]
+    }
+  
+  # IOC Categories & TLP Levels
+  ioc-categories: "ipv4,ipv6,domain,url,file_hash-md5,file_hash-sha1,file_hash-sha256,email,mutex,registry_key,cve"
+  tlp-levels: "tlp:white,tlp:green,tlp:amber,tlp:red"
+  
+  # Threat Hunting Queries (Pre-built)
+  hunting-queries: |
+    {
+      "queries": [
+        {
+          "id": "hunt-001",
+          "name": "Lateral Movement Detection",
+          "description": "Detect potential lateral movement using SMB, RDP, or WinRM",
+          "query": "event_type:(authentication OR network) AND destination_port:(445 OR 3389 OR 5985) AND NOT source_ip:(10.0.0.0/8 OR 172.16.0.0/12 OR 192.168.0.0/16)",
+          "severity": "high",
+          "mitre_techniques": ["T1021", "T1021.001", "T1021.002", "T1021.003"]
+        },
+        {
+          "id": "hunt-002", 
+          "name": "Data Exfiltration Patterns",
+          "description": "Identify large data transfers to external destinations",
+          "query": "network.bytes_out:>104857600 AND NOT destination_ip:(10.0.0.0/8 OR 172.16.0.0/12 OR 192.168.0.0/16)",
+          "severity": "critical",
+          "mitre_techniques": ["T1048", "T1048.001", "T1048.002", "T1048.003"]
+        },
+        {
+          "id": "hunt-003",
+          "name": "Credential Dumping Indicators",
+          "description": "Detect tools and behaviors associated with credential theft",
+          "query": "process_name:(mimikatz.exe OR procdump.exe OR ntdsutil.exe OR vssadmin.exe) OR command_line:(\"sekurlsa\" OR \"ntds.dit\" OR \"vshadow\")",
+          "severity": "critical",
+          "mitre_techniques": ["T1003", "T1003.001", "T1003.002", "T1003.003"]
+        },
+        {
+          "id": "hunt-004",
+          "name": "Persistence Mechanisms",
+          "description": "Detect common persistence techniques",
+          "query": "(registry_key_path:(\"Run\\\\\" OR \"RunOnce\\\\\") AND event_type:registry_change) OR process_name:(schtasks.exe OR sc.exe OR reg.exe)",
+          "severity": "high",
+          "mitre_techniques": ["T1547", "T1547.001", "T1053"]
+        },
+        {
+          "id": "hunt-005",
+          "name": "Telecom-Specific: SS7/SIGTRAN Anomalies",
+          "description": "Detect suspicious SS7 signaling patterns (Djezzy-specific)",
+          "query": "protocol:ss7 AND (message_type:(sendAuthenticationInfo OR provideSubscriberInfo) AND NOT source_node:(trusted_msc_list))",
+          "severity": "critical",
+          "telecom_specific": true,
+          "anrt_relevant": true
+        }
+      ]
+    }
+
+---
+# Pre-built YARA Rules for Malware Detection
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: yara-rules-bundle
+  namespace: cybersoc-threat-intel
+  labels:
+    category: threat-detection
+data:
+  # Generic Ransomware Detection Rule
+  rule_ransomware_generic.yar: |
+    rule Ransomware_Generic_Gen1 : Crypto Ransomware {
+      meta:
+        description = "Generic ransomware behavior detection"
+        author = "CyberSOC Team - Djezzy"
+        date = "2024-01-15"
+        hash = "generic"
+        severity = "critical"
+      strings:
+        $s1 = "encrypt" nocase wide ascii
+        $s2 = ".encrypted" nocase ascii
+        $s3 = "bitcoin" nocase ascii
+        $s4 = "pay" nocase wide ascii
+        $s5 = "decrypt" nocase wide ascii
+        $s6 = "README" nocase ascii
+      condition:
+        4 of them and filesize < 500KB
+    }
+    
+  # Banking Trojan Detection (Relevant for Algeria)
+  rule_banking_trojan.yar: |
+    rule Banking_Trojan_Alert1 : Trojan Banker {
+      meta:
+        description = "Banking trojan targeting Algerian banks"
+        author = "CyberSOC Team - Djezzy"
+        severity = "high"
+        target_region: ["DZ", "MA", "TN"]  # North Africa focus
+      strings:
+        $b1 = "/login" nocase ascii
+        $b2 = "password" nocase ascii
+        $b3 = "bank" nocase ascii
+        $b4 = "djezzy" nocase ascii
+        $b5 = "bna" nocase ascii  # Banque Nationale d'Algérie
+        $b6 = "cpa" nocase ascii   # Crédit Populaire d'Algérie
+        $b7 = "bea" nocase ascii   # Banque Extérieure d'Algérie
+        $c1 = "POST" nocase ascii
+        $c2 = "form" nocase ascii
+      condition:
+        ($b1 and $b2 and ($b3 or $b4 or $b5 or $b6 or $b7)) and ($c1 or $c2)
+    }
+    
+  # Cryptominer Detection
+  rule_cryptominer.yar: |
+    rule CryptoMiner_Detection1 : CoinMiner {
+      meta:
+        description = "Cryptocurrency mining malware detection"
+        author = "CyberSOC Team"
+        severity = "medium"
+      strings:
+        $m1 = "stratum+tcp" nocase ascii
+        $m2 = "xmrig" nocase ascii
+        $m3 = "minerd" nocase ascii
+        $m4 = "pool." nocase ascii
+        $m5 = "wallet" nocase ascii
+        $m6 = "monero" nocase ascii
+        $m7 = "bitcoin" nocase ascii
+      condition:
+        3 of them
+    }

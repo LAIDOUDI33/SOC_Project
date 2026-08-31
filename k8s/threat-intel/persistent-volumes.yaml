@@ -1,0 +1,108 @@
+# =============================================================================
+# CyberSOC Platform - Threat Intelligence Persistent Volume Claims
+# Target: Djezzy Telecom Algeria
+# Total Storage: ~660 GiB
+# =============================================================================
+
+---
+# TAXII Client Feed State (Tracking last poll, etc.)
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: taxii-client-state-pvc
+  namespace: cybersoc-threat-intel
+  labels:
+    app.kubernetes.io/component: taxii-client
+    storage-class: premium-ssd
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: premium-ssd
+  resources:
+    requests:
+      storage: 10Gi
+
+---
+# IOC Database Storage (Main IOC repository)
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: ioc-storage-pvc
+  namespace: cybersoc-threat-intel
+  labels:
+    app.kubernetes.io/component: ioc-manager
+    storage-class: premium-ssd
+spec:
+  accessModes:
+    - ReadWriteMany  # Multiple IOC manager replicas need access
+  storageClassName: premium-ssd
+  resources:
+    requests:
+      storage: 200Gi
+
+---
+# Threat Hunting Results & Saved Hunts
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: threat-hunting-results-pvc
+  namespace: cybersoc-threat-intel
+  labels:
+    app.kubernetes.io/component: threat-hunting
+    storage-class: premium-ssd
+spec:
+  accessModes:
+    - ReadWriteMany
+  storageClassName: premium-ssd
+  resources:
+    requests:
+      storage: 100Gi
+
+---
+# YARA Rules & Signatures Repository
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: yara-rules-pvc
+  namespace: cybersoc-threat-intel
+  labels:
+    app.kubernetes.io/component: stix-processor
+    storage-class: premium-ssd
+spec:
+  accessModes:
+    - ReadWriteMany
+  storageClassName: premium-ssd
+  resources:
+    requests:
+      storage: 50Gi
+
+---
+# Threat Intel Backups
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: threat-intel-backup-pvc
+  namespace: cybersoc-threat-intel
+  labels:
+    app.kubernetes.io/component: backup
+    storage-class: standard-hdd
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: standard-hdd
+  resources:
+    requests:
+      storage: 300Gi
+
+---
+# Summary of Threat Intelligence Storage Allocation
+# ==================================================
+# Component              | Size     | StorageClass   | Purpose
+# -----------------------|----------|----------------|--------
+# TAXII Client State     | 10 GiB   | Premium SSD    | Feed polling state
+# IOC Database           | 200 GiB  | Premium SSD    | IOCs, indicators
+# Hunting Results        | 100 GiB  | Premium SSD    | Hunt results, queries
+# YARA Rules             | 50 GiB   | Premium SSD    | Malware signatures
+# Backups                | 300 GiB  | Standard HDD   | IOC backups
+# -------------------------------------------
+# TOTAL                  | ~660 GiB               |

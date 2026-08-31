@@ -1,0 +1,127 @@
+# =============================================================================
+# CyberSOC Platform - SOAR Services
+# Target: Djezzy Telecom Algeria
+# =============================================================================
+
+---
+# Playbook Engine Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: playbook-engine-svc
+  namespace: cybersoc-soar
+  labels:
+    app.kubernetes.io/name: playbook-engine
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: playbook-engine
+  ports:
+    - name: http
+      port: 8080
+      targetPort: 8080
+    - name: grpc
+      port: 50070
+      targetPort: 50070
+    - name: metrics
+      port: 9090
+      targetPort: 9090
+    - name: websocket
+      port: 8081
+      targetPort: 8081
+
+---
+# Incident Manager Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: incident-manager-svc
+  namespace: cybersoc-soar
+  labels:
+    app.kubernetes.io/name: incident-manager
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: incident-manager
+  ports:
+    - name: http
+      port: 8090
+      targetPort: 8090
+    - name: grpc
+      port: 50071
+      targetPort: 50071
+
+---
+# Case Manager Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: case-manager-svc
+  namespace: cybersoc-soar
+  labels:
+    app.kubernetes.io/name: case-manager
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: case-manager
+  ports:
+    - name: http
+      port: 8091
+      targetPort: 8091
+    - name: grpc
+      port: 50072
+      targetPort: 50072
+
+---
+# SOAR API Gateway Service (External)
+apiVersion: v1
+kind: Service
+metadata:
+  name: soar-api-gateway
+  namespace: cybersoc-soar
+  labels:
+    app.kubernetes.io/name: soar-api-gateway
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: soar-api-gateway
+  ports:
+    - name: http
+      port: 8080
+      targetPort: 8080
+    - name: https
+      port: 8443
+      targetPort: 8443
+
+---
+# SOAR Web UI Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: soar-web-ui-svc
+  namespace: cybersoc-soar
+  labels:
+    app.kubernetes.io/name: soar-web-ui
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: soar-web-ui
+  ports:
+    - name: http
+      port: 3000
+      targetPort: 3000
+
+---
+# SOAR Headless Service (DNS for internal communication)
+apiVersion: v1
+kind: Service
+metadata:
+  name: soar-headless
+  namespace: cybersoc-soar
+  labels:
+    app.kubernetes.io/part-of: cybersoc-soar
+spec:
+  type: ClusterIP
+  clusterIP: None
+  selector:
+    app.kubernetes.io/part-of: cybersoc-soar

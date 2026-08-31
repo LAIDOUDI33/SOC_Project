@@ -1,0 +1,155 @@
+# =============================================================================
+# CyberSOC Platform - SIEM Persistent Volume Claims
+# Target: Djezzy Telecom Algeria
+# Total Storage: ~8.2 TiB (Hot/Warm/Cold tiers + State + Rules)
+# =============================================================================
+
+---
+# Elasticsearch Hot Data (Real-time indexing) - 3 nodes x 500Gi = 1.5TiB
+# Already defined in elasticsearch-cluster.yaml as volumeClaimTemplates
+
+---
+# Elasticsearch Warm Data (Historical queries) - 2 nodes x 1TiB = 2TiB
+# Already defined in elasticsearch-cluster.yaml
+
+---
+# Elasticsearch Cold Data (Archive) - 1 node x 5TiB = 5TiB
+# Already defined in elasticsearch-cluster.yaml
+
+---
+# Elasticsearch Master Nodes - 3 nodes x 100Gi = 300Gi
+# Already defined in elasticsearch-cluster.yaml
+
+---
+# Custom Sigma Rules Storage (User-defined rules)
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: siem-custom-rules-pvc
+  namespace: cybersoc-siem
+  labels:
+    app.kubernetes.io/component: sigma-engine
+    storage-class: premium-ssd
+spec:
+  accessModes:
+    - ReadWriteMany  # Multiple sigma pods need access
+  storageClassName: premium-ssd
+  resources:
+    requests:
+      storage: 50Gi
+
+---
+# Sigma Engine Rule State (Correlation state, tracking)
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: siem-rule-state-pvc
+  namespace: cybersoc-siem
+  labels:
+    app.kubernetes.io/component: sigma-engine
+    storage-class: premium-ssd
+spec:
+  accessModes:
+    - ReadWriteMany  # Shared state across replicas
+  storageClassName: premium-ssd
+  resources:
+    requests:
+      storage: 100Gi
+
+---
+# Logstash Dead Letter Queue (Failed events)
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: siem-dlq-pvc
+  namespace: cybersoc-siem
+  labels:
+    app.kubernetes.io/component: logstash
+    storage-class: standard-hdd
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: standard-hdd
+  resources:
+    requests:
+      storage: 500Gi
+
+---
+# Alertmanager Storage (Alert history, silences)
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: alertmanager-storage-pvc
+  namespace: cybersoc-siem
+  labels:
+    app.kubernetes.io/component: alertmanager
+    storage-class: premium-ssd
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: premium-ssd
+  resources:
+    requests:
+      storage: 20Gi
+
+---
+# Kibana Saved Objects, Dashboards, Visualizations
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: kibana-data-pvc
+  namespace: cybersoc-siem
+  labels:
+    app.kubernetes.io/component: kibana
+    storage-class: premium-ssd
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: premium-ssd
+  resources:
+    requests:
+      storage: 50Gi
+
+---
+# Filebeat Registry State (Tracking processed files)
+# Using hostPath in DaemonSet definition
+
+---
+# GeoIP Database Cache (IP geolocation data)
+# Using emptyDir or initContainer download
+
+---
+# SIEM Backup Storage (Configuration backups)
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: siem-backup-pvc
+  namespace: cybersoc-siem
+  labels:
+    app.kubernetes.io/component: backup
+    storage-class: standard-hdd
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: standard-hdd
+  resources:
+    requests:
+      storage: 1Ti
+
+---
+# Summary of SIEM Storage Allocation
+# ==================================
+# Component              | Size     | StorageClass   | Tier
+# -----------------------|----------|----------------|------
+# ES Master (x3)        | 300 GiB  | Premium SSD    | Management
+# ES Hot Data (x3)      | 1.5 TiB  | Premium NVMe   | Hot (7 days)
+# ES Warm Data (x2)     | 2 TiB    | Premium SSD    | Warm (30 days)
+# ES Cold Data (x1)     | 5 TiB    | Standard HDD   | Cold (3 years)
+# Custom Sigma Rules    | 50 GiB   | Premium SSD    | Rules
+# Sigma Rule State      | 100 GiB  | Premium SSD    | State
+# Logstash DLQ          | 500 GiB  | Standard HDD   | Error Handling
+# Alertmanager          | 20 GiB   | Premium SSD    | Alerting
+# Kibana Data           | 50 GiB   | Premium SSD    | Visualization
+# SIEM Backups          | 1 TiB    | Standard HDD   | Backup
+# -------------------------------------------
+# TOTAL                 | ~10.6 TiB               |

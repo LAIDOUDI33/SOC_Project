@@ -1,0 +1,101 @@
+# =============================================================================
+# CyberSOC Platform - SIEM Phase Namespace & Resource Configuration
+# Target: Djezzy Telecom Algeria - ANRT Compliant
+# Namespace: cybersoc-siem
+# =============================================================================
+
+---
+# SIEM Namespace with Production Labels
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: cybersoc-siem
+  labels:
+    app.kubernetes.io/name: cybersoc-platform
+    app.kubernetes.io/component: siem
+    app.kubernetes.io/part-of: security-operations
+    cybersoc.djezzy.dz/environment: production
+    cybersoc.djezzy.dz/department: soc
+    cybersoc.djezzy.dz/compliance: anrt
+    name: cybersoc-siem
+  annotations:
+    description: "CyberSOC Security Information and Event Management"
+    contact: "soc-ops@djezzy.dz"
+
+---
+# Resource Quota - SIEM Workloads (High Memory for Log Processing)
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: siem-resource-quota
+  namespace: cybersoc-siem
+spec:
+  hard:
+    # Compute Resources
+    requests.cpu: "64"
+    requests.memory: "128Gi"
+    limits.cpu: "128"
+    limits.memory: "256Gi"
+    
+    # Object Counts
+    pods: "100"
+    services: "30"
+    secrets: "50"
+    configmaps: "50"
+    persistentvolumeclaims: "20"
+    
+    # Special Resources
+    requests.nvidia.com/gpu: "0"  # No GPU needed for SIEM
+
+---
+# Limit Range - Default Container Constraints
+apiVersion: v1
+kind: LimitRange
+metadata:
+  name: siem-limit-range
+  namespace: cybersoc-siem
+spec:
+  limits:
+    # Default Container Limits
+    - type: Container
+      default:
+        cpu: "4"
+        memory: "8Gi"
+      defaultRequest:
+        cpu: "500m"
+        memory: "2Gi"
+      max:
+        cpu: "32"
+        memory: "64Gi"
+      min:
+        cpu: "100m"
+        memory: "128Mi"
+    
+    # Persistent Volume Claims
+    - type: PersistentVolumeClaim
+      max:
+        storage: "2Ti"
+      min:
+        storage: "1Gi"
+
+---
+# Pod Priority Class for Critical SIEM Components
+apiVersion: scheduling.k8s.io/v1
+kind: PriorityClass
+metadata:
+  name: siem-critical
+  namespace: cybersoc-siem
+value: 1000000
+globalDefault: false
+description: "Critical priority for SIEM correlation and alerting components"
+
+---
+# Pod Priority Class for Normal SIEM Components
+apiVersion: scheduling.k8s.io/v1
+kind: PriorityClass
+metadata:
+  name: siem-normal
+  namespace: cybersoc-siem
+value: 100000
+globalDefault: true
+description: "Normal priority for SIEM collection and indexing components"

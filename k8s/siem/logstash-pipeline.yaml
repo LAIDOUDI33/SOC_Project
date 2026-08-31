@@ -1,0 +1,412 @@
+# =============================================================================
+# CyberSOC Platform - Logstash Pipeline & Log Processing
+# Target: Djezzy Telecom Algeria
+# Purpose: Centralized log ingestion, parsing, enrichment, and forwarding
+# =============================================================================
+
+---
+# Logstash Deployment - Main Processing Engine
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: logstash-siem
+  namespace: cybersoc-siem
+  labels:
+    app.kubernetes.io/name: logstash
+    app.kubernetes.io/component: log-processing
+    app.kubernetes.io/part-of: cybersoc-siem
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: logstash
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: logstash
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "9600"
+    spec:
+      serviceAccountName: siem-sa
+      securityContext:
+        runAsUser: 1000
+        fsGroup: 1000
+      initContainers:
+        # Pipeline configuration validator
+        - name: pipeline-validator
+          image: docker.elastic.co/logstash/logstash:8.11.0
+          command: ['bin/logstash', '--config.test_and_exit', '-f', '/usr/share/logstash/pipeline']
+          volumeMounts:
+            - name: pipeline-config
+              mountPath: /usr/share/logstash/pipeline
+            - name: patterns-config
+              mountPath: /usr/share/logstash/patterns
+      containers:
+        - name: logstash
+          image: docker.elastic.co/logstash/logstash:8.11.0
+          ports:
+            - name: beats
+              containerPort: 5044
+            - name: http
+              containerPort: 8080
+            - name: metrics
+              containerPort: 9600
+          env:
+            - name: LS_JAVA_OPTS
+              value: "-Xms4g -Xmx4g"
+            - name: XPACK_MONITORING_ENABLED
+              value: "false"  # Use external Prometheus
+            - name: XPACK_MANAGEMENT_ENABLED
+              value: "false"
+            - name: ELASTICSEARCH_HOSTS
+              value: "https://elasticsearch-siem-hot.cybersoc-siem.svc.cluster.local:9200"
+            - name: ELASTICSEARCH_USER
+              value: "logstash_writer"
+            - name: ELASTICSEARCH_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: siem-secrets
+                  key: logstash-password
+            - name: KAFKA_BROKERS
+              valueFrom:
+                configMapKeyRef:
+                  name: siem-config
+                  key: kafka-brokers
+          resources:
+            requests:
+              cpu: "4"
+              memory: "8Gi"
+            limits:
+              cpu: "8"
+              memory: "16Gi"
+          volumeMounts:
+            - name: pipeline-config
+              mountPath: /usr/share/logstash/pipeline
+              readOnly: true
+            - name: patterns-config
+              mountPath: /usr/share/logstash/patterns
+              readOnly: true
+            - name: dead-letter-queue
+              mountPath: /usr/share/logstash/dead_letter_queue
+            - name: geoip-db
+              mountPath: /usr/share/logstash/geoip
+              readOnly: true
+          livenessProbe:
+            tcpSocket:
+              port: 9600
+            initialDelaySeconds: 60
+            periodSeconds: 20
+          readinessProbe:
+            httpGet:
+              path: /
+              port: 9600
+            initialDelaySeconds: 30
+            periodSeconds: 10
+      volumes:
+        - name: pipeline-config
+          configMap:
+            name: logstash-pipeline-config
+        - name: patterns-config
+          configMap:
+            name: logstash-patterns-config
+        - name: geoip-db
+          emptyDir: {}
+        - name: dead-letter-queue
+          persistentVolumeClaim:
+            claimName: siem-dlq-pvc
+
+---
+# Filebeat DaemonSet - Node-level Log Collection
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: filebeat-siem
+  namespace: cybersoc-siem
+  labels:
+    app.kubernetes.io/name: filebeat
+    app.kubernetes.io/component: log-collector
+    app.kubernetes.io/part-of: cybersoc-siem
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: filebeat
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: filebeat
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "5066"
+    spec:
+      serviceAccountName: siem-sa
+      terminationGracePeriodSeconds: 30
+      containers:
+        - name: filebeat
+          image: docker.elastic.co/beats/filebeat:8.11.0
+          args: ["-c", "/etc/filebeat.yml", "-e"]
+          ports:
+            - name: http
+              containerPort: 5066
+          env:
+            - name: NODE_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+            - name: ELASTICSEARCH_HOST
+              value: "https://elasticsearch-siem-hot.cybersoc-siem.svc.cluster.local:9200"
+            - name: ELASTICSEARCH_USERNAME
+              value: "filebeat_writer"
+            - name: ELASTICSEARCH_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: siem-secrets
+                  key: filebeat-password
+            - name: KAFKA_BROKERS
+              valueFrom:
+                configMapKeyRef:
+                  name: siem-config
+                  key: kafka-brokers
+          resources:
+            requests:
+              cpu: "200m"
+              memory: "512Mi"
+            limits:
+              cpu: "500m"
+              memory: "1Gi"
+          volumeMounts:
+            - name: config
+              mountPath: /etc/filebeat.yml
+              subPath: filebeat.yml
+            - name: varlibdockercontainers
+              mountPath: /var/lib/docker/containers
+              readOnly: true
+            - name: varlog
+              mountPath: /var/log
+              readOnly: true
+            - name: data
+              mountPath: /usr/share/filebeat/data
+          securityContext:
+            privileged: true
+            runAsUser: 0
+      volumes:
+        - name: config
+          configMap:
+            name: filebeat-config
+        - name: varlibdockercontainers
+          hostPath:
+            path: /var/lib/docker/containers
+        - name: varlog
+          hostPath:
+            path: /var/log
+        - name: data
+          hostPath:
+            path: /var/lib/filebeat-data
+            type: DirectoryOrCreate
+
+---
+# Metricbeat DaemonSet - Infrastructure Metrics Collection
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: metricbeat-siem
+  namespace: cybersoc-siem
+  labels:
+    app.kubernetes.io/name: metricbeat
+    app.kubernetes.io/component: metrics-collector
+    app.kubernetes.io/part-of: cybersoc-siem
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: metricbeat
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: metricbeat
+    spec:
+      serviceAccountName: siem-sa
+      containers:
+        - name: metricbeat
+          image: docker.elastic.co/beats/metricbeat:8.11.0
+          args: ["-c", "/etc/metricbeat.yml", "-system.hostfs=/hostfs"]
+          ports:
+            - name: http
+              containerPort: 5066
+          env:
+            - name: ELASTICSEARCH_HOST
+              value: "https://elasticsearch-siem-hot.cybersoc-siem.svc.cluster.local:9200"
+            - name: ELASTICSEARCH_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: siem-secrets
+                  key: metricbeat-password
+          resources:
+            requests:
+              cpu: "200m"
+              memory: "256Mi"
+            limits:
+              cpu: "500m"
+              memory: "512Mi"
+          volumeMounts:
+            - name: config
+              mountPath: /etc/metricbeat.yml
+              subPath: metricbeat.yml
+            - name: hostfs
+              mountPath: /hostfs
+              readOnly: true
+            - name: proc
+              mountPath: /hostfs/proc
+              readOnly: true
+            - name: cgroup
+              mountPath: /hostfs/sys/fs/cgroup
+              readOnly: true
+            - name: data
+              mountPath: /usr/share/metricbeat/data
+          securityContext:
+            runAsUser: 0
+            privileged: true
+      volumes:
+        - name: config
+          configMap:
+            name: metricbeat-config
+        - name: hostfs
+          hostPath:
+            path: /
+        - name: proc
+          hostPath:
+            path: /proc
+        - name: cgroup
+          hostPath:
+            path: /sys/fs/cgroup
+        - name: data
+          hostPath:
+            path: /var/lib/metricbeat-data
+            type: DirectoryOrCreate
+
+---
+# Packetbeat DaemonSet - Network Traffic Analysis (Telecom-specific)
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: packetbeat-siem
+  namespace: cybersoc-siem
+  labels:
+    app.kubernetes.io/name: packetbeat
+    app.kubernetes.io/component: network-analyzer
+    app.kubernetes.io/part-of: cybersoc-siem
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: packetbeat
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: packetbeat
+    spec:
+      serviceAccountName: siem-sa
+      hostNetwork: true  # Required for network capture
+      dnsPolicy: ClusterFirstWithHostNet
+      containers:
+        - name: packetbeat
+          image: docker.elastic.co/beats/packetbeat:8.11.0
+          args: ["-c", "/etc/packetbeat.yml", "-e"]
+          env:
+            - name: ELASTICSEARCH_HOST
+              value: "https://elasticsearch-siem-hot.cybersoc-siem.svc.cluster.local:9200"
+            - name: ELASTICSEARCH_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: siem-secrets
+                  key: packetbeat-password
+            # Telecom protocols to monitor
+            - name: PACKETBEAT_PROTOCOLS
+              value: "dns,http,tls,ss7,diameter,sip,gtp,smpp"
+          resources:
+            requests:
+              cpu: "500m"
+              memory: "1Gi"
+            limits:
+              cpu: "2"
+              memory: "2Gi"
+          volumeMounts:
+            - name: config
+              mountPath: /etc/packetbeat.yml
+              subPath: packetbeat.yml
+            - name: data
+              mountPath: /usr/share/packetbeat/data
+          securityContext:
+            capabilities:
+              add:
+                - NET_ADMIN
+                - NET_RAW
+            privileged: true
+            runAsUser: 0
+      volumes:
+        - name: config
+          configMap:
+            name: packetbeat-config
+        - name: data
+          hostPath:
+            path: /var/lib/packetbeat-data
+            type: DirectoryOrCreate
+      nodeSelector:
+        network-monitoring: "true"
+
+---
+# Splunk Universal Forwarder - Enterprise Integration
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: splunk-forwarder-siem
+  namespace: cybersoc-siem
+  labels:
+    app.kubernetes.io/name: splunk-forwarder
+    app.kubernetes.io/component: splunk-integration
+    app.kubernetes.io/part-of: cybersoc-siem
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: splunk-forwarder
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: splunk-forwarder
+    spec:
+      serviceAccountName: siem-sa
+      containers:
+        - name: splunk-forwarder
+          image: splunk/universalforwarder:9.1.2
+          env:
+            - name: SPLUNK_FORWARD_SERVER
+              valueFrom:
+                configMapKeyRef:
+                  name: siem-config
+                  key: splunk-hec-url
+            - name: SPLUNK_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: siem-secrets
+                  key: splunk-hec-token
+            - name: SPLUNK_DEFAULT_INDEX
+              value: "cybersoc_main"
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "256Mi"
+            limits:
+              cpu: "300m"
+              memory: "512Mi"
+          volumeMounts:
+            - name: logs
+              mountPath: /var/log/containers
+              readOnly: true
+            - name: splunk-config
+              mountPath: /opt/splunkforwarder/etc/system/local
+              readOnly: true
+      volumes:
+        - name: logs
+          hostPath:
+            path: /var/log/containers
+        - name: splunk-config
+          configMap:
+            name: splunk-forwarder-config

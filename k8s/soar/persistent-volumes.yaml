@@ -1,0 +1,108 @@
+# =============================================================================
+# CyberSOC Platform - SOAR Persistent Volume Claims
+# Target: Djezzy Telecom Algeria
+# Total Storage: ~260 GiB
+# =============================================================================
+
+---
+# Playbooks Storage (User-defined and system playbooks)
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: soar-playbooks-pvc
+  namespace: cybersoc-soar
+  labels:
+    app.kubernetes.io/component: playbook-engine
+    storage-class: premium-ssd
+spec:
+  accessModes:
+    - ReadWriteMany  # Multiple engine replicas need access
+  storageClassName: premium-ssd
+  resources:
+    requests:
+      storage: 50Gi
+
+---
+# Playbook Execution State (Running playbook state, checkpoints)
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: soar-playbook-state-pvc
+  namespace: cybersoc-soar
+  labels:
+    app.kubernetes.io/component: playbook-engine
+    storage-class: premium-ssd
+spec:
+  accessModes:
+    - ReadWriteMany  # Shared state for HA
+  storageClassName: premium-ssd
+  resources:
+    requests:
+      storage: 100Gi
+
+---
+# Evidence Storage (Forensic artifacts, PCAPs, logs)
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: soar-evidence-pvc
+  namespace: cybersoc-soar
+  labels:
+    app.kubernetes.io/component: case-manager
+    storage-class: premium-ssd
+spec:
+  accessModes:
+    - ReadWriteMany  # Multiple case managers need access
+  storageClassName: premium-ssd
+  resources:
+    requests:
+      storage: 500Gi
+
+---
+# Case Attachments & Reports
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: soar-case-data-pvc
+  namespace: cybersoc-soar
+  labels:
+    app.kubernetes.io/component: case-manager
+    storage-class: premium-ssd
+spec:
+  accessModes:
+    - ReadWriteMany
+  storageClassName: premium-ssd
+  resources:
+    requests:
+      storage: 100Gi
+
+---
+# SOAR Backup Storage
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: soar-backup-pvc
+  namespace: cybersoc-soar
+  labels:
+    app.kubernetes.io/component: backup
+    storage-class: standard-hdd
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: standard-hdd
+  resources:
+    requests:
+      storage: 1Ti
+
+---
+# Summary of SOAR Storage Allocation
+# ==================================
+# Component              | Size     | StorageClass   | Purpose
+# -----------------------|----------|----------------|--------
+# Playbooks              | 50 GiB   | Premium SSD    | Playbook definitions
+# Playbook State         | 100 GiB  | Premium SSD    | Execution state/checkpoints
+# Evidence Storage       | 500 GiB  | Premium SSD    | Forensic artifacts, PCAPs
+# Case Data/Attachments  | 100 GiB  | Premium SSD    | Reports, attachments
+# Backups                | 1 TiB    | Standard HDD   | Configuration backups
+# -------------------------------------------
+# TOTAL                  | ~1.75 TiB               |

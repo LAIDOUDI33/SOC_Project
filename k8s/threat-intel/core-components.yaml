@@ -1,0 +1,416 @@
+# =============================================================================
+# CyberSOC Platform - Threat Intelligence Core Components
+# Target: Djezzy Telecom Algeria
+# Components: TAXII Clients, STIX Processor, IOC Database, Threat Hunting
+# =============================================================================
+
+---
+# TAXII 2.0 Server (for sharing intel with ANRT/partners)
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: taxii-server
+  namespace: cybersoc-threat-intel
+  labels:
+    app.kubernetes.io/name: taxii-server
+    app.kubernetes.io/component: intel-sharing
+    app.kubernetes.io/part-of: cybersoc-threat-intel
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: taxii-server
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: taxii-server
+    spec:
+      serviceAccountName: threat-intel-sa
+      containers:
+        - name: taxii-server
+          image: ghcr.io/laidoudi33/soc-taxii-server:2.0.0-production
+          ports:
+            - name: http
+              containerPort: 8080
+            - name: https
+              containerPort: 8443
+            - name: discovery
+              containerPort: 9497  # TAXII Discovery service
+          env:
+            - name: TAXII_MODE
+              value: "production"
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: threat-intel-secrets
+                  key: database-url
+            - name: STIX_VERSION
+              value: "2.1"
+            
+            # Sharing Configuration
+            - name: SHARE_WITH_ANRT
+              value: "true"
+            - name: PARTNER_COLLECTIONS
+              value: "anrt-ncsa,cert-dz,first-org"
+            
+            # Authentication
+            - name: AUTH_TYPE
+              value: "bearer_token"
+            - name: JWT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: threat-intel-secrets
+                  key: jwt-secret
+            
+            # Rate Limiting
+            - name: RATE_LIMIT_REQUESTS
+              value: "1000"
+            - name: RATE_LIMIT_WINDOW
+              value: "60s"
+          
+          resources:
+            requests:
+              cpu: "500m"
+              memory: "1Gi"
+            limits:
+              cpu: "2"
+              memory: "4Gi"
+
+---
+# TAXII Client (Consume external feeds)
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: taxii-client
+  namespace: cybersoc-threat-intel
+  labels:
+    app.kubernetes.io/name: taxii-client
+    app.kubernetes.io/component: feed-consumer
+    app.kubernetes.io/part-of: cybersoc-threat-intel
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: taxii-client
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: taxii-client
+    spec:
+      serviceAccountName: threat-intel-sa
+      containers:
+        - name: taxii-client
+          image: ghcr.io/laidoudi33/soc-taxii-client:2.0.0-production
+          env:
+            # Feed Sources Configuration
+            - name: FEED_SOURCES_CONFIG
+              valueFrom:
+                configMapKeyRef:
+                  name: threat-intel-config
+                  key: feed-sources
+            
+            # Database for storing IOCs
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: threat-intel-secrets
+                  key: database-url
+            
+            # Polling Intervals
+            - name: POLL_INTERVAL_MINUTES
+              value: "15"  # Poll every 15 minutes
+            
+            # Processing Options
+            - name: AUTO_ENRICH_IOCS
+              value: "true"
+            - name: DEDUPLICATION_ENABLED
+              value: "true"
+            - name: CONFIDENCE_THRESHOLD
+              value: "50"  # Only store IOCs with confidence >= 50%
+            
+            # Output to Kafka (for SIEM/SOAR)
+            - name: KAFKA_BROKERS
+              valueFrom:
+                configMapKeyRef:
+                  name: threat-intel-config
+                  key: kafka-brokers
+            - name: KAFKA_OUTPUT_TOPIC
+              value: "threat-intel.iocs.new"
+          
+          resources:
+            requests:
+              cpu: "1"
+              memory: "2Gi"
+            limits:
+              cpu: "4"
+              memory: "8Gi"
+          
+          volumeMounts:
+            - name: feed-state
+              mountPath: /var/lib/taxii-client/state
+
+---
+# STIX 2.1 Processor & Normalizer
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: stix-processor
+  namespace: cybersoc-threat-intel
+  labels:
+    app.kubernetes.io/name: stix-processor
+    app.kubernetes.io/component: stix-processing
+    app.kubernetes.io/part-of: cybersoc-threat-intel
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: stix-processor
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: stix-processor
+    spec:
+      serviceAccountName: threat-intel-sa
+      containers:
+        - name: stix-processor
+          image: ghcr.io/laidoudi33/soc-stix-processor:2.0.0-production
+          ports:
+            - name: http
+              containerPort: 8081
+            - name: grpc
+              containerPort: 50080
+          env:
+            - name: STIX_VERSION
+              value: "2.1"
+            - name: SUPPORTED_STIX_OBJECTS
+              value: "indicator,observed-data,attack-pattern,campaign,intrusion-set,malware,tool,vulnerability,location,identity"
+            
+            # Enrichment Services
+            - name: GEOIP_ENABLED
+              value: "true"
+            - name: WHOIS_LOOKUP_ENABLED
+              value: "true"
+            - name: REVERSE_DNS_ENABLED
+              value: "true"
+            
+            # Output Configuration
+            - name: OUTPUT_TO_ELASTICSEARCH
+              value: "true"
+            - name: ELASTICSEARCH_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: threat-intel-config
+                  key: elasticsearch-url
+            - name: OUTPUT_INDEX_PREFIX
+              value: "threat-intel-"
+          
+          resources:
+            requests:
+              cpu: "2"
+              memory: "4Gi"
+            limits:
+              cpu: "6"
+              memory: "12Gi"
+
+---
+# IOC Database & Management API
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ioc-manager
+  namespace: cybersoc-threat-intel
+  labels:
+    app.kubernetes.io/name: ioc-manager
+    app.kubernetes.io/component: ioc-management
+    app.kubernetes.io/part-of: cybersoc-threat-intel
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: ioc-manager
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: ioc-manager
+    spec:
+      serviceAccountName: threat-intel-sa
+      containers:
+        - name: ioc-manager
+          image: ghcr.io/laidoudi33/soc-ioc-manager:2.0.0-production
+          ports:
+            - name: http
+              containerPort: 8082
+            - name: grpc
+              containerPort: 50081
+          env:
+            # Database
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: threat-intel-secrets
+                  key: database-url
+            
+            # Cache
+            - name: REDIS_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: threat-intel-config
+                  key: redis-url
+            
+            # API Configuration
+            - name: API_RATE_LIMIT
+              value: "10000/minute"
+            - name: MAX_IOC_QUERY_RESULTS
+              value: "10000"
+            
+            # IOC Lifecycle
+            - name: DEFAULT_IOC_TTL_DAYS
+              value: "90"  # Auto-expire after 90 days unless refreshed
+            - name: CONFIDENCE_DECAY_ENABLED
+              value: "true"
+            - name: CONFIDENCE_DECAY_RATE
+              value: "0.01/day"  # Lose 1% confidence per day
+            
+            # Integration Endpoints
+            - name: SIEM_INTEGRATION_URL
+              value: "http://sigma-correlation-engine-svc.cybersoc-siem.svc.cluster.local:8080/api/iocs"
+            - name: SOAR_INTEGRATION_URL
+              value: "http://playbook-engine-svc.cybersoc-soar.svc.cluster.local:8080/api/iocs"
+          
+          resources:
+            requests:
+              cpu: "1"
+              memory: "2Gi"
+            limits:
+              cpu: "4"
+              memory: "8Gi"
+          
+          volumeMounts:
+            - name: ioc-storage
+              mountPath: /data/iocs
+
+---
+# Threat Hunting Platform
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: threat-hunting-platform
+  namespace: cybersoc-threat-intel
+  labels:
+    app.kubernetes.io/name: threat-hunting
+    app.kubernetes.io/component: threat-hunting
+    app.kubernetes.io/part-of: cybersoc-threat-intel
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: threat-hunting
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: threat-hunting
+    spec:
+      serviceAccountName: threat-intel-sa
+      containers:
+        - name: threat-hunting
+          image: ghcr.io/laidoudi33/soc-threat-hunting:2.0.0-production
+          ports:
+            - name: http
+              containerPort: 8083
+            - name: grpc
+              containerPort: 50082
+          env:
+            # Data Sources
+            - name: ELASTICSEARCH_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: threat-intel-config
+                  key: elasticsearch-url
+            - name: KIBANA_URL
+              value: "https://kibana.soc.djezzy.dz"
+            
+            # Hunting Query Engine
+            - name: QUERY_ENGINE
+              value: "EQL+SQL"  # Event Query Language + SQL
+            - name: MAX_QUERY_TIME
+              value: "300s"  # 5 minutes max query time
+            - name: MAX_RESULTS
+              value: "100000"
+            
+            # Saved Hunt Results
+            - name: SAVED_HUNTS_RETENTION_DAYS
+              value: "365"
+            
+            # Integration with Threat Intel
+            - name: IOC_API_URL
+              value: "http://ioc-manager:8082"
+        
+          resources:
+            requests:
+              cpu: "2"
+              memory: "4Gi"
+            limits:
+              cpu: "6"
+              memory: "12Gi"
+          
+          volumeMounts:
+            - name: hunt-results
+              mountPath: /data/hunts
+
+---
+# Threat Intelligence API Gateway (External Interface)
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: threat-intel-api-gateway
+  namespace: cybersoc-threat-intel
+  labels:
+    app.kubernetes.io/name: threat-intel-api-gateway
+    app.kubernetes.io/component: api-gateway
+    app.kubernetes.io/part-of: cybersoc-threat-intel
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: threat-intel-api-gateway
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: threat-intel-api-gateway
+    spec:
+      serviceAccountName: threat-intel-sa
+      containers:
+        - name: api-gateway
+          image: ghcr.io/laidoudi33/soc-threat-intel-api-gateway:2.0.0-production
+          ports:
+            - name: http
+              containerPort: 8080
+            - name: https
+              containerPort: 8443
+          env:
+            - name: UPSTREAM_TAXII_SERVER
+              value: "http://taxii-server:8080"
+            - name: UPSTREAM_TAXII_CLIENT
+              value: "http://taxii-client:8080"
+            - name: UPSTREAM_STIX_PROCESSOR
+              value: "http://stix-processor:8081"
+            - name: UPSTREAM_IOC_MANAGER
+              value: "http://ioc-manager:8082"
+            - name: UPSTREAM_THREAT_HUNTING
+              value: "http://threat-hunting:8083"
+            
+            - name: RATE_LIMIT
+              value: "500/minute"
+            - name: JWT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: threat-intel-secrets
+                  key: jwt-secret
+          
+          resources:
+            requests:
+              cpu: "250m"
+              memory: "512Mi"
+            limits:
+              cpu: "1"
+              memory: "2Gi"

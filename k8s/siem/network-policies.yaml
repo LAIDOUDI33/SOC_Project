@@ -1,0 +1,468 @@
+# =============================================================================
+# CyberSOC Platform - SIEM Network Policies (Zero-Trust)
+# Target: Djezzy Telecom Algeria
+# Default: DENY ALL - Explicit allow only
+# =============================================================================
+
+---
+# Default Deny All Ingress Traffic
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-ingress
+  namespace: cybersoc-siem
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+
+---
+# Default Deny All Egress Traffic
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-egress
+  namespace: cybersoc-siem
+spec:
+  podSelector: {}
+  policyTypes:
+    - Egress
+
+---
+# Allow DNS Egress (Required for all pods)
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-dns-egress
+  namespace: cybersoc-siem
+spec:
+  podSelector: {}
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+
+---
+# Elasticsearch Cluster Internal Communication
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: elasticsearch-netpol
+  namespace: cybersoc-siem
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: elasticsearch
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    # Allow ES nodes to communicate with each other
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: elasticsearch
+      ports:
+        - protocol: TCP
+          port: 9200
+        - protocol: TCP
+          port: 9300
+    
+    # Allow Kibana to connect
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: kibana
+      ports:
+        - protocol: TCP
+          port: 9200
+    
+    # Allow Logstash/Beats to index data
+    - from:
+        - podSelector:
+            matchExpressions:
+              - key: app.kubernetes.io/name
+                operator: In
+                values: [logstash, filebeat, metricbeat, packetbeat, sigma-engine]
+      ports:
+        - protocol: TCP
+          port: 9200
+    
+    # Allow monitoring (Prometheus)
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: monitoring
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: prometheus
+      ports:
+        - protocol: TCP
+          port: 9200
+  
+  egress:
+    # ES nodes can talk to each other
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: elasticsearch
+      ports:
+        - protocol: TCP
+          port: 9300
+
+---
+# Logstash Network Policy
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: logstash-netpol
+  namespace: cybersoc-siem
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: logstash
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    # Accept logs from Beats agents
+    - from:
+        - podSelector:
+            matchExpressions:
+              - key: app.kubernetes.io/name
+                operator: In
+                values: [filebeat, metricbeat, packetbeat]
+      ports:
+        - protocol: TCP
+          port: 5044
+    
+    # Accept HTTP input
+    - from:
+        - podSelector: {}  # Any pod in namespace can send HTTP logs
+      ports:
+        - protocol: TCP
+          port: 8080
+  
+  egress:
+    # Connect to Elasticsearch
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: elasticsearch
+      ports:
+        - protocol: TCP
+          port: 9200
+    
+    # Connect to Kafka
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: logging
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: kafka
+      ports:
+        - protocol: TCP
+          port: 9094
+    
+    # Connect to Redis (caching)
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: cybersoc-cache
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: redis
+      ports:
+        - protocol: TCP
+          port: 6379
+
+---
+# Sigma Correlation Engine Network Policy
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: sigma-engine-netpol
+  namespace: cybersoc-siem
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: sigma-engine
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    # API access from SIEM gateway and SOAR bridge
+    - from:
+        - podSelector:
+            matchExpressions:
+              - key: app.kubernetes.io/name
+                operator: In
+                values: [siem-api-gateway, siem-soar-bridge]
+      ports:
+        - protocol: TCP
+          port: 8080
+        - protocol: TCP
+          port: 50060
+    
+    # Metrics scraping
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: monitoring
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: prometheus
+      ports:
+        - protocol: TCP
+          port: 9090
+  
+  egress:
+    # Read from Elasticsearch
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: elasticsearch
+      ports:
+        - protocol: TCP
+          port: 9200
+    
+    # Consume from Kafka
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: logging
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: kafka
+      ports:
+        - protocol: TCP
+          port: 9094
+    
+    # Write alerts to Kafka
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: logging
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: kafka
+      ports:
+        - protocol: TCP
+          port: 9094
+    
+    # Redis for state/cache
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: cybersoc-cache
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: redis
+      ports:
+        - protocol: TCP
+          port: 6379
+
+---
+# Beats Agents Network Policy (Filebeat/Metricbeat/Packetbeat)
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: beats-agents-netpol
+  namespace: cybersoc-siem
+spec:
+  podSelector:
+    matchExpressions:
+      - key: app.kubernetes.io/name
+        operator: In
+        values: [filebeat, metricbeat, packetbeat]
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    # Allow metrics collection
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: monitoring
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: prometheus
+      ports:
+        - protocol: TCP
+          port: 5066
+  
+  egress:
+    # Send to Logstash
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: logstash
+      ports:
+        - protocol: TCP
+          port: 5044
+    
+    # Direct to Elasticsearch (if Logstash bypassed)
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: elasticsearch
+      ports:
+        - protocol: TCP
+          port: 9200
+    
+    # To Kafka
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: logging
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: kafka
+      ports:
+        - protocol: TCP
+          port: 9094
+
+---
+# Alertmanager Network Policy
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: alertmanager-netpol
+  namespace: cybersoc-siem
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: alertmanager
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    # Receive alerts from Prometheus
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: monitoring
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: prometheus
+      ports:
+        - protocol: TCP
+          port: 9093
+    
+    # Web UI access (from Ingress controller)
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: ingress-nginx
+          podSelector: {}
+      ports:
+        - protocol: TCP
+          port: 9093
+  
+  egress:
+    # External notifications (Slack, Teams, Email, PagerDuty)
+    - to:
+        - namespaceSelector: {}
+      ports:
+        - protocol: TCP
+          port: 443
+        - protocol: TCP
+          port: 587  # SMTP
+
+---
+# Kibana Network Policy
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: kibana-netpol
+  namespace: cybersoc-siem
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: kibana
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    # User access via Ingress
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: ingress-nginx
+          podSelector: {}
+      ports:
+        - protocol: TCP
+          port: 5601
+  
+  egress:
+    # Connect to Elasticsearch
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: elasticsearch
+      ports:
+        - protocol: TCP
+          port: 9200
+
+---
+# SOAR Bridge Network Policy
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: soar-bridge-netpol
+  namespace: cybersoc-siem
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: siem-soar-bridge
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    # From Sigma engine (alerts)
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: sigma-engine
+      ports:
+        - protocol: TCP
+          port: 8090
+        - protocol: TCP
+          port: 50061
+  
+  egress:
+    # To SOAR API Gateway
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: cybersoc-soar
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: soar-api-gateway
+      ports:
+        - protocol: TCP
+          port: 8080
+    
+    # To Threat Intelligence
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: cybersoc-threat-intel
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: threat-intel-api
+      ports:
+        - protocol: TCP
+          port: 8080

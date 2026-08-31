@@ -1,0 +1,169 @@
+# =============================================================================
+# CyberSOC Platform - SIEM RBAC Configuration
+# Target: Djezzy Telecom Algeria
+# Principle of Least Privilege
+# =============================================================================
+
+---
+# Service Account for SIEM Components
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: siem-sa
+  namespace: cybersoc-siem
+  labels:
+    app.kubernetes.io/part-of: cybersoc-siem
+  annotations:
+    iam.amazonaws.com/role: "arn:aws:iam::123456789012:role/cybersoc-siem-role"
+automountServiceAccountToken: false  # Security best practice
+
+---
+# Role: SIEM Pod Management (Namespace-scoped)
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: siem-pod-role
+  namespace: cybersoc-siem
+rules:
+  # Read ConfigMaps and Secrets for configuration
+  - apiGroups: [""]
+    resources: ["configmaps", "secrets"]
+    verbs: ["get", "list", "watch"]
+  
+  # Read own pods for service discovery
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list", "watch"]
+  
+  # Read PVCs for storage management
+  - apiGroups: [""]
+    resources: ["persistentvolumeclaims"]
+    verbs: ["get", "list", "watch"]
+  
+  # Create events for logging
+  - apiGroups: [""]
+    resources: ["events"]
+    verbs: ["create", "patch"]
+
+---
+# RoleBinding: Bind SA to Pod Role
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: siem-role-binding
+  namespace: cybersoc-siem
+subjects:
+  - kind: ServiceAccount
+    name: siem-sa
+    namespace: cybersoc-siem
+roleRef:
+  kind: Role
+  name: siem-pod-role
+  apiGroup: rbac.authorization.k8s.io
+
+---
+# ClusterRole: Cross-Namespace Access (Elasticsearch, Kafka, Redis)
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: siem-cross-namespace-reader
+  labels:
+    app.kubernetes.io/part-of: cybersoc-siem
+rules:
+  # Read services in other namespaces (for cross-service communication)
+  - apiGroups: [""]
+    resources: ["services", "endpoints"]
+    verbs: ["get", "list", "watch"]
+  
+  # Read nodes for Filebeat/Metricbeat host metrics
+  - apiGroups: [""]
+    resources: ["nodes", "nodes/proxy", "nodes/stats"]
+    verbs: ["get", "list", "watch"]
+  
+  # Read custom metrics from Prometheus
+  - apiGroups: ["metrics.k8s.io"]
+    resources: ["pods", "nodes"]
+    verbs: ["get", "list", "watch"]
+
+---
+# ClusterRoleBinding: Bind SA to ClusterRole
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: siem-cluster-role-binding
+subjects:
+  - kind: ServiceAccount
+    name: siem-sa
+    namespace: cybersoc-siem
+roleRef:
+  kind: ClusterRole
+  name: siem-cross-namespace-reader
+  apiGroup: rbac.authorization.k8s.io
+
+---
+# Special Role: Beats Agents (Need elevated permissions)
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: beats-agent-role
+  namespace: cybersoc-siem
+rules:
+  # Everything from base role
+  - apiGroups: [""]
+    resources: ["configmaps", "secrets", "pods", "events"]
+    verbs: ["get", "list", "watch", "create", "patch"]
+  
+  # Read all namespaces for log collection
+  - apiGroups: [""]
+    resources: ["namespaces"]
+    verbs: ["get", "list"]
+
+---
+# RoleBinding for Beats Agents
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: beats-role-binding
+  namespace: cybersoc-siem
+subjects:
+  - kind: ServiceAccount
+    name: siem-sa
+    namespace: cybersoc-siem
+roleRef:
+  kind: Role
+  name: beats-agent-role
+  apiGroup: rbac.authorization.k8s.io
+
+---
+# Special Role: Sigma Engine (Needs alert creation access)
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: sigma-engine-role
+  namespace: cybersoc-siem
+rules:
+  # Base permissions
+  - apiGroups: [""]
+    resources: ["configmaps", "secrets", "pods", "events", "persistentvolumeclaims"]
+    verbs: ["get", "list", "watch", "create", "update", "patch"]
+  
+  # Write to custom resources (alerts, incidents)
+  - apiGroups: ["cybersoc.djezzy.dz"]
+    resources: ["alerts", "incidents", "correlations"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+
+---
+# RoleBinding for Sigma Engine
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: sigma-engine-role-binding
+  namespace: cybersoc-siem
+subjects:
+  - kind: ServiceAccount
+    name: siem-sa
+    namespace: cybersoc-siem
+roleRef:
+  kind: Role
+  name: sigma-engine-role
+  apiGroup: rbac.authorization.k8s.io

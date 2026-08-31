@@ -1,0 +1,454 @@
+# =============================================================================
+# CyberSOC Platform - SIEM Configuration Maps
+# Target: Djezzy Telecom Algeria - ANRT Compliant
+# =============================================================================
+
+---
+# Main SIEM Configuration
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: siem-config
+  namespace: cybersoc-siem
+  labels:
+    app.kubernetes.io/part-of: cybersoc-siem
+data:
+  # Elasticsearch Configuration
+  elasticsearch-url: "https://elasticsearch-siem-coordinating.cybersoc-siem.svc.cluster.local:9200"
+  elasticsearch-cluster-name: "cybersoc-siem-cluster"
+  elasticsearch-index-prefix: "cybersoc-"
+  
+  # Kafka Configuration (Event Streaming)
+  kafka-brokers: "kafka-0.kafka-headless.logging.svc.cluster.local:9094,kafka-1.kafka-headless.logging.svc.cluster.local:9094,kafka-2.kafka-headless.logging.svc.cluster.local:9094"
+  kafka-security-protocol: "SASL_SSL"
+  kafka-sasl-mechanism: "SCRAM-SHA-512"
+  
+  # Redis Configuration (Caching & State)
+  redis-url: "redis-master.cybersoc-cache.svc.cluster.local:6379"
+  redis-password-ref: "redis-password"
+  
+  # Splunk Integration
+  splunk-hec-url: "https://splunk-hec.djezzy.internal:8088"
+  splunk-index: "cybersoc_main"
+  
+  # Alerting Configuration
+  alert-severity-levels: "critical,high,medium,low,info"
+  alert-escalation-timeout: "900s"  # 15 minutes
+  
+  # ANRT Compliance Settings
+  anrt-log-retention-days: "1095"  # 3 years mandatory
+  anrt-audit-log-enabled: "true"
+  anrt-data-localization: "algeria-only"
+  
+  # Performance Tuning
+  correlation-window-seconds: "300"
+  batch-size: "1000"
+  worker-count: "16"
+
+---
+# Logstash Pipeline Configuration
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: logstash-pipeline-config
+  namespace: cybersoc-siem
+data:
+  # Main Input Pipeline
+  01-inputs.conf: |
+    input {
+      beats {
+        port => 5044
+        ssl => true
+        ssl_certificate => "/etc/logstash/ssl/cert.pem"
+        ssl_key => "/etc/logstash/ssl/key.pem"
+      }
+      
+      kafka {
+        bootstrap_servers => "${KAFKA_BROKERS}"
+        topics => ["logs.raw", "events.security", "network.flows"]
+        security_protocol => "SASL_SSL"
+        sasl_mechanism => "SCRAM-SHA-512"
+        codec => json
+        consumer_threads => 4
+      }
+      
+      http {
+        port => 8080
+        additional_codecs => {"application/json"=>"json"}
+      }
+    }
+
+  # Filter Pipeline - Parsing & Enrichment
+  02-filters.conf: |
+    filter {
+      # Parse Kubernetes metadata
+      if [kubernetes] {
+        mutate {
+          add_field => { "namespace" => "%{[kubernetes][namespace]}" }
+          add_field => { "pod_name" => "%{[kubernetes][pod][name]}" }
+          add_field => { "container_name" => "%{[kubernetes][container][name]}" }
+        }
+      }
+      
+      # GeoIP enrichment for IP addresses
+      geoip {
+        source => "[source][ip]"
+        target => "[source][geo]"
+        database => "/usr/share/logstash/geoip/GeoLite2-City.mmdb"
+      }
+      
+      # DNS resolution for threat intel lookup
+      dns {
+        reverse => ["source.ip", "destination.ip"]
+        action => "replace"
+        field => "[dns_resolution]"
+      }
+      
+      # Timestamp normalization
+      date {
+        match => ["timestamp", "ISO8601", "UNIX", "SYSLOG"]
+        timezone => "Africa/Algiers"
+        target => "@timestamp"
+      }
+      
+      # Anomaly scoring baseline
+      ruby {
+        code => "
+          event.set('anomaly_score', 0) unless event.get('anomaly_score')
+          
+          # High-risk indicators
+          risk = 0
+          risk += 30 if event.get('severity') == 'critical'
+          risk += 20 if event.get('severity') == 'high'
+          risk += 25 if event.get('[source][ip]') && event.get('[source][ip]').start_with?('10.0.0.') == false && event.get('[source][ip]') != '127.0.0.1'
+          risk += 15 if event.get('event_type') == 'authentication_failure'
+          risk += 20 if event.get('event_type') == 'privilege_escalation'
+          
+          event.set('anomaly_score', [risk, event.get('anomaly_score')].max)
+        "
+      }
+      
+      # PII Detection & Masking (GDPR Compliance)
+      if [message] =~ /\b\d{16}\b/ {
+        mutate {
+          add_tag => ["pii_detected", "credit_card"]
+        }
+      }
+    }
+
+  # Output Pipeline - Multiple Destinations
+  03-outputs.conf: |
+    output {
+      # Primary: Elasticsearch
+      elasticsearch {
+        hosts => ["${ELASTICSEARCH_HOSTS}"]
+        user => "${ELASTICSEARCH_USER}"
+        password => "${ELASTICSEARCH_PASSWORD}"
+        ssl => true
+        ssl_certificate_verification => true
+        
+        index => "cybersec-%{[@metadata][beat]}-%{+YYYY.MM.dd}"
+        
+        # Template management
+        manage_template => false
+        template_name => "cybersoc-*"
+        
+        # Bulk settings
+        bulk_max_size => 5000
+        flush_size => 2000
+        idle_flush_time => 5
+      }
+      
+      # Secondary: Kafka for downstream processing
+      kafka {
+        bootstrap_servers => "${KAFKA_BROKERS}"
+        topic_id => "siem.enriched.events"
+        security_protocol => "SASL_SSL"
+        sasl_mechanism => "SCRAM-SHA-512"
+        
+        compression_type => "lz4"
+        acks => "all"
+        retries => 3
+      }
+      
+      # Tertiary: Splunk HEC (Compliance/Backup)
+      if [severity] in ["critical", "high"] or [anomaly_score] >= 70 {
+        http {
+          url => "${SPLUNK_HEC_URL}/services/collector/event"
+          http_method => "post"
+          format => "json"
+          headers => ["Authorization", "Splunk ${SPLUNK_TOKEN}"]
+          mapping => {
+            "host" => "%{host}"
+            "source" => "%{[log][file][path]}"
+            "sourcetype" => "_json"
+            "index" => "cybersoc_alerts"
+            "event" => "{message}"
+          }
+        }
+      }
+      
+      # Dead Letter Queue for failed events
+      if "_grokparsefailure" in [tags] or "_jsonparsefailure" in [tags] {
+        file {
+          path => "/usr/share/logstash/dead_letter_queue/%{+yyyy-MM-dd}/dlq-%{+HH}.log"
+        }
+      }
+    }
+
+---
+# Filebeat Configuration
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: filebeat-config
+  namespace: cybersoc-siem
+data:
+  filebeat.yml: |
+    filebeat.inputs:
+    - type: container
+      paths:
+        - /var/lib/docker/containers/*/*.log
+      processors:
+      - add_kubernetes_metadata:
+          host: ${NODE_NAME}:10250
+          matchers:
+          - logs_path:
+              logs_path: "/var/lib/docker/containers"
+      - decode_json_fields:
+          fields: ["message"]
+          target: "json"
+          overwrite_keys: true
+    
+    output.elasticsearch:
+      hosts: ["${ELASTICSEARCH_HOST}"]
+      username: "${ELASTICSEARCH_USERNAME}"
+      password: "${ELASTICSEARCH_PASSWORD}"
+      ssl.enabled: true
+      index: "filebeat-%{[agent.version]}-%{+yyyy.MM.dd}"
+    
+    output.kafka:
+      enabled: true
+      hosts: ${KAFKA_BROKERS}
+      topic: "logs.raw"
+      required_acks: 1
+      compression: gzip
+      max_message_bytes: 10485760
+
+---
+# Sigma Rules Bundle (Sample Critical Rules)
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: sigma-rules-bundle
+  namespace: cybersoc-siem
+  labels:
+    category: sigma-rules
+data:
+  # Rule: Brute Force Attack Detection
+  rule_brute_force.yml: |
+    title: Potential Brute Force Attack Detected
+    id: d73b7aa8-76bd-44d6-a8f6-99a93be2e8a0
+    status: stable
+    description: Detects multiple authentication failures from single source indicating brute force attack
+    author: CyberSOC Team - Djezzy
+    references:
+      - https://attack.mitre.org/technics/T1110/
+    tags:
+      - attack.credential_access
+      - attack.t1110
+      - anrt.compliance
+    logsource:
+      category: authentication
+      product: kubernetes
+    detection:
+      selection:
+        event_type: authentication_failure
+        outcome: failure
+      condition: selection | count() by source_ip > 10 timeframe=5m
+    falsepositives:
+      - Legitimate users with mistyped passwords
+      - Application misconfigurations
+    level: high
+    anrt_severity: critical
+    djezzy_response: "auto_block_ip_15m"
+
+  # Rule: Privilege Escalation Detection
+  rule_privilege_escalation.yml: |
+    title: Privilege Escalation Attempt Detected
+    id: e4a9b3c2-1f4e-4a8b-9c6d-7e5f4a3b2c1d
+    status: stable
+    description: Detects attempts to escalate privileges beyond authorized level
+    author: CyberSOC Team - Djezzy
+    references:
+      - https://attack.mitre.org/technics/T1548/
+    tags:
+      - attack.privilege_escalation
+      - attack.t1548
+      - anrt.compliance
+    logsource:
+      category: privilege_escalation
+      product: kubernetes
+    detection:
+      selection:
+        or:
+          - event_type: create_cluster_role_binding
+          - event_type: escalate_to_root
+          - event_type: namespace_escape
+      condition: selection
+    falsepositives:
+      - Authorized admin actions
+    level: critical
+    anrt_severity: critical
+    djezzy_response: "immediate_incident"
+
+  # Rule: Crypto Mining Detection (Resource Abuse)
+  rule_crypto_mining.yml: |
+    title: Cryptocurrency Mining Activity Detected
+    id: f5c0d4e3-2a5f-4b9c-0d7e-8f6a5b4c3d2e
+    status: stable
+    description: Detects patterns indicative of cryptocurrency mining in cluster
+    author: CyberSOC Team - Djezzy
+    references:
+      - https://attack.mitre.org/technics/T1496/
+    tags:
+      - attack.impact
+      - attack.t1496
+      - resource_abuse
+    logsource:
+      category: process_creation
+      product: kubernetes
+    detection:
+      selection_crypto:
+        or:
+          - process_name|contains: "xmrig"
+          - process_name|contains: "minerd"
+          - command_line|contains: "stratum+tcp"
+          - command_line|contains: "pool."
+      selection_network:
+        destination_port:
+          - 3333  # Common mining ports
+          - 4444
+          - 5555
+      condition: selection_crypto or selection_network
+    falsepositives:
+      - Legitimate blockchain applications (rare in SOC)
+    level: critical
+    anrt_severity: critical
+    djezzy_response: "terminate_pod_notify"
+
+  # Rule: Data Exfiltration Detection
+  rule_data_exfiltration.yml: |
+    title: Potential Data Exfiltration Detected
+    id: a6b1e5f4-3b6a-4c0d-1e8f-9a7b6c5d4e3f
+    status: stable
+    description: Detects large data transfers to external destinations
+    author: CyberSOC Team - Djezzy
+    references:
+      - https://attack.mitre.org/technics/T1048/
+    tags:
+      - attack.exfiltration
+      - attack.t1048
+      - anrt.data_protection
+    logsource:
+      category: network
+      product: suricata
+    detection:
+      selection_volume:
+        bytes_out > 104857600  # >100MB transfer
+      selection_destination:
+        not destination_ip:
+          - cidr: "10.0.0.0/8"
+          - cidr: "172.16.0.0/12"
+          - cidr: "192.168.0.0/16"
+          - cidr: "196.x.x.x"  # Algeria ASN ranges
+      condition: selection_volume and selection_destination
+    falsepositives:
+      - Large legitimate backups
+      - Software updates
+    level: high
+    anrt_severity: high
+    djezzy_response: "investigate_quarantine"
+
+---
+# Alertmanager Configuration
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: alertmanager-config
+  namespace: cybersoc-siem
+data:
+  config.yml: |
+    global:
+      resolve_timeout: 5m
+      smtp_smarthost: 'mail.djezzy.dz:587'
+      smtp_from: 'alertmanager@soc.djezzy.dz'
+      smtp_auth_username: 'alertmanager@soc.djezzy.dz'
+    
+    route:
+      receiver: 'default-receiver'
+      group_by: ['alertname', 'severity', 'namespace']
+      group_wait: 10s
+      group_interval: 5m
+      repeat_interval: 4h
+      routes:
+        # Critical alerts - Immediate escalation
+        - match:
+            severity: critical
+          receiver: 'critical-alerts'
+          continue: true
+          group_wait: 0s
+          repeat_interval: 15m
+        
+        # High severity alerts
+        - match:
+            severity: high
+          receiver: 'high-alerts'
+          continue: true
+          repeat_interval: 1h
+        
+        # ANRT compliance alerts
+        - match:
+            anrt_compliance: 'true'
+          receiver: 'compliance-team'
+          repeat_interval: 24h
+    
+    receivers:
+      - name: 'default-receiver'
+        email_configs:
+          - to: 'soc-ops@djezzy.dz'
+            send_resolved: true
+      
+      - name: 'critical-alerts'
+        webhook_configs:
+          - url: 'http://soar-api-gateway.cybersoc-soar.svc.cluster.local:8080/api/v1/alerts/critical'
+            send_resolved: true
+        slack_configs:
+          - channel: '#soc-critical-alerts'
+            send_resolved: true
+            title: '[CRITICAL] {{ .Status | toUpper }}: {{ .Labels.alertname }}'
+            text: '{{ range .Alerts }}{{ .Annotations.description }}{{ end }}'
+        email_configs:
+          - to: 'soc-manager@djezzy.dz,ciso@djezzy.dz'
+            send_resolved: true
+      
+      - name: 'high-alerts'
+        slack_configs:
+          - channel: '#soc-alerts'
+            send_resolved: true
+        pagerduty_configs:
+          - service_key: '${PAGERDUTY_SERVICE_KEY}'
+            severity: error
+            description: '{{ .Labels.alertname }}: {{ .Annotations.summary }}'
+      
+      - name: 'compliance-team'
+        email_configs:
+          - to: 'compliance@djezzy.dz,anrt-liaison@djezzy.dz'
+            send_resolved: true
+    
+    inhibit_rules:
+      - source_match:
+          severity: 'critical'
+        target_match:
+          severity: 'warning'
+        equal: ['alertname', 'namespace']

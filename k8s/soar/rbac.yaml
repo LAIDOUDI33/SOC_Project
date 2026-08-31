@@ -1,0 +1,82 @@
+# =============================================================================
+# CyberSOC Platform - SOAR RBAC Configuration
+# Target: Djezzy Telecom Algeria
+# =============================================================================
+
+---
+# Service Account for SOAR Components
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: soar-sa
+  namespace: cybersoc-soar
+  labels:
+    app.kubernetes.io/part-of: cybersoc-soar
+  annotations:
+    iam.amazonaws.com/role: "arn:aws:iam::123456789012:role/cybersoc-soar-role"
+automountServiceAccountToken: false
+
+---
+# Role: SOAR Pod Management
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: soar-pod-role
+  namespace: cybersoc-soar
+rules:
+  - apiGroups: [""]
+    resources: ["configmaps", "secrets", "pods", "events"]
+    verbs: ["get", "list", "watch", "create", "patch"]
+  - apiGroups: [""]
+    resources: ["persistentvolumeclaims"]
+    verbs: ["get", "list", "watch"]
+
+---
+# RoleBinding: SA to Pod Role
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: soar-role-binding
+  namespace: cybersoc-soar
+subjects:
+  - kind: ServiceAccount
+    name: soar-sa
+    namespace: cybersoc-soar
+roleRef:
+  kind: Role
+  name: soar-pod-role
+  apiGroup: rbac.authorization.k8s.io
+
+---
+# ClusterRole: Cross-Namespace Access (SIEM, Threat Intel, DB)
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: soar-cross-namespace-access
+  labels:
+    app.kubernetes.io/part-of: cybersoc-soar
+rules:
+  # Read services/endpoints for cross-service communication
+  - apiGroups: [""]
+    resources: ["services", "endpoints"]
+    verbs: ["get", "list", "watch"]
+  
+  # Custom resources (alerts, incidents, playbooks)
+  - apiGroups: ["cybersoc.djezzy.dz"]
+    resources: ["*"]
+    verbs: ["*"]
+
+---
+# ClusterRoleBinding
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: soar-cluster-role-binding
+subjects:
+  - kind: ServiceAccount
+    name: soar-sa
+    namespace: cybersoc-soar
+roleRef:
+  kind: ClusterRole
+  name: soar-cross-namespace-access
+  apiGroup: rbac.authorization.k8s.io

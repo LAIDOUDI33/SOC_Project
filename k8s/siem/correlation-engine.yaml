@@ -1,0 +1,331 @@
+# =============================================================================
+# CyberSOC Platform - SIEM Correlation Engine & Rule Engine
+# Target: Djezzy Telecom Algeria - ANRT Compliant
+# Purpose: Real-time event correlation, threat detection, alert generation
+# =============================================================================
+
+---
+# Sigma Rule Engine - Threat Detection & Correlation
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: sigma-correlation-engine
+  namespace: cybersoc-siem
+  labels:
+    app.kubernetes.io/name: sigma-engine
+    app.kubernetes.io/component: correlation
+    app.kubernetes.io/part-of: cybersoc-siem
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: sigma-engine
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: sigma-engine
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8080"
+    spec:
+      priorityClassName: siem-critical
+      serviceAccountName: siem-sa
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        fsGroup: 1000
+      containers:
+        - name: sigma-engine
+          image: ghcr.io/laidoudi33/soc-sigma-engine:2.0.0-production
+          ports:
+            - name: http
+              containerPort: 8080
+            - name: grpc
+              containerPort: 50060
+            - name: metrics
+              containerPort: 9090
+          env:
+            # Core Configuration
+            - name: ENGINE_MODE
+              value: "production"
+            - name: CORRELATION_WINDOW
+              value: "300s"  # 5-minute correlation window
+            
+            # Data Sources
+            - name: ELASTICSEARCH_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: siem-config
+                  key: elasticsearch-url
+            - name: KAFKA_BROKERS
+              valueFrom:
+                configMapKeyRef:
+                  name: siem-config
+                  key: kafka-brokers
+            - name: REDIS_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: siem-config
+                  key: redis-url
+            
+            # Alert Configuration
+            - name: ALERT_OUTPUT_TOPIC
+              value: "siem.alerts.critical"
+            - name: ALERT_ES_INDEX
+              value: "cybersoc-alerts-*"
+            
+            # Performance Tuning
+            - name: WORKER_COUNT
+              value: "16"
+            - name: BATCH_SIZE
+              value: "1000"
+            - name: RULE_CACHE_SIZE
+              value: "10000"
+            
+            # ANRT Compliance
+            - name: ANRT_LOG_RETENTION_DAYS
+              value: "1095"  # 3 years mandatory
+            - name: ANRT_ALERT_ESCALATION
+              value: "true"
+          
+          resources:
+            requests:
+              cpu: "4"
+              memory: "8Gi"
+            limits:
+              cpu: "12"
+              memory: "24Gi"
+          
+          volumeMounts:
+            - name: rules-volume
+              mountPath: /etc/sigma/rules
+              readOnly: true
+            - name: custom-rules-volume
+              mountPath: /etc/sigma/custom-rules
+              readOnly: true
+            - name: rule-state
+              mountPath: /var/lib/sigma/state
+            - name: cache-volume
+              mountPath: /var/cache/sigma
+          
+          livenessProbe:
+            httpGet:
+              path: /api/health/live
+              port: 8080
+            initialDelaySeconds: 30
+            periodSeconds: 15
+            timeoutSeconds: 5
+          
+          readinessProbe:
+            httpGet:
+              path: /api/health/ready
+              port: 8080
+            initialDelaySeconds: 15
+            periodSeconds: 10
+            timeoutSeconds: 5
+      
+      volumes:
+        - name: rules-volume
+          configMap:
+            name: sigma-rules-bundle
+        - name: custom-rules-volume
+          persistentVolumeClaim:
+            claimName: siem-custom-rules-pvc
+        - name: rule-state
+          persistentVolumeClaim:
+            claimName: siem-rule-state-pvc
+        - name: cache-volume
+          emptyDir:
+            medium: Memory
+            sizeLimit: "2Gi"
+
+---
+# HPA for Sigma Engine (Critical Component)
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: sigma-engine-hpa
+  namespace: cybersoc-siem
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: sigma-correlation-engine
+  minReplicas: 3
+  maxReplicas: 15
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70
+    - type: Resource
+      resource:
+        name: memory
+        target:
+          type: Utilization
+          averageUtilization: 75
+    # Custom metric: Event queue depth
+    - type: Pods
+      pods:
+        metric:
+          name: sigma_event_queue_depth
+        target:
+          type: AverageValue
+          averageValue: "10000"
+  behavior:
+    scaleDown:
+      stabilizationWindowSeconds: 300
+      policies:
+        - type: Percent
+          value: 10
+          periodSeconds: 60
+    scaleUp:
+      stabilizationWindowSeconds: 30
+      policies:
+        - type: Percent
+          value: 100
+          periodSeconds: 15
+        - type: Pods
+          value: 4
+          periodSeconds: 15
+      selectPolicy: Max
+
+---
+# PDB for Sigma Engine (High Availability)
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: sigma-engine-pdb
+  namespace: cybersoc-siem
+spec:
+  minAvailable: 2
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: sigma-engine
+
+---
+# Alert Manager - Alert Aggregation & Routing
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: alertmanager-siem
+  namespace: cybersoc-siem
+  labels:
+    app.kubernetes.io/name: alertmanager
+    app.kubernetes.io/component: alerting
+    app.kubernetes.io/part-of: cybersoc-siem
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: alertmanager
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: alertmanager
+    spec:
+      priorityClassName: siem-critical
+      serviceAccountName: siem-sa
+      containers:
+        - name: alertmanager
+          image: prom/alertmanager:v0.26.0
+          args:
+            - "--config.file=/etc/alertmanager/config.yml"
+            - "--storage.path=/alertmanager"
+            - "--web.external-url=https://alertmanager.soc.djezzy.dz"
+            - "--web.route-prefix=/"
+          ports:
+            - name: web
+              containerPort: 9093
+          env:
+            - name: SLACK_WEBHOOK_URL
+              valueFrom:
+                secretKeyRef:
+                  name: siem-secrets
+                  key: slack-webhook-url
+            - name: TEAMS_WEBHOOK_URL
+              valueFrom:
+                secretKeyRef:
+                  name: siem-secrets
+                  key: teams-webhook-url
+          resources:
+            requests:
+              cpu: "200m"
+              memory: "256Mi"
+            limits:
+              cpu: "500m"
+              memory: "512Mi"
+          volumeMounts:
+            - name: config
+              mountPath: /etc/alertmanager
+              readOnly: true
+            - name: storage
+              mountPath: /alertmanager
+          livenessProbe:
+            httpGet:
+              path: /-/healthy
+              port: 9093
+            initialDelaySeconds: 20
+          readinessProbe:
+            httpGet:
+              path: /-/ready
+              port: 9093
+            initialDelaySeconds: 10
+      volumes:
+        - name: config
+          configMap:
+            name: alertmanager-config
+        - name: storage
+          persistentVolumeClaim:
+            claimName: alertmanager-storage-pvc
+
+---
+# SOAR Integration Bridge - Connects SIEM to SOAR Playbooks
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: siem-soar-bridge
+  namespace: cybersoc-siem
+  labels:
+    app.kubernetes.io/name: siem-soar-bridge
+    app.kubernetes.io/component: integration
+    app.kubernetes.io/part-of: cybersoc-siem
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: siem-soar-bridge
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: siem-soar-bridge
+    spec:
+      serviceAccountName: siem-sa
+      containers:
+        - name: bridge
+          image: ghcr.io/laidoudi33/soc-siem-soar-bridge:2.0.0-production
+          ports:
+            - name: http
+              containerPort: 8090
+            - name: grpc
+              containerPort: 50061
+          env:
+            - name: SIEM_INPUT_TOPIC
+              value: "siem.alerts.*"
+            - name: SOAR_API_URL
+              value: "http://soar-api-gateway.cybersoc-soar.svc.cluster.local:8080"
+            - name: AUTO_ENRICH_ENABLED
+              value: "true"
+            - name: THREAT_INTEL_FEED_URL
+              value: "http://threat-intel-api.cybersoc-threat-intel.svc.cluster.local:8080"
+            - name: IOC_LOOKUP_ENABLED
+              value: "true"
+          resources:
+            requests:
+              cpu: "1"
+              memory: "2Gi"
+            limits:
+              cpu: "4"
+              memory: "8Gi"

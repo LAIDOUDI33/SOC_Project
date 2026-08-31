@@ -1,0 +1,458 @@
+# =============================================================================
+# CyberSOC Platform - Elasticsearch Cluster for SIEM Logs
+# Target: Djezzy Telecom Algeria - ANRT Compliant
+# Purpose: Centralized log storage, search, and analysis
+# Architecture: Hot/Warm/Cold tier with 9-node cluster
+# =============================================================================
+
+---
+# Elasticsearch Master Nodes (3 nodes for quorum)
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: elasticsearch-siem-master
+  namespace: cybersoc-siem
+  labels:
+    app.kubernetes.io/name: elasticsearch
+    app.kubernetes.io/component: master
+    app.kubernetes.io/part-of: cybersoc-siem
+spec:
+  replicas: 3
+  serviceName: elasticsearch-siem-master
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: elasticsearch
+      app.kubernetes.io/component: master
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: elasticsearch
+        app.kubernetes.io/component: master
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "9200"
+        prometheus.io/path: "/_prometheus/metrics"
+    spec:
+      serviceAccountName: siem-sa
+      securityContext:
+        fsGroup: 1000
+      initContainers:
+        # Sysctl tuning for Elasticsearch
+        - name: sysctl
+          image: busybox:1.36
+          command: ['sh', '-c', 'sysctl -w vm.max_map_count=262144 && sysctl -w net.core.somaxmax=65535']
+          securityContext:
+            privileged: true
+        # Chown data directory
+        - name: chown-data
+          image: docker.elastic.co/elasticsearch/elasticsearch:8.11.0
+          command: ['sh', '-c', 'chown -R 1000:1000 /usr/share/elasticsearch/data']
+          volumeMounts:
+            - name: data
+              mountPath: /usr/share/elasticsearch/data
+      containers:
+        - name: elasticsearch
+          image: docker.elastic.co/elasticsearch/elasticsearch:8.11.0
+          ports:
+            - name: http
+              containerPort: 9200
+            - name: transport
+              containerPort: 9300
+          env:
+            - name: node.roles
+              value: "master"
+            - name: discovery.seed_hosts
+              value: "elasticsearch-siem-master-0.elasticsearch-siem-master,elasticsearch-siem-master-1.elasticsearch-siem-master,elasticsearch-siem-master-2.elasticsearch-siem-master"
+            - name: cluster.initial_master_nodes
+              value: "elasticsearch-siem-master-0,elasticsearch-siem-master-1,elasticsearch-siem-master-2"
+            - name: cluster.name
+              value: "cybersoc-siem-cluster"
+            - name: network.host
+              value: "_site_"
+            - name: xpack.security.enabled
+              value: "true"
+            - name: xpack.security.http.ssl.enabled
+              value: "true"
+            - name: xpack.security.transport.ssl.enabled
+              value: "true"
+            - name: ELASTIC_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: siem-secrets
+                  key: elasticsearch-password
+            - name: JAVA_OPTS
+              value: "-Xms4g -Xmx4g"
+          resources:
+            requests:
+              cpu: "2"
+              memory: "8Gi"
+            limits:
+              cpu: "4"
+              memory: "16Gi"
+          volumeMounts:
+            - name: data
+              mountPath: /usr/share/elasticsearch/data
+          livenessProbe:
+            httpGet:
+              path: /_cluster/health?local=true
+              port: 9200
+            initialDelaySeconds: 60
+            periodSeconds: 20
+          readinessProbe:
+            httpGet:
+              path: /_cluster/health?local=true
+              port: 9200
+            initialDelaySeconds: 30
+            periodSeconds: 10
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                labelSelector:
+                  matchLabels:
+                    app.kubernetes.io/component: master
+                topologyKey: kubernetes.io/hostname
+      nodeSelector:
+        node-type: production
+        workload-class: database
+      tolerations:
+        - key: "dedicated"
+          operator: "Equal"
+          value: "database-workloads"
+          effect: NoSchedule
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        storageClassName: premium-ssd
+        resources:
+          requests:
+            storage: "100Gi"
+
+---
+# Elasticsearch Data Nodes - Hot Tier (Real-time indexing)
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: elasticsearch-siem-hot
+  namespace: cybersoc-siem
+  labels:
+    app.kubernetes.io/name: elasticsearch
+    app.kubernetes.io/component: hot-data
+    app.kubernetes.io/part-of: cybersoc-siem
+spec:
+  replicas: 3
+  serviceName: elasticsearch-siem-hot
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: elasticsearch
+      app.kubernetes.io/component: hot-data
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: elasticsearch
+        app.kubernetes.io/component: hot-data
+    spec:
+      serviceAccountName: siem-sa
+      securityContext:
+        fsGroup: 1000
+      initContainers:
+        - name: sysctl
+          image: busybox:1.36
+          command: ['sh', '-c', 'sysctl -w vm.max_map_count=262144']
+          securityContext:
+            privileged: true
+      containers:
+        - name: elasticsearch
+          image: docker.elastic.co/elasticsearch/elasticsearch:8.11.0
+          ports:
+            - name: http
+              containerPort: 9200
+            - name: transport
+              containerPort: 9300
+          env:
+            - name: node.roles
+              value: "data_hot,data_content"
+            - name: discovery.seed_hosts
+              value: "elasticsearch-siem-master-0.elasticsearch-siem-master,elasticsearch-siem-master-1.elasticsearch-siem-master,elasticsearch-siem-master-2.elasticsearch-siem-master"
+            - name: cluster.name
+              value: "cybersoc-siem-cluster"
+            - name: xpack.security.enabled
+              value: "true"
+            - name: xpack.security.http.ssl.enabled
+              value: "true"
+            - name: ELASTIC_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: siem-secrets
+                  key: elasticsearch-password
+            - name: JAVA_OPTS
+              value: "-Xms8g -Xmx8g"
+            - name: index.routing.allocation.require.tier
+              value: "data_hot"
+          resources:
+            requests:
+              cpu: "8"
+              memory: "16Gi"
+            limits:
+              cpu: "16"
+              memory: "32Gi"
+          volumeMounts:
+            - name: data
+              mountPath: /usr/share/elasticsearch/data
+          livenessProbe:
+            httpGet:
+              path: /_cluster/health?local=true
+              port: 9200
+            initialDelaySeconds: 60
+          readinessProbe:
+            httpGet:
+              path: /_cluster/health?local=true
+              port: 9200
+            initialDelaySeconds: 30
+      affinity:
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - labelSelector:
+                matchExpressions:
+                  - key: app.kubernetes.io/component
+                    operator: In
+                    values: [hot-data]
+              topologyKey: kubernetes.io/hostname
+      nodeSelector:
+        node-type: production
+        workload-class: io-intensive
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        storageClassName: premium-nvme
+        resources:
+          requests:
+            storage: "500Gi"
+
+---
+# Elasticsearch Data Nodes - Warm Tier (Historical queries)
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: elasticsearch-siem-warm
+  namespace: cybersoc-siem
+  labels:
+    app.kubernetes.io/name: elasticsearch
+    app.kubernetes.io/component: warm-data
+spec:
+  replicas: 2
+  serviceName: elasticsearch-siem-warm
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: elasticsearch
+      app.kubernetes.io/component: warm-data
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: elasticsearch
+        app.kubernetes.io/component: warm-data
+    spec:
+      serviceAccountName: siem-sa
+      containers:
+        - name: elasticsearch
+          image: docker.elastic.co/elasticsearch/elasticsearch:8.11.0
+          ports:
+            - name: http
+              containerPort: 9200
+            - name: transport
+              containerPort: 9300
+          env:
+            - name: node.roles
+              value: "data_warm"
+            - name: discovery.seed_hosts
+              value: "elasticsearch-siem-master-0.elasticsearch-siem-master,elasticsearch-siem-master-1.elasticsearch-siem-master,elasticsearch-siem-master-2.elasticsearch-siem-master"
+            - name: cluster.name
+              value: "cybersoc-siem-cluster"
+            - name: xpack.security.enabled
+              value: "true"
+            - name: ELASTIC_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: siem-secrets
+                  key: elasticsearch-password
+            - name: JAVA_OPTS
+              value: "-Xms4g -Xmx4g"
+          resources:
+            requests:
+              cpu: "4"
+              memory: "8Gi"
+            limits:
+              cpu: "8"
+              memory: "16Gi"
+          volumeMounts:
+            - name: data
+              mountPath: /usr/share/elasticsearch/data
+      nodeSelector:
+        node-type: production
+        workload-class: standard
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        storageClassName: premium-ssd
+        resources:
+          requests:
+            storage: "1Ti"
+
+---
+# Elasticsearch Cold Tier (Archive)
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: elasticsearch-siem-cold
+  namespace: cybersoc-siem
+  labels:
+    app.kubernetes.io/name: elasticsearch
+    app.kubernetes.io/component: cold-data
+spec:
+  replicas: 1
+  serviceName: elasticsearch-siem-cold
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: elasticsearch
+      app.kubernetes.io/component: cold-data
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: elasticsearch
+        app.kubernetes.io/component: cold-data
+    spec:
+      serviceAccountName: siem-sa
+      containers:
+        - name: elasticsearch
+          image: docker.elastic.co/elasticsearch/elasticsearch:8.11.0
+          ports:
+            - name: http
+              containerPort: 9200
+          env:
+            - name: node.roles
+              value: "data_cold"
+            - name: discovery.seed_hosts
+              value: "elasticsearch-siem-master-0.elasticsearch-siem-master"
+            - name: cluster.name
+              value: "cybersoc-siem-cluster"
+            - name: xpack.security.enabled
+              value: "true"
+            - name: ELASTIC_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: siem-secrets
+                  key: elasticsearch-password
+            - name: JAVA_OPTS
+              value: "-Xms2g -Xmx2g"
+          resources:
+            requests:
+              cpu: "2"
+              memory: "4Gi"
+            limits:
+              cpu: "4"
+              memory: "8Gi"
+          volumeMounts:
+            - name: data
+              mountPath: /usr/share/elasticsearch/data
+      nodeSelector:
+        node-type: archive
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        storageClassName: standard-hdd
+        resources:
+          requests:
+            storage: "5Ti"
+
+---
+# Kibana for SIEM Visualization & Analysis
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: kibana-siem
+  namespace: cybersoc-siem
+  labels:
+    app.kubernetes.io/name: kibana
+    app.kubernetes.io/component: visualization
+    app.kubernetes.io/part-of: cybersoc-siem
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: kibana
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: kibana
+      annotations:
+        prometheus.io/scrape: "false"
+    spec:
+      serviceAccountName: siem-sa
+      containers:
+        - name: kibana
+          image: docker.elastic.co/kibana/kibana:8.11.0
+          ports:
+            - name: http
+              containerPort: 5601
+          env:
+            - name: ELASTICSEARCH_HOSTS
+              value: "https://elasticsearch-siem-master.cybersoc-siem.svc.cluster.local:9200"
+            - name: ELASTICSEARCH_USERNAME
+              value: "kibana_system"
+            - name: ELASTICSEARCH_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: siem-secrets
+                  key: kibana-password
+            - name: SERVER_NAME
+              value: "kibana.soc.djezzy.dz"
+            - name: SERVER_PUBLICBASEURL
+              value: "https://kibana.soc.djezzy.dz"
+            - name: XPACK_SECURITY_ENCRYPTIONKEY
+              valueFrom:
+                secretKeyRef:
+                  name: siem-secrets
+                  key: xpack-encryption-key
+            - name: I18N_LOCALE
+              value: "fr-DZ"  # Algerian French locale
+            - name: XPACK_FLEET_ENABLED
+              value: "true"
+            - name: XPACK_Siem_ENABLED
+              value: "true"
+          resources:
+            requests:
+              cpu: "2"
+              memory: "4Gi"
+            limits:
+              cpu: "4"
+              memory: "8Gi"
+          livenessProbe:
+            httpGet:
+              path: /api/status
+              port: 5601
+            initialDelaySeconds: 60
+            periodSeconds: 20
+          readinessProbe:
+            httpGet:
+              path: /api/status
+              port: 5601
+            initialDelaySeconds: 30
+            periodSeconds: 10
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                labelSelector:
+                  matchLabels:
+                    app.kubernetes.io/name: kibana
+                topologyKey: kubernetes.io/hostname

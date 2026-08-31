@@ -1,0 +1,82 @@
+# =============================================================================
+# CyberSOC Platform - Threat Intelligence RBAC
+# Target: Djezzy Telecom Algeria
+# =============================================================================
+
+---
+# Service Account for Threat Intel Components
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: threat-intel-sa
+  namespace: cybersoc-threat-intel
+  labels:
+    app.kubernetes.io/part-of: cybersoc-threat-intel
+  annotations:
+    iam.amazonaws.com/role: "arn:aws:iam::123456789012:role/cybersoc-threat-intel-role"
+automountServiceAccountToken: false
+
+---
+# Role: Threat Intel Pod Management
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: threat-intel-pod-role
+  namespace: cybersoc-threat-intel
+rules:
+  - apiGroups: [""]
+    resources: ["configmaps", "secrets", "pods", "events"]
+    verbs: ["get", "list", "watch", "create", "patch"]
+  - apiGroups: [""]
+    resources: ["persistentvolumeclaims"]
+    verbs: ["get", "list", "watch"]
+
+---
+# RoleBinding
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: threat-intel-role-binding
+  namespace: cybersoc-threat-intel
+subjects:
+  - kind: ServiceAccount
+    name: threat-intel-sa
+    namespace: cybersoc-threat-intel
+roleRef:
+  kind: Role
+  name: threat-intel-pod-role
+  apiGroup: rbac.authorization.k8s.io
+
+---
+# ClusterRole: Cross-Namespace Access (SIEM, SOAR, DB)
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: threat-intel-cross-namespace-access
+  labels:
+    app.kubernetes.io/part-of: cybersoc-threat-intel
+rules:
+  # Read services/endpoints
+  - apiGroups: [""]
+    resources: ["services", "endpoints"]
+    verbs: ["get", "list", "watch"]
+  
+  # Custom resources
+  - apiGroups: ["cybersoc.djezzy.dz"]
+    resources: ["*"]
+    verbs: ["get", "list", "watch", "create", "update"]
+
+---
+# ClusterRoleBinding
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: threat-intel-cluster-role-binding
+subjects:
+  - kind: ServiceAccount
+    name: threat-intel-sa
+    namespace: cybersoc-threat-intel
+roleRef:
+  kind: ClusterRole
+  name: threat-intel-cross-namespace-access
+  apiGroup: rbac.authorization.k8s.io
