@@ -1,0 +1,296 @@
+# CyberSOC Platform - Splunk Enterprise Integration
+# Djezzy Telecom Algeria - SIEM Phase
+# Splunk Forwarders & HEC (HTTP Event Collector) Integration
+
+apiVersion: v1
+kind: Secret
+metadata:
+  name: splunk-credentials
+  namespace: cybersoc-siem
+  labels:
+    app.kubernetes.io/component: siem-splunk
+type: Opaque
+stringData:
+  SPLUNK_HEC_TOKEN: "djezzy-soc-hec-token-2024-secure"
+  SPLUNK_PASSWORD: "SplunkAdmin@DjezzySOC#2024!"
+---
+# Universal Forwarder DaemonSet (Node-level log collection)
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: splunk-universal-forwarder
+  namespace: cybersoc-siem
+  labels:
+    app.kubernetes.io/name: splunk-forwarder
+    app.kubernetes.io/component: log-collection
+    app.kubernetes.io/part-of: djezzy-telecom
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: splunk-forwarder
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: splunk-forwarder
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8089"
+    spec:
+      serviceAccountName: elasticsearch-sa
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+      containers:
+      - name: splunk-forwarder
+        image: splunk/universalforwarder:9.2.0
+        ports:
+        - containerPort: 8089
+          name: management
+          protocol: TCP
+        env:
+        - name: SPLUNK_FORWARD_SERVER
+          value: "splunk-indexer.djezzy.internal:9997"
+        - name: SPLUNK_DEployment_SERVER
+          value: "splunk-deployer.djezzy.internal:8089"
+        - name: SPLUNK_HEC_URL
+          value: "https://splunk-hec.soc.djezzy.dz:8088"
+        - name: SPLUNK_HEC_TOKEN
+          valueFrom:
+            secretKeyRef:
+              name: splunk-credentials
+              key: SPLUNK_HEC_TOKEN
+        - name: SPLUNK_START_ARGS
+          value: "--accept-license --answer-yes --no-prompt --auto-ports"
+        - name: DJEZZY_INDEX_PREFIX
+          value: "djezzy_soc_"
+        - name: ANRT_LOG_FORWARDING
+          value: "enabled"
+        resources:
+          requests:
+            cpu: "200m"
+            memory: "512Mi"
+          limits:
+            cpu: "500m"
+            memory: "1Gi"
+        volumeMounts:
+        - name: varlog
+          mountPath: /var/log
+          readOnly: true
+        - name: varlibdockercontainers
+          mountPath: /var/lib/docker/containers
+          readOnly: true
+        - name: splunk-config
+          mountPath: /opt/splunkforwarder/etc/system/local
+          readOnly: true
+        readinessProbe:
+          exec:
+            command:
+            - sh
+            - -c
+            - pgrep -f splunkd
+          initialDelaySeconds: 15
+          periodSeconds: 10
+        livenessProbe:
+          exec:
+            command:
+            - sh
+            - -c
+            - pgrep -f splunkd
+          initialDelaySeconds: 30
+          periodSeconds: 20
+      volumes:
+      - name: varlog
+        hostPath:
+          path: /var/log
+          type: Directory
+      - name: varlibdockercontainers
+        hostPath:
+          path: /var/lib/docker/containers
+          type: Directory
+      - name: splunk-config
+        configMap:
+          name: splunk-forwarder-config
+---
+# HEC Token Configuration for External Log Sources
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: splunk-forwarder-config
+  namespace: cybersoc-siem
+data:
+  inputs.conf: |
+    # CyberSOC Splunk Forwarder Configuration
+    # Djezzy Telecom Algeria
+    
+    [default]
+    host = $decideOnStartup
+    
+    # Kubernetes System Logs
+    [monitor:///var/log/containers/*.log]
+    disabled = false
+    sourcetype = kube:container
+    index = djezzy_soc_kubernetes
+    _TCP_ROUTING = djezzy_indexers
+    
+    # System Logs
+    [monitor:///var/log/syslog]
+    disabled = false
+    sourcetype = syslog
+    index = djezzy_soc_system
+    _TCP_ROUTING = djezzy_indexers
+    
+    [monitor:///var/log/auth.log]
+    disabled = false
+    sourcetype = linux:auth
+    index = djezzy_soc_authentication
+    _TCP_ROUTING = djezzy_indexers
+    
+    # ANRT Compliance - Security Events
+    [monitor:///var/log/security/*.log]
+    disabled = false
+    sourcetype = security:event
+    index = djezzy_soc_security
+    _TCP_ROUTING = djezzy_indexers
+    
+  outputs.conf: |
+    # Splunk Indexer Outputs
+    [tcpout]
+    defaultGroup = djezzy_indexers
+    forwardedindex.filter.disable = true
+    indexAndForward = false
+    
+    [tcpout:djezzy_indexers]
+    server = splunk-indexer-1.djezzy.internal:9997,splunk-indexer-2.djezzy.internal:9997
+    useACK = true
+    maxQueueSize = 1MB
+    indexAndForward = false
+    
+    # HEC Output for Cloud Sources
+    [tcpout:hec_output]
+    token = $SPLUNK_HEC_TOKEN
+    server = https://splunk-hec.soc.djezzy.dz:8088
+    SSLVerifyCertificate = true
+    
+  props.conf: |
+    # Source Type Configurations
+    
+    [kube:container]
+    TIMESTAMP_FIELDS = timestamp
+    MAX_TIMESTAMP_LOOKAHEAD = 2s
+    TIME_FORMAT = %Y-%m-%dT%H:%M:%S.%NZ
+    TRUNCATE = 10000
+    LINE_BREAKER = ([\r\n]+)
+    SHOULD_LINEMERGE = false
+    
+    [syslog]
+    TIMESTAMP_FIELDS = _time
+    MAX_TIMESTAMP_LOOKAHEAD = 2s
+    TIME_FORMAT = %b %d %H:%M:%S
+    PARSER = syslog-host
+    
+    [security:event]
+    BREAK_ONLY_BEFORE_DATE = true
+    MUST_BREAK_AFTER_EXTRACT = false
+    SHOULD_LINEMERGE = true
+    BREAK_MAX_DAYS = 1
+    MAX_EVENTS = 50000
+    
+    # GDPR - PII Masking Rules
+    [msisdn_masking]
+    SEDCMD-msisdn = s/(\+213|00213)(5|6|7)[0-9]{2}/*****/g
+    SEDCMD-imsi = s/60301[0-9]{10}/*****/g
+    
+  transforms.conf: |
+    # Field Transformations
+    
+    [syslog-host]
+    REGEX = ^[^\s]+\s+[^\s]+\s+(?P<host>[^\s]+)\s+
+    FORMAT = host::$host
+    WRITE_META = true
+    
+    # Djezzy Telecom Field Extraction
+    [ss7-field-extraction]
+    REGEX = SS7_OP=(?<ss7_operation>\w+)\s+SRC=(?<origin_point>[\d.]+)\s+DST=(?<destination>[\d.]+)
+    FORMAT = ss7_operation::$ss7_operation origin_point::$origin_point destination::$destination
+    
+    [diameter-field-extraction]
+    REGEX = CMD=(?<command_code>\w+)\s+SESSION=(?<session_id>[^\s]+)\s+ORIGIN=(?<origin_host>[^\s]+)
+    FORMAT = command_code::$command_code session_id::$session_id origin_host::$origin_host
+---
+# Splunk HEC Service for External Log Ingestion
+apiVersion: v1
+kind: Service
+metadata:
+  name: splunk-hec
+  namespace: cybersoc-siem
+  labels:
+    app.kubernetes.io/name: splunk-hec
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: splunk-hec
+  ports:
+  - port: 8088
+    targetPort: 8088
+    name: hec
+    protocol: TCP
+---
+# Log Aggregation Summary Dashboard Data
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: siem-data-sources-inventory
+  namespace: cybersoc-siem
+  labels:
+    app.kubernetes.io/component: siem-documentation
+data:
+  data_sources.json: |
+    {
+      "siem_data_sources": {
+        "network_security": [
+          {"name": "Palo Alto Next-Gen FW", "type": "firewall", "logs_per_day": 50000000, "protocol": "Syslog"},
+          {"name": "Cisco ASA/FTD", "type": "firewall", "logs_per_day": 30000000, "protocol": "Syslog"},
+          {"name": "Fortinet FortiGate", "type": "firewall", "logs_per_day": 25000000, "protocol": "Syslog"},
+          {"name": "Snort IDS/IPS", "type": "ids", "logs_per_day": 15000000, "protocol": "Syslog"},
+          {"name": "Suricata", "type": "ids", "logs_per_day": 10000000, "protocol": "EVE JSON"}
+        ],
+        "telecom_infrastructure": [
+          {"name": "SS7 Firewall (SCTP)", "type": "signaling", "logs_per_day": 80000000, "protocol": "Custom"},
+          {"name": "Diameter Router", "type": "signaling", "logs_per_day": 60000000, "protocol": "DIAMETER"},
+          {"name": "HLR/HSS", "type": "core-network", "logs_per_day": 40000000, "protocol": "Syslog"},
+          {"name": "MSC/VLR", "type": "core-network", "logs_per_day": 35000000, "protocol": "CDR"},
+          {"name": "SGSN/GGSN/GW", "type": "packet-core", "logs_per_day": 45000000, "protocol": "GTP"},
+          {"name": "SMSC", "type": "messaging", "logs_per_day": 55000000, "protocol": "SMPP"},
+          {"name": "IN Platform (SCP)", "type": "intelligent-network", "logs_per_day": 20000000, "protocol": "CAP"}
+        ],
+        "endpoint_security": [
+          {"name": "CrowdStrike Falcon", "type": "edr", "logs_per_day": 12000000, "protocol": "REST API"},
+          {"name": "Microsoft Defender for Endpoint", "type": "edr", "logs_per_day": 15000000, "protocol": "Azure Sentinel"},
+          {"name": "Carbon Black", "type": "edr", "logs_per_day": 8000000, "protocol": "Stream"},
+          {"name": "Symantec EP", "type": "av", "logs_per_day": 10000000, "protocol": "Syslog"}
+        ],
+        "identity_access": [
+          {"name": "Active Directory", "type": "directory", "logs_per_day": 25000000, "protocol": "WinEventLog"},
+          {"name": "Radius Server (Cisco ACS)", "type": "aaa", "logs_per_day": 18000000, "protocol": "Radius Accounting"},
+          {"name": "LDAP/OpenLDAP", "type": "directory", "logs_per_day": 5000000, "protocol": "Syslog"},
+          {"name": "Kerberos KDC", "type": "auth", "logs_per_day": 3000000, "protocol": "MIT Kerberos"}
+        ],
+        "cloud_services": [
+          {"name": "AWS CloudTrail", "type": "cloud-audit", "logs_per_day": 8000000, "protocol": "S3/SQS"},
+          {"name": "Azure Activity Logs", "type": "cloud-audit", "logs_per_day": 6000000, "protocol": "Event Hub"},
+          {"name": "Office 365 Audit", "type": "saas", "logs_per_day": 7000000, "protocol": "Management API"},
+          {"name": "Google Workspace", "type": "saas", "logs_per_day": 4000000, "protocol": "Cloud Pub/Sub"}
+        ],
+        "application_logs": [
+          {"name": "Billing System (Oracle BRM)", "type": "business-app", "logs_per_day": 15000000, "protocol": "JDBC"},
+          {"name": "CRM (Salesforce)", "type": "crm", "logs_per_day": 5000000, "protocol": "EventLogFile"},
+          {"name": "ERP (SAP)", "type": "erp", "logs_per_day": 8000000, "protocol": "IDoc/RFC"},
+          {"name": "Provisioning System", "type": "oss-bss", "logs_per_day": 6000000, "protocol": "REST API"}
+        ],
+        "total_daily_volume_estimate": 750000000,
+        "retention_days_hot": 30,
+        "retention_days_warm": 180,
+        "retention_days_cold": 365,
+        "anrt_mandatory_retention_days": 1095
+      }
+    }

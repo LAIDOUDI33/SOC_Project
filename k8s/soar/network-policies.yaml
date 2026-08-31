@@ -1,265 +1,209 @@
-# =============================================================================
-# CyberSOC Platform - SOAR Network Policies (Zero-Trust)
-# Target: Djezzy Telecom Algeria
-# =============================================================================
+# CyberSOC Platform - SOAR Network Policies
+# Djezzy Telecom Algeria - Zero-Trust Security Architecture
 
----
-# Default Deny All Ingress
+# ============================================
+# POLICY 1: Default Deny All Ingress
+# ============================================
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
-  name: default-deny-ingress
+  name: soar-default-deny-ingress
   namespace: cybersoc-soar
+  labels:
+    policy: zero-trust-deny-all
+    severity: critical
 spec:
   podSelector: {}
   policyTypes:
-    - Ingress
+  - Ingress
 
 ---
-# Default Deny All Egress
+# ============================================
+# POLICY 2: Default Deny All Egress
+# ============================================
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
-  name: default-deny-egress
+  name: soar-default-deny-egress
   namespace: cybersoc-soar
+  labels:
+    policy: zero-trust-deny-all
+    severity: critical
 spec:
   podSelector: {}
   policyTypes:
-    - Egress
+  - Egress
 
 ---
-# Allow DNS Egress
+# ============================================
+# POLICY 3: SOAR Engine API Access
+# ============================================
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
-  name: allow-dns-egress
+  name: soar-engine-api-access
   namespace: cybersoc-soar
+  labels:
+    component: core-soar
+    purpose: api-access
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: soar-engine
+  policyTypes:
+  - Ingress
+  - Egress
+  ingress:
+  # SIEM → SOAR (Alert Webhook)
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: cybersoc-siem
+      podSelector:
+        matchLabels:
+          app.kubernetes.io/name: siem-correlation-engine
+    ports:
+    - protocol: TCP
+      port: 8080
+    
+  # Threat Intel → SOAR
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: cybersoc-threat-intel
+      podSelector:
+        matchLabels:
+          app.kubernetes.io/name: threat-intel-hub
+    ports:
+    - protocol: TCP
+      port: 8080
+      
+  # Analytics Services → SOAR
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: cybersoc-analytics
+    ports:
+    - protocol: TCP
+      port: 8080
+      
+  egress:
+  # To Elasticsearch (SIEM)
+  - to:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: cybersoc-siem
+      podSelector:
+        matchLabels:
+          app.kubernetes.io/name: elasticsearch
+    ports:
+    - protocol: TCP
+      port: 9200
+      
+  # To PostgreSQL (Infrastructure)
+  - to:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: cybersoc-infrastructure
+      podSelector:
+        matchLabels:
+          app.kubernetes.io/name: postgres
+    ports:
+    - protocol: TCP
+      port: 5432
+      
+  # To Redis (Infrastructure)
+  - to:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: cybersoc-infrastructure
+      podSelector:
+        matchLabels:
+          app.kubernetes.io/name: redis-master
+    ports:
+    - protocol: TCP
+      port: 6379
+
+---
+# ============================================
+# POLICY 4: SOAR UI/Portal Access
+# ============================================
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: soar-ui-access
+  namespace: cybersoc-soar
+  labels:
+    component: user-interface
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: soar-portal
+  policyTypes:
+  - Ingress
+  ingress:
+  # From Ingress Controller
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          app.kubernetes.io/name: ingress-nginx
+      podSelector: {}
+    ports:
+    - protocol: TCP
+      port: 443
+    - protocol: TCP
+      port: 80
+
+---
+# ============================================
+# POLICY 5: Monitoring Access
+# ============================================
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: soar-monitoring-access
+  namespace: cybersoc-soar
+  labels:
+    purpose: observability
 spec:
   podSelector: {}
   policyTypes:
-    - Egress
-  egress:
-    - to:
-        - namespaceSelector:
-            matchLabels:
-              kubernetes.io/metadata.name: kube-system
-          podSelector:
-            matchLabels:
-              k8s-app: kube-dns
-      ports:
-        - protocol: UDP
-          port: 53
-        - protocol: TCP
-          port: 53
+  - Ingress
+  ingress:
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: cybersoc-monitoring
+      podSelector:
+        matchLabels:
+          app.kubernetes.io/name: prometheus
+    ports:
+    - protocol: TCP
+      port: 8080
 
 ---
-# Playbook Engine Network Policy
+# ============================================
+# POLICY 6: DNS Resolution
+# ============================================
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
-  name: playbook-engine-netpol
+  name: soar-dns-resolution
   namespace: cybersoc-soar
+  labels:
+    purpose: infrastructure
 spec:
-  podSelector:
-    matchLabels:
-      app.kubernetes.io/name: playbook-engine
+  podSelector: {}
   policyTypes:
-    - Ingress
-    - Egress
-  ingress:
-    # API Gateway access
-    - from:
-        - podSelector:
-            matchLabels:
-              app.kubernetes.io/name: soar-api-gateway
-      ports:
-        - protocol: TCP
-          port: 8080
-        - protocol: TCP
-          port: 50070
-    
-    # SIEM alerts input
-    - from:
-        - namespaceSelector:
-            matchLabels:
-              kubernetes.io/metadata.name: cybersoc-siem
-          podSelector:
-            matchLabels:
-              app.kubernetes.io/name: siem-soar-bridge
-      ports:
-        - protocol: TCP
-          port: 8080
-    
-    # Monitoring
-    - from:
-        - namespaceSelector:
-            matchLabels:
-              kubernetes.io/metadata.name: monitoring
-          podSelector:
-            matchLabels:
-              app.kubernetes.io/name: prometheus
-      ports:
-        - protocol: TCP
-          port: 9090
-  
+  - Egress
   egress:
-    # Database (PostgreSQL)
-    - to:
-        - namespaceSelector:
-            matchLabels:
-              kubernetes.io/metadata.name: cybersoc-db
-          podSelector:
-            matchLabels:
-              app.kubernetes.io/name: postgresql
-      ports:
-        - protocol: TCP
-          port: 5432
-    
-    # Kafka
-    - to:
-        - namespaceSelector:
-            matchLabels:
-              kubernetes.io/metadata.name: logging
-          podSelector:
-            matchLabels:
-              app.kubernetes.io/name: kafka
-      ports:
-        - protocol: TCP
-          port: 9094
-    
-    # Redis
-    - to:
-        - namespaceSelector:
-            matchLabels:
-              kubernetes.io/metadata.name: cybersoc-cache
-          podSelector:
-            matchLabels:
-              app.kubernetes.io/name: redis
-      ports:
-        - protocol: TCP
-          port: 6379
-    
-    # Call SIEM for enrichment
-    - to:
-        - namespaceSelector:
-            matchLabels:
-              kubernetes.io/metadata.name: cybersoc-siem
-          podSelector:
-            matchLabels:
-              app.kubernetes.io/name: sigma-engine
-      ports:
-        - protocol: TCP
-          port: 8080
-
----
-# Incident/Case Manager Network Policy
-apiVersion: networking.k8s.io/v1
-kind: NetworkPolicy
-metadata:
-  name: incident-manager-netpol
-  namespace: cybersoc-soar
-spec:
-  podSelector:
-    matchExpressions:
-      - key: app.kubernetes.io/name
-        operator: In
-        values: [incident-manager, case-manager]
-  policyTypes:
-    - Ingress
-    - Egress
-  ingress:
-    - from:
-        - podSelector:
-            matchLabels:
-              app.kubernetes.io/name: soar-api-gateway
-      ports:
-        - protocol: TCP
-          port: 8090
-        - protocol: TCP
-          port: 8091
-  
-  egress:
-    # PostgreSQL
-    - to:
-        - namespaceSelector:
-            matchLabels:
-              kubernetes.io/metadata.name: cybersoc-db
-          podSelector:
-            matchLabels:
-              app.kubernetes.io/name: postgresql
-      ports:
-        - protocol: TCP
-          port: 5432
-
----
-# API Gateway Network Policy
-apiVersion: networking.k8s.io/v1
-kind: NetworkPolicy
-metadata:
-  name: soar-api-gateway-netpol
-  namespace: cybersoc-soar
-spec:
-  podSelector:
-    matchLabels:
-      app.kubernetes.io/name: soar-api-gateway
-  policyTypes:
-    - Ingress
-    - Egress
-  ingress:
-    # Ingress controller (external users)
-    - from:
-        - namespaceSelector:
-            matchLabels:
-              kubernetes.io/metadata.name: ingress-nginx
-          podSelector: {}
-      ports:
-        - protocol: TCP
-          port: 8080
-        - protocol: TCP
-          port: 8443
-  
-  egress:
-    # Internal services
-    - to:
-        - podSelector: {}
-      ports:
-        - protocol: TCP
-          port: 8080
-        - protocol: TCP
-          port: 8090
-        - protocol: TCP
-          port: 8091
-
----
-# Web UI Network Policy
-apiVersion: networking.k8s.io/v1
-kind: NetworkPolicy
-metadata:
-  name: soar-web-ui-netpol
-  namespace: cybersoc-soar
-spec:
-  podSelector:
-    matchLabels:
-      app.kubernetes.io/name: soar-web-ui
-  policyTypes:
-    - Ingress
-    - Egress
-  ingress:
-    - from:
-        - namespaceSelector:
-            matchLabels:
-              kubernetes.io/metadata.name: ingress-nginx
-          podSelector: {}
-      ports:
-        - protocol: TCP
-          port: 3000
-  
-  egress:
-    # To API Gateway only
-    - to:
-        - podSelector:
-            matchLabels:
-              app.kubernetes.io/name: soar-api-gateway
-      ports:
-        - protocol: TCP
-          port: 8080
+  - to:
+    - namespaceSelector: {}
+      podSelector:
+        matchLabels:
+          k8s-app: kube-dns
+    ports:
+    - protocol: UDP
+      port: 53
+    - protocol: TCP
+      port: 53

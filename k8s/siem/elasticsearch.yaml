@@ -1,0 +1,222 @@
+# CyberSOC Platform - Elasticsearch Cluster
+# Enterprise-Grade Log Storage & Analytics Backend
+# Djezzy Telecom Algeria - SIEM Phase
+
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: elasticsearch-sa
+  namespace: cybersoc-siem
+  labels:
+    app.kubernetes.io/name: elasticsearch
+    app.kubernetes.io/component: siem-storage
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: elasticsearch-cluster-role
+  labels:
+    app.kubernetes.io/component: siem-storage
+rules:
+- apiGroups: [""]
+  resources: ["pods", "services", "endpoints"]
+  verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: elasticsearch-cluster-rolebinding
+subjects:
+- kind: ServiceAccount
+  name: elasticsearch-sa
+  namespace: cybersoc-siem
+roleRef:
+  kind: ClusterRole
+  name: elasticsearch-cluster-role
+  apiGroup: rbac.authorization.k8s.io
+---
+# Elasticsearch StatefulSet - Production Cluster
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: elasticsearch
+  namespace: cybersoc-siem
+  labels:
+    app.kubernetes.io/name: elasticsearch
+    app.kubernetes.io/component: siem-storage
+    app.kubernetes.io/instance: production
+spec:
+  serviceName: elasticsearch-headless
+  replicas: 3
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: elasticsearch
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: elasticsearch
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "9114"
+        prometheus.io/path: "/metrics"
+    spec:
+      serviceAccountName: elasticsearch-sa
+      securityContext:
+        fsGroup: 1000
+        runAsNonRoot: true
+        runAsUser: 1000
+      initContainers:
+      - name: sysctl-init
+        image: busybox:1.36
+        command: ['sh', '-c', 'sysctl -w vm.max_map_count=262144 && sysctl -w fs.file-max=65536']
+        securityContext:
+          privileged: true
+      containers:
+      - name: elasticsearch
+        image: docker.elastic.co/elasticsearch/elasticsearch:8.12.0
+        ports:
+        - containerPort: 9200
+          name: http
+          protocol: TCP
+        - containerPort: 9300
+          name: transport
+          protocol: TCP
+        env:
+        - name: discovery.type
+          value: single-node
+        - name: ES_JAVA_OPTS
+          value: "-Xms2g -Xmx2g"
+        - name: xpack.security.enabled
+          value: "true"
+        - name: xpack.security.http.ssl.enabled
+          value: "false"
+        - name: xpack.security.transport.ssl.enabled
+          value: "false"
+        - name: cluster.name
+          value: cybersoc-siem-djezzy
+        - name: node.name
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        - name: ANRT_LOG_RETENTION_DAYS
+          value: "365"
+        - name: DJEZZY_COMPLIANCE_MODE
+          value: "strict"
+        - name: GDPR_DATA_MASKING
+          value: "true"
+        resources:
+          requests:
+            cpu: "2"
+            memory: "4Gi"
+          limits:
+            cpu: "4"
+            memory: "8Gi"
+        volumeMounts:
+        - name: elasticsearch-data
+          mountPath: /usr/share/elasticsearch/data
+        - name: elasticsearch-config
+          mountPath: /usr/share/elasticsearch/config/elasticsearch.yml
+          subPath: elasticsearch.yml
+        readinessProbe:
+          httpGet:
+            path: /_cluster/health?local=true
+            port: 9200
+          initialDelaySeconds: 30
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 3
+        livenessProbe:
+          httpGet:
+            path: /_cluster/health?local=true
+            port: 9200
+          initialDelaySeconds: 60
+          periodSeconds: 20
+          timeoutSeconds: 10
+          failureThreshold: 3
+      volumes:
+      - name: elasticsearch-config
+        configMap:
+          name: elasticsearch-config
+  volumeClaimTemplates:
+  - metadata:
+      name: elasticsearch-data
+    spec:
+      accessModes: ["ReadWriteOnce"]
+      storageClassName: managed-premium
+      resources:
+        requests:
+          storage: 200Gi
+---
+# Elasticsearch Headless Service (for cluster communication)
+apiVersion: v1
+kind: Service
+metadata:
+  name: elasticsearch-headless
+  namespace: cybersoc-siem
+  labels:
+    app.kubernetes.io/name: elasticsearch
+spec:
+  clusterIP: None
+  selector:
+    app.kubernetes.io/name: elasticsearch
+  ports:
+  - port: 9200
+    name: http
+  - port: 9300
+    name: transport
+---
+# Elasticsearch Client Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: elasticsearch
+  namespace: cybersoc-siem
+  labels:
+    app.kubernetes.io/name: elasticsearch
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: elasticsearch
+  ports:
+  - port: 9200
+    targetPort: 9200
+    name: http
+    protocol: TCP
+  - port: 9300
+    targetPort: 9300
+    name: transport
+    protocol: TCP
+---
+# Elasticsearch ConfigMap
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: elasticsearch-config
+  namespace: cybersoc-siem
+data:
+  elasticsearch.yml: |
+    cluster.name: cybersoc-siem-djezzy
+    network.host: 0.0.0.0
+    discovery.seed_hosts: ["elasticsearch-0.elasticsearch-headless.cybersoc-siem.svc.cluster.local"]
+    cluster.initial_master_nodes: ["elasticsearch-0"]
+    
+    # Djezzy Telecom Security Configuration
+    xpack.security.enabled: true
+    xpack.security.audit.enabled: true
+    
+    # ANRT Compliance - Log Settings
+    path.logs: /usr/share/elasticsearch/logs
+    path.data: /usr/share/elasticsearch/data
+    
+    # Index Settings for Telecom Logs
+    action.destructive_requires_name: true
+    indices.memory.index_buffer_size: 30%
+    
+    # GDPR Compliance - Data Handling
+    xpack.security.encryptionKey: "djezzy-telecom-algeria-siem-encryption-key-2024"
+    xpack.reporting.encryptionKey: "djezzy-reporting-encryption-key-secure"
+    
+    # Performance Tuning
+    thread_pool.search.size: 12
+    thread_pool.write.size: 8
+    thread_pool.bulk.queue_size: 2000

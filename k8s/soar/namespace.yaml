@@ -1,11 +1,7 @@
-# =============================================================================
-# CyberSOC Platform - SOAR Phase Namespace & Configuration
-# Target: Djezzy Telecom Algeria - ANRT Compliant
-# Purpose: Security Orchestration, Automation, and Response
-# =============================================================================
+# CyberSOC Platform - SOAR Namespace
+# Target: Djezzy Telecom Algeria (ANRT/ISO27001/GDPR Compliant)
+# Phase: Security Orchestration, Automation & Response
 
----
-# SOAR Namespace with Production Labels
 apiVersion: v1
 kind: Namespace
 metadata:
@@ -13,17 +9,18 @@ metadata:
   labels:
     app.kubernetes.io/name: cybersoc-platform
     app.kubernetes.io/component: soar
-    app.kubernetes.io/part-of: security-operations
-    cybersoc.djezzy.dz/environment: production
-    cybersoc.djezzy.dz/department: soc
-    cybersoc.djezzy.dz/compliance: anrt
-    name: cybersoc-soar
+    app.kubernetes.io/part-of: djezzy-telecom
+    app.kubernetes.io/managed-by: kubernetes
+    security.djezzy.dz/compliance: anrt-iso27001-gdpr
+    security.djezzy.dz/classification: confidential
+    environment: production
+    region: algeria-dz
   annotations:
-    description: "CyberSOC Security Orchestration, Automation & Response"
-    contact: "soc-ops@djezzy.dz"
-
+    description: "CyberSOC SOAR Namespace - Djezzy Telecom Algeria"
+    contact: "soc-team@djezzy.dz"
+    compliance-framework: "ANRT Telecom Security | ISO27001:2022 | GDPR EU Data Protection"
 ---
-# Resource Quota - SOAR Workloads (Moderate compute, high I/O)
+# Resource Quota for SOAR Namespace
 apiVersion: v1
 kind: ResourceQuota
 metadata:
@@ -31,21 +28,17 @@ metadata:
   namespace: cybersoc-soar
 spec:
   hard:
-    # Compute Resources
-    requests.cpu: "32"
-    requests.memory: "64Gi"
-    limits.cpu: "64"
-    limits.memory: "128Gi"
-    
-    # Object Counts
-    pods: "50"
-    services: "20"
-    secrets: "30"
-    configmaps: "30"
-    persistentvolumeclaims: "15"
-
+    requests.cpu: "16"
+    requests.memory: "32Gi"
+    limits.cpu: "32"
+    limits.memory: "64Gi"
+    persistentvolumeclaims: "10"
+    pods: "25"
+    services: "15"
+    secrets: "20"
+    configmaps: "15"
 ---
-# Limit Range - Default Container Constraints
+# Limit Range for SOAR Namespace
 apiVersion: v1
 kind: LimitRange
 metadata:
@@ -53,36 +46,16 @@ metadata:
   namespace: cybersoc-soar
 spec:
   limits:
-    - type: Container
-      default:
-        cpu: "2"
-        memory: "4Gi"
-      defaultRequest:
-        cpu: "250m"
-        memory: "512Mi"
-      max:
-        cpu: "16"
-        memory: "32Gi"
-      min:
-        cpu: "100m"
-        memory: "128Mi"
-
----
-# Priority Classes for SOAR Components
-apiVersion: scheduling.k8s.io/v1
-kind: PriorityClass
-metadata:
-  name: soar-critical
-  namespace: cybersoc-soar
-value: 1000000
-globalDefault: false
-description: "Critical priority for SOAR playbook execution engine"
-
-apiVersion: scheduling.k8s.io/v1
-kind: PriorityClass
-metadata:
-  name: soar-normal
-  namespace: cybersoc-soar
-value: 100000
-globalDefault: true
-description: "Normal priority for SOAR UI and auxiliary services"
+  - type: Container
+    default:
+      cpu: "2"
+      memory: "4Gi"
+    defaultRequest:
+      cpu: "500m"
+      memory: "1Gi"
+    max:
+      cpu: "8"
+      memory: "16Gi"
+    min:
+      cpu: "100m"
+      memory: "128Mi"

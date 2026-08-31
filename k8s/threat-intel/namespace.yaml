@@ -1,29 +1,26 @@
-# =============================================================================
-# CyberSOC Platform - Threat Intelligence Phase Namespace
-# Target: Djezzy Telecom Algeria - ANRT Compliant
-# Purpose: External threat intelligence, IOC management, threat hunting
-# =============================================================================
+# CyberSOC Platform - Threat Intelligence Namespace
+# Target: Djezzy Telecom Algeria (ANRT/ISO27001/GDPR Compliant)
+# Phase: Threat Intelligence & IOC Management
 
----
-# Threat Intelligence Namespace
 apiVersion: v1
 kind: Namespace
 metadata:
   name: cybersoc-threat-intel
   labels:
     app.kubernetes.io/name: cybersoc-platform
-    app.kubernetes.io/component: threat-intelligence
-    app.kubernetes.io/part-of: security-operations
-    cybersoc.djezzy.dz/environment: production
-    cybersoc.djezzy.dz/department: soc
-    cybersoc.djezzy.dz/compliance: anrt
-    name: cybersoc-threat-intel
+    app.kubernetes.io/component: threat-intel
+    app.kubernetes.io/part-of: djezzy-telecom
+    app.kubernetes.io/managed-by: kubernetes
+    security.djezzy.dz/compliance: anrt-iso27001-gdpr
+    security.djezzy.dz/classification: confidential
+    environment: production
+    region: algeria-dz
   annotations:
-    description: "CyberSOC Threat Intelligence Platform"
-    contact: "threat-intel@djezzy.dz"
-
+    description: "CyberSOC Threat Intelligence Namespace - Djezzy Telecom Algeria"
+    contact: "threat-intel-team@djezzy.dz"
+    compliance-framework: "ANRT Telecom Security | ISO27001:2022 | GDPR EU Data Protection"
 ---
-# Resource Quota
+# Resource Quota for Threat Intel Namespace
 apiVersion: v1
 kind: ResourceQuota
 metadata:
@@ -31,18 +28,17 @@ metadata:
   namespace: cybersoc-threat-intel
 spec:
   hard:
-    requests.cpu: "16"
-    requests.memory: "32Gi"
-    limits.cpu: "32"
-    limits.memory: "64Gi"
-    pods: "30"
-    services: "15"
-    secrets: "20"
-    configmaps: "20"
+    requests.cpu: "8"
+    requests.memory: "16Gi"
+    limits.cpu: "16"
+    limits.memory: "32Gi"
     persistentvolumeclaims: "10"
-
+    pods: "15"
+    services: "12"
+    secrets: "15"
+    configmaps: "12"
 ---
-# Limit Range
+# Limit Range for Threat Intel Namespace
 apiVersion: v1
 kind: LimitRange
 metadata:
@@ -50,13 +46,16 @@ metadata:
   namespace: cybersoc-threat-intel
 spec:
   limits:
-    - type: Container
-      default:
-        cpu: "2"
-        memory: "4Gi"
-      defaultRequest:
-        cpu: "200m"
-        memory: "512Mi"
-      max:
-        cpu: "8"
-        memory: "16Gi"
+  - type: Container
+    default:
+      cpu: "2"
+      memory: "4Gi"
+    defaultRequest:
+      cpu: "500m"
+      memory: "1Gi"
+    max:
+      cpu: "6"
+      memory: "12Gi"
+    min:
+      cpu: "100m"
+      memory: "128Mi"

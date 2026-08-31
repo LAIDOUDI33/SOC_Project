@@ -1,0 +1,335 @@
+# CyberSOC Platform - Logstash Log Processing Pipeline
+# Djezzy Telecom Algeria - SIEM Phase
+# Handles: Firewall, IDS/IPS, Telecom (SS7/Diameter), Windows, Linux, Application logs
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: logstash
+  namespace: cybersoc-siem
+  labels:
+    app.kubernetes.io/name: logstash
+    app.kubernetes.io/component: siem-pipeline
+    app.kubernetes.io/part-of: djezzy-telecom
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: logstash
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: logstash
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "9600"
+    spec:
+      serviceAccountName: elasticsearch-sa
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        fsGroup: 1000
+      containers:
+      - name: logstash
+        image: docker.elastic.co/logstash/logstash:8.12.0
+        ports:
+        - containerPort: 5044
+          name: beats
+          protocol: TCP
+        - containerPort: 9600
+          name: monitoring
+          protocol: TCP
+        - containerPort: 5000
+          name: tcp
+          protocol: TCP
+        env:
+        - name: LS_JAVA_OPTS
+          value: "-Xms1g -Xmx1g"
+        - name: XPACK_MONITORING_ENABLED
+          value: "true"
+        - name: ELASTICSEARCH_HOST
+          value: "elasticsearch.cybersoc-siem.svc.cluster.local"
+        - name: ELASTICSEARCH_PORT
+          value: "9200"
+        - name: DJEZZY_ENVIRONMENT
+          value: "production"
+        - name: ANRT_LOG_STANDARD
+          value: "compliant"
+        resources:
+          requests:
+            cpu: "1"
+            memory: "2Gi"
+          limits:
+            cpu: "2"
+            memory: "4Gi"
+        volumeMounts:
+        - name: logstash-config
+          mountPath: /usr/share/logstash/pipeline/logstash.conf
+          subPath: logstash.conf
+        - name: logstash-patterns
+          mountPath: /usr/share/logstash/patterns/extra
+          readOnly: true
+        readinessProbe:
+          tcpSocket:
+            port: 5044
+          initialDelaySeconds: 15
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 3
+        livenessProbe:
+          httpGet:
+            path: /
+            port: 9600
+          initialDelaySeconds: 30
+          periodSeconds: 20
+          timeoutSeconds: 10
+          failureThreshold: 3
+      volumes:
+      - name: logstash-config
+        configMap:
+          name: logstash-config
+      - name: logstash-patterns
+        configMap:
+          name: logstash-patterns-djezzy
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: logstash
+  namespace: cybersoc-siem
+  labels:
+    app.kubernetes.io/name: logstash
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: logstash
+  ports:
+  - port: 5044
+    targetPort: 5044
+    name: beats
+    protocol: TCP
+  - port: 9600
+    targetPort: 9600
+    name: monitoring
+    protocol: TCP
+  - port: 5000
+    targetPort: 5000
+    name: tcp-input
+    protocol: TCP
+---
+# Main Logstash Pipeline Configuration
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: logstash-config
+  namespace: cybersoc-siem
+data:
+  logstash.conf: |
+    input {
+      # Beats Input (Filebeat, Metricbeat, Packetbeat)
+      beats {
+        port => 5044
+        ssl => false
+      }
+      
+      # Syslog Input for Network Devices
+      syslog {
+        port => 5514
+        type => "syslog"
+        codec => plain { charset => "UTF-8" }
+      }
+      
+      # TCP Input for Custom Applications
+      tcp {
+        port => 5000
+        codec => json_lines {}
+      }
+      
+      # Kafka Input for High-Volume Streams
+      kafka {
+        bootstrap_servers => "kafka.cybersoc-infrastructure.svc.cluster.local:9092"
+        topics => ["firewall-logs", "ids-alerts", "telecom-events", "authentication"]
+        group_id => "logstash-consumers"
+        consumer_threads => 4
+      }
+    }
+
+    filter {
+      # Djezzy Telecom-Specific Parsing
+      
+      # SS7/Diameter Protocol Logs (Telecom Specific)
+      if [type] == "ss7-logs" or [message] =~ /SS7|Diameter|MAP|TCAP/ {
+        grok {
+          match => { 
+            "message" => "%{WORD:ss7_operation}%{SPACE}%{IP:origin_point}%{SPACE}%{IP:destination}%{SPACE}%{GREEDYDATA:payload}" 
+          }
+        }
+        
+        # GDPR - Mask subscriber IMSI/MSISDN partially
+        mutate {
+          replace => { "subscriber_id" => "****%{[subscriber_id][-4:]}" }
+        }
+      }
+      
+      # Firewall Logs (Palo Alto, Fortinet, Cisco ASA)
+      if [type] == "firewall" or [logsource][type] == "firewall" {
+        grok {
+          match => { 
+            "message" => "%{SYSLOGTIMESTAMP:timestamp}%{SPACE}%{IP:src_ip}%{SPACE}%{IP:dst_ip}%{SPACE}%{WORD:action}%{SPACE}%{INT:port}" 
+          }
+        }
+        
+        geoip {
+          source => "[dst_ip]"
+          target => "geoip_dst"
+          database => "/usr/share/logstash/GeoLite2-City.mmdb"
+        }
+        
+        geoip {
+          source => "[src_ip]"
+          target => "geoip_src"
+          database => "/usr/share/logstash/GeoLite2-City.mmdb"
+        }
+        
+        # Djezzy Algeria Geo Enrichment
+        if [geoip_dst][country_name] == "Algeria" {
+          mutate { add_tag => ["djezzy-domestic-traffic"] }
+        } else if [geoip_dst][country_name] {
+          mutate { add_tag => ["international-traffic"] }
+        }
+      }
+      
+      # Windows Event Logs
+      if [type] == "wineventlog" or [winlog][event_id] {
+        # Security Event IDs of Interest for ANRT Compliance
+        if [winlog][event_id] in [4624, 4625, 4634, 4648, 4768, 4769, 4776, 4770] {
+          mutate { add_tag => ["authentication-event"] }
+        }
+        if [winlog][event_id] in [4670, 4671, 4672, 4673] {
+          mutate { add_tag => ["security-policy-change"] }
+        }
+      }
+      
+      # Authentication Events (Radius, LDAP, Kerberos)
+      if [type] == "auth" or [event][category] == "authentication" {
+        grok {
+          match => { 
+            "message" => "%{WORD:auth_type}%{SPACE}user=%{DATA:user}%{SPACE}src_ip=%{IP:src_ip}%{SPACE}result=%{WORD:result}" 
+          }
+        }
+        
+        # Failed Authentication Alerting
+        if [result] == "failure" or [result] == "denied" {
+          mutate { add_tag => ["auth-failure"] }
+        }
+      }
+      
+      # DNS Query Analysis
+      if [type] == "dns" or [query] {
+        dns {
+          action => ["reverse", "resolve"]
+          reverse => [source, client]
+          resolve => [query]
+          nameserver => ["8.8.8.8", "1.1.1.1"]
+        }
+        
+        # DGA Detection Pattern
+        if [query] =~ /^[a-z]{15,}$/ {
+          mutate { add_tag => ["suspicious-dga-domain"] }
+        }
+      }
+      
+      # Web Proxy Logs (Squid, Blue Coat)
+      if [type] == "proxy" or [proxy] {
+        urldecode {
+          field => "url"
+        }
+        
+        useragent {
+          source => "user_agent"
+          target => "ua_parsed"
+        }
+        
+        # Categorize Traffic
+        if [url] =~ /(facebook|twitter|instagram|tiktok)/i {
+          mutate { add_field => { "traffic_category" => "social-media" } }
+        } else if [url] =~ /(banking|finance|payment)/i {
+          mutate { add_field => { "traffic_category" => "financial" } }
+        }
+      }
+      
+      # General Enrichment
+      mutate {
+        add_field => {
+          "environment" => "djezzy-production"
+          "anrt_compliance" => "true"
+          "processing_timestamp" => "%{@timestamp}"
+          "log_source" => "cybersoc-siem"
+        }
+      }
+      
+      # Remove Sensitive Fields (GDPR)
+      prune {
+        whitelist_names => ["^timestamp$", "^type$", "^host$", "^source$", "^@timestamp$", 
+                           "^message$", "^tags$", "^src_ip$", "^dst_ip$", "^action$", 
+                           "^user$", "^result$", "^ss7_", "^port$", "^geoip", "^event$"]
+      }
+      
+      date {
+        match => ["timestamp", "ISO8601", "UNIX", "SYSLOGTIMESTAMP"]
+        target => "@timestamp"
+      }
+    }
+
+    output {
+      # Primary Output to Elasticsearch
+      elasticsearch {
+        hosts => ["${ELASTICSEARCH_HOST}:${ELASTICSEARCH_PORT}"]
+        index => "cybersoc-%{[@metadata][beat]}-%{+YYYY.MM.dd}"
+        template_name => "cybersoc-template"
+        template_overwrite => true
+        
+        # ANRT Compliance - Document Indexing
+        document_type => "_doc"
+        manage_template => true
+      }
+      
+      # High-Priority Alerts to SOAR Pipeline
+      if "auth-failure" in [tags] or "suspicious-dga-domain" in [tags] {
+        kafka {
+          bootstrap_servers => "kafka.cybersoc-infrastructure.svc.cluster.local:9092"
+          topic_id => "siem-high-priority-alerts"
+          compression_type => "snappy"
+        }
+      }
+      
+      # Debug Output (Development Only)
+      if [environment] == "development" {
+        stdout { codec => rubydebug }
+      }
+    }
+---
+# Djezzy Telecom Custom Grok Patterns
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: logstash-patterns-djezzy
+  namespace: cybersoc-siem
+data:
+  djezzy-custom: |
+    # SS7/Diameter Protocol Patterns
+    DJEZZY_SS7_MAP %{WORD:map_op}:%{DATA:imsi}:%{DATA:msisdn}:%{DATA:opcode}
+    DJEZZY_DIAMETER %{WORD:command_code}:%{DATA:session_id}:%{DATA:origin_host}
+    
+    # Telecom Network Elements
+    DJEZZY_MSC %{HOSTNAME:msc_id}:%{INT:cic}:%{DATA:trunk_group}
+    DJEZZY_HLR %{HOSTNAME:hlr_id}:%{DATA:subscriber_record}
+    DJEZZY_SGSN %{HOSTNAME:sgsn_id}:%{DATA:tlli}:%{DATA:imei}
+    
+    # Djezzy Internal Systems
+    DJEZZY_BSS_SYSTEM %{WORD:subsystem}:%{DATA:transaction_id}:%{DATA:result_code}
+    DJEZZY_MEDIATION %{HOSTNAME:mediation_node}:%{DATA:protocol_adapter}:%{INT:message_count}
+    
+    # ANRT Regulatory Logging
+    DJEZZY_ANRT_REPORT %{WORD:report_type}:%{TIMESTAMP_ISO8601:report_time}:%{DATA:scope}
+    DJEZZY_INTERCEPT %{WORD:lawful_intercept}:%{DATA:target_id}:%{DATA:authorization_ref}

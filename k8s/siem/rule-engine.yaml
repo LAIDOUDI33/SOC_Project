@@ -1,0 +1,523 @@
+# CyberSOC Platform - SIEM Rule Engine
+# Djezzy Telecom Algeria - Detection & Alert Rules
+# Comprehensive rule set for telecom security, ANRT compliance, and threat detection
+
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: siem-rules-config
+  namespace: cybersoc-siem
+  labels:
+    app.kubernetes.io/component: siem-rules
+data:
+  # ========================================
+  # CRITICAL SEVERITY RULES
+  # ========================================
+  critical_rules.yaml: |
+    rules:
+      # Rule CRIT-001: Brute Force Attack Detection
+      - id: "CRIT-001"
+        name: "Multi-Source Authentication Brute Force"
+        severity: critical
+        description: "Detects brute force attacks from multiple source IPs targeting same account"
+        enabled: true
+        tags: [authentication, brute-force, account-takeover, anrt-critical]
+        reference: "ANRT-SOC-2024-AUTH-001"
+        
+        condition:
+          type: aggregation
+          source: authentication-events
+          window: 5m
+          group_by: [user, destination_ip]
+          having:
+            field: failed_attempts
+            operator: ">="
+            value: 10
+          distinct_count:
+            field: source_ip
+            operator: ">="
+            value: 3
+            
+        actions:
+          - type: alert
+            priority: P1
+            notify: [soc-analysts-oncall, security-operations]
+            
+          - type: block
+            target: source_ips
+            duration: 1h
+            method: firewall-block
+            
+          - type: escalate
+            to: soar-playbook
+            playbook_id: "PB-BF-RESPONSE-001"
+            
+        anrt_reporting: mandatory
+        gdpr_impact: potential_breach
+        
+      # Rule CRIT-002: SS7/MAP Fraud Detection
+      - id: "CRIT-002"
+        name: "SS7 Subscriber Data Harvesting Attack"
+        severity: critical
+        description: "Detects abnormal SS7 MAP operations indicating subscriber data harvesting"
+        enabled: true
+        tags: [ss7, fraud, telecom, data-breach, anrt-critical]
+        reference: "DJEZZY-SS7-FRAUD-001"
+        
+        condition:
+          type: sequence
+          events:
+            - type: ss7-map-operation
+              operation: sendAuthenticationInfo
+              window: 60s
+              
+            - type: ss7-map-operation  
+              operation: provideSubscriberInfo
+              window: 60s
+              same_origin: true
+              
+            - type: ss7-map-operation
+              operation: anyLocationInfo
+              window: 120s
+              same_origin: true
+              
+          max_sequence_duration: 300s
+          
+        context:
+          origin_type: hlr_foreign_network
+          destination_range: djezzy_hlr_subscribers
+          
+        actions:
+          - type: alert
+            priority: P0
+            notify: [fraud-team, soc-management, network-security]
+            
+          - type: block
+            target: ss7_global_title
+            method: ss7-firewall-block
+            duration: permanent
+            
+          - type: report
+            to: [anrt-regulatory, internal-audit]
+            
+        anrt_reporting: immediate_mandatory
+        gdpr_impact: confirmed_breach
+
+      # Rule CRIT-003: Command & Control Detection
+      - id: "CRIT-003"
+        name: "DGA Domain C2 Communication Detected"
+        severity: critical
+        description: "Detects communication to algorithmically generated domains (C2 beaconing)"
+        enabled: true
+        tags: [malware, c2, dga, network-threat, anrt-critical]
+        reference: "MITRE-TACTIC-C2-001"
+        
+        condition:
+          type: threshold
+          source: dns-queries
+          window: 1h
+          field: query
+          pattern_match: "^[a-z]{15,20}\\.[a-z]{2,3}$"
+          threshold: 20
+          group_by: [source_ip]
+          
+        enrichment:
+          - threat_intel_lookup
+          - ip_reputation_check
+          - historical_baseline_comparison
+          
+        actions:
+          - type: alert
+            priority: P1
+            notify: [threat-hunting-team, incident-response]
+            
+          - type: isolate
+            target: infected_endpoint
+            method: edr-isolate
+            
+          - type: forensic
+            capture: [memory, disk-image, network-pcap]
+            
+        anrt_reporting: standard
+        gdpr_impact: minimal
+
+  # ========================================
+  # HIGH SEVERITY RULES
+  # ========================================
+  high_rules.yaml: |
+    rules:
+      # Rule HIGH-001: Privilege Escalation
+      - id: "HIGH-001"
+        name: "Multiple Privilege Escalation Events"
+        severity: high
+        description: "Detects rapid privilege escalation across multiple systems"
+        enabled: true
+        tags: [insider-threat, privilege-escalation, anrt-high]
+        
+        condition:
+          type: rate
+          source: windows-security-log
+          event_ids: [4672, 4673, 4674, 4675]
+          window: 15m
+          threshold: 5
+          group_by: [subject_user]
+          
+        actions:
+          - type: alert
+            priority: P2
+            notify: [soc-analysts]
+            
+          - type: trigger_ueba
+            analysis_type: insider_threat
+            
+      # Rule HIGH-002: Data Exfiltration
+      - id: "HIGH-002"
+        name: "Large Volume Data Transfer to External"
+        severity: high
+        description: "Detects unusual large data transfers to external destinations"
+        enabled: true
+        tags: [data-exfiltration, dlp, anrt-high, gdpr-sensitive]
+        
+        condition:
+          type: statistical_anomaly
+          source: proxy-logs
+          field: bytes_sent
+          baseline_window: 7d
+          deviation_threshold: 4.0  # 4 standard deviations
+          min_volume_mb: 500
+          destination_type: external
+          
+        gdpr_fields_involved: [subscriber_data, call_records, location_data]
+        
+        actions:
+          - type: alert
+            priority: P2
+            notify: [dlp-team, data-protection-officer]
+            
+          - type: throttle
+            target: user_session
+            action: bandwidth_limit
+            
+      # Rule HIGH-003: SIM Box Fraud Detection
+      - id: "HIGH-003"
+        name: "SIM Box (Bypass) Fraud Pattern"
+        severity: high
+        description: "Detects SIM box fraud patterns - high volume calls to diverse international numbers from single cell site"
+        enabled: true
+        tags: [fraud, sim-box, revenue-assurance, telecom-fraud, anrt-high]
+        reference: "GSMA-FRAUD-001"
+        
+        condition:
+          type: complex_aggregation
+          sources:
+            - cdr_records
+            - ss7_iam_messages
+            - roaming_events
+            
+          conditions:
+            - field: calling_number
+              type: gsm_sim_box_pattern
+              confidence: > 0.85
+              
+            - field: called_numbers_unique_count
+              window: 1h
+              operator: ">="
+              value: 100
+              
+            - field: destination_countries
+              operator: "in"
+              value: ["high-cost-routing-countries"]
+              
+            - field: avg_call_duration_sec
+              operator: "<="
+              value: 45
+              
+          correlation_key: [cell_global_id, msc_id]
+          
+        actions:
+          - type: alert
+            priority: P1
+            notify: [fraud-ops, revenue-assurance, network-operations]
+            
+          - type: block
+            target: sim_cards
+            method: network_blacklist
+            reason: suspected_fraud
+            
+          - type: report
+            to: [irgs-algeria, gsma-database]
+            
+        anrt_reporting: mandatory
+        financial_impact: high
+
+      # Rule HIGH-004: Unusual After-Hours Access
+      - id: "HIGH-004"
+        name: "Sensitive System Access Outside Business Hours"
+        severity: high
+        description: "Detects access to critical systems outside normal business hours"
+        enabled: true
+        tags: [insider-threat, unauthorized-access, anrt-high]
+        
+        condition:
+          type: time_based
+          source: authentication-events
+          target_systems: [billing-system, hlr, eir, provisioning]
+          allowed_hours:
+            start: "08:00"
+            end: "20:00"
+            timezone: "Africa/Algiers"
+          exclude_users: [automation-service-accounts, oncall-admins]
+          
+        actions:
+          - type: alert
+            priority: P2
+            notify: [soc-duty-phone]
+            
+          - type: require_mfa
+            target: user_session
+
+  # ========================================
+  # MEDIUM SEVERITY RULES
+  # ========================================
+  medium_rules.yaml: |
+    rules:
+      # Rule MED-001: Policy Violation
+      - id: "MED-001"
+        name: "Security Policy Change Detected"
+        severity: medium
+        description: "Detects modifications to security policies or firewall rules"
+        enabled: true
+        tags: [policy-change, configuration-drift, anrt-medium]
+        
+        condition:
+          type: event_match
+          sources:
+            - windows-event-id: [4719, 4779, 4904, 4905, 4906, 4907]
+            - firewall_config_change: true
+            - iam_policy_modification: true
+            
+        actions:
+          - type: alert
+            priority: P3
+            notify: [security-engineering]
+            
+          - type: create_ticket
+            system: servicenow
+            category: Security
+            subcategory: Policy Review
+            
+      # Rule MED-002: Malware Indicators
+      - id: "MED-002"
+        name: "Known Malware IOC Match"
+        severity: medium
+        description: "Alerts when network traffic matches known malware indicators of compromise"
+        enabled: true
+        tags: [malware, ioc-match, threat-intel]
+        
+        condition:
+          type: ioc_lookup
+          source: all_logs
+          ioc_types:
+            - ip_address
+            - domain
+            - hash_sha256
+            - url
+          threat_feeds:
+            - djezzy-custom-iocs
+            - commercial-feed-primary
+            - open-source-community
+            - anrt-shared-iocs
+            
+        actions:
+          - type: alert
+            priority: P3
+            notify: [soc-analysts]
+            
+          - type: enrich
+            add_context: [threat_actor, campaign, ttps]
+            
+          - type: auto_contain
+            if_confidence: > 0.95
+            method: network_segmentation
+
+      # Rule MED-003: Roaming Anomaly
+      - id: "MED-003"
+        name: "Impossible Travel / Roaming Anomaly"
+        severity: medium
+        description: "Detects impossible travel patterns (same IMSI in distant locations within short time)"
+        enabled: true
+        tags: [roaming-fraud, identity-theft, telecom-fraud, anrt-medium]
+        
+        condition:
+          type: geo_velocity
+          source: roaming_location_updates
+          entity: imsi
+          min_distance_km: 1000
+          max_time_minutes: 60
+          
+        actions:
+          - type: alert
+            priority: P2
+            notify: [fraud-team, roaming-clearing-house]
+            
+          - type: flag_subscriber
+            reason: suspicious_roaming
+            auto_block: false  # Manual review required
+
+  # ========================================
+  # TELECOM-SPECIFIC RULES (Djezzy Algeria)
+  # ========================================
+  telecom_rules.yaml: |
+    rules:
+      # Rule TEL-001: Diameter Attack Detection
+      - id: "TEL-001"
+        name: "Diameter DoS Attack Pattern"
+        severity: critical
+        description: "Detects Diameter protocol denial-of-service attack patterns"
+        enabled: true
+        tags: [diameter, dos, telecom-attack, anrt-critical]
+        
+        condition:
+          type: rate_spike
+          source: diameter_messages
+          command_code: any
+          window: 1s
+          baseline_multiplier: 10
+          min_absolute_rate: 1000
+          group_by: [origin_host, origin_realm]
+          
+        actions:
+          - type: alert
+            priority: P0
+            notify: [noc-soc-bridge, network-defense]
+            
+          - type: rate_limit
+            target: diameter_origin
+            limit: normal_baseline
+            duration: 30m
+            
+      # Rule TEL-002: IRGS Compliance Violation
+      - id: "TEL-002"
+        name: "IRGS Reporting Threshold Breach"
+        severity: high
+        description: "Alerts when security incidents exceed IRGS reporting thresholds"
+        enabled: true
+        tags: [irgs, regulatory-compliance, anrt-mandatory]
+        
+        condition:
+          type: threshold_counter
+          metric: security_incidents_count
+          period: 24h
+          thresholds:
+            warning: 50
+            critical: 100
+          categories:
+            - successful_intrusion
+            - data_breach
+            - service_disruption
+            
+        actions:
+          - type: alert
+            priority: P1
+            notify: [compliance-officer, ciso, irgs-liaison]
+            
+          - type: generate_report
+            format: irgs_standard
+            submit_to: irgs_algeria_portal
+            
+      # Rule TEL-003: Signaling Storm Detection
+      - id: "TEL-003"
+        name: "Signaling Storm / SMS Spam Attack"
+        severity: high
+        description: "Detects signaling storms and SMS spam campaigns"
+        enabled: true
+        tags: [signaling-storm, sms-spam, network-abuse, anrt-high]
+        
+        condition:
+          type: multi_condition
+            conditions:
+              - source: ss7_messages
+                operation: forwardShortMessage
+                window: 1m
+                count: > 10000
+                
+              - source: sms_cdr
+                distinct_destinations: > 5000
+                window: 5m
+                
+              - source: smpp_messages
+                submit_sm_rate: > 5x_baseline
+                window: 5m
+                
+        actions:
+          - type: alert
+            priority: P1
+            notify: [sms-platform-team, noc, fraud-ops]
+            
+          - type: throttle
+            target: offending_esmes
+            method: smpp_rate_limit
+            
+          - type: enable_filtering
+            type: content_filter
+            target: spam_patterns
+---
+# SIEM Rules API Service
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: siem-rule-manager
+  namespace: cybersoc-siem
+  labels:
+    app.kubernetes.io/name: siem-rule-manager
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: siem-rule-manager
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: siem-rule-manager
+    spec:
+      serviceAccountName: elasticsearch-sa
+      securityContext:
+        runAsNonRoot: true
+      containers:
+      - name: rule-manager
+        image: cybersoc/rule-manager:v2.0.0
+        ports:
+        - containerPort: 8080
+          name: api
+        env:
+        - name: RULE_STORAGE_PATH
+          value: "/rules"
+        - name: CORRELATION_ENGINE_URL
+          value: "http://siem-correlation-engine:8080"
+        resources:
+          requests:
+            cpu: "500m"
+            memory: "1Gi"
+          limits:
+            cpu: "2"
+            memory: "4Gi"
+        volumeMounts:
+        - name: rules-volume
+          mountPath: /rules
+      volumes:
+      - name: rules-volume
+        persistentVolumeClaim:
+          claimName: siem-rules-pvc
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: siem-rule-manager
+  namespace: cybersoc-siem
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: siem-rule-manager
+  ports:
+  - port: 8080
+    targetPort: 8080

@@ -1,0 +1,307 @@
+# CyberSOC Platform - SOAR Playbooks Configuration
+# Djezzy Telecom Algeria - Automated Incident Response Playbooks
+# Covers: Malware, Phishing, Data Breach, Insider Threat, Telecom Fraud, DDoS
+
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: soar-playbooks-config
+  namespace: cybersoc-soar
+  labels:
+    app.kubernetes.io/component: soar-playbooks
+data:
+  # ============================================
+  # PLAYBOOK 1: Malware Response (Critical)
+  # ============================================
+  pb-malware-response.yaml: |
+    id: "PB-MALWARE-001"
+    name: "Malware Detection & Containment Response"
+    version: "2.1.0"
+    severity: critical
+    description: "Automated response playbook for malware detection and containment"
+    tags: [malware, endpoint, containment, critical, anrt-mandatory]
+    
+    trigger:
+      source: siem_alerts
+      conditions:
+        - field: alert_type
+          operator: in
+          value: [malware_detection, edr_alert, antivirus_trigger]
+        - field: severity
+          operator: in
+          value: [critical, high]
+          
+    actions:
+      - step: 1
+        name: "Alert Triage & Enrichment"
+        type: parallel
+        timeout_sec: 120
+        actions:
+        - name: "Threat Intel Lookup"
+          type: threat_intel_lookup
+          target: "{{alert.ioc}}"
+          feeds: [all]
+          output: intel_context
+          
+        - name: "User Risk Score Check"
+          type: ueba_query
+          endpoint: "${UEBA_SERVICE_URL}"
+          query: user_risk_score
+          params:
+            user: "{{alert.user}}"
+            window: 24h
+          output: user_risk
+          
+        - name: "Historical Baseline"
+          type: analytics_query
+          endpoint: "${ML_SERVER_URL}"
+          query: anomaly_detection
+          params:
+            entity: "{{alert.source_ip}}"
+            metric: network_behavior
+          output: baseline_deviation
+          
+      - step: 2
+        name: "Automated Containment Decision"
+        type: conditional
+        condition: "{{intel_context.threat_level == 'critical' or baseline_deviation > 4.0}}"
+        
+        if_true:
+          - name: "Isolate Endpoint"
+            type: edr_action
+            provider: crowdstrike
+            action: isolate
+            target: "{{alert.endpoint_id}}"
+            notify_user: true
+            
+          - name: "Block Network Communication"
+            type: firewall_block
+            provider: palo_alto
+            target: "{{alert.source_ip}}"
+            duration: 4h
+            rule_name: "AUTO-BLOCK-MALWARE-{{alert.id}}"
+            
+          - name: "Disable User Account (if high risk)"
+            type: conditional
+            condition: "{{user_risk.score > 80}}"
+            if_true:
+            - name: "Suspend Account"
+              type: ad_action
+              action: disable
+              target: "{{alert.user}}"
+              
+        if_false:
+          - name: "Create Investigation Task"
+            type: case_action
+              action: create_task
+              assignee: soc_tier1
+              priority: high
+              notes: "Manual investigation required - automated containment not triggered"
+              
+      - step: 3
+        name: "Evidence Collection & Forensics"
+        type: sequential
+        actions:
+        - name: "Capture Memory Image"
+          type: forensic_action
+          action: memory_capture
+          target: "{{alert.endpoint_id}}"
+          retention_days: 90
+          
+        - name: "Collect Network PCAP"
+          type: network_capture
+          target: "{{alert.source_ip}}"
+          duration_min: 30
+          filter: "host {{alert.source_ip}}"
+          
+        - name: "Preserve Disk Image"
+          type: forensic_action
+          action: disk_image
+          target: "{{alert.endpoint_id}}"
+          compression: true
+          
+      - step: 4
+        name: "Notification & Escalation"
+        type: parallel
+        actions:
+        - name: "Notify SOC Team"
+          type: notification
+          channel: slack
+          channel_id: "#soc-alerts-critical"
+          message: "MALWARE CONTAINMENT INITIATED\nAlert ID: {{alert.id}}\nEndpoint: {{alert.endpoint}}\nAction: {{containment_action}}"
+          
+        - name: "Create ServiceNow Ticket"
+          type: ticket_create
+          system: servicenow
+          assignment_group: "SOC Tier 1"
+          priority: P1
+          description: "Automated malware response executed. See case {{case.id}} for details."
+          
+        - name: "Update Case Status"
+          type: case_update
+          status: containment
+          add_note: "Automated containment completed at {{timestamp}}"
+          
+      - step: 5
+        name: "Post-Incident Actions"
+        type: delayed
+        delay_hours: 4
+        actions:
+        - name: "Run Full Antivirus Scan"
+          type: edr_action
+          action: full_scan
+          target: "{{alert.endpoint_id}}"
+          
+        - name: "Update Threat Intelligence"
+          type: threat_intel_push
+          iocs:
+            - type: hash_sha256
+              value: "{{alert.file_hash}}"
+              confidence: 95
+              source: djezzy_soc_automated
+              
+    anrt_reporting: mandatory
+    gdpr_impact: potential_breach
+
+  # ============================================
+  # PLAYBOOK 2: SS7/Diameter Fraud Response (Telecom Specific)
+  # ============================================
+  pb-telecom-fraud-response.yaml: |
+    id: "PB-FRAUD-TELECOM-003"
+    name: "Telecom Signaling Fraud Detection & Response"
+    version: "2.2.0-djezzy"
+    severity: critical
+    description: "Specialized playbook for SS7/Diameter fraud detection and IRGS compliance"
+    tags: [ss7, diameter, telecom-fraud, irgs, anrt-critical, gsma]
+    
+    trigger:
+      source: [siem_alerts, fraud_detection_system, ueba_anomalies]
+      conditions:
+        - OR:
+          - field: alert_type
+            operator: equals
+            value: ss7_fraud_pattern
+          - field: alert_type
+            operator: equals
+            value: diameter_fraud_indicator
+          - field: alert_type
+            operator: equals
+            value: sim_box_detection
+          - field: fraud_score
+            operator: ">="
+            value: 0.85
+            
+    actions:
+      - step: 1
+        name: "Immediate Fraud Containment"
+        type: parallel
+        timeout_sec: 60
+        actions:
+        - name: "Block SS7 Global Title"
+          type: ss7_firewall_action
+          action: block_global_title
+          target: "{{alert.ss7_gt_origin}}"
+          duration: permanent
+          reason: "Fraud pattern detected - Auto-block by SOC"
+          
+        - name: "Block Diameter Origin"
+          type: diameter_firewall_action
+          action: block_origin_host
+          target: "{{alert.diameter_origin_host}}"
+          duration: permanent
+          
+        - name: "Flag Subscriber Accounts"
+          type: provisioning_action
+          action: flag_accounts
+          account_ids: "{{alert.involved_subscribers}}"
+          flag_type: fraud_suspect
+          auto_suspend: false
+          notes: "Auto-flagged by PB-FRAUD-TELECOM-003 at {{timestamp}}"
+          
+      - step: 2
+        name: "IRGS Regulatory Reporting"
+        type: conditional
+        condition: "{{financial_impact.estimated_loss_dzd > 100000 or alert.involves_data_breach == true}}"
+        
+        if_true:
+        - name: "Generate IRGS Report"
+          type: regulatory_report
+          format: irgs_sirf_v2
+          submit_to: irgs_algeria_portal
+          deadline_hours: 4
+          
+        if_false:
+        - name: "Log for Periodic Report"
+          type: audit_log
+          category: fraud_incident
+          
+      - step: 3
+        name: "GSMA Database Update"
+        type: parallel
+        actions:
+        - name: "Report Fraudulent SIM Cards"
+          type: gsma_database_action
+          action: report_sims
+          sim_iccids: "{{alert.fraudulent_sims}}"
+          
+        - name: "Check International Blacklists"
+          type: gsma_database_action
+          action: lookup_imsi
+          imsis: "{{alert.involved_imsis}}"
+          
+    anrt_reporting: immediate_mandatory
+    gdpr_impact: subscriber_data_involved
+
+  # ============================================
+  # PLAYBOOK 3: Data Breach Response (GDPR/ANRT)
+  # ============================================
+  pb-data-breach-response.yaml: |
+    id: "PB-DATA-BREACH-004"
+    name: "Data Breach Detection & GDPR/ANRT Response"
+    version: "2.1.0"
+    severity: critical
+    tags: [data-breach, gdpr, anrt-critical, dpo-notification]
+    
+    trigger:
+      source: [siem_alerts, dlp_system, database_audit]
+      conditions:
+        - field: alert_type
+          operator: in
+          value: [data_exfiltration, unauthorized_access_pii, database_breach]
+          
+    actions:
+      - step: 1
+        name: "Immediate Containment"
+        type: parallel
+        actions:
+        - name: "Isolate Affected Systems"
+          type: network_isolation
+          targets: "{{alert.affected_systems}}"
+        - name: "Revoke Compromised Credentials"
+          type: credential_revocation
+          credentials: "{{alert.compromised_credentials}}"
+          
+      - step: 2
+        name: "DPO Notification (GDPR Art.33)"
+        type: conditional
+        condition: "{{exposed_data_categories.contains_pii == true}}"
+        
+        if_true:
+        - name: "Notify DPO Within 72h"
+          type: notification
+          channel: encrypted_email
+          to: dpo@djezzy.dz
+          template: gdpr_breach_notification_dpo
+          
+      - step: 3
+        name: "ANRT Reporting"
+        type: always
+        actions:
+        - name: "Security Incident Report"
+          type: regulatory_report
+          format: anrt_security_incident_v2
+          submit_to: anrt_portal
+          deadline_hours: 72
+          
+    anrt_reporting: mandatory_within_72h
+    gdpr_articles: ["33", "34"]

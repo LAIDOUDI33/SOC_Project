@@ -1,290 +1,190 @@
-# =============================================================================
-# CyberSOC Platform - Threat Intelligence Network Policies (Zero-Trust)
-# Target: Djezzy Telecom Algeria
-# =============================================================================
+# CyberSOC Platform - Threat Intelligence Network Policies
+# Djezzy Telecom Algeria - Zero-Trust Security
 
----
-# Default Deny All Ingress
+# ============================================
+# POLICY 1: Default Deny All Ingress
+# ============================================
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
-  name: default-deny-ingress
+  name: ti-default-deny-ingress
   namespace: cybersoc-threat-intel
+  labels:
+    policy: zero-trust-deny-all
 spec:
   podSelector: {}
   policyTypes:
-    - Ingress
+  - Ingress
 
 ---
-# Default Deny All Egress
+# ============================================
+# POLICY 2: Default Deny All Egress
+# ============================================
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
-  name: default-deny-egress
+  name: ti-default-deny-egress
   namespace: cybersoc-threat-intel
+  labels:
+    policy: zero-trust-deny-all
 spec:
   podSelector: {}
   policyTypes:
-    - Egress
+  - Egress
 
 ---
-# Allow DNS Egress
+# ============================================
+# POLICY 3: Threat Intel Hub Access
+# ============================================
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
-  name: allow-dns-egress
+  name: threat-intel-hub-access
   namespace: cybersoc-threat-intel
+  labels:
+    component: core-threat-intel
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: threat-intel-hub
+  policyTypes:
+  - Ingress
+  - Egress
+  ingress:
+  # SOAR → Threat Intel (IOC Enrichment)
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: cybersoc-soar
+      podSelector:
+        matchLabels:
+          app.kubernetes.io/name: soar-engine
+    ports:
+    - protocol: TCP
+      port: 8080
+      
+  # SIEM → Threat Intel (Alert Enrichment)
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: cybersoc-siem
+      podSelector:
+        matchLabels:
+          app.kubernetes.io/name: siem-correlation-engine
+    ports:
+    - protocol: TCP
+      port: 8080
+      
+  # Analytics → Threat Intel
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: cybersoc-analytics
+    ports:
+    - protocol: TCP
+      port: 8080
+      
+  egress:
+  # To External Threat Feed Sources (Required for feed collection)
+  - to:
+    - ipBlock:
+        cidr: 0.0.0.0/0
+        except:
+        - 10.0.0.0/8
+        - 172.16.0.0/12
+        - 192.168.0.0/16
+    ports:
+    - protocol: TCP
+      port: 443   # HTTPS for TAXII/REST APIs
+    - protocol: TCP
+      port: 80    # HTTP fallback
+      
+  # To Elasticsearch (SIEM)
+  - to:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: cybersoc-siem
+      podSelector:
+        matchLabels:
+          app.kubernetes.io/name: elasticsearch
+    ports:
+    - protocol: TCP
+      port: 9200
+      
+  # To PostgreSQL (Infrastructure)
+  - to:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: cybersoc-infrastructure
+      podSelector:
+        matchLabels:
+          app.kubernetes.io/name: postgres
+    ports:
+    - protocol: TCP
+      port: 5432
+      
+  # To Redis (Infrastructure)
+  - to:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: cybersoc-infrastructure
+      podSelector:
+        matchLabels:
+          app.kubernetes.io/name: redis-master
+    ports:
+    - protocol: TCP
+      port: 6379
+
+---
+# ============================================
+# POLICY 4: Monitoring Access
+# ============================================
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: ti-monitoring-access
+  namespace: cybersoc-threat-intel
+  labels:
+    purpose: observability
 spec:
   podSelector: {}
   policyTypes:
-    - Egress
-  egress:
-    - to:
-        - namespaceSelector:
-            matchLabels:
-              kubernetes.io/metadata.name: kube-system
-          podSelector:
-            matchLabels:
-              k8s-app: kube-dns
-      ports:
-        - protocol: UDP
-          port: 53
-        - protocol: TCP
-          port: 53
+  - Ingress
+  ingress:
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: cybersoc-monitoring
+      podSelector:
+        matchLabels:
+          app.kubernetes.io/name: prometheus
+    ports:
+    - protocol: TCP
+      port: 8080
 
 ---
-# TAXII Server Network Policy (External access for partners)
+# ============================================
+# POLICY 5: DNS Resolution
+# ============================================
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
-  name: taxii-server-netpol
+  name: ti-dns-resolution
   namespace: cybersoc-threat-intel
+  labels:
+    purpose: infrastructure
 spec:
-  podSelector:
-    matchLabels:
-      app.kubernetes.io/name: taxii-server
+  podSelector: {}
   policyTypes:
-    - Ingress
-    - Egress
-  ingress:
-    # External partner access via Ingress
-    - from:
-        - namespaceSelector:
-            matchLabels:
-              kubernetes.io/metadata.name: ingress-nginx
-          podSelector: {}
-      ports:
-        - protocol: TCP
-          port: 8080
-        - protocol: TCP
-          port: 8443
-        - protocol: TCP
-          port: 9497
-    
-    # Internal API Gateway access
-    - from:
-        - podSelector:
-            matchLabels:
-              app.kubernetes.io/name: threat-intel-api-gateway
-      ports:
-        - protocol: TCP
-          port: 8080
-  
+  - Egress
   egress:
-    # Database access
-    - to:
-        - namespaceSelector:
-            matchLabels:
-              kubernetes.io/metadata.name: cybersoc-db
-          podSelector:
-            matchLabels:
-              app.kubernetes.io/name: postgresql
-      ports:
-        - protocol: TCP
-          port: 5432
-
----
-# TAXII Client Network Policy (Needs external egress to fetch feeds)
-apiVersion: networking.k8s.io/v1
-kind: NetworkPolicy
-metadata:
-  name: taxii-client-netpol
-  namespace: cybersoc-threat-intel
-spec:
-  podSelector:
-    matchLabels:
-      app.kubernetes.io/name: taxii-client
-  policyTypes:
-    - Ingress
-    - Egress
-  ingress:
-    - from:
-        - podSelector:
-            matchLabels:
-              app.kubernetes.io/name: threat-intel-api-gateway
-      ports:
-        - protocol: TCP
-          port: 8080
-  
-  egress:
-    # External TAXII servers (HTTPS)
-    - to:
-        - namespaceSelector: {}  # Any external destination
-      ports:
-        - protocol: TCP
-          port: 443
-    
-    # Database
-    - to:
-        - namespaceSelector:
-            matchLabels:
-              kubernetes.io/metadata.name: cybersoc-db
-          podSelector:
-            matchLabels:
-              app.kubernetes.io/name: postgresql
-      ports:
-        - protocol: TCP
-          port: 5432
-    
-    # Kafka (output IOCs)
-    - to:
-        - namespaceSelector:
-            matchLabels:
-              kubernetes.io/metadata.name: logging
-          podSelector:
-            matchLabels:
-              app.kubernetes.io/name: kafka
-      ports:
-        - protocol: TCP
-          port: 9094
-
----
-# STIX Processor & IOC Manager Network Policy
-apiVersion: networking.k8s.io/v1
-kind: NetworkPolicy
-metadata:
-  name: stix-ioc-netpol
-  namespace: cybersoc-threat-intel
-spec:
-  podSelector:
-    matchExpressions:
-      - key: app.kubernetes.io/name
-        operator: In
-        values: [stix-processor, ioc-manager]
-  policyTypes:
-    - Ingress
-    - Egress
-  ingress:
-    - from:
-        - podSelector:
-            matchLabels:
-              app.kubernetes.io/name: threat-intel-api-gateway
-      ports:
-        - protocol: TCP
-          port: 8080
-        - protocol: TCP
-          port: 8081
-        - protocol: TCP
-          port: 8082
-  
-  egress:
-    # Elasticsearch
-    - to:
-        - namespaceSelector:
-            matchLabels:
-              kubernetes.io/metadata.name: cybersoc-siem
-          podSelector:
-            matchLabels:
-              app.kubernetes.io/name: elasticsearch
-      ports:
-        - protocol: TCP
-          port: 9200
-    
-    # Redis (cache)
-    - to:
-        - namespaceSelector:
-            matchLabels:
-              kubernetes.io/metadata.name: cybersoc-cache
-          podSelector:
-            matchLabels:
-              app.kubernetes.io/name: redis
-      ports:
-        - protocol: TCP
-          port: 6379
-
----
-# Threat Hunting Platform Network Policy
-apiVersion: networking.k8s.io/v1
-kind: NetworkPolicy
-metadata:
-  name: threat-hunting-netpol
-  namespace: cybersoc-threat-intel
-spec:
-  podSelector:
-    matchLabels:
-      app.kubernetes.io/name: threat-hunting
-  policyTypes:
-    - Ingress
-    - Egress
-  ingress:
-    - from:
-        - podSelector:
-            matchLabels:
-              app.kubernetes.io/name: threat-intel-api-gateway
-      ports:
-        - protocol: TCP
-          port: 8083
-  
-  egress:
-    # Elasticsearch (query logs)
-    - to:
-        - namespaceSelector:
-            matchLabels:
-              kubernetes.io/metadata.name: cybersoc-siem
-          podSelector:
-            matchLabels:
-              app.kubernetes.io/name: elasticsearch
-      ports:
-        - protocol: TCP
-          port: 9200
-
----
-# API Gateway Network Policy
-apiVersion: networking.k8s.io/v1
-kind: NetworkPolicy
-metadata:
-  name: threat-intel-api-gateway-netpol
-  namespace: cybersoc-threat-intel
-spec:
-  podSelector:
-    matchLabels:
-      app.kubernetes.io/name: threat-intel-api-gateway
-  policyTypes:
-    - Ingress
-    - Egress
-  ingress:
-    # External users via Ingress
-    - from:
-        - namespaceSelector:
-            matchLabels:
-              kubernetes.io/metadata.name: ingress-nginx
-          podSelector: {}
-      ports:
-        - protocol: TCP
-          port: 8080
-        - protocol: TCP
-          port: 8443
-  
-  egress:
-    # All internal services
-    - to:
-        - podSelector: {}
-      ports:
-        - protocol: TCP
-          port: 8080
-        - protocol: TCP
-          port: 8081
-        - protocol: TCP
-          port: 8082
-        - protocol: TCP
-          port: 8083
+  - to:
+    - namespaceSelector: {}
+      podSelector:
+        matchLabels:
+          k8s-app: kube-dns
+    ports:
+    - protocol: UDP
+      port: 53
+    - protocol: TCP
+      port: 53

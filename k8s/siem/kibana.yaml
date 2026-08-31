@@ -1,0 +1,224 @@
+# CyberSOC Platform - Kibana Visualization
+# Djezzy Telecom Algeria - SIEM Phase
+# Security Analytics Dashboard & Investigation Interface
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: kibana
+  namespace: cybersoc-siem
+  labels:
+    app.kubernetes.io/name: kibana
+    app.kubernetes.io/component: siem-visualization
+    app.kubernetes.io/part-of: djezzy-telecom
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: kibana
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: kibana
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "5601"
+    spec:
+      serviceAccountName: elasticsearch-sa
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+      containers:
+      - name: kibana
+        image: docker.elastic.co/kibana/kibana:8.12.0
+        ports:
+        - containerPort: 5601
+          name: http
+          protocol: TCP
+        env:
+        - name: ELASTICSEARCH_HOSTS
+          value: "http://elasticsearch.cybersoc-siem.svc.cluster.local:9200"
+        - name: SERVER_NAME
+          value: kibana.soc.djezzy.dz
+        - name: SERVER_BASEPATH
+          value: ""
+        - name: XPACK_SECURITY_ENABLED
+          value: "true"
+        - name: XPACK_ENCRYPTEDCOOKIES_ENABLED
+          value: "true"
+        - name: DJEZZY_BRANDING
+          value: "enabled"
+        - name: ANRT_DASHBOARD_MODE
+          value: "compliant"
+        resources:
+          requests:
+            cpu: "500m"
+            memory: "1Gi"
+          limits:
+            cpu: "2"
+            memory: "4Gi"
+        volumeMounts:
+        - name: kibana-config
+          mountPath: /usr/share/kibana/config/kibana.yml
+          subPath: kibana.yml
+        - name: kibana-dashboards
+          mountPath: /usr/share/kibana/config/dashboards
+          readOnly: true
+        readinessProbe:
+          httpGet:
+            path: /api/status
+            port: 5601
+          initialDelaySeconds: 30
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 3
+        livenessProbe:
+          httpGet:
+            path: /api/status
+            port: 5601
+          initialDelaySeconds: 45
+          periodSeconds: 20
+          timeoutSeconds: 10
+          failureThreshold: 3
+      volumes:
+      - name: kibana-config
+        configMap:
+          name: kibana-config
+      - name: kibana-dashboards
+        configMap:
+          name: kibana-dashboards-prebuilt
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: kibana
+  namespace: cybersoc-siem
+  labels:
+    app.kubernetes.io/name: kibana
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: kibana
+  ports:
+  - port: 5601
+    targetPort: 5601
+    name: http
+    protocol: TCP
+---
+# Ingress for External Access (via API Gateway)
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: kibana-ingress
+  namespace: cybersoc-siem
+  annotations:
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/backend-protocol: "HTTP"
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+spec:
+  ingressClassName: nginx
+  tls:
+  - hosts:
+    - kibana.soc.djezzy.dz
+    secretName: kibana-tls-cert
+  rules:
+  - host: kibana.soc.djezzy.dz
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: kibana
+            port:
+              number: 5601
+---
+# Kibana Configuration
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: kibana-config
+  namespace: cybersoc-siem
+data:
+  kibana.yml: |
+    server.host: "0.0.0.0"
+    server.port: 5601
+    server.name: "CyberSOC-Kibana-Djezzy"
+    
+    # Elasticsearch Connection
+    elasticsearch.hosts: ["http://elasticsearch.cybersoc-siem.svc.cluster.local:9200"]
+    elasticsearch.requestTimeout: 60000
+    elasticsearch.shardTimeout: 60000
+    
+    # Security Configuration
+    xpack.security.enabled: true
+    xpack.security.encryptionKey: "djezzy-kibana-security-key-algeria-2024"
+    xpack.reporting.encryptionKey: "djezzy-reporting-encryption-secure"
+    xpack.encryptedCookies.enabled: true
+    
+    # Monitoring
+    monitoring.ui.container.elasticsearch.enabled: true
+    
+    # Djezzy Branding
+    i18n.locale: "en"
+    logging.verbose: false
+    
+    # ANRT Compliance Settings
+    xpack.taskManager.maxWorkers: 4
+    xpack.monitoring.kibana.collection.enabled: true
+    xpack.monitoring.kibana.collection.interval: 15000
+    
+    # Dashboard & Visualization Defaults
+    dashboard.defaultDarkMode: false
+    search.includeFrozen: false
+    csv.maxSizeBytes: 20000000
+    
+    # Telemetry Disabled (Security Requirement)
+    telemetry.enabled: false
+---
+# Pre-built Djezzy SOC Dashboards Configuration
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: kibana-dashboards-prebuilt
+  namespace: cybersoc-siem
+data:
+  dashboards.json: |
+    {
+      "djezzy_soc_overview": {
+        "title": "Djezzy SOC Operations Overview",
+        "description": "Real-time security operations dashboard for Djezzy Telecom",
+        "panels": [
+          {"type": "metric", "title": "Total Events/sec", "visualization": "events_rate"},
+          {"type": "metric", "title": "Active Alerts", "visualization": "alert_count"},
+          {"type": "metric", "title": "Critical Severity", "visualization": "critical_alerts"},
+          {"type": "map", "title": "Attack Geography", "visualization": "geo_attacks"},
+          {"type": "table", "title": "Top Source IPs", "visualization": "top_src_ips"},
+          {"type": "timeline", "title": "Alert Timeline", "visualization": "alert_timeline"}
+        ]
+      },
+      "telecom_security_monitoring": {
+        "title": "Telecom Protocol Security (SS7/Diameter)",
+        "description": "SS7, Diameter, and telecom-specific threat monitoring",
+        "panels": [
+          {"type": "metric", "title": "SS7 Events", "visualization": "ss7_event_count"},
+          {"type": "metric", "title": "Diameter Messages", "visualization": "diameter_count"},
+          {"type": "table", "title": "SS7 Anomalies", "visualization": "ss7_anomalies"},
+          {"type": "chart", "title": "Signaling Traffic Trend", "visualization": "signaling_trend"}
+        ]
+      },
+      "anrt_compliance_dashboard": {
+        "title": "ANRT Regulatory Compliance",
+        "description": "ANRT compliance metrics and audit trail",
+        "panels": [
+          {"type": "gauge", "title": "Compliance Score", "visualization": "compliance_score"},
+          {"type": "log", "title": "Audit Trail", "visualization": "audit_logs"},
+          {"type": "table", "title": "Policy Violations", "visualization": "violations"}
+        ]
+      },
+      "threat_hunting_workspace": {
+        "title": "Threat Hunting Workspace",
+        "description": "Interactive investigation workspace for analysts",
+        "features": ["saved_searches", "timelines", "ioc_lookup", "correlation_rules"]
+      }
+    }

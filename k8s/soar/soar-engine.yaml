@@ -1,0 +1,406 @@
+# CyberSOC Platform - SOAR Engine (Core Orchestration)
+# Djezzy Telecom Algeria - Security Automation & Response
+# Handles: Playbook execution, incident response, case management
+
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: soar-sa
+  namespace: cybersoc-soar
+  labels:
+    app.kubernetes.io/name: soar-engine
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: soarengine-cluster-role
+  labels:
+    app.kubernetes.io/component: soar
+rules:
+- apiGroups: [""]
+  resources: ["pods", "services", "configmaps", "secrets"]
+  verbs: ["get", "list", "watch", "create", "update", "patch"]
+- apiGroups: [""]
+  resources: ["events"]
+  verbs: ["create", "patch"]
+- apiGroups: ["apps"]
+  resources: ["deployments", "replicasets"]
+  verbs: ["get", "list", "watch", "create", "update", "patch"]
+- apiGroups: ["batch"]
+  resources: ["jobs", "cronjobs"]
+  verbs: ["get", "list", "watch", "create", "update"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: soarengine-cluster-rolebinding
+subjects:
+- kind: ServiceAccount
+  name: soar-sa
+  namespace: cybersoc-soar
+roleRef:
+  kind: ClusterRole
+  name: soarengine-cluster-role
+  apiGroup: rbac.authorization.k8s.io
+---
+# SOAR Engine Deployment - Main Orchestration Platform
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: soar-engine
+  namespace: cybersoc-soar
+  labels:
+    app.kubernetes.io/name: soar-engine
+    app.kubernetes.io/component: core-soar
+    app.kubernetes.io/part-of: djezzy-telecom
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: soar-engine
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: soar-engine
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8080"
+        prometheus.io/path: "/metrics"
+    spec:
+      serviceAccountName: soar-sa
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        fsGroup: 1000
+      containers:
+      - name: soar-engine
+        image: cybersoc/soar-engine:v3.2.0-djezzy
+        ports:
+        - containerPort: 8080
+          name: api
+          protocol: TCP
+        - containerPort: 9090
+          name: grpc
+          protocol: TCP
+        env:
+        - name: SOAR_MODE
+          value: "production"
+        - name: TENANT_ID
+          value: "djezzy-telecom-algeria"
+        
+        # Database Connections
+        - name: POSTGRES_URL
+          value: "postgresql://soar_user:secure_pass@postgres.cybersoc-infrastructure.svc.cluster.local:5432/soar_db"
+        - name: REDIS_URL
+          value: "redis-master.cybersoc-infrastructure.svc.cluster.local:6379"
+        
+        # SIEM Integration
+        - name: SIEM_CORRELATION_ENGINE
+          value: "http://siem-correlation-engine.cybersoc-siem.svc.cluster.local:8080"
+        - name: ELASTICSEARCH_URL
+          value: "http://elasticsearch.cybersoc-siem.svc.cluster.local:9200"
+        
+        # Analytics Integration
+        - name: ML_SERVER_URL
+          value: "http://ml-server.cybersoc-analytics.svc.cluster.local:8001"
+        - name: UEBA_SERVICE_URL
+          value: "http://ueba.cybersoc-analytics.svc.cluster.local:8003"
+        - name: PREDICTIVE_ANALYTICS_URL
+          value: "http://predictive-analytics.cybersoc-analytics.svc.cluster.local:8002"
+        
+        # Threat Intelligence Integration
+        - name: THREAT_INTEL_HUB
+          value: "http://threat-intel-hub.cybersoc-threat-intel.svc.cluster.local:8080"
+        
+        # Compliance & Security
+        - name: ANRT_COMPLIANCE_ENABLED
+          value: "true"
+        - name: GDPR_DATA_PROTECTION
+          value: "true"
+        - name: AUDIT_LOG_ENABLED
+          value: "true"
+        
+        # Configuration
+        - name: PLAYBOOK_STORAGE_PATH
+          value: "/playbooks"
+        - name: CASE_STORAGE_PATH
+          value: "/cases"
+        - name: LOG_LEVEL
+          value: "INFO"
+        - name: MAX_CONCURRENT_PLAYBOOKS
+          value: "50"
+        - name: PLAYBOOK_TIMEOUT_SEC
+          value: "3600"
+        
+        resources:
+          requests:
+            cpu: "2"
+            memory: "4Gi"
+          limits:
+            cpu: "6"
+            memory: "12Gi"
+        volumeMounts:
+        - name: playbooks-volume
+          mountPath: /playbooks
+          readOnly: true
+        - name: cases-volume
+          mountPath: /cases
+        - name: config-volume
+          mountPath: /config
+          readOnly: true
+        readinessProbe:
+          httpGet:
+            path: /health/ready
+            port: 8080
+          initialDelaySeconds: 20
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 3
+        livenessProbe:
+          httpGet:
+            path: /health/live
+            port: 8080
+          initialDelaySeconds: 30
+          periodSeconds: 15
+          timeoutSeconds: 10
+          failureThreshold: 3
+      volumes:
+      - name: playbooks-volume
+        persistentVolumeClaim:
+          claimName: soar-playbooks-pvc
+      - name: cases-volume
+        persistentVolumeClaim:
+          claimName: soar-cases-pvc
+      - name: config-volume
+        configMap:
+          name: soar-engine-config
+---
+# SOAR Engine Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: soar-engine
+  namespace: cybersoc-soar
+  labels:
+    app.kubernetes.io/name: soar-engine
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: soar-engine
+  ports:
+  - port: 8080
+    targetPort: 8080
+    name: api
+    protocol: TCP
+  - port: 9090
+    targetPort: 9090
+    name: grpc
+    protocol: TCP
+---
+# Horizontal Pod Autoscaler for SOAR Engine
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: soar-engine-hpa
+  namespace: cybersoc-soar
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: soar-engine
+  minReplicas: 3
+  maxReplicas: 10
+  metrics:
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: 70
+  - type: Resource
+    resource:
+      name: memory
+      target:
+        type: Utilization
+        averageUtilization: 75
+  behavior:
+    scaleUp:
+      stabilizationWindowSeconds: 60
+      policies:
+      - type: Percent
+        value: 100
+        periodSeconds: 60
+    scaleDown:
+      stabilizationWindowSeconds: 300
+      policies:
+      - type: Percent
+        value: 25
+        periodSeconds: 120
+---
+# PVC for Playbook Storage
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: soar-playbooks-pvc
+  namespace: cybersoc-soar
+spec:
+  accessModes:
+  - ReadWriteMany
+  storageClassName: managed-premium
+  resources:
+    requests:
+      storage: 20Gi
+---
+# PVC for Case Management Storage
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: soar-cases-pvc
+  namespace: cybersoc-soar
+spec:
+  accessModes:
+  - ReadWriteMany
+  storageClassName: managed-premium
+  resources:
+    requests:
+      storage: 100Gi
+---
+# SOAR Engine Configuration
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: soar-engine-config
+  namespace: cybersoc-soar
+data:
+  engine.yaml: |
+    # CyberSOC SOAR Engine Configuration
+    # Djezzy Telecom Algeria Production Instance
+    
+    engine:
+      instance_id: "cybersoc-soar-djezzy-001"
+      environment: production
+      tenant: djezzy-telecom-algeria
+      version: "3.2.0-djezzy"
+    
+    playbook_execution:
+      max_concurrent: 50
+      default_timeout: 3600  # 1 hour
+      retry_count: 3
+      retry_delay_sec: 30
+      
+      # Worker pool configuration
+      workers:
+        count: 16
+        queue_size: 1000
+        
+    incident_management:
+      auto_create_from_alerts: true
+      alert_to_incident_mapping:
+        critical: "P1-HIGH-PRIORITY"
+        high: "P2-STANDARD"
+        medium: "P3-LOW"
+        low: "P4-INFO"
+        
+      severity_escalation:
+        P1:
+          sla_minutes: 15
+          notify: [ciso, soc-manager, oncall]
+          auto_escalate_minutes: 30
+        P2:
+          sla_minutes: 60
+          notify: [soc-team, shift-lead]
+          auto_escalate_minutes: 120
+        P3:
+          sla_minutes: 240
+          notify: [soc-analysts]
+          
+      case_lifecycle:
+        states: [new, triage, investigation, containment, eradication, recovery, closed]
+        mandatory_fields: [title, description, severity, assignee, reporter]
+        
+    integrations:
+      siem:
+        enabled: true
+        endpoint: "${SIEM_CORRELATION_ENGINE}"
+        alert_webhook: "/webhook/alert"
+        bi_directional_sync: true
+        
+      analytics:
+        ml_server:
+          url: "${ML_SERVER_URL}"
+          enabled: true
+          use_cases: [threat_scoring, anomaly_detection, user_risk]
+        ueba:
+          url: "${UEBA_SERVICE_URL}"
+          enabled: true
+          use_cases: [insider_threat, behavioral_anomaly]
+        predictive:
+          url: "${PREDICTIVE_ANALYTICS_URL}"
+          enabled: true
+          use_cases: [threat_forecasting, capacity_planning]
+          
+      threat_intelligence:
+        enabled: true
+        endpoint: "${THREAT_INTEL_HUB}"
+        auto_enrichment: true
+        ioc_lookup_on_alert: true
+        
+      ticketing:
+        servicenow:
+          enabled: true
+          instance: "djezzy.service-now.com"
+          sync_interval_min: 5
+        jira:
+          enabled: false
+          
+      communication:
+        email:
+          smtp_server: "mail.djezzy.dz"
+          from_address: "soc-alerts@djezzy.dz"
+        slack:
+          webhook_url: "${SLACK_WEBHOOK_URL}"
+        ms_teams:
+          webhook_url: "${TEAMS_WEBHOOK_URL}"
+          
+      external_tools:
+        firewall_api:
+          palo_alto:
+            base_url: "https://paloalto.djezzy.dz"
+          fortinet:
+            base_url: "https://fortigate.djezzy.dz"
+        edr:
+          crowdstrike:
+            base_url: "https://falcon.djezzy.dz"
+        dns_security:
+          infoblox:
+            base_url: "https://infoblox.djezzy.dz"
+            
+    anrt_compliance:
+      enabled: true
+      audit_all_actions: true
+      retain_action_history_days: 1095  # 3 years ANRT requirement
+      regulatory_reporting:
+        irgs_integration: true
+        report_format: "ANRT-SIRF-v2"
+        
+    gdpr_protection:
+      enabled: true
+      pii_fields_masking: true
+      data_minimization: true
+      retention_policy:
+        case_data_days: 365
+        pii_data_days: 90
+        
+    telecom_specific:
+      ss7_response_playbooks:
+        - "PB-SS7-FRAUD-RESPONSE"
+        - "PB-SS7-DATA-BREACH"
+        - "PB-SS7-SIGNALING-ABUSE"
+        
+      diameter_response_playbooks:
+        - "PB-DIAMETER-DOS-RESPONSE"
+        - "PB-DIAMETER-FRAUD-DETECTION"
+        
+      fraud_integration:
+        irgs_auto_report: true
+        gsma_database_check: true

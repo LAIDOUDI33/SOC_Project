@@ -1,0 +1,487 @@
+# CyberSOC Platform - Threat Intelligence Hub
+# Djezzy Telecom Algeria - STIX/TAXII Integration & IOC Management
+
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: threat-intel-sa
+  namespace: cybersoc-threat-intel
+  labels:
+    app.kubernetes.io/name: threat-intel-hub
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: threatintel-cluster-role
+  labels:
+    app.kubernetes.io/component: threat-intel
+rules:
+- apiGroups: [""]
+  resources: ["pods", "services", "configmaps", "secrets", "persistentvolumeclaims"]
+  verbs: ["get", "list", "watch", "create", "update", "patch"]
+- apiGroups: [""]
+  resources: ["events"]
+  verbs: ["create", "patch"]
+- apiGroups: ["batch"]
+  resources: ["jobs", "cronjobs"]
+  verbs: ["get", "list", "watch", "create"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: threatintel-cluster-rolebinding
+subjects:
+- kind: ServiceAccount
+  name: threat-intel-sa
+  namespace: cybersoc-threat-intel
+roleRef:
+  kind: ClusterRole
+  name: threatintel-cluster-role
+  apiGroup: rbac.authorization.k8s.io
+---
+# Threat Intelligence Hub Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: threat-intel-hub
+  namespace: cybersoc-threat-intel
+  labels:
+    app.kubernetes.io/name: threat-intel-hub
+    app.kubernetes.io/component: core-threat-intel
+    app.kubernetes.io/part-of: djezzy-telecom
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: threat-intel-hub
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: threat-intel-hub
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8080"
+        prometheus.io/path: "/metrics"
+    spec:
+      serviceAccountName: threat-intel-sa
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        fsGroup: 1000
+      containers:
+      - name: threat-intel-hub
+        image: cybersoc/threat-intel-hub:v2.5.0-djezzy
+        ports:
+        - containerPort: 8080
+          name: api
+          protocol: TCP
+        - containerPort: 9090
+          name: grpc
+          protocol: TCP
+        env:
+        - name: THREAT_INTEL_MODE
+          value: "production"
+        - name: TENANT_ID
+          value: "djezzy-telecom-algeria"
+        
+        # Database Connections
+        - name: POSTGRES_URL
+          value: "postgresql://ti_user:secure_pass@postgres.cybersoc-infrastructure.svc.cluster.local:5432/threat_intel_db"
+        - name: REDIS_URL
+          value: "redis-master.cybersoc-infrastructure.svc.cluster.local:6379"
+        - name: ELASTICSEARCH_URL
+          value: "http://elasticsearch.cybersoc-siem.svc.cluster.local:9200"
+        
+        # STIX/TAXII Configuration
+        - name: TAXII_SERVER_ENABLED
+          value: "true"
+        - name: TAXII_SERVER_PORT
+          value: "9443"
+        - name: STIX_CONFIG_PATH
+          value: "/config/stix-config.yaml"
+        
+        # Feed Configuration
+        - name: FEED_STORAGE_PATH
+          value: "/feeds"
+        - name: IOC_STORAGE_PATH
+          value: "/iocs"
+        
+        # Integrations
+        - name: SIEM_WEBHOOK_URL
+          value: "http://siem-correlation-engine.cybersoc-siem.svc.cluster.local:8080/webhook/threat-intel"
+        - name: SOAR_WEBHOOK_URL
+          value: "http://soar-engine.cybersoc-soar.svc.cluster.local:8080/webhook/ioc-enrichment"
+        
+        # Compliance & Security
+        - name: ANRT_SHARING_ENABLED
+          value: "true"
+        - name: GDPR_DATA_MINIMIZATION
+          value: "true"
+        - name: AUDIT_LOG_ENABLED
+          value: "true"
+        
+        # Performance
+        - name: MAX_CONCURRENT_FEEDS
+          value: "20"
+        - name: IOC_CACHE_TTL_HOURS
+          value: "24"
+        - name: LOG_LEVEL
+          value: "INFO"
+        
+        resources:
+          requests:
+            cpu: "1"
+            memory: "2Gi"
+          limits:
+            cpu: "4"
+            memory: "8Gi"
+        volumeMounts:
+        - name: feeds-volume
+          mountPath: /feeds
+        - name: iocs-volume
+          mountPath: /iocs
+        - name: config-volume
+          mountPath: /config
+          readOnly: true
+        readinessProbe:
+          httpGet:
+            path: /health/ready
+            port: 8080
+          initialDelaySeconds: 20
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 3
+        livenessProbe:
+          httpGet:
+            path: /health/live
+            port: 8080
+          initialDelaySeconds: 30
+          periodSeconds: 15
+          timeoutSeconds: 10
+          failureThreshold: 3
+      volumes:
+      - name: feeds-volume
+        persistentVolumeClaim:
+          claimName: threat-intel-feeds-pvc
+      - name: iocs-volume
+        persistentVolumeClaim:
+          claimName: threat-intel-iocs-pvc
+      - name: config-volume
+        configMap:
+          name: threat-intel-hub-config
+---
+# Threat Intelligence Hub Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: threat-intel-hub
+  namespace: cybersoc-threat-intel
+  labels:
+    app.kubernetes.io/name: threat-intel-hub
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: threat-intel-hub
+  ports:
+  - port: 8080
+    targetPort: 8080
+    name: api
+    protocol: TCP
+  - port: 9090
+    targetPort: 9090
+    name: grpc
+    protocol: TCP
+  - port: 9443
+    targetPort: 9443
+    name: taxii
+    protocol: TCP
+---
+# HPA for Threat Intel Hub
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: threat-intel-hpa
+  namespace: cybersoc-threat-intel
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: threat-intel-hub
+  minReplicas: 2
+  maxReplicas: 6
+  metrics:
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: 70
+  - type: Resource
+    resource:
+      name: memory
+      target:
+        type: Utilization
+        averageUtilization: 75
+---
+# PVC for Feed Storage
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: threat-intel-feeds-pvc
+  namespace: cybersoc-threat-intel
+spec:
+  accessModes:
+  - ReadWriteMany
+  storageClassName: managed-premium
+  resources:
+    requests:
+      storage: 50Gi
+---
+# PVC for IOC Storage
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: threat-intel-iocs-pvc
+  namespace: cybersoc-threat-intel
+spec:
+  accessModes:
+  - ReadWriteMany
+  storageClassName: managed-premium
+  resources:
+    requests:
+      storage: 100Gi
+---
+# Threat Intelligence Hub Configuration
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: threat-intel-hub-config
+  namespace: cybersoc-threat-intel
+data:
+  stix-config.yaml: |
+    # CyberSOC Threat Intelligence Configuration
+    # Djezzy Telecom Algeria
+    
+    hub:
+      instance_id: "cybersoc-threat-intel-djezzy-001"
+      environment: production
+      tenant: djezzy-telecom-algeria
+      
+    stix_taxii:
+      server:
+        enabled: true
+        port: 9443
+        tls_enabled: true
+        certificate_path: "/certs/taxii.crt"
+        key_path: "/certs/taxii.key"
+        
+      collections:
+        - id: "djezzy-threat-indicators"
+          name: "Djezzy SOC Threat Indicators"
+          description: "Primary collection for Djezzy-specific threat indicators"
+          type: indicator
+          
+        - id: "algeria-region-threats"
+          name: "Algeria Region Threat Intelligence"
+          description: "Threat intelligence specific to Algeria/MENA region"
+          type: threat-report
+          
+    threat_feeds:
+      # Commercial Feeds
+      commercial:
+        - name: "Recorded Future - Premium"
+          type: taxii-2.1
+          endpoint: "https://api.recordedfuture.com/taxii2/"
+          collection: "InsightCVRF"
+          api_key: "${RECORDED_FUTURE_API_KEY}"
+          poll_interval_min: 60
+          enabled: true
+          priority: high
+          
+        - name: "Anomali ThreatStream"
+          type: taxii-2.1
+          endpoint: "https://threatstream.anomali.com/taxii2/poll/"
+          collection: "ThreatStream_Daily_Intelligence"
+          api_key: "${ANOMALI_API_KEY}"
+          poll_interval_min: 120
+          enabled: true
+          priority: high
+          
+        - name: "Mandiant Advantage"
+          type: taxii-2.1
+          endpoint: "https://taxii.mandiant.com/taxii/"
+          collection: "Mandiant_Threat_Intelligence"
+          api_key: "${MANDIANT_API_KEY}"
+          poll_interval_min: 180
+          enabled: true
+          priority: medium
+          
+      # Open Source Feeds
+      open_source:
+        - name: "AlienVault OTX"
+          type: otx
+          api_key: "${OTX_API_KEY}"
+          pulse_filter:
+            min_score: 7
+            geo_focus: [DZ, MA, TN, EG, MENA]
+          poll_interval_min: 30
+          enabled: true
+          
+        - name: "Abuse.ch URLhaus"
+          type: csv_download
+          url: "https://urlhaus.abuse.ch/downloads/csv_recent/"
+          format: urlhaus_csv
+          poll_interval_min: 15
+          enabled: true
+          
+        - name: "PhishTank"
+          type: csv_download
+          url: "https://www.phishtank.com/phish_feed.csv"
+          format: phishtank_csv
+          poll_interval_min: 60
+          enabled: true
+          
+        - name: "MalwareBazaar"
+          type: api
+          endpoint: "https://mb-api.abuse.ch/api/v1/"
+          query_type: recent
+          api_key: "${MALWAREBAZAIRE_API_KEY}"
+          poll_interval_min: 30
+          enabled: true
+          
+        - name: "BlockList.de Attacks"
+          type: txt_download
+          url: "https://lists.blocklist.de/lists/all.txt"
+          format: ip_list
+          poll_interval_min: 60
+          enabled: true
+          
+      # Government/ISAC Sharing
+      government:
+        - name: "ANRT Cyber Threat Sharing"
+          type: stix-taxii
+          endpoint: "https://taxii.anrt.dz/public"
+          collection: "ANRT-Cyber-Threats"
+          sharing_agreement: anrt_mou_2024
+          direction: bidirectional
+          enabled: true
+          priority: critical
+          
+        - name: "GSMA Fraud Intelligence"
+          type: gsma_api
+          endpoint: "https://fi.gsma.com/api/v2/"
+          api_key: "${GSMA_FI_API_KEY}"
+          focus_areas: [sim_fraud, roaming_fraud, ss7_attacks, irgs_compliance]
+          poll_interval_min: 240
+          enabled: true
+          priority: critical
+          
+        - name: "FIRST (Forum of Incident Response Teams)"
+          type: stix-taxii
+          endpoint: "https://taxii.first.org/public"
+          collections: [first-indicators, first-reports]
+          sharing_level: trusted_circles
+          enabled: true
+          
+      # Regional/Telecom-Specific
+      telecom_specific:
+        - name: "GSMA ISAO - Telecom Threats"
+          type: stix-taxii
+          endpoint: "https://taxii.gsma.com/telecom-threats"
+          focus: [ss7_attacks, diameter_fraud, sim_swap, network_infrastructure]
+          enabled: true
+          
+        - name: "ITU Telecom Security Alerts"
+          type: rss_atom
+          url: "https://www.itu.int/en/ITU-T/security/Pages/rss.aspx"
+          parse_format: itu_security_alert
+          enabled: true
+          
+    ioc_management:
+      types_supported:
+        - ipv4
+        - ipv6
+        - domain
+        - url
+        - email
+        - file_hash_md5
+        - file_hash_sha1
+        - file_hash_sha256
+        - mutex
+        - registry_key
+        - imsi
+        - msisdn
+        - iccid
+        - imei
+        - ss7_global_title
+        - diameter_host
+        
+      scoring:
+        default_confidence: 50
+        max_score: 100
+        decay_days: 90
+        
+      enrichment:
+        auto_geolookup: true
+        auto_whois: true
+        auto_dns_resolution: true
+        auto_ssl_certificate_lookup: true
+        auto_virustotal_check: true
+        virustotal_api_key: "${VIRUSTOTAL_API_KEY}"
+        
+      deduplication:
+        enabled: true
+        algorithm: fuzzy_hash
+        similarity_threshold: 0.95
+        
+    threat_hunting:
+      enabled: true
+      integration_siem: true
+      integration_ueba: true
+      saved_queries_max: 500
+      hunt_sessions_max: 50
+      
+      yara_rules:
+        storage_path: "/yara-rules"
+        auto_update: true
+        update_schedule: "daily"
+        rule_sources:
+          - name: "YARA Community Rules"
+            url: "https://github.com/YARA-Rules/rules.git"
+            
+          - name: "FireEye APT YARA"
+            url: "https://github.com/fireeye/red_team_tool_countermeasures.git"
+            
+          - name: "Florian Roth's YARA"
+            url: "https://github.com/Neo23x0/signature-base.git"
+            
+      sigma_rules:
+        storage_path: "/sigma-rules"
+        auto_update: true
+        update_schedule: "hourly"
+        rule_sources:
+          - name: "SigmaHQ Generic"
+            url: "https://github.com/SigmaHQ/sigma.git"
+            
+          - name: "Djezzy Custom Sigma Rules"
+            source: internal
+            path: "/config/djezzy-sigma-rules"
+            
+    anrt_sharing:
+      enabled: true
+      mandatory_reporting:
+        - critical_threats_to_algerian_infrastructure
+        - telecom_sector_campaigns
+        - apt_activity_in_mena_region
+      sharing_format: stix_2.1
+      anonymization: selective
+      fields_anonymized: [internal_ip, hostname, username]
+      
+    gdpr_compliance:
+      enabled: true
+      pii_detection: true
+      data_minimization: true
+      retention_policy:
+        raw_ioc_data_days: 365
+        aggregated_intel_days: 1095
+        investigation_artifacts_days: 180
