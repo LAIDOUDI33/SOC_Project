@@ -1,0 +1,112 @@
+# ============================================================
+# Grafana Datasource Provisioning - CyberSOC Production
+# Target: Djezzy Telecom Algeria
+# Location: /etc/grafana/provisioning/datasources/
+# =================================================-----------
+
+apiVersion: 1
+
+datasources:
+  # ----------------------------------------------------------
+  # Prometheus - Primary Metrics Source
+  # ----------------------------------------------------------
+  - name: 'Prometheus'
+    type: 'prometheus'
+    access: 'proxy'
+    url: 'http://prometheus-operated.monitoring.svc.cluster.local:9090'
+    isDefault: true
+    uid: 'prometheus'
+    jsonData:
+      httpMethod: POST
+      manageAlerts: true
+      prometheusType: Prometheus
+      prometheusVersion: '2.45.0'
+      cacheLevel: 'High'
+      incrementalQuerying: true
+      queryTimeout: 60s
+      timeInterval: 15s
+    editable: false
+    basicAuth: false
+
+  # ----------------------------------------------------------
+  # Elasticsearch - Log Analytics & Behavior Data
+  # ----------------------------------------------------------
+  - name: 'Elasticsearch - Analytics'
+    type: 'elasticsearch'
+    access: 'proxy'
+    url: 'https://elasticsearch-coordinating.logging.svc.cluster.local:9200'
+    uid: 'elasticsearch-analytics'
+    jsonData:
+      esVersion: '8.11.0'
+      timeField: '@timestamp'
+      logMessageField: message
+      logLevelField: log.level
+      maxConcurrentShardRequests: 5
+      includeFrozen: false
+      sigv4Auth: false
+      tlsSkipVerify: false
+    editable: false
+    basicAuth: true
+    basicAuthUser: '${ELASTICSEARCH_USERNAME}'
+    secureJsonData:
+      basicAuthPassword: '${ELASTICSEARCH_PASSWORD}'
+
+  # ----------------------------------------------------------
+  # PostgreSQL - Analytics Metadata & Config
+  # ----------------------------------------------------------
+  - name: 'PostgreSQL - Analytics'
+    type: 'postgres'
+    access: 'proxy'
+    url: 'postgresql-cybersoc-primary.cybersoc-db.svc.cluster.local:5432'
+    uid: 'postgres-analytics'
+    database: 'cybersoc_analytics'
+    user: '${POSTGRES_ANALYTICS_USER}'
+    secureJsonData:
+      password: '${POSTGRES_ANALYTICS_PASSWORD}'
+    jsonData:
+      sslmode: 'require'
+      maxOpenConns: 10
+      maxIdleConns: 5
+      connMaxLifetime: 14400
+    editable: false
+
+  # ----------------------------------------------------------
+  # Jaeger - Distributed Tracing (Analytics Services)
+  # ----------------------------------------------------------
+  - name: 'Jaeger'
+    type: 'jaeger'
+    access: 'proxy'
+    url: 'http://jaeger-query.monitoring.svc.cluster.local:16686'
+    uid: 'jaeger-tracing'
+    jsonData:
+      tracesToLogsV2:
+        customQuery: true
+        query: 'process.serviceName = "{{serviceName}}" | log.file.path = "{{span.fileName}}"'
+        datasourceUid: 'elasticsearch-analytics'
+      tracesToMetrics:
+        datasourceUid: 'prometheus'
+        tags: [{ key: 'service.name', value: 'serviceName' }, { key: 'span.name', value: 'spanName' }]
+      serverSpanSource: 'span'
+      spanStartTimeShift: '0ms'
+      spanEndTimeShift: '0s'
+      durationLimit: '0ms'
+      traceIdListDuration: '1h'
+    editable: false
+
+  # ----------------------------------------------------------
+  # Loki - Analytics Service Logs
+  # ----------------------------------------------------------
+  - name: 'Loki'
+    type: 'loki'
+    access: 'proxy'
+    url: 'http://loki.monitoring.svc.cluster.local:3100'
+    uid: 'loki-logs'
+    jsonData:
+      maxLines: 1000
+      derivedFields:
+        - datasourceUid: 'jaeger-tracing'
+          matcherRegex: '"traceId":"(\w+)"'
+          name: TraceID
+          url: '$${__value.raw}'
+          urlDisplayLabel: 'View Trace'
+    editable: false
